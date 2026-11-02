@@ -44,7 +44,7 @@ export function HostResolution({ form }: { form: HostForm }) {
 
   let text: string;
   if (match) {
-    text = t('hostsFile.pinned', { name, address: match.entry.address, line: match.entry.line });
+    text = t('hostsFile.pinned', { name, address: match.entry.address });
   } else if (answer && answer.addresses.length > 0) {
     text = t('hostsFile.resolvesTo', { name, addresses: answer.addresses.join(', ') });
   } else if (answer) {

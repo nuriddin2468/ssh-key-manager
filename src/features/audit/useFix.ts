@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import { api } from '@/api/commands';
 import { useAppMutation } from '@/api/useAppMutation';
 import { useDialogs } from '@/app/dialogs';
@@ -6,12 +7,16 @@ import { useRouter } from '@/app/router';
 import type { Finding } from '@/bindings/Finding';
 import type { FixAction } from '@/bindings/FixAction';
 import type { KeyView } from '@/bindings/KeyView';
+import { editOf } from '@/features/hostsFile/draft';
+import { reportUnapplied } from '@/features/hostsFile/useHostsApply';
+import { AppError } from '@/lib/ipc';
 
 const FIX_LABELS = {
   fixPermissions: 'audit.action.fixPermissions',
   addPassphrase: 'audit.action.addPassphrase',
   regeneratePublic: 'audit.action.regeneratePublic',
   removeIdentityFile: 'audit.action.removeIdentityFile',
+  turnOffHostsEntry: 'audit.action.turnOff',
 } as const;
 
 /** The label of a finding's one-click fix, or of "open" when there is none. */
@@ -27,6 +32,7 @@ function hostsFileLine(finding: Finding): number | undefined {
   const kind = finding.kind;
   if (kind.kind === 'hostsFileRedirect') return kind.line;
   if (kind.kind === 'hostsFileConflict') return kind.lines[0];
+  if (kind.kind === 'hostsFileExpired') return kind.line;
   return undefined;
 }
 
@@ -49,6 +55,27 @@ export function useFix(keysById: ReadonlyMap<string, KeyView>) {
           return api.removeIdentityFile(action.hostId, action.path).then(() => undefined);
         case 'addPassphrase':
           return undefined;
+        case 'turnOffHostsEntry': {
+          const file = await api.hostsFile();
+          const entry = file.view.entries.find((e) => e.line === action.line);
+          if (!entry) throw new AppError('not_found', `hosts file line ${action.line}`);
+          const result = await api.applyHostsChanges({
+            revision: file.revision,
+            changes: [
+              {
+                kind: 'set',
+                line: entry.line,
+                entry: { ...editOf(entry), enabled: false, expires: null },
+              },
+            ],
+            flushDns: true,
+            prompt: t('hostsFile.authPrompt'),
+          });
+          if (result.outcome === 'applied')
+            toast.success(t('hostsFile.turnedOff', { name: entry.names[0] ?? entry.address }));
+          else reportUnapplied(t, result);
+          return undefined;
+        }
       }
     },
     {

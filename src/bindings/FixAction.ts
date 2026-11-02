@@ -28,4 +28,8 @@ hostId: number | null,
 /**
  * The `IdentityFile` value as written.
  */
-path: string, };
+path: string, } | { "kind": "turnOffHostsEntry", 
+/**
+ * 1-based line in the hosts file.
+ */
+line: number, };

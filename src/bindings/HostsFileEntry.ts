@@ -22,7 +22,7 @@ kind: HostsAddressKind,
  */
 names: Array<string>, 
 /**
- * Trailing comment without the `#`.
+ * Trailing comment without the `#` and the expiry token.
  */
 comment: string | null, 
 /**
@@ -37,4 +37,12 @@ system: boolean,
  * Names an earlier turned-on line already lists for the same address
  * family, so resolvers use that line for them. Empty when turned off.
  */
-shadowed: Array<string>, };
+shadowed: Array<string>, 
+/**
+ * The group the entry is in.
+ */
+group: string | null, 
+/**
+ * When a temporary entry expires (RFC 3339).
+ */
+expires: string | null, };

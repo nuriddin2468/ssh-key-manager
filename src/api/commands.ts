@@ -8,7 +8,11 @@ import type { Environment } from '@/bindings/Environment';
 import type { GenerateKeyRequest } from '@/bindings/GenerateKeyRequest';
 import type { HostEdit } from '@/bindings/HostEdit';
 import type { HostKeyCheck } from '@/bindings/HostKeyCheck';
+import type { HostsApplyResult } from '@/bindings/HostsApplyResult';
+import type { HostsBackup } from '@/bindings/HostsBackup';
+import type { HostsChange } from '@/bindings/HostsChange';
 import type { HostsFileInfo } from '@/bindings/HostsFileInfo';
+import type { HostsPreview } from '@/bindings/HostsPreview';
 import type { KeysView } from '@/bindings/KeysView';
 import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostsFile } from '@/bindings/KnownHostsFile';
@@ -53,6 +57,17 @@ export const api = {
 
   hostsFile: () => call<HostsFileInfo>('read_hosts_file'),
   lookupHost: (name: string) => call<NameLookup>('lookup_host', { name }),
+  previewHostsChanges: (revision: string, changes: HostsChange[]) =>
+    call<HostsPreview>('preview_hosts_changes', { revision, changes }),
+  applyHostsChanges: (vars: {
+    revision: string;
+    changes: HostsChange[];
+    flushDns: boolean;
+    prompt: string;
+  }) => call<HostsApplyResult>('apply_hosts_changes', vars),
+  hostsBackups: () => call<HostsBackup[]>('list_hosts_backups'),
+  restoreHostsBackup: (vars: { path: string; flushDns: boolean; prompt: string }) =>
+    call<HostsApplyResult>('restore_hosts_backup', vars),
 
   audit: () => call<AuditReport>('run_audit'),
   fixPermissions: (items: PermissionFix[]) => call<number>('fix_permissions', { items }),

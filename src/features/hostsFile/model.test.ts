@@ -14,6 +14,8 @@ function entry(line: number, address: string, names: string[], enabled = true): 
     enabled,
     system: false,
     shadowed: [],
+    group: null,
+    expires: null,
   };
 }
 

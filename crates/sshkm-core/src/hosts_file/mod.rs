@@ -1,25 +1,43 @@
-//! A lossless model of the system hosts file.
+//! A lossless, editable model of the system hosts file.
 //!
 //! The hosts file (`/etc/hosts`, `%SystemRoot%\System32\drivers\etc\hosts` on
 //! Windows) maps names to addresses before DNS is asked, so it decides where
 //! `ssh`, `git` and everything else connect. Every line is kept and the model
-//! round-trips byte for byte.
+//! round-trips byte for byte; edits ([`HostsFile::edited`]) change only the
+//! lines they touch.
 //!
 //! A line is `address name… # comment`, and `#` starts a comment anywhere. A
 //! comment that holds a complete entry (`# 10.0.0.5 api.local`) is reported
 //! as a turned-off entry, the usual way to switch one off by hand. Names are
 //! case-insensitive, and when several lines list a name for the same address
 //! family, resolvers use the first one.
+//!
+//! Two conventions of this app live in comments, so the file stays plain:
+//!
+//! - Groups are blocks between `# >>> sshkm: <name>` and `# <<< sshkm: <name>`.
+//! - `sshkm-until=<RFC 3339 time>` in an entry's comment marks it temporary.
+//!
+//! Writing the file needs administrator rights; see [`install`].
+
+mod edit;
+mod install;
+#[cfg(test)]
+mod tests;
 
 use std::{
     collections::HashSet,
-    fmt,
+    fmt::{self, Write as _},
+    fs,
     net::IpAddr,
     path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
+pub use self::edit::{HostsChange, HostsDiffKind, HostsDiffLine, HostsEdited, HostsEntryEdit};
+pub use self::install::{InstallOutcome, can_install, install};
 use crate::{
     Error, Result, fsutil,
     text::{self, Line},
@@ -45,6 +63,13 @@ const SYSTEM_NAMES: &[&str] = &[
     "ip6-allrouters",
     "ip6-allhosts",
 ];
+
+/// Comment text that opens a group, before its name.
+const GROUP_START: &str = ">>> sshkm:";
+/// Comment text that closes a group (followed by the name, for people).
+const GROUP_END: &str = "<<< sshkm";
+/// Comment token that holds a temporary entry's expiry time.
+const UNTIL: &str = "sshkm-until=";
 
 /// Where the operating system reads the hosts file from.
 pub fn system_path() -> PathBuf {
@@ -90,7 +115,7 @@ pub struct HostsFileEntry {
     pub kind: HostsAddressKind,
     /// Names in file order.
     pub names: Vec<String>,
-    /// Trailing comment without the `#`.
+    /// Trailing comment without the `#` and the expiry token.
     pub comment: Option<String>,
     /// False when the entry is commented out.
     pub enabled: bool,
@@ -99,12 +124,24 @@ pub struct HostsFileEntry {
     /// Names an earlier turned-on line already lists for the same address
     /// family, so resolvers use that line for them. Empty when turned off.
     pub shadowed: Vec<String>,
+    /// The group the entry is in.
+    pub group: Option<String>,
+    /// When a temporary entry expires (RFC 3339).
+    pub expires: Option<String>,
 }
 
 impl HostsFileEntry {
     /// The address is IPv6.
     pub fn is_ipv6(&self) -> bool {
         self.address.contains(':')
+    }
+
+    /// The entry is temporary and its time has passed.
+    pub fn is_expired(&self, now: OffsetDateTime) -> bool {
+        self.expires
+            .as_deref()
+            .and_then(|expires| OffsetDateTime::parse(expires, &Rfc3339).ok())
+            .is_some_and(|expires| expires <= now)
     }
 }
 
@@ -132,6 +169,19 @@ pub struct HostsFileIssue {
     pub problem: HostsLineProblem,
 }
 
+/// A block of entries between this app's group markers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+pub struct HostsGroup {
+    /// The name in the opening marker.
+    pub name: String,
+    /// 1-based line of the opening marker.
+    pub line: u32,
+    /// 1-based line of the closing marker, if there is one.
+    pub end_line: Option<u32>,
+}
+
 /// Everything the UI shows about a hosts file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -141,18 +191,39 @@ pub struct HostsFileView {
     pub entries: Vec<HostsFileEntry>,
     /// Lines that could not be parsed.
     pub invalid: Vec<HostsFileIssue>,
+    /// Groups in file order.
+    pub groups: Vec<HostsGroup>,
+}
+
+/// Why the app cannot change a hosts file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+pub enum HostsReadOnly {
+    /// The file is not UTF-8; writing it back would mangle text in a legacy
+    /// code page.
+    NotUtf8,
+    /// The file is a symbolic link, so another tool (`NixOS`, a container
+    /// runtime) manages it.
+    Link,
+    /// There is no way to ask for administrator rights (`pkexec` is missing).
+    NoElevation,
 }
 
 /// The parsed file.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostsFile {
     lines: Vec<Line>,
+    revision: String,
+    utf8: bool,
 }
 
-enum Parsed<'a> {
+enum LineKind<'a> {
     Blank,
     Entry { fields: Fields<'a>, enabled: bool },
     Invalid(HostsLineProblem),
+    GroupStart(&'a str),
+    GroupEnd,
 }
 
 struct Fields<'a> {
@@ -162,31 +233,67 @@ struct Fields<'a> {
     comment: Option<&'a str>,
 }
 
+/// A line with the group it is in (`None` for the markers themselves).
+struct Scanned<'a> {
+    kind: LineKind<'a>,
+    group: Option<&'a str>,
+}
+
 impl HostsFile {
     /// Parses hosts file text. Never fails.
     pub fn parse(input: &str) -> Self {
         Self {
             lines: text::split_lines(input),
+            revision: revision_of(input.as_bytes()),
+            utf8: true,
         }
     }
 
-    /// Loads a file; a missing file is empty. The app never writes this file,
-    /// so text that is not UTF-8 (a legacy code page on Windows) is decoded
-    /// lossily for display.
+    /// Loads a file; a missing file is empty. Text that is not UTF-8 (a legacy
+    /// code page on Windows) is decoded lossily for display, and such a file
+    /// is never written back (see [`Self::read_only_reason`]).
     pub fn load(path: &Path) -> Result<Self> {
         match fsutil::read_limited(path, MAX_HOSTS_FILE_SIZE) {
-            Ok(bytes) => Ok(Self::parse(&String::from_utf8_lossy(&bytes))),
-            Err(Error::NotFound(_)) => Ok(Self::default()),
+            Ok(bytes) => {
+                let text = String::from_utf8_lossy(&bytes);
+                Ok(Self {
+                    lines: text::split_lines(&text),
+                    revision: revision_of(&bytes),
+                    utf8: matches!(text, std::borrow::Cow::Borrowed(_)),
+                })
+            }
+            Err(Error::NotFound(_)) => Ok(Self::parse("")),
             Err(e) => Err(e),
+        }
+    }
+
+    /// SHA-256 of the file's bytes, in hex. Edits name the revision they were
+    /// made against, so changes made elsewhere in the meantime are not lost.
+    pub fn revision(&self) -> &str {
+        &self.revision
+    }
+
+    /// Why this app cannot write the file at `path`, if it cannot.
+    pub fn read_only_reason(&self, path: &Path) -> Option<HostsReadOnly> {
+        if !self.utf8 {
+            Some(HostsReadOnly::NotUtf8)
+        } else if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+            Some(HostsReadOnly::Link)
+        } else if !can_install() {
+            Some(HostsReadOnly::NoElevation)
+        } else {
+            None
         }
     }
 
     /// All entries, turned off ones included.
     pub fn entries(&self) -> Vec<HostsFileEntry> {
         let mut seen = HashSet::new();
-        self.parsed()
-            .filter_map(|(i, parsed)| match parsed {
-                Parsed::Entry { fields, enabled } => {
+        self.scan()
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, line)| match line.kind {
+                LineKind::Entry { fields, enabled } => {
                     let ipv6 = fields.ip.is_ipv6();
                     let shadowed = if enabled {
                         fields
@@ -198,7 +305,7 @@ impl HostsFile {
                     } else {
                         Vec::new()
                     };
-                    Some(entry(i, &fields, enabled, shadowed))
+                    Some(entry(i, &fields, enabled, shadowed, line.group))
                 }
                 _ => None,
             })
@@ -207,9 +314,11 @@ impl HostsFile {
 
     /// Lines that could not be parsed.
     pub fn invalid_lines(&self) -> Vec<HostsFileIssue> {
-        self.parsed()
-            .filter_map(|(i, parsed)| match parsed {
-                Parsed::Invalid(problem) => Some(HostsFileIssue {
+        self.scan()
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, line)| match line.kind {
+                LineKind::Invalid(problem) => Some(HostsFileIssue {
                     line: line_number(i),
                     problem,
                 }),
@@ -218,11 +327,39 @@ impl HostsFile {
             .collect()
     }
 
-    /// Entries and invalid lines together.
+    /// Groups in file order. A group without a closing marker runs to the
+    /// next group or the end of the file.
+    pub fn groups(&self) -> Vec<HostsGroup> {
+        let mut groups: Vec<HostsGroup> = Vec::new();
+        let mut open = false;
+        for (i, line) in self.scan().into_iter().enumerate() {
+            match line.kind {
+                LineKind::GroupStart(name) => {
+                    groups.push(HostsGroup {
+                        name: name.to_owned(),
+                        line: line_number(i),
+                        end_line: None,
+                    });
+                    open = true;
+                }
+                LineKind::GroupEnd if open => {
+                    if let Some(group) = groups.last_mut() {
+                        group.end_line = Some(line_number(i));
+                    }
+                    open = false;
+                }
+                _ => {}
+            }
+        }
+        groups
+    }
+
+    /// Entries, invalid lines and groups together.
     pub fn view(&self) -> HostsFileView {
         HostsFileView {
             entries: self.entries(),
             invalid: self.invalid_lines(),
+            groups: self.groups(),
         }
     }
 
@@ -236,11 +373,29 @@ impl HostsFile {
             .collect()
     }
 
-    fn parsed(&self) -> impl Iterator<Item = (usize, Parsed<'_>)> + '_ {
+    fn scan(&self) -> Vec<Scanned<'_>> {
+        let mut group = None;
         self.lines
             .iter()
-            .enumerate()
-            .map(|(i, line)| (i, parse_line(&line.text)))
+            .map(|line| {
+                let kind = parse_line(&line.text);
+                let in_group = match kind {
+                    LineKind::GroupStart(name) => {
+                        group = Some(name);
+                        None
+                    }
+                    LineKind::GroupEnd => {
+                        group = None;
+                        None
+                    }
+                    _ => group,
+                };
+                Scanned {
+                    kind,
+                    group: in_group,
+                }
+            })
+            .collect()
     }
 }
 
@@ -271,8 +426,20 @@ pub fn normalize_name(name: &str) -> String {
     name.strip_suffix('.').unwrap_or(name).to_ascii_lowercase()
 }
 
+fn revision_of(bytes: &[u8]) -> String {
+    let mut hex = String::with_capacity(64);
+    for byte in Sha256::digest(bytes) {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
 fn line_number(index: usize) -> u32 {
     u32::try_from(index + 1).unwrap_or(u32::MAX)
+}
+
+fn is_system_name(name: &str) -> bool {
+    SYSTEM_NAMES.contains(&normalize_name(name).as_str())
 }
 
 fn entry(
@@ -280,44 +447,79 @@ fn entry(
     fields: &Fields<'_>,
     enabled: bool,
     shadowed: Vec<String>,
+    group: Option<&str>,
 ) -> HostsFileEntry {
+    let (comment, expires) = split_expiry(fields.comment);
     HostsFileEntry {
         line: line_number(index),
         address: fields.address.to_owned(),
         kind: address_kind(fields.ip),
         names: fields.names.iter().map(|n| (*n).to_owned()).collect(),
-        comment: fields.comment.map(str::to_owned),
+        comment,
         enabled,
-        system: fields
-            .names
-            .iter()
-            .all(|n| SYSTEM_NAMES.contains(&normalize_name(n).as_str())),
+        system: fields.names.iter().all(|n| is_system_name(n)),
         shadowed,
+        group: group.map(str::to_owned),
+        expires,
     }
 }
 
-fn parse_line(raw: &str) -> Parsed<'_> {
+/// Separates the expiry token from the rest of a comment.
+fn split_expiry(comment: Option<&str>) -> (Option<String>, Option<String>) {
+    let Some(comment) = comment else {
+        return (None, None);
+    };
+    let token = comment.split_whitespace().find(|word| {
+        word.strip_prefix(UNTIL)
+            .is_some_and(|time| OffsetDateTime::parse(time, &Rfc3339).is_ok())
+    });
+    match token {
+        Some(token) => {
+            let rest: Vec<&str> = comment
+                .split_whitespace()
+                .filter(|word| *word != token)
+                .collect();
+            let rest = rest.join(" ");
+            (
+                (!rest.is_empty()).then_some(rest),
+                token.strip_prefix(UNTIL).map(str::to_owned),
+            )
+        }
+        None => (Some(comment.to_owned()), None),
+    }
+}
+
+fn parse_line(raw: &str) -> LineKind<'_> {
     let (data, comment) = split_comment(raw.trim_start_matches('\u{feff}'));
     if !data.trim().is_empty() {
         return match parse_fields(data, comment) {
-            Ok(fields) => Parsed::Entry {
+            Ok(fields) => LineKind::Entry {
                 fields,
                 enabled: true,
             },
-            Err(problem) => Parsed::Invalid(problem),
+            Err(problem) => LineKind::Invalid(problem),
         };
     }
+    let Some(comment) = comment else {
+        return LineKind::Blank;
+    };
+    let body = comment.trim_start_matches('#').trim();
+    if let Some(name) = body.strip_prefix(GROUP_START).map(str::trim)
+        && !name.is_empty()
+    {
+        return LineKind::GroupStart(name);
+    }
+    if body.starts_with(GROUP_END) {
+        return LineKind::GroupEnd;
+    }
     // A comment that is a complete entry is a turned-off entry.
-    let disabled = comment.and_then(|body| {
-        let (data, comment) = split_comment(body.trim_start_matches('#'));
-        parse_fields(data, comment).ok()
-    });
-    match disabled {
-        Some(fields) => Parsed::Entry {
+    let (data, comment) = split_comment(comment.trim_start_matches('#'));
+    match parse_fields(data, comment) {
+        Ok(fields) => LineKind::Entry {
             fields,
             enabled: false,
         },
-        None => Parsed::Blank,
+        Err(_) => LineKind::Blank,
     }
 }
 
@@ -385,207 +587,5 @@ fn address_kind(ip: IpAddr) -> HostsAddressKind {
         HostsAddressKind::Private
     } else {
         HostsAddressKind::Public
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const SAMPLE: &str = "\u{feff}##\n\
-         # Host Database\n\
-         #\n\
-         127.0.0.1\tlocalhost\n\
-         255.255.255.255\tbroadcasthost\n\
-         ::1             localhost\n\
-         fe80::1%lo0\tlocalhost\n\
-         \n\
-         10.0.4.12   api.internal  API.internal.  # staging API\n\
-         # 10.0.4.13 old-api.internal\n\
-         ## 192.168.1.5 nas.local nas # the NAS\n\
-         # localhost is used to configure the loopback interface\n\
-         10.0.9.9 api.internal\n\
-         0.0.0.0 ads.example.com\n\
-         100.101.102.103 tailnet-box\n\
-         140.82.112.3 github.com\n\
-         300.1.1.1 broken.example\n\
-         10.0.0.1\n\
-         10.0.0.2 bad/name\n\
-         fe80::1% nowhere\n\
-         \t  # indented comment\n\
-         ::ffff:10.0.0.1 mapped";
-
-    fn sample() -> HostsFile {
-        HostsFile::parse(SAMPLE)
-    }
-
-    fn lines(entries: &[HostsFileEntry]) -> Vec<u32> {
-        entries.iter().map(|e| e.line).collect()
-    }
-
-    #[test]
-    fn round_trips() {
-        for input in [
-            SAMPLE.to_owned(),
-            SAMPLE.replace('\n', "\r\n"),
-            format!("{SAMPLE}\n"),
-            String::new(),
-        ] {
-            assert_eq!(HostsFile::parse(&input).to_string(), input);
-        }
-    }
-
-    #[test]
-    fn parses_entries() {
-        let entries = sample().entries();
-        assert_eq!(lines(&entries), [4, 5, 6, 7, 9, 10, 11, 13, 14, 15, 16, 22]);
-        let by_line = |line| entries.iter().find(|e| e.line == line).unwrap();
-
-        let localhost = by_line(4);
-        assert_eq!(localhost.names, ["localhost"]);
-        assert!(localhost.enabled && localhost.system);
-        assert_eq!(localhost.kind, HostsAddressKind::Loopback);
-        assert_eq!(by_line(5).kind, HostsAddressKind::Private);
-        assert!(by_line(5).system);
-        assert_eq!(by_line(7).address, "fe80::1%lo0");
-        assert!(by_line(7).is_ipv6() && !by_line(4).is_ipv6());
-
-        let api = by_line(9);
-        assert_eq!(api.names, ["api.internal", "API.internal."]);
-        assert_eq!(api.comment.as_deref(), Some("staging API"));
-        assert_eq!(api.kind, HostsAddressKind::Private);
-        assert!(!api.system);
-
-        let off = by_line(10);
-        assert!(!off.enabled);
-        assert_eq!(off.names, ["old-api.internal"]);
-        let nas = by_line(11);
-        assert!(!nas.enabled);
-        assert_eq!(nas.names, ["nas.local", "nas"]);
-        assert_eq!(nas.comment.as_deref(), Some("the NAS"));
-
-        assert_eq!(by_line(14).kind, HostsAddressKind::Blocked);
-        assert_eq!(by_line(15).kind, HostsAddressKind::Private, "CGNAT range");
-        assert_eq!(by_line(16).kind, HostsAddressKind::Public);
-        assert_eq!(by_line(22).kind, HostsAddressKind::Public);
-    }
-
-    #[test]
-    fn reports_invalid_lines() {
-        let invalid: Vec<_> = sample()
-            .invalid_lines()
-            .into_iter()
-            .map(|i| (i.line, i.problem))
-            .collect();
-        assert_eq!(
-            invalid,
-            [
-                (17, HostsLineProblem::BadAddress),
-                (18, HostsLineProblem::NoNames),
-                (19, HostsLineProblem::BadName),
-                (20, HostsLineProblem::BadAddress),
-            ]
-        );
-    }
-
-    #[test]
-    fn earlier_lines_shadow_later_ones_per_family() {
-        let entries = sample().entries();
-        let shadowed = |line| {
-            entries
-                .iter()
-                .find(|e| e.line == line)
-                .unwrap()
-                .shadowed
-                .clone()
-        };
-        // Line 9 lists the name twice (case and final dot differ).
-        assert_eq!(shadowed(9), ["API.internal."]);
-        assert_eq!(shadowed(13), ["api.internal"]);
-        // IPv6 localhost lines: the first one counts, the scoped one does not.
-        assert_eq!(shadowed(6), Vec::<String>::new());
-        assert_eq!(shadowed(7), ["localhost"]);
-        // Turned-off entries never shadow or get shadowed.
-        assert_eq!(shadowed(10), Vec::<String>::new());
-    }
-
-    #[test]
-    fn lookup() {
-        let hosts = sample();
-        assert_eq!(lines(&hosts.lookup("API.Internal")), [9, 13]);
-        assert_eq!(lines(&hosts.lookup("api.internal.")), [9, 13]);
-        assert_eq!(lines(&hosts.lookup("localhost")), [4, 6, 7]);
-        assert_eq!(lines(&hosts.lookup("old-api.internal")), Vec::<u32>::new());
-        assert_eq!(lines(&hosts.lookup("nowhere")), Vec::<u32>::new());
-    }
-
-    #[test]
-    fn names() {
-        let longest_label = "a".repeat(63);
-        let long_label = "a".repeat(64);
-        let long_name = ["a"; 128].join(".");
-        for good in ["a", "a.b", "a-b_c.example.", "x1", longest_label.as_str()] {
-            assert!(is_valid_name(good), "{good}");
-        }
-        for bad in [
-            "",
-            ".",
-            "a..b",
-            ".a",
-            "a b",
-            "a/b",
-            "ünï.example",
-            long_label.as_str(),
-            long_name.as_str(),
-        ] {
-            assert!(!is_valid_name(bad), "{bad}");
-        }
-        assert_eq!(normalize_name("Git.Example.COM."), "git.example.com");
-    }
-
-    #[test]
-    fn parsing_is_total() {
-        for line in [
-            "#",
-            "# #",
-            "%",
-            "::",
-            ":: #",
-            "1.2.3.4 #x",
-            "# 1.2.3.4",
-            "\u{feff}",
-        ] {
-            let _ = parse_line(line);
-        }
-        assert!(matches!(parse_line(":: x"), Parsed::Entry { .. }));
-    }
-
-    #[test]
-    fn load_missing_and_lossy() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("hosts");
-        assert_eq!(HostsFile::load(&path).unwrap().entries(), []);
-        // "10.0.0.1 box # сервер" in Windows-1251.
-        let mut bytes = b"10.0.0.1 box # ".to_vec();
-        bytes.extend_from_slice(&[0xf1, 0xe5, 0xf0, 0xe2, 0xe5, 0xf0]);
-        std::fs::write(&path, bytes).unwrap();
-        let entries = HostsFile::load(&path).unwrap().entries();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].names, ["box"]);
-    }
-
-    #[test]
-    fn system_path_is_absolute() {
-        assert!(system_path().is_absolute());
-        assert!(system_path().ends_with("hosts"));
-    }
-
-    #[test]
-    fn view_serializes() {
-        let v = serde_json::to_value(sample().view()).unwrap();
-        assert_eq!(v["entries"][0]["kind"], "loopback");
-        assert_eq!(v["entries"][0]["enabled"], true);
-        assert_eq!(v["entries"][8]["kind"], "blocked");
-        assert_eq!(v["invalid"][0]["problem"], "badAddress");
     }
 }

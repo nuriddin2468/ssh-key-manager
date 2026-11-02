@@ -81,4 +81,20 @@ addresses: Array<string>,
 /**
  * 1-based lines that list the name.
  */
-lines: Array<number>, };
+lines: Array<number>, } | { "kind": "hostsFileExpired", 
+/**
+ * The entry's names.
+ */
+names: Array<string>, 
+/**
+ * Its address.
+ */
+address: string, 
+/**
+ * 1-based line in the hosts file.
+ */
+line: number, 
+/**
+ * When it expired (RFC 3339).
+ */
+expires: string, };

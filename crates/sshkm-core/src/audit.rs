@@ -22,6 +22,7 @@
 //! | legacy PEM / PKCS#8 format | info |
 //! | hosts file sends a code host elsewhere, or `localhost` off this computer | critical |
 //! | hosts file gives a name several addresses | warning |
+//! | temporary hosts file entry past its time | warning |
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -29,6 +30,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use crate::{
     Result,
@@ -163,6 +165,17 @@ pub enum FindingKind {
         /// 1-based lines that list the name.
         lines: Vec<u32>,
     },
+    /// A temporary hosts file entry is still turned on after its time.
+    HostsFileExpired {
+        /// The entry's names.
+        names: Vec<String>,
+        /// Its address.
+        address: String,
+        /// 1-based line in the hosts file.
+        line: u32,
+        /// When it expired (RFC 3339).
+        expires: String,
+    },
 }
 
 /// What a finding is about.
@@ -210,6 +223,11 @@ pub enum FixAction {
         host_id: Option<u32>,
         /// The `IdentityFile` value as written.
         path: String,
+    },
+    /// Turn the hosts file entry on `line` off (needs administrator rights).
+    TurnOffHostsEntry {
+        /// 1-based line in the hosts file.
+        line: u32,
     },
 }
 
@@ -280,6 +298,8 @@ pub struct AuditInput<'a> {
     pub identity_usage: &'a [IdentityUsage],
     /// Entries of the system hosts file.
     pub hosts_file: &'a [HostsFileEntry],
+    /// The time temporary entries are compared with (none: never expired).
+    pub now: Option<OffsetDateTime>,
 }
 
 /// Runs all rules. Pure: no file system access.
@@ -338,7 +358,7 @@ pub fn run(input: &AuditInput<'_>) -> AuditReport {
             }),
         });
     }
-    hosts_file_findings(input.hosts_file, &mut findings);
+    hosts_file_findings(input.hosts_file, input.now, &mut findings);
 
     findings.sort_by(|a, b| a.severity.cmp(&b.severity).then_with(|| a.id.cmp(&b.id)));
     let mut counts = AuditCounts::default();
@@ -391,6 +411,7 @@ pub fn run_for_paths(paths: &SshPaths, hosts_file: &Path) -> Result<AuditReport>
         config_file: config_file.as_ref(),
         identity_usage: &usage,
         hosts_file: &hosts,
+        now: Some(OffsetDateTime::now_utc()),
     }))
 }
 
@@ -527,7 +548,31 @@ struct NameUse<'a> {
     lines: Vec<u32>,
 }
 
-fn hosts_file_findings(entries: &[HostsFileEntry], out: &mut Vec<Finding>) {
+fn hosts_file_findings(
+    entries: &[HostsFileEntry],
+    now: Option<OffsetDateTime>,
+    out: &mut Vec<Finding>,
+) {
+    if let Some(now) = now {
+        for entry in entries.iter().filter(|e| e.enabled && e.is_expired(now)) {
+            out.push(Finding {
+                id: format!(
+                    "hostsFileExpired:{}:{}",
+                    entry.address,
+                    entry.names.join(",")
+                ),
+                severity: Severity::Warning,
+                kind: FindingKind::HostsFileExpired {
+                    names: entry.names.clone(),
+                    address: entry.address.clone(),
+                    line: entry.line,
+                    expires: entry.expires.clone().unwrap_or_default(),
+                },
+                subject: FindingSubject::default(),
+                fix: Some(FixAction::TurnOffHostsEntry { line: entry.line }),
+            });
+        }
+    }
     // Keyed by name and IPv6-ness: each address family resolves on its own.
     let mut by_name: BTreeMap<(String, bool), NameUse<'_>> = BTreeMap::new();
     // Scoped addresses (`fe80::1%lo0 localhost`) apply to one interface and
@@ -793,6 +838,7 @@ mod tests {
             config_file: Some(&cfg),
             identity_usage: &usage,
             hosts_file: &[],
+            now: None,
         });
         assert_eq!(
             ids(&report),
@@ -864,6 +910,29 @@ mod tests {
                 addresses: vec!["10.0.4.12".into(), "10.0.9.9".into()],
                 lines: vec![4, 5, 6],
             }
+        );
+
+        let entries = HostsFile::parse(
+            "10.0.9.1 demo.local # sshkm-until=2026-11-02T19:00:00Z\n\
+             # 10.0.9.2 old.local # sshkm-until=2026-11-02T19:00:00Z\n",
+        )
+        .entries();
+        let at = |now| {
+            run(&AuditInput {
+                hosts_file: &entries,
+                now: Some(now),
+                ..AuditInput::default()
+            })
+        };
+        assert_eq!(
+            ids(&at(time::macros::datetime!(2026-11-02 18:00 UTC))),
+            Vec::<&str>::new()
+        );
+        let report = at(time::macros::datetime!(2026-11-02 19:30 UTC));
+        assert_eq!(ids(&report), ["hostsFileExpired:10.0.9.1:demo.local"]);
+        assert_eq!(
+            report.findings[0].fix,
+            Some(FixAction::TurnOffHostsEntry { line: 1 })
         );
 
         let entries = HostsFile::parse("10.1.1.1 localhost\n").entries();

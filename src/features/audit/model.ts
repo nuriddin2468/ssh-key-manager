@@ -58,11 +58,19 @@ export function findingText(t: TFunction, finding: Finding): string {
       return kind.name.replace(/\.$/, '').toLowerCase() === 'localhost'
         ? t('audit.kinds.hostsFileRedirect.textLocalhost', { address: kind.address })
         : t('audit.kinds.hostsFileRedirect.text', { name: kind.name, address: kind.address });
+    case 'hostsFileExpired':
+      return t('audit.kinds.hostsFileExpired.text', {
+        names: kind.names.join(' '),
+        address: kind.address,
+        time: new Intl.DateTimeFormat(undefined, {
+          dateStyle: 'medium',
+          timeStyle: 'short',
+        }).format(new Date(kind.expires)),
+      });
     case 'hostsFileConflict':
       return t('audit.kinds.hostsFileConflict.text', {
         name: kind.name,
         addresses: kind.addresses.join(', '),
-        line: kind.lines[0] ?? '',
         address: kind.addresses[0] ?? '',
       });
     default:
@@ -81,6 +89,7 @@ export function findingSubject(
   if (finding.kind.kind === 'hostsFileRedirect' || finding.kind.kind === 'hostsFileConflict') {
     return finding.kind.name;
   }
+  if (finding.kind.kind === 'hostsFileExpired') return finding.kind.names.join(' ');
   if (keyId) return keysById.get(keyId)?.name ?? keyId.split('#').pop() ?? keyId;
   if (hostId !== null) {
     const host = hosts.find((h) => h.id === hostId);

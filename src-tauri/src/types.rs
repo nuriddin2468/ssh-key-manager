@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use sshkm_core::agent::{AgentIdentity, AgentStatus};
 use sshkm_core::config::{ConfigView, IdentityUsage};
-use sshkm_core::hosts_file::HostsFileView;
+use sshkm_core::hosts_file::{HostsDiffLine, HostsFileView, HostsReadOnly};
 use sshkm_core::keys::{GenerateRequest, KeyInfo, SkippedFile};
 use sshkm_core::known_hosts::{KnownHostEntry, KnownHostsView};
 use sshkm_core::paths::SshPaths;
@@ -157,7 +157,53 @@ pub struct KnownHostsFile {
 pub struct HostsFileInfo {
     pub path: String,
     pub exists: bool,
+    /// SHA-256 of the file; edits are made against it.
+    pub revision: String,
+    /// Why the app cannot change the file, if it cannot.
+    pub read_only: Option<HostsReadOnly>,
     pub view: HostsFileView,
+}
+
+/// What a set of changes would do to the hosts file.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub struct HostsPreview {
+    /// The file changed since the changes were made, so they no longer apply.
+    pub stale: bool,
+    pub diff: Vec<HostsDiffLine>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub enum HostsApplyOutcome {
+    /// The new file is in place.
+    Applied,
+    /// The password prompt was dismissed; nothing changed.
+    Cancelled,
+    /// The file changed since the changes were made; nothing changed.
+    Stale,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub struct HostsApplyResult {
+    pub outcome: HostsApplyOutcome,
+    pub file: HostsFileInfo,
+}
+
+/// A copy of the hosts file saved before the app changed it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub struct HostsBackup {
+    pub path: String,
+    /// When it was saved (RFC 3339).
+    pub saved: Option<String>,
+    /// How many entries it has.
+    pub entries: u32,
 }
 
 /// What the system resolver returned for a name.

@@ -8,7 +8,7 @@ use time::OffsetDateTime;
 /// Shared by all commands.
 pub struct AppState {
     pub paths: SshPaths,
-    /// The system hosts file (read only).
+    /// The system hosts file.
     pub hosts_file: PathBuf,
     /// Backups of `config` and `known_hosts` are written here before edits.
     pub backup_dir: PathBuf,

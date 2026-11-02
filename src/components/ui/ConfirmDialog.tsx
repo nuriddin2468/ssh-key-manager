@@ -9,6 +9,8 @@ interface ConfirmDialogProps {
   title: ReactNode;
   description: ReactNode;
   confirmLabel: string;
+  /** Defaults to Cancel. */
+  cancelLabel?: string;
   destructive?: boolean;
   busy?: boolean;
   onConfirm: () => void;
@@ -20,6 +22,7 @@ export function ConfirmDialog({
   title,
   description,
   confirmLabel,
+  cancelLabel,
   destructive = false,
   busy = false,
   onConfirm,
@@ -38,7 +41,7 @@ export function ConfirmDialog({
           </div>
           <div className="flex justify-end gap-2">
             <AlertDialog.Cancel asChild>
-              <Button>{t('common.cancel')}</Button>
+              <Button>{cancelLabel ?? t('common.cancel')}</Button>
             </AlertDialog.Cancel>
             <Button
               variant={destructive ? 'danger' : 'primary'}

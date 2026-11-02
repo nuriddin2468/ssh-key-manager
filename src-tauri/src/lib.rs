@@ -77,6 +77,10 @@ pub fn run() {
             commands::known_hosts::check_host_key,
             commands::hosts_file::read_hosts_file,
             commands::hosts_file::lookup_host,
+            commands::hosts_file::preview_hosts_changes,
+            commands::hosts_file::apply_hosts_changes,
+            commands::hosts_file::list_hosts_backups,
+            commands::hosts_file::restore_hosts_backup,
             commands::audit::run_audit,
             commands::audit::fix_permissions,
         ])

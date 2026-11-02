@@ -93,8 +93,13 @@ export function LookupDialog({ entries, initialName, onShowLine, onDone }: Looku
                             {t('hostsFile.lookupIgnored')}
                           </Badge>
                         )}
-                        <Button size="sm" variant="ghost" onClick={() => onShowLine(entry.line)}>
-                          {t('hostsFile.showLine', { line: entry.line })}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          aria-label={`${t('hostsFile.showInList')}: ${entry.address}`}
+                          onClick={() => onShowLine(entry.line)}
+                        >
+                          {t('hostsFile.showInList')}
                         </Button>
                       </li>
                     ))}

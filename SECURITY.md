@@ -7,8 +7,29 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
 - **Private keys never reach the UI.** The webview only receives metadata and public keys.
   Decrypted keys exist only inside the Rust process, are zeroized when dropped, and are
   passed straight to `ssh-agent`.
-- **Passphrases are not stored.** They travel from the form to the Rust process for one
-  operation and are held in `secrecy::SecretString`. They are never logged.
+- **Key passphrases are not stored**, unless you save them in the password vault. They
+  travel from the form to the Rust process for one operation and are held in
+  `secrecy::SecretString`. They are never logged.
+- **The password vault** (optional) is a standard KeePass file, `vault.kdbx`, in the
+  app's data folder or a folder you choose.
+  - Format: KDBX 4.1 with Argon2id key derivation and ChaCha20 encryption; password
+    fields are additionally protected inside the file, as KeePass does.
+  - Its password is a random 256-bit recovery key shown once when the vault is made.
+    The master password does not encrypt the database directly: it opens a copy of
+    the recovery key kept in `vault.keys`, encrypted with XChaCha20-Poly1305 under a
+    key derived with Argon2id (128 MiB, 3 passes). There is no way back without the
+    master password or the recovery key.
+  - While unlocked, the decrypted database is held only by the Rust process and is
+    dropped when the vault locks: on request, after inactivity, after sleep, and
+    optionally when the window is minimised. Lists and details sent to the interface
+    carry no passwords or 2FA secrets; a password reaches the interface only when you
+    choose to reveal it.
+  - Copying a password or 2FA code goes from Rust straight to the clipboard, marked so
+    clipboard history (and Windows' cloud clipboard) skip it, and is cleared after
+    30 seconds by default if nothing else was copied.
+  - Changes are written atomically and the previous file is backed up (20 copies,
+    still encrypted). A write over a change made elsewhere is refused and saved as a
+    separate copy.
 - **Minimal network access.** The app sends none of your data anywhere. Its only
   requests are:
   - the update check, which downloads `latest.json` from this repository's GitHub

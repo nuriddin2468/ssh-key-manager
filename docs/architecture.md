@@ -29,6 +29,20 @@ real `~/.ssh`. Its modules:
     `icacls`.
 - `audit`: pure rules over the data above. Findings carry machine-readable kinds and
   parameters, so the UI can localise them.
+- `vault`: the password vault, two files side by side.
+  - `vault.kdbx` is a standard KeePass database (KDBX 4.1, Argon2id, ChaCha20). Its
+    password is the *vault secret*: a random 256-bit recovery key, shown once, which
+    also opens the file in KeePassXC.
+  - `vault.keys` holds key slots: the secret encrypted with XChaCha20-Poly1305 under a
+    key derived from the master password (Argon2id, 128 MiB) and, optionally, under a
+    random device key kept in the OS credential store for Touch ID / Windows Hello.
+    Losing it loses nothing: the recovery key opens the database and sets a new
+    master password.
+  - Entry summaries and details never contain a password or 2FA secret; those are
+    read one at a time.
+  - Every change is written atomically after a backup. Before each operation the
+    vault re-reads a database changed elsewhere (a synced folder); a write over such
+    a change fails with `conflict` and is kept as a separate copy.
 
 Errors have a stable `code` (`wrong_passphrase`, `agent_unavailable`, …) that the UI
 translates.
@@ -41,6 +55,10 @@ translates.
 - **Process helpers.** Run `ssh -V`, `ssh-keyscan` and `ssh` without a console window and
   with timeouts.
 - **Watcher.** Watches `~/.ssh` so changes made in a terminal appear immediately.
+- **Vault runtime.** The unlocked vault lives only in the Rust process. A timer locks
+  it after inactivity or sleep; each lock emits `vault-locked`. Copied passwords go
+  from Rust to the clipboard, marked to stay out of clipboard history, and are
+  cleared after a while.
 - **Menu.** The macOS menu bar with keyboard shortcuts.
 
 ## UI

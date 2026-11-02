@@ -14,7 +14,7 @@ import {
   ShieldCheck,
   Trash2,
 } from 'lucide-react';
-import { useState } from 'react';
+import { type CSSProperties, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
@@ -117,8 +117,12 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
     >
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute -top-[90px] -left-10 h-[220px] w-[300px] rounded-full opacity-55 blur-[50px]"
-        style={{ background: TONES[tone][1] }}
+        className="soft-glow absolute -top-[178px] -left-[128px] h-[396px] w-[476px]"
+        style={
+          {
+            '--glow-color': `color-mix(in srgb, ${TONES[tone][1]} 53%, transparent)`,
+          } as CSSProperties
+        }
       />
       <div className="relative flex flex-col gap-3.5 border-b border-white/[0.07] px-5 pt-5 pb-4">
         <div className="flex items-start gap-3">

@@ -403,7 +403,7 @@ export function HostsFilePage({ line }: { line?: number }) {
       {pending > 0 ? (
         <section
           aria-label={t('hostsFile.pending', { count: pending })}
-          className="flex flex-wrap items-center gap-3 border-t border-white/[0.07] bg-[rgb(11_15_23/0.72)] px-6 py-3 backdrop-blur-xl"
+          className="flex flex-wrap items-center gap-3 border-t border-white/[0.07] bg-[rgb(11_15_23/0.72)] px-6 py-3"
         >
           {stale ? (
             <span role="alert" className="min-w-0 flex-1 text-[12.5px] text-warning">

@@ -86,7 +86,7 @@ export function Select({
           collisionPadding={12}
           className={cn(
             'z-50 max-h-[min(320px,var(--radix-select-content-available-height))] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border border-white/10',
-            'bg-[rgb(22_27_39/0.96)] text-[13px] text-fg shadow-[0_24px_48px_-16px_rgb(0_0_0/0.75),inset_0_1px_0_rgb(255_255_255/0.06)] backdrop-blur-xl',
+            'bg-[rgb(22_27_39/0.96)] text-[13px] text-fg shadow-[0_24px_48px_-16px_rgb(0_0_0/0.75),inset_0_1px_0_rgb(255_255_255/0.06)]',
             'origin-[var(--radix-select-content-transform-origin)] data-[state=closed]:pointer-events-none data-[state=closed]:animate-popover-out data-[state=open]:animate-popover-in',
           )}
         >

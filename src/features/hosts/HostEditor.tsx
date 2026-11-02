@@ -77,7 +77,7 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
     >
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute -top-[110px] -right-[60px] h-[220px] w-[320px] rounded-full bg-[#2563EB] opacity-35 blur-[60px]"
+        className="soft-glow absolute -top-[215px] -right-[165px] h-[430px] w-[530px] [--glow-color:rgb(37_99_235/0.32)]"
       />
       <div className="relative flex flex-wrap items-center gap-2.5 px-5 pt-[18px] pb-3.5">
         <Tile tone={mono.tone} size={44}>

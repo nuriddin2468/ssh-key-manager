@@ -223,6 +223,23 @@
   border: 1px solid rgb(var(--accent-rgb) / 0.4);
   color: var(--accent-text);
 }
+/*
+ * Soft light behind a panel's header, shaped like a blurred circle. Drawn as
+ * a gradient, not with `filter: blur()`: without a GPU, WebKitGTK repaints a
+ * blur on every hover and keystroke, which made the UI lag on Linux. Set the
+ * colour with `--glow-color` and size the element to the light's full extent.
+ */
+@utility soft-glow {
+  pointer-events: none;
+  background: radial-gradient(
+    closest-side,
+    var(--glow-color),
+    color-mix(in srgb, var(--glow-color) 90%, transparent) 25%,
+    color-mix(in srgb, var(--glow-color) 55%, transparent) 50%,
+    color-mix(in srgb, var(--glow-color) 18%, transparent) 75%,
+    transparent
+  );
+}
 @utility selected-row {
   background: rgb(var(--accent-rgb) / 0.1);
   box-shadow: inset 0 0 0 1px rgb(var(--accent-rgb) / 0.38);

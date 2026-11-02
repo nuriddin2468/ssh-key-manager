@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 use sshkm_core::agent::{AgentIdentity, AgentStatus};
 use sshkm_core::config::{ConfigView, IdentityUsage};
+use sshkm_core::hosts_file::HostsFileView;
 use sshkm_core::keys::{GenerateRequest, KeyInfo, SkippedFile};
 use sshkm_core::known_hosts::{KnownHostEntry, KnownHostsView};
 use sshkm_core::paths::SshPaths;
@@ -45,6 +46,8 @@ pub struct Environment {
     pub default_comment: String,
     /// Where backups of edited files are kept.
     pub backup_dir: String,
+    /// The system hosts file.
+    pub hosts_file: String,
 }
 
 /// A host block that references a key.
@@ -146,6 +149,26 @@ pub struct KnownHostsFile {
     pub path: String,
     pub exists: bool,
     pub view: KnownHostsView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub struct HostsFileInfo {
+    pub path: String,
+    pub exists: bool,
+    pub view: HostsFileView,
+}
+
+/// What the system resolver returned for a name.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub struct NameLookup {
+    /// Addresses in the order the resolver prefers them.
+    pub addresses: Vec<String>,
+    /// Why nothing was found, as the resolver put it.
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

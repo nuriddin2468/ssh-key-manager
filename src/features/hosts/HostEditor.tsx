@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { IconButton } from '@/components/ui/IconButton';
 import { Tile } from '@/components/ui/Tile';
+import { HostResolution } from '@/features/hostsFile/HostResolution';
 import { cn } from '@/lib/cn';
 import { ConfigPreview, HostFields, useHostErrors } from './HostFields';
 import {
@@ -166,6 +167,8 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
               hostId={host.id}
               errors={dirty ? errors : { port: errors.port }}
             />
+
+            <HostResolution form={form} />
 
             <OtherOptions rows={form.other} onChange={(rows) => set('other', rows)} />
           </fieldset>

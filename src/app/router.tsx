@@ -10,6 +10,7 @@ export type Route =
   | { page: 'hosts'; hostId?: number }
   | { page: 'agent' }
   | { page: 'known' }
+  | { page: 'hostsFile'; line?: number }
   | { page: 'audit' }
   | { page: 'settings' };
 
@@ -33,6 +34,8 @@ function devRoute(): Route | undefined {
   if (page === 'keys') return { page, keyId: params.get('key') ?? undefined };
   if (page === 'hosts')
     return { page, hostId: params.has('host') ? Number(params.get('host')) : undefined };
+  if (page === 'hostsFile')
+    return { page, line: params.has('line') ? Number(params.get('line')) : undefined };
   if (
     page === 'overview' ||
     page === 'agent' ||

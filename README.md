@@ -112,7 +112,7 @@ Builds are not code-signed yet (it's on the [roadmap](#roadmap)), so your system
 
 ## Privacy and safety
 
-- **Nothing leaves your computer.** The app sends none of your data anywhere. It goes online only to check GitHub for a new version of itself (you can turn this off in **Settings → Updates**) and when you ask it to reach a server: checking a host key or testing a connection.
+- **Nothing leaves your computer.** The app sends none of your data anywhere. It goes online only to check GitHub for a new version of itself (you can turn this off in **Settings → Updates**) and when you ask it to reach a server: checking a host key, testing a connection or looking up a name in DNS.
 - **Your private keys stay private.** The interface only ever sees public keys and fingerprints. Passphrases are used once and never stored.
 - **Your files stay standard.** Everything is plain OpenSSH, and you can stop using the app at any time.
 - **Mistakes can be undone.** Config files are backed up before every edit, and keys go to the Trash, not into oblivion.

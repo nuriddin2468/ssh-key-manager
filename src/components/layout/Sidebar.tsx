@@ -3,6 +3,7 @@ import {
   Globe,
   KeyRound,
   type LucideIcon,
+  Network,
   Server,
   Settings as SettingsIcon,
   ShieldCheck,
@@ -14,6 +15,7 @@ import {
   useAudit,
   useConfig,
   useEnvironment,
+  useHostsFile,
   useKeys,
   useKnownHosts,
 } from '@/api/queries';
@@ -35,6 +37,7 @@ export function Sidebar() {
   const config = useConfig();
   const agent = useAgent();
   const known = useKnownHosts();
+  const hostsFile = useHostsFile();
   const audit = useAudit();
 
   const findings = audit.data ? audit.data.counts.critical + audit.data.counts.warning : 0;
@@ -83,6 +86,15 @@ export function Sidebar() {
           {item('hosts', t('nav.hosts'), 'blue', Server, config.data?.view.hosts.length)}
           {item('agent', t('nav.agent'), 'violet', Cpu, running ? unlocked : undefined)}
           {item('known', t('nav.known'), 'amber', Globe, known.data?.view.entries.length)}
+        </NavGroup>
+        <NavGroup label={t('nav.groupSystem')}>
+          {item(
+            'hostsFile',
+            t('nav.hostsFile'),
+            'indigo',
+            Network,
+            hostsFile.data?.view.entries.filter((entry) => entry.enabled).length,
+          )}
         </NavGroup>
         <NavGroup label={t('nav.groupHealth')}>
           <NavItem

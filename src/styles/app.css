@@ -167,6 +167,15 @@
   --glow-a: rgb(217 119 6 / 0.22);
   --glow-b: rgb(37 99 235 / 0.1);
 }
+[data-section="hostsFile"] {
+  --accent-1: #a5b4fc;
+  --accent-2: #6366f1;
+  --accent-ink: #110f3d;
+  --accent-text: #c7d2fe;
+  --accent-rgb: 129 140 248;
+  --glow-a: rgb(79 70 229 / 0.24);
+  --glow-b: rgb(20 184 166 / 0.08);
+}
 [data-section="audit"] {
   --accent-1: #fda4af;
   --accent-2: #f43f5e;

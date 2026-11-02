@@ -8,9 +8,11 @@ import type { Environment } from '@/bindings/Environment';
 import type { GenerateKeyRequest } from '@/bindings/GenerateKeyRequest';
 import type { HostEdit } from '@/bindings/HostEdit';
 import type { HostKeyCheck } from '@/bindings/HostKeyCheck';
+import type { HostsFileInfo } from '@/bindings/HostsFileInfo';
 import type { KeysView } from '@/bindings/KeysView';
 import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostsFile } from '@/bindings/KnownHostsFile';
+import type { NameLookup } from '@/bindings/NameLookup';
 import type { PermissionFix } from '@/bindings/PermissionFix';
 import type { SavedHost } from '@/bindings/SavedHost';
 import { call } from '@/lib/ipc';
@@ -48,6 +50,9 @@ export const api = {
   removeKnownHosts: (lines: number[]) => call<KnownHostsFile>('remove_known_hosts', { lines }),
   checkHostKey: (host: string, port: number | null) =>
     call<HostKeyCheck>('check_host_key', { host, port }),
+
+  hostsFile: () => call<HostsFileInfo>('read_hosts_file'),
+  lookupHost: (name: string) => call<NameLookup>('lookup_host', { name }),
 
   audit: () => call<AuditReport>('run_audit'),
   fixPermissions: (items: PermissionFix[]) => call<number>('fix_permissions', { items }),

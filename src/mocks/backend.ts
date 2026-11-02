@@ -11,6 +11,7 @@ import type { GenerateKeyRequest } from '@/bindings/GenerateKeyRequest';
 import type { HostEdit } from '@/bindings/HostEdit';
 import type { HostEntry } from '@/bindings/HostEntry';
 import type { HostOption } from '@/bindings/HostOption';
+import type { HostsFileEntry } from '@/bindings/HostsFileEntry';
 import type { KeysView } from '@/bindings/KeysView';
 import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostEntry } from '@/bindings/KnownHostEntry';
@@ -199,6 +200,50 @@ known.push({
   comment: null,
 });
 
+const hostsLine = (
+  line: number,
+  address: string,
+  kind: HostsFileEntry['kind'],
+  names: string[],
+  extra: Partial<HostsFileEntry> = {},
+): HostsFileEntry => ({
+  line,
+  address,
+  kind,
+  names,
+  comment: null,
+  enabled: true,
+  system: false,
+  shadowed: [],
+  ...extra,
+});
+
+const hostsFileEntries: HostsFileEntry[] = [
+  hostsLine(7, '127.0.0.1', 'loopback', ['localhost'], { system: true }),
+  hostsLine(8, '255.255.255.255', 'private', ['broadcasthost'], { system: true }),
+  hostsLine(9, '::1', 'loopback', ['localhost'], { system: true }),
+  hostsLine(12, '127.0.0.1', 'loopback', ['app.test', 'api.test', 'admin.test']),
+  hostsLine(13, '10.0.8.20', 'private', ['staging-api.internal'], { comment: 'behind the VPN' }),
+  hostsLine(14, '10.0.8.21', 'private', ['staging-api.internal'], {
+    comment: 'new staging, not live yet',
+    enabled: false,
+  }),
+  hostsLine(15, '10.0.4.12', 'private', ['prod-db.internal']),
+  hostsLine(16, '192.168.1.20', 'private', ['nas.home', 'nas']),
+  hostsLine(17, '10.0.8.30', 'private', ['staging-api.internal'], {
+    shadowed: ['staging-api.internal'],
+  }),
+  hostsLine(20, '0.0.0.0', 'blocked', ['tracker.example.com']),
+  hostsLine(21, '0.0.0.0', 'blocked', ['ads.example.net']),
+];
+
+const DNS: Record<string, string[]> = {
+  'github.com': ['140.82.121.4'],
+  'gitlab.com': ['172.65.251.78', '2606:4700:90:0:f22e:fbec:5bed:a9b9'],
+  'bastion.example.net': ['203.0.113.10'],
+  'vpn.example.org': ['198.51.100.7'],
+};
+
 function hosts(): HostEntry[] {
   let line = 1;
   return hostSpecs.map((spec, id) => {
@@ -315,6 +360,18 @@ function audit(): AuditReport {
       fix: { kind: 'removeIdentityFile', hostId: usage.hostId, path: usage.raw },
     });
   }
+  findings.push({
+    id: 'hostsFileConflict:staging-api.internal:ipv4',
+    severity: 'warning',
+    kind: {
+      kind: 'hostsFileConflict',
+      name: 'staging-api.internal',
+      addresses: ['10.0.8.20', '10.0.8.30'],
+      lines: [13, 17],
+    },
+    subject: { keyId: null, hostId: null, path: null },
+    fix: null,
+  });
   const order = { critical: 0, warning: 1, info: 2 };
   findings.sort((a, b) => order[a.severity] - order[b.severity]);
   const count = (s: Finding['severity']) => findings.filter((f) => f.severity === s).length;
@@ -363,6 +420,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     appVersion: '0.1.0',
     defaultComment: 'dev@macbook-pro',
     backupDir: `${HOME}/Library/Application Support/dev.sshkeymanager.desktop/backups`,
+    hostsFile: '/etc/hosts',
   }),
   list_keys: keysView,
   generate_key: ({ request }) => {
@@ -503,6 +561,22 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       };
     }
     return { status: saved.length ? 'match' : 'unknown', offered, saved, error: null };
+  },
+  read_hosts_file: () => ({
+    path: '/etc/hosts',
+    exists: true,
+    view: { entries: hostsFileEntries, invalid: [] },
+  }),
+  lookup_host: ({ name }) => {
+    const wanted = String(name).toLowerCase();
+    const listed = hostsFileEntries.find((e) => e.enabled && e.names.includes(wanted));
+    const addresses = listed ? [listed.address] : (DNS[wanted] ?? []);
+    return {
+      addresses,
+      error: addresses.length
+        ? null
+        : 'failed to lookup address information: nodename nor servname provided, or not known',
+    };
   },
   run_audit: audit,
   fix_permissions: ({ items }) => {

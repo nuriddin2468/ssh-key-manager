@@ -8,7 +8,8 @@ import { useDialogs } from './dialogs';
 import { type Page, type Route, useRouter } from './router';
 
 const FIND_EVENT = 'sshkm:find';
-const PAGES: Page[] = ['overview', 'keys', 'hosts', 'agent', 'known', 'audit'];
+// ⌘1–⌘7, in the order they were added so existing shortcuts never move.
+const PAGES: Page[] = ['overview', 'keys', 'hosts', 'agent', 'known', 'audit', 'hostsFile'];
 
 /**
  * Wires the native menu (macOS), keyboard shortcuts (Windows/Linux, where

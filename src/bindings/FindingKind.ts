@@ -57,4 +57,28 @@ patterns: Array<string>, } | { "kind": "legacyFormat",
 /**
  * `pem` or `pkcs8`.
  */
-format: KeyFormat, };
+format: KeyFormat, } | { "kind": "hostsFileRedirect", 
+/**
+ * The name as written.
+ */
+name: string, 
+/**
+ * Where it is sent.
+ */
+address: string, 
+/**
+ * 1-based line in the hosts file.
+ */
+line: number, } | { "kind": "hostsFileConflict", 
+/**
+ * The name, normalised.
+ */
+name: string, 
+/**
+ * The distinct addresses in file order.
+ */
+addresses: Array<string>, 
+/**
+ * 1-based lines that list the name.
+ */
+lines: Array<number>, };

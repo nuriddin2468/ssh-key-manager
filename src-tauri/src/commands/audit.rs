@@ -10,7 +10,10 @@ use crate::types::PermissionFix;
 
 #[tauri::command]
 pub async fn run_audit(state: State<'_, Shared>) -> AppResult<AuditReport> {
-    blocking(&state, |state| Ok(audit::run_for_paths(&state.paths)?)).await
+    blocking(&state, |state| {
+        Ok(audit::run_for_paths(&state.paths, &state.hosts_file)?)
+    })
+    .await
 }
 
 /// Applies permission fixes and returns how many paths were fixed. Only paths

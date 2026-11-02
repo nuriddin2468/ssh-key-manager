@@ -17,8 +17,17 @@ const FIX_LABELS = {
 /** The label of a finding's one-click fix, or of "open" when there is none. */
 export function fixLabelKey(finding: Finding) {
   if (finding.fix) return FIX_LABELS[finding.fix.kind];
+  if (hostsFileLine(finding) !== undefined) return 'audit.action.openHostsFile';
   if (finding.subject.hostId !== null && !finding.subject.keyId) return 'audit.action.openHost';
   return 'audit.action.openKey';
+}
+
+/** The hosts file line a finding is about, if it is about one. */
+function hostsFileLine(finding: Finding): number | undefined {
+  const kind = finding.kind;
+  if (kind.kind === 'hostsFileRedirect') return kind.line;
+  if (kind.kind === 'hostsFileConflict') return kind.lines[0];
+  return undefined;
 }
 
 /** Runs a finding's fix: some apply at once, some open a dialog or a page. */
@@ -59,7 +68,9 @@ export function useFix(keysById: ReadonlyMap<string, KeyView>) {
       run.mutate(action);
       return;
     }
-    if (finding.subject.keyId) navigate({ page: 'keys', keyId: finding.subject.keyId });
+    const line = hostsFileLine(finding);
+    if (line !== undefined) navigate({ page: 'hostsFile', line });
+    else if (finding.subject.keyId) navigate({ page: 'keys', keyId: finding.subject.keyId });
     else if (finding.subject.hostId !== null)
       navigate({ page: 'hosts', hostId: finding.subject.hostId });
   };

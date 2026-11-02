@@ -20,6 +20,9 @@ real `~/.ssh`. Its modules:
   - Edits change only the lines they touch.
   - New hosts go before a trailing `Host *` block, because the first match wins.
 - `known_hosts`: a lossless model, including matching of hashed (`|1|`) entries.
+- `hosts_file`: a lossless, read-only model of the system hosts file (`/etc/hosts`,
+  `%SystemRoot%\System32\drivers\etc\hosts`). Commented-out entries count as turned off,
+  and for each address family the first line that lists a name wins, as in resolvers.
 - `agent`: a small synchronous client for the ssh-agent protocol.
   - Connects through a Unix socket (`SSH_AUTH_SOCK`), or on Windows a named pipe:
     `SSH_AUTH_SOCK` if it names one, else the OpenSSH agent's pipe.
@@ -40,7 +43,8 @@ translates.
   the hosts that use each key.
 - **Process helpers.** Run `ssh -V`, `ssh-keyscan` and `ssh` without a console window and
   with timeouts.
-- **Watcher.** Watches `~/.ssh` so changes made in a terminal appear immediately.
+- **Watcher.** Watches `~/.ssh` and the hosts file so changes made in a terminal appear
+  immediately.
 - **Menu.** The macOS menu bar with keyboard shortcuts.
 
 ## UI

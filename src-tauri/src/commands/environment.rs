@@ -14,6 +14,7 @@ pub async fn get_environment(state: State<'_, Shared>) -> AppResult<Environment>
             app_version: env!("CARGO_PKG_VERSION").to_owned(),
             default_comment: default_comment(),
             backup_dir: state.backup_dir.to_string_lossy().into_owned(),
+            hosts_file: state.hosts_file.to_string_lossy().into_owned(),
         })
     })
     .await

@@ -10,6 +10,7 @@
     "opener:allow-reveal-item-in-dir",
     "clipboard-manager:allow-write-text",
     "dialog:allow-open",
+    "dialog:allow-save",
     "window-state:default",
     "log:default",
     "updater:default",

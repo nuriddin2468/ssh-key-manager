@@ -8,6 +8,7 @@ mod process;
 mod state;
 mod types;
 mod vault;
+mod vault_watcher;
 mod watcher;
 
 use std::sync::Arc;
@@ -18,6 +19,7 @@ use tauri::{Manager, WindowEvent};
 use crate::state::AppState;
 use crate::vault::LockReason;
 
+#[allow(clippy::too_many_lines, reason = "mostly the list of commands")]
 pub fn run() {
     let builder = tauri::Builder::default();
 
@@ -50,6 +52,7 @@ pub fn run() {
             watcher::start(app.handle(), &paths.dir);
             let state = Arc::new(AppState::new(paths, backup_dir, data_dir));
             state.vault.start_timer(app.handle().clone());
+            vault_watcher::start(app.handle(), &state.vault.paths());
             app.manage(state);
             #[cfg(target_os = "macos")]
             menu::install(app)?;
@@ -111,6 +114,15 @@ pub fn run() {
             commands::vault::vault_change_master,
             commands::vault::vault_new_recovery_key,
             commands::vault::vault_set_settings,
+            commands::vault_files::vault_import_preview,
+            commands::vault_files::vault_import,
+            commands::vault_files::vault_trash_import_file,
+            commands::vault_files::vault_export_csv,
+            commands::vault_files::vault_export_kdbx,
+            commands::vault_files::vault_location,
+            commands::vault_files::vault_move,
+            commands::vault_files::vault_use_file,
+            commands::vault_files::vault_use_default,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start SSH Key Manager");

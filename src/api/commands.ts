@@ -14,6 +14,7 @@ import type { GenerateKeyRequest } from '@/bindings/GenerateKeyRequest';
 import type { GenerateOptions } from '@/bindings/GenerateOptions';
 import type { HostEdit } from '@/bindings/HostEdit';
 import type { HostKeyCheck } from '@/bindings/HostKeyCheck';
+import type { ImportPreview } from '@/bindings/ImportPreview';
 import type { KeysView } from '@/bindings/KeysView';
 import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostsFile } from '@/bindings/KnownHostsFile';
@@ -22,6 +23,7 @@ import type { PermissionFix } from '@/bindings/PermissionFix';
 import type { SavedHost } from '@/bindings/SavedHost';
 import type { SecretField } from '@/bindings/SecretField';
 import type { Strength } from '@/bindings/Strength';
+import type { VaultLocation } from '@/bindings/VaultLocation';
 import type { VaultSettings } from '@/bindings/VaultSettings';
 import type { VaultStatus } from '@/bindings/VaultStatus';
 import { call } from '@/lib/ipc';
@@ -92,4 +94,24 @@ export const api = {
   vaultNewRecoveryKey: (master: string) => call<string>('vault_new_recovery_key', { master }),
   vaultSetSettings: (settings: VaultSettings) =>
     call<VaultSettings>('vault_set_settings', { settings }),
+
+  // The vault's files (src-tauri/src/commands/vault_files.rs).
+  /** Rows of a CSV export, without passwords; duplicates name the existing entry. */
+  vaultImportPreview: (path: string) => call<ImportPreview>('vault_import_preview', { path }),
+  /** Reads the file again and adds the rows at `indices`; returns how many were added. */
+  vaultImport: (path: string, indices: number[]) => call<number>('vault_import', { path, indices }),
+  /** Moves the CSV file just imported to the Trash; refuses any other file. */
+  vaultTrashImportFile: (path: string) => call<void>('vault_trash_import_file', { path }),
+  /** Plain-text KeePassXC-style CSV; returns how many entries were written. */
+  vaultExportCsv: (path: string, master: string) =>
+    call<number>('vault_export_csv', { path, master }),
+  /** A copy of the database, which opens with the recovery key. Works locked. */
+  vaultExportKdbx: (path: string) => call<void>('vault_export_kdbx', { path }),
+  vaultLocation: () => call<VaultLocation>('vault_location'),
+  /** Moves both vault files into `folder`, locked or unlocked. */
+  vaultMove: (folder: string) => call<VaultLocation>('vault_move', { folder }),
+  /** Locks the vault and switches to another `.kdbx` file. */
+  vaultUseFile: (path: string) => call<VaultLocation>('vault_use_file', { path }),
+  /** Back to the app's folder: move the files there, or switch to the vault there. */
+  vaultUseDefault: (moveFiles: boolean) => call<VaultLocation>('vault_use_default', { moveFiles }),
 };

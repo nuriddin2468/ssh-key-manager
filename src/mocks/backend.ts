@@ -15,6 +15,7 @@ import type { KeysView } from '@/bindings/KeysView';
 import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostEntry } from '@/bindings/KnownHostEntry';
 import type { PermissionFix } from '@/bindings/PermissionFix';
+import { vaultHandlers } from './vault';
 
 const HOME = '/Users/dev';
 const DIR = `${HOME}/.ssh`;
@@ -356,6 +357,7 @@ const fail = (code: string, message: string) => Promise.reject({ code, message }
 const findKey = (id: unknown) => keys.find((k) => k.id === id);
 
 const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
+  ...vaultHandlers,
   get_environment: (): Environment => ({
     paths: { home: HOME, dir: DIR, config: `${DIR}/config`, knownHosts: `${DIR}/known_hosts` },
     platform: 'macos',

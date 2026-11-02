@@ -11,6 +11,7 @@ export type Route =
   | { page: 'agent' }
   | { page: 'known' }
   | { page: 'audit' }
+  | { page: 'passwords'; entryId?: string }
   | { page: 'settings' };
 
 export type Page = Route['page'];
@@ -33,6 +34,7 @@ function devRoute(): Route | undefined {
   if (page === 'keys') return { page, keyId: params.get('key') ?? undefined };
   if (page === 'hosts')
     return { page, hostId: params.has('host') ? Number(params.get('host')) : undefined };
+  if (page === 'passwords') return { page, entryId: params.get('entry') ?? undefined };
   if (
     page === 'overview' ||
     page === 'agent' ||

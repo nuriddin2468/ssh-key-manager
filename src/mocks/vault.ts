@@ -1,5 +1,11 @@
 // In-memory password vault for `pnpm dev` (see backend.ts). It starts locked;
-// the master password is `master`. Open `?vault=missing` to start without one.
+// the master password is `master`. `?vault=` changes the start:
+// - `missing`: no vault yet;
+// - `keepass`: a KeePass file without a master password on this computer
+//   (opens with the recovery key or the file's password, `keepass`);
+// - `unlocked`: already open.
+// Like the backend, it locks itself after the auto-lock time without activity
+// and announces every lock (see `MOCK_LOCKED_EVENT` in features/passwords).
 
 import type { CopyResult } from '@/bindings/CopyResult';
 import type { EntryDetail } from '@/bindings/EntryDetail';
@@ -21,9 +27,15 @@ interface MockEntry {
   otp: string;
 }
 
-let exists = new URLSearchParams(window.location.search).get('vault') !== 'missing';
+const START = new URLSearchParams(window.location.search).get('vault');
+const LOCKED_EVENT = 'sshkm:mock-vault-locked';
+const KEEPASS_PASSWORD = 'keepass';
+
+let exists = START !== 'missing';
+let hasMaster = START !== 'keepass';
 let master = 'master';
-let unlocked = false;
+let unlocked = START === 'unlocked';
+let lastActivity = Date.now();
 let deviceEnabled = false;
 let settings: VaultSettings = {
   database: null,
@@ -97,8 +109,27 @@ const fail = (code: string, message: string) => Promise.reject({ code, message }
 
 function requireUnlocked(): Promise<never> | undefined {
   if (!unlocked) return fail('vault_locked', 'the vault is locked');
+  lastActivity = Date.now();
   return undefined;
 }
+
+function open() {
+  unlocked = true;
+  lastActivity = Date.now();
+}
+
+function lock(reason: 'manual' | 'idle') {
+  if (!unlocked) return;
+  unlocked = false;
+  window.dispatchEvent(new CustomEvent(LOCKED_EVENT, { detail: reason }));
+}
+
+window.setInterval(() => {
+  const minutes = settings.autoLockMinutes;
+  if (unlocked && minutes !== null && Date.now() - lastActivity >= minutes * 60_000) {
+    lock('idle');
+  }
+}, 5_000);
 
 function find(id: unknown): MockEntry | undefined {
   return entries.find((e) => e.detail.id === id);
@@ -135,7 +166,7 @@ function status(): VaultStatus {
     state: unlocked ? 'unlocked' : exists ? 'locked' : 'missing',
     files: {
       exists,
-      hasMasterPassword: exists,
+      hasMasterPassword: exists && hasMaster,
       hasDeviceUnlock: exists && deviceEnabled,
       deviceSlots: exists && deviceEnabled ? ['9b2e4c1a-7f3d-4e8a-b6c5-1d0f2a3e4b5c'] : [],
       vaultId: exists ? '3f0c7a52-0d5e-4c1b-9a51-7b0f4e2a8c11' : null,
@@ -191,25 +222,30 @@ export const vaultHandlers: Record<string, (args: Record<string, unknown>) => un
     if (exists) return fail('already_exists', 'vault.kdbx');
     if (!next) return fail('invalid_input', 'the master password is empty');
     exists = true;
-    unlocked = true;
+    hasMaster = true;
     master = next as string;
+    open();
     return RECOVERY_KEY;
   },
   vault_unlock: ({ master: typed }) => {
+    if (!hasMaster) return fail('not_found', 'vault.keys');
     if (typed !== master) return fail('wrong_passphrase', 'wrong passphrase');
-    unlocked = true;
+    open();
   },
   vault_recover: ({ recoveryKey, newMaster }) => {
     const normalized = String(recoveryKey).toUpperCase().replace(/[\s-]/g, '');
-    if (normalized !== RECOVERY_KEY.replace(/-/g, '')) {
+    const isKeepassPassword = !hasMaster && recoveryKey === KEEPASS_PASSWORD;
+    if (normalized !== RECOVERY_KEY.replace(/-/g, '') && !isKeepassPassword) {
       return fail('wrong_passphrase', 'wrong passphrase');
     }
     master = newMaster as string;
-    unlocked = true;
+    hasMaster = true;
+    open();
   },
   vault_unlock_device: () => {
     if (!deviceEnabled) return fail('not_found', 'device unlock is not set up here');
     unlocked = true;
+    lastActivity = Date.now();
   },
   vault_enable_device: ({ master: typed }) => {
     if (typed !== master) return fail('wrong_passphrase', 'wrong passphrase');
@@ -218,10 +254,10 @@ export const vaultHandlers: Record<string, (args: Record<string, unknown>) => un
   vault_disable_device: () => {
     deviceEnabled = false;
   },
-  vault_lock: () => {
-    unlocked = false;
+  vault_lock: () => lock('manual'),
+  vault_activity: () => {
+    if (unlocked) lastActivity = Date.now();
   },
-  vault_activity: () => undefined,
   vault_entries: () =>
     requireUnlocked() ?? entries.map(summary).sort((a, b) => a.title.localeCompare(b.title)),
   vault_entry: ({ id }) =>
@@ -248,6 +284,8 @@ export const vaultHandlers: Record<string, (args: Record<string, unknown>) => un
     return { clearsInSecs: secret && settings.clipboardSeconds ? settings.clipboardSeconds : null };
   },
   vault_otp: ({ id }): OtpCode | Promise<never> => {
+    const locked = requireUnlocked();
+    if (locked) return locked;
     const target = find(id);
     if (!target?.otp) return fail('not_found', '2FA secret');
     const seconds = Math.floor(Date.now() / 1000);

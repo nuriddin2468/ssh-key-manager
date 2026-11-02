@@ -1,6 +1,6 @@
 import { X } from 'lucide-react';
 import { Dialog as RDialog } from 'radix-ui';
-import type { ReactNode } from 'react';
+import { type ReactNode, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/cn';
 import { IconButton } from './IconButton';
@@ -12,26 +12,41 @@ interface DialogContentProps {
   /** Page section whose accent the dialog uses. */
   section: string;
   className?: string;
+  /** `false` ignores Escape and clicks outside, for a step that must be finished. */
+  dismissible?: boolean;
   children: ReactNode;
 }
 
-export function DialogContent({ section, className, children }: DialogContentProps) {
+export function DialogContent({
+  section,
+  className,
+  dismissible = true,
+  children,
+}: DialogContentProps) {
+  const block = dismissible ? undefined : (event: Event) => event.preventDefault();
+  const returnFocus = useReturnFocus();
   return (
     <RDialog.Portal>
       <RDialog.Overlay className="fixed inset-0 z-40 bg-[rgb(4_6_11/0.62)] backdrop-blur-[6px] data-[state=open]:animate-fade-in" />
       <div className="pointer-events-none fixed inset-0 z-50 grid place-items-center overflow-y-auto p-4">
         <RDialog.Content
           data-section={section}
-          // Start in the first field rather than on the close button.
+          onEscapeKeyDown={block}
+          onInteractOutside={block}
+          // Start in the first field rather than on the close button. Radix
+          // radios and checkboxes add hidden inputs (tabindex -1) to forms;
+          // skip those.
           onOpenAutoFocus={(event) => {
+            returnFocus.remember();
             const field = (event.currentTarget as HTMLElement).querySelector<HTMLElement>(
-              'input:not([type=hidden]):not([disabled]), textarea, select',
+              'input:not([type=hidden]):not([disabled]):not([tabindex="-1"]), textarea, select',
             );
             if (field) {
               event.preventDefault();
               field.focus();
             }
           }}
+          onCloseAutoFocus={returnFocus.restore}
           className={cn(
             'pointer-events-auto relative flex max-h-[calc(100vh-32px)] w-full max-w-[620px] flex-col overflow-hidden rounded-[22px] border border-white/10 bg-[linear-gradient(180deg,rgb(26_31_46/0.97),rgb(15_18_28/0.97))] text-fg shadow-[0_40px_80px_-24px_rgb(0_0_0/0.8),inset_0_1px_0_rgb(255_255_255/0.06)] outline-none data-[state=open]:animate-dialog-in',
             className,
@@ -48,13 +63,36 @@ export function DialogContent({ section, className, children }: DialogContentPro
   );
 }
 
+/**
+ * Radix returns focus to a `Dialog.Trigger`; dialogs here open from plain
+ * buttons, menus and shortcuts, so remember what had focus when one opened
+ * (Radix calls `onOpenAutoFocus` before moving focus) and go back to it.
+ */
+export function useReturnFocus() {
+  const element = useRef<HTMLElement | null>(null);
+  return {
+    remember: () => {
+      const active = document.activeElement;
+      element.current = active instanceof HTMLElement && active !== document.body ? active : null;
+    },
+    restore: (event: Event) => {
+      const target = element.current;
+      if (!target?.isConnected) return;
+      event.preventDefault();
+      target.focus();
+    },
+  };
+}
+
 interface DialogHeaderProps {
   icon?: ReactNode;
   title: ReactNode;
   description?: ReactNode;
+  /** `false` hides the close button, for a step that must be finished. */
+  closable?: boolean;
 }
 
-export function DialogHeader({ icon, title, description }: DialogHeaderProps) {
+export function DialogHeader({ icon, title, description, closable = true }: DialogHeaderProps) {
   const { t } = useTranslation();
   return (
     <header className="relative flex items-start gap-3.5 px-6 pt-[22px] pb-4">
@@ -71,9 +109,15 @@ export function DialogHeader({ icon, title, description }: DialogHeaderProps) {
           <RDialog.Description className="sr-only">{title}</RDialog.Description>
         )}
       </div>
-      <RDialog.Close asChild>
-        <IconButton label={t('common.close')} icon={<X className="size-4" />} variant="secondary" />
-      </RDialog.Close>
+      {closable ? (
+        <RDialog.Close asChild>
+          <IconButton
+            label={t('common.close')}
+            icon={<X className="size-4" />}
+            variant="secondary"
+          />
+        </RDialog.Close>
+      ) : null}
     </header>
   );
 }

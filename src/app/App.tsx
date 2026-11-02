@@ -11,6 +11,8 @@ import { HostsPage } from '@/features/hosts/HostsPage';
 import { KeysPage } from '@/features/keys/KeysPage';
 import { KnownHostsPage } from '@/features/known/KnownHostsPage';
 import { OverviewPage } from '@/features/overview/OverviewPage';
+import { PasswordsPage } from '@/features/passwords/PasswordsPage';
+import { useVaultEvents } from '@/features/passwords/useVaultEvents';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { platform } from '@/lib/platform';
 import { useSettings } from '@/lib/settings';
@@ -44,6 +46,7 @@ export function App() {
 function Shell() {
   const { route } = useRouter();
   useAppEvents();
+  useVaultEvents();
   useAutomaticUpdates(useSettings().autoUpdate);
   useKeysFromVault();
 
@@ -66,6 +69,7 @@ function Shell() {
         {route.page === 'agent' ? <AgentPage /> : null}
         {route.page === 'known' ? <KnownHostsPage /> : null}
         {route.page === 'audit' ? <AuditPage /> : null}
+        {route.page === 'passwords' ? <PasswordsPage entryId={route.entryId} /> : null}
         {route.page === 'settings' ? <SettingsPage /> : null}
       </main>
     </div>

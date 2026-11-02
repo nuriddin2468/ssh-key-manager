@@ -8,6 +8,8 @@
     "core:window:allow-start-dragging",
     "core:window:allow-toggle-maximize",
     "opener:allow-reveal-item-in-dir",
+    "opener:allow-open-url",
+    "opener:allow-default-urls",
     "clipboard-manager:allow-write-text",
     "dialog:allow-open",
     "dialog:allow-save",

@@ -56,6 +56,7 @@ pub fn install(app: &App) -> tauri::Result<()> {
         .item(&item("nav-agent", "Agent", "CmdOrCtrl+4")?)
         .item(&item("nav-known", "Known Hosts", "CmdOrCtrl+5")?)
         .item(&item("nav-audit", "Audit", "CmdOrCtrl+6")?)
+        .item(&item("nav-passwords", "Passwords", "CmdOrCtrl+7")?)
         .separator()
         .item(&item("check", "Check Again", "CmdOrCtrl+R")?)
         .separator()

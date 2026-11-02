@@ -1,17 +1,22 @@
 import { isTauri } from '@tauri-apps/api/core';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
-import { FolderOpen, KeyRound } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { Clock, FolderOpen, KeyRound } from 'lucide-react';
+import { type ReactNode, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useEnvironment } from '@/api/queries';
 import { toastError } from '@/api/useAppMutation';
+import { useRouter } from '@/app/router';
 import { Logo } from '@/components/Logo';
 import { PageBody, Toolbar } from '@/components/layout/Toolbar';
 import { Button } from '@/components/ui/Button';
+import { Dialog } from '@/components/ui/Dialog';
 import { Select } from '@/components/ui/Select';
 import { Switch } from '@/components/ui/Switch';
 import { Tile, type Tone } from '@/components/ui/Tile';
 import { LifetimeSelect } from '@/features/agent/LifetimeSelect';
+import { AUTO_LOCK_MINUTES, CLIPBOARD_SECONDS } from '@/features/passwords/model';
+import { ChangeMasterDialog, NewRecoveryKeyDialog } from '@/features/passwords/SecurityDialogs';
+import { useVaultSettings } from '@/features/passwords/useVaultSettings';
 import { LANGUAGE_NAMES, LANGUAGES, type Language, setLanguage, storedLanguage } from '@/i18n';
 import { displayPath } from '@/lib/format';
 import { fileManagerName } from '@/lib/platform';
@@ -95,6 +100,8 @@ export function SettingsPage() {
           </Row>
         </Group>
 
+        <PasswordsGroup home={home} onReveal={(path) => void reveal(path)} />
+
         <Group title={t('settings.folders')}>
           {files.map((file) => (
             <Row key={file.label} label={file.label}>
@@ -160,6 +167,144 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
       <span className="shrink-0 font-medium">{label}</span>
       <span className="ml-auto flex min-w-0 items-center justify-end gap-2">{children}</span>
     </div>
+  );
+}
+
+/** The vault's preferences, its master password and recovery key, and its file. */
+function PasswordsGroup({
+  home,
+  onReveal,
+}: {
+  home: string | undefined;
+  onReveal: (path: string) => void;
+}) {
+  const { t } = useTranslation();
+  const { navigate } = useRouter();
+  const { status, settings, update } = useVaultSettings();
+  const [dialog, setDialog] = useState<'master' | 'recovery' | null>(null);
+  const unlockKeysId = useId();
+  if (!status || !settings) return null;
+
+  const clock = <Clock aria-hidden="true" className="size-3.5 text-subtle" strokeWidth={2} />;
+  const switches = [
+    { key: 'lockOnSleep', label: t('passwords.lockOnSleep') },
+    { key: 'lockOnScreenLock', label: t('passwords.lockOnScreenLock') },
+    { key: 'lockOnMinimize', label: t('passwords.lockOnMinimize') },
+  ] as const;
+
+  return (
+    <Group title={t('passwords.settingsTitle')}>
+      <Row label={t('passwords.autoLock')}>
+        <Select
+          aria-label={t('passwords.autoLock')}
+          size="sm"
+          className="w-[220px]"
+          value={String(settings.autoLockMinutes ?? 'never')}
+          onValueChange={(next) =>
+            update({ autoLockMinutes: next === 'never' ? null : Number(next) })
+          }
+          options={AUTO_LOCK_MINUTES.map((minutes) => ({
+            value: String(minutes ?? 'never'),
+            icon: clock,
+            label:
+              minutes === null
+                ? t('passwords.lockNever')
+                : minutes === 60
+                  ? t('passwords.lockHour')
+                  : t('passwords.lockMinutes', { count: minutes }),
+          }))}
+        />
+      </Row>
+      <Row label={t('passwords.clearClipboard')}>
+        <Select
+          aria-label={t('passwords.clearClipboard')}
+          size="sm"
+          className="w-[220px]"
+          value={String(settings.clipboardSeconds)}
+          onValueChange={(next) => update({ clipboardSeconds: Number(next) })}
+          options={CLIPBOARD_SECONDS.map((seconds) => ({
+            value: String(seconds),
+            icon: clock,
+            label:
+              seconds === 0
+                ? t('passwords.clearNever')
+                : t('passwords.clearSeconds', { count: seconds }),
+          }))}
+        />
+      </Row>
+      {switches.map(({ key, label }) => (
+        <Row key={key} label={label}>
+          <Switch
+            aria-label={label}
+            checked={settings[key]}
+            onCheckedChange={(checked) => update({ [key]: checked })}
+          />
+        </Row>
+      ))}
+      <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">
+        <span className="flex min-w-0 flex-col">
+          <span id={`${unlockKeysId}-label`} className="font-medium">
+            {t('passwords.unlockKeys')}
+          </span>
+          <span id={`${unlockKeysId}-hint`} className="text-[12px] text-subtle">
+            {t('passwords.unlockKeysHint')}
+          </span>
+        </span>
+        <span className="ml-auto flex shrink-0 items-center">
+          <Switch
+            aria-labelledby={`${unlockKeysId}-label`}
+            aria-describedby={`${unlockKeysId}-hint`}
+            checked={settings.unlockKeysOnOpen}
+            onCheckedChange={(unlockKeysOnOpen) => update({ unlockKeysOnOpen })}
+          />
+        </span>
+      </div>
+
+      {status.state === 'unlocked' ? (
+        <>
+          <Row label={t('passwords.changeMaster')}>
+            <Button size="sm" onClick={() => setDialog('master')}>
+              {t('passwords.changeMasterButton')}
+            </Button>
+          </Row>
+          <Row label={t('passwords.newRecoveryKey')}>
+            <Button size="sm" onClick={() => setDialog('recovery')}>
+              {t('passwords.newRecoveryButton')}
+            </Button>
+          </Row>
+        </>
+      ) : (
+        <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">
+          <span className="min-w-0 text-[12.5px] text-muted">
+            {status.state === 'locked' ? t('passwords.unlockForSecurity') : t('passwords.noVault')}
+          </span>
+          <Button size="sm" className="ml-auto" onClick={() => navigate({ page: 'passwords' })}>
+            {t('passwords.openPasswords')}
+          </Button>
+        </div>
+      )}
+
+      {status.files.exists ? (
+        <Row label={t('passwords.vaultFile')}>
+          <span className="selectable min-w-0 flex-1 truncate text-right font-mono text-[12px] text-muted">
+            {displayPath(status.paths.database, home)}
+          </span>
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<FolderOpen className="size-[15px]" strokeWidth={1.75} />}
+            onClick={() => onReveal(status.paths.database)}
+          >
+            {t('keys.showIn', { app: fileManagerName })}
+          </Button>
+        </Row>
+      ) : null}
+
+      <Dialog open={dialog !== null} onOpenChange={(open) => (open ? undefined : setDialog(null))}>
+        {dialog === 'master' ? <ChangeMasterDialog onDone={() => setDialog(null)} /> : null}
+        {dialog === 'recovery' ? <NewRecoveryKeyDialog onDone={() => setDialog(null)} /> : null}
+      </Dialog>
+    </Group>
   );
 }
 

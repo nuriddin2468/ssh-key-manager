@@ -2,7 +2,9 @@ import {
   Cpu,
   Globe,
   KeyRound,
+  LockKeyhole,
   type LucideIcon,
+  RectangleEllipsis,
   Server,
   Settings as SettingsIcon,
   ShieldCheck,
@@ -16,6 +18,8 @@ import {
   useEnvironment,
   useKeys,
   useKnownHosts,
+  useVaultEntries,
+  useVaultStatus,
 } from '@/api/queries';
 import { type Page, type Route, useRouter } from '@/app/router';
 import { Logo } from '@/components/Logo';
@@ -36,12 +40,17 @@ export function Sidebar() {
   const agent = useAgent();
   const known = useKnownHosts();
   const audit = useAudit();
+  const vault = useVaultStatus();
+  const vaultEntries = useVaultEntries();
 
   const findings = audit.data ? audit.data.counts.critical + audit.data.counts.warning : 0;
   const unlocked = agent.data?.identities.length ?? 0;
   const running = agent.data?.status.available ?? false;
   const update = useUpdateState();
   const updateReady = update.status === 'available' || update.status === 'downloading';
+  const vaultState = vault.data?.state;
+  const savedPasswords =
+    vaultState === 'unlocked' ? vaultEntries.data?.filter((e) => !e.inTrash).length : undefined;
 
   const item = (page: Page, label: string, tone: Tone, Icon: LucideIcon, count?: number) => (
     <NavItem
@@ -83,6 +92,26 @@ export function Sidebar() {
           {item('hosts', t('nav.hosts'), 'blue', Server, config.data?.view.hosts.length)}
           {item('agent', t('nav.agent'), 'violet', Cpu, running ? unlocked : undefined)}
           {item('known', t('nav.known'), 'amber', Globe, known.data?.view.entries.length)}
+        </NavGroup>
+        <NavGroup label={t('nav.groupSecrets')}>
+          <NavItem
+            label={t('nav.passwords')}
+            tone="indigo"
+            icon={RectangleEllipsis}
+            active={route.page === 'passwords'}
+            count={savedPasswords}
+            trailing={
+              vaultState === 'locked' ? (
+                <LockKeyhole
+                  role="img"
+                  aria-label={t('nav.vaultLocked')}
+                  className="ml-auto size-3.5 text-subtle"
+                  strokeWidth={2}
+                />
+              ) : undefined
+            }
+            onClick={() => navigate({ page: 'passwords' })}
+          />
         </NavGroup>
         <NavGroup label={t('nav.groupHealth')}>
           <NavItem
@@ -173,6 +202,8 @@ interface NavItemProps {
   count?: number;
   badge?: number;
   badgeLabel?: string;
+  /** Shown at the end instead of a count, e.g. a status icon. */
+  trailing?: React.ReactNode;
   onClick: () => void;
 }
 
@@ -184,6 +215,7 @@ function NavItem({
   count,
   badge,
   badgeLabel,
+  trailing,
   onClick,
 }: NavItemProps) {
   return (
@@ -212,7 +244,9 @@ function NavItem({
         </span>
       ) : count !== undefined ? (
         <span className="ml-auto text-[12px] text-subtle tabular-nums">{count}</span>
-      ) : null}
+      ) : (
+        (trailing ?? null)
+      )}
     </button>
   );
 }

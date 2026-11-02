@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
 import { invalidateAll } from '@/api/queries';
 import { Button } from '@/components/ui/Button';
+import { OpenExistingVaultButton } from './files';
 import { MasterPasswordFields, masterReady } from './MasterPasswordFields';
 import { RecoveryKeyPanel } from './RecoveryKeyPanel';
 import { VaultCard } from './VaultCard';
@@ -76,6 +77,7 @@ export function CreateVault() {
           {t('passwords.create')}
         </Button>
       </form>
+      <OpenExistingVaultButton variant="ghost" size="sm" className="self-center" />
     </VaultCard>
   );
 }

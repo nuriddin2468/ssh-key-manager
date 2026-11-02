@@ -11,6 +11,7 @@ import { HostsPage } from '@/features/hosts/HostsPage';
 import { KeysPage } from '@/features/keys/KeysPage';
 import { KnownHostsPage } from '@/features/known/KnownHostsPage';
 import { OverviewPage } from '@/features/overview/OverviewPage';
+import { useVaultFileEvents } from '@/features/passwords/files';
 import { PasswordsPage } from '@/features/passwords/PasswordsPage';
 import { useVaultEvents } from '@/features/passwords/useVaultEvents';
 import { SettingsPage } from '@/features/settings/SettingsPage';
@@ -47,6 +48,7 @@ function Shell() {
   const { route } = useRouter();
   useAppEvents();
   useVaultEvents();
+  useVaultFileEvents();
   useAutomaticUpdates(useSettings().autoUpdate);
   useKeysFromVault();
 

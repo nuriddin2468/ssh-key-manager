@@ -2,9 +2,13 @@ import { FileKey, LockKeyhole } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
+import { invalidateAll } from '@/api/queries';
+import type { BiometricKind } from '@/bindings/BiometricKind';
+import type { DeviceUnlockStatus } from '@/bindings/DeviceUnlockStatus';
 import type { VaultFiles } from '@/bindings/VaultFiles';
 import { Button } from '@/components/ui/Button';
 import { TextField } from '@/components/ui/TextField';
+import { DeviceIcon, deviceReason, METHOD_NAME } from './device';
 import { MasterPasswordFields, masterReady } from './MasterPasswordFields';
 import { VaultCard } from './VaultCard';
 import { requestSearchFocus, takeSearchFocusRequest, useVaultMutation } from './vault';
@@ -14,7 +18,7 @@ import { requestSearchFocus, takeSearchFocusRequest, useVaultMutation } from './
  * password. A KeePass file without a master password on this computer opens
  * with the recovery key or the file's own password.
  */
-export function UnlockVault({ files }: { files: VaultFiles }) {
+export function UnlockVault({ files, device }: { files: VaultFiles; device: DeviceUnlockStatus }) {
   const [recovering, setRecovering] = useState(!files.hasMasterPassword);
   return recovering || !files.hasMasterPassword ? (
     <RecoverForm
@@ -22,11 +26,20 @@ export function UnlockVault({ files }: { files: VaultFiles }) {
       onBack={files.hasMasterPassword ? () => setRecovering(false) : undefined}
     />
   ) : (
-    <UnlockForm onForgot={() => setRecovering(true)} />
+    <UnlockForm
+      deviceKind={device.enabled ? device.kind : null}
+      onForgot={() => setRecovering(true)}
+    />
   );
 }
 
-function UnlockForm({ onForgot }: { onForgot: () => void }) {
+function UnlockForm({
+  deviceKind,
+  onForgot,
+}: {
+  deviceKind: BiometricKind | null;
+  onForgot: () => void;
+}) {
   const { t } = useTranslation();
   const [master, setMaster] = useState('');
   const [wrong, setWrong] = useState(false);
@@ -53,7 +66,16 @@ function UnlockForm({ onForgot }: { onForgot: () => void }) {
       title={t('passwords.lockedTitle')}
       text={t('passwords.lockedText')}
     >
-      {/* Unlock with Touch ID / Windows Hello goes here, above the password. */}
+      {deviceKind ? (
+        <>
+          <DeviceUnlock kind={deviceKind} />
+          <div className="flex items-center gap-3 text-[12px] text-subtle">
+            <span aria-hidden="true" className="h-px flex-1 bg-white/[0.08]" />
+            {t('passwords.orMaster')}
+            <span aria-hidden="true" className="h-px flex-1 bg-white/[0.08]" />
+          </div>
+        </>
+      ) : null}
       <form onSubmit={submit} className="flex flex-col gap-4">
         <TextField
           label={t('passwords.masterPassword')}
@@ -65,11 +87,11 @@ function UnlockForm({ onForgot }: { onForgot: () => void }) {
             setWrong(false);
           }}
           error={wrong ? t('passwords.wrongMaster') : undefined}
-          autoFocus
+          autoFocus={!deviceKind}
         />
         <Button
           type="submit"
-          variant="primary"
+          variant={deviceKind ? 'secondary' : 'primary'}
           size="lg"
           className="w-full"
           loading={unlock.isPending}
@@ -82,6 +104,56 @@ function UnlockForm({ onForgot }: { onForgot: () => void }) {
         {t('passwords.forgot')}
       </Button>
     </VaultCard>
+  );
+}
+
+/** The primary way in when Touch ID / Windows Hello is set up here. */
+function DeviceUnlock({ kind }: { kind: BiometricKind }) {
+  const { t } = useTranslation();
+  const method = METHOD_NAME[kind];
+  const [problem, setProblem] = useState<string | null>(null);
+
+  const unlock = useVaultMutation(api.vaultUnlockDevice, {
+    onError: (error) => {
+      takeSearchFocusRequest();
+      // Dismissing the system prompt is a choice, not an error.
+      if (error.code === 'cancelled') return true;
+      if (error.code === 'not_found') {
+        setProblem(t('passwords.deviceGone', { method }));
+        void invalidateAll();
+        return true;
+      }
+      if (error.code === 'unsupported') {
+        setProblem(t('passwords.deviceUnavailable', { method }));
+        return true;
+      }
+      return false;
+    },
+  });
+
+  return (
+    <div className="flex flex-col gap-2">
+      <Button
+        variant="primary"
+        size="lg"
+        className="w-full"
+        icon={<DeviceIcon kind={kind} className="size-[18px]" />}
+        loading={unlock.isPending}
+        onClick={() => {
+          setProblem(null);
+          requestSearchFocus();
+          unlock.mutate(deviceReason(t, kind, 'unlock'));
+        }}
+        autoFocus
+      >
+        {t('passwords.unlockWithDevice', { method })}
+      </Button>
+      {problem ? (
+        <p role="alert" className="text-[12.5px] text-warning">
+          {problem}
+        </p>
+      ) : null}
+    </div>
   );
 }
 

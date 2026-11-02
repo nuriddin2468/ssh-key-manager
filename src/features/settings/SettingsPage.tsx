@@ -3,6 +3,7 @@ import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { Clock, FolderOpen, KeyRound } from 'lucide-react';
 import { type ReactNode, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { api } from '@/api/commands';
 import { useEnvironment } from '@/api/queries';
 import { toastError } from '@/api/useAppMutation';
 import { useRouter } from '@/app/router';
@@ -14,9 +15,16 @@ import { Select } from '@/components/ui/Select';
 import { Switch } from '@/components/ui/Switch';
 import { Tile, type Tone } from '@/components/ui/Tile';
 import { LifetimeSelect } from '@/features/agent/LifetimeSelect';
+import { METHOD_NAME } from '@/features/passwords/device';
+import { VaultLocationSection } from '@/features/passwords/files';
 import { AUTO_LOCK_MINUTES, CLIPBOARD_SECONDS } from '@/features/passwords/model';
-import { ChangeMasterDialog, NewRecoveryKeyDialog } from '@/features/passwords/SecurityDialogs';
+import {
+  ChangeMasterDialog,
+  DeviceUnlockDialog,
+  NewRecoveryKeyDialog,
+} from '@/features/passwords/SecurityDialogs';
 import { useVaultSettings } from '@/features/passwords/useVaultSettings';
+import { useVaultMutation } from '@/features/passwords/vault';
 import { LANGUAGE_NAMES, LANGUAGES, type Language, setLanguage, storedLanguage } from '@/i18n';
 import { displayPath } from '@/lib/format';
 import { fileManagerName } from '@/lib/platform';
@@ -100,7 +108,8 @@ export function SettingsPage() {
           </Row>
         </Group>
 
-        <PasswordsGroup home={home} onReveal={(path) => void reveal(path)} />
+        <PasswordsGroup />
+        <VaultLocationSection />
 
         <Group title={t('settings.folders')}>
           {files.map((file) => (
@@ -171,18 +180,17 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /** The vault's preferences, its master password and recovery key, and its file. */
-function PasswordsGroup({
-  home,
-  onReveal,
-}: {
-  home: string | undefined;
-  onReveal: (path: string) => void;
-}) {
+function PasswordsGroup() {
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const { status, settings, update } = useVaultSettings();
-  const [dialog, setDialog] = useState<'master' | 'recovery' | null>(null);
+  const [dialog, setDialog] = useState<'master' | 'recovery' | 'device' | null>(null);
   const unlockKeysId = useId();
+  const deviceId = useId();
+  const kind = status?.device.kind ?? null;
+  const disableDevice = useVaultMutation(api.vaultDisableDevice, {
+    success: () => (kind ? t('passwords.deviceOff', { method: METHOD_NAME[kind] }) : undefined),
+  });
   if (!status || !settings) return null;
 
   const clock = <Clock aria-hidden="true" className="size-3.5 text-subtle" strokeWidth={2} />;
@@ -260,6 +268,28 @@ function PasswordsGroup({
         </span>
       </div>
 
+      {kind ? (
+        <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">
+          <span className="flex min-w-0 flex-col">
+            <span id={`${deviceId}-label`} className="font-medium">
+              {t('passwords.unlockWithDevice', { method: METHOD_NAME[kind] })}
+            </span>
+            <span id={`${deviceId}-hint`} className="text-[12px] text-subtle">
+              {t('passwords.deviceHint')}
+            </span>
+          </span>
+          <span className="ml-auto flex shrink-0 items-center">
+            <Switch
+              aria-labelledby={`${deviceId}-label`}
+              aria-describedby={`${deviceId}-hint`}
+              checked={status.device.enabled}
+              disabled={status.state !== 'unlocked' || disableDevice.isPending}
+              onCheckedChange={(on) => (on ? setDialog('device') : disableDevice.mutate(undefined))}
+            />
+          </span>
+        </div>
+      ) : null}
+
       {status.state === 'unlocked' ? (
         <>
           <Row label={t('passwords.changeMaster')}>
@@ -284,25 +314,12 @@ function PasswordsGroup({
         </div>
       )}
 
-      {status.files.exists ? (
-        <Row label={t('passwords.vaultFile')}>
-          <span className="selectable min-w-0 flex-1 truncate text-right font-mono text-[12px] text-muted">
-            {displayPath(status.paths.database, home)}
-          </span>
-          <Button
-            size="sm"
-            variant="ghost"
-            icon={<FolderOpen className="size-[15px]" strokeWidth={1.75} />}
-            onClick={() => onReveal(status.paths.database)}
-          >
-            {t('keys.showIn', { app: fileManagerName })}
-          </Button>
-        </Row>
-      ) : null}
-
       <Dialog open={dialog !== null} onOpenChange={(open) => (open ? undefined : setDialog(null))}>
         {dialog === 'master' ? <ChangeMasterDialog onDone={() => setDialog(null)} /> : null}
         {dialog === 'recovery' ? <NewRecoveryKeyDialog onDone={() => setDialog(null)} /> : null}
+        {dialog === 'device' && kind ? (
+          <DeviceUnlockDialog kind={kind} onDone={() => setDialog(null)} />
+        ) : null}
       </Dialog>
     </Group>
   );

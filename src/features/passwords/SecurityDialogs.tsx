@@ -3,12 +3,14 @@ import { type FormEvent, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
 import { invalidateAll } from '@/api/queries';
+import type { BiometricKind } from '@/bindings/BiometricKind';
 import { Button } from '@/components/ui/Button';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
 import { TextField } from '@/components/ui/TextField';
 import { Tile } from '@/components/ui/Tile';
 import { AppError } from '@/lib/ipc';
 import { platform } from '@/lib/platform';
+import { DeviceIcon, deviceReason, METHOD_NAME } from './device';
 import { MasterPasswordFields, masterReady } from './MasterPasswordFields';
 import { RecoveryKeyPanel } from './RecoveryKeyPanel';
 import { toastVaultError, useSecretCall, useVaultMutation } from './vault';
@@ -85,6 +87,82 @@ export function ChangeMasterDialog({ onDone }: { onDone: () => void }) {
             disabled={!ready}
           >
             {t('passwords.changeMasterTitle')}
+          </Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  );
+}
+
+/**
+ * Turns on Touch ID / Windows Hello: the master password, then one system
+ * prompt to show it works.
+ */
+export function DeviceUnlockDialog({ kind, onDone }: { kind: BiometricKind; onDone: () => void }) {
+  const { t } = useTranslation();
+  const method = METHOD_NAME[kind];
+  const [master, setMaster] = useState('');
+  const [wrong, setWrong] = useState(false);
+
+  const enable = useVaultMutation(
+    (master: string) => api.vaultEnableDevice(master, deviceReason(t, kind, 'enable')),
+    {
+      success: () => t('passwords.deviceOn', { method }),
+      onSuccess: onDone,
+      onError: (error) => {
+        if (error.code === 'cancelled') return true;
+        if (error.code !== 'wrong_passphrase') return false;
+        setWrong(true);
+        return true;
+      },
+    },
+  );
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!master || enable.isPending) return;
+    enable.mutate(master);
+  };
+
+  return (
+    <DialogContent section="passwords" className="max-w-[440px]">
+      <form onSubmit={submit} className="flex min-h-0 flex-col">
+        <DialogHeader
+          icon={
+            <Tile tone="indigo" size={44} glow>
+              <DeviceIcon kind={kind} className="size-5" />
+            </Tile>
+          }
+          title={t('passwords.deviceEnableTitle', { method })}
+          description={t('passwords.deviceEnableText', { method })}
+        />
+        <DialogBody>
+          <TextField
+            label={t('passwords.masterPassword')}
+            type="password"
+            autoComplete="current-password"
+            value={master}
+            onChange={(event) => {
+              setMaster(event.target.value);
+              setWrong(false);
+            }}
+            error={wrong ? t('passwords.wrongMaster') : undefined}
+            autoFocus
+          />
+          <p className="text-[12.5px] text-muted">{t('passwords.deviceHint')}</p>
+        </DialogBody>
+        <DialogFooter>
+          <Button size="lg" onClick={onDone}>
+            {t('common.cancel')}
+          </Button>
+          <Button
+            type="submit"
+            variant="primary"
+            size="lg"
+            loading={enable.isPending}
+            disabled={!master}
+          >
+            {t('passwords.deviceEnableButton')}
           </Button>
         </DialogFooter>
       </form>

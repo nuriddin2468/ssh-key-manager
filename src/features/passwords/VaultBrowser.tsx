@@ -1,4 +1,12 @@
-import { LockKeyhole, Plus, RectangleEllipsis, Trash2 } from 'lucide-react';
+import {
+  FileInput,
+  FileOutput,
+  LockKeyhole,
+  MoreHorizontal,
+  Plus,
+  RectangleEllipsis,
+  Trash2,
+} from 'lucide-react';
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
@@ -14,6 +22,8 @@ import { Chip } from '@/components/ui/Chip';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Dialog } from '@/components/ui/Dialog';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { IconButton } from '@/components/ui/IconButton';
+import { Menu, MenuContent, MenuItem, MenuTrigger } from '@/components/ui/Menu';
 import { SearchField } from '@/components/ui/SearchField';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
@@ -21,6 +31,7 @@ import { cn } from '@/lib/cn';
 import { formatRelative, shortFingerprint } from '@/lib/format';
 import { EntryEditor } from './EntryEditor';
 import { EntryPane } from './EntryPane';
+import { ExportDialog, ImportDialog } from './files';
 import {
   avatar,
   type EntryFilter,
@@ -60,6 +71,7 @@ export function VaultBrowser({ entryId }: { entryId?: string }) {
   const [filter, setFilter] = useState<EntryFilter>('all');
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState<{ entry: EntryDetail | null } | null>(null);
+  const [fileDialog, setFileDialog] = useState<'import' | 'export' | null>(null);
   const [confirmEmpty, setConfirmEmpty] = useState(false);
   const search = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -140,6 +152,29 @@ export function VaultBrowser({ entryId }: { entryId?: string }) {
         >
           {t('passwords.lock')}
         </Button>
+        <Menu>
+          <MenuTrigger asChild>
+            <IconButton
+              label={t('passwords.more')}
+              variant="secondary"
+              icon={<MoreHorizontal className="size-4" strokeWidth={2} />}
+            />
+          </MenuTrigger>
+          <MenuContent>
+            <MenuItem
+              icon={<FileInput className="size-[15px]" strokeWidth={1.9} />}
+              onSelect={() => setFileDialog('import')}
+            >
+              {t('passwords.importCsv')}
+            </MenuItem>
+            <MenuItem
+              icon={<FileOutput className="size-[15px]" strokeWidth={1.9} />}
+              onSelect={() => setFileDialog('export')}
+            >
+              {t('passwords.exportVault')}
+            </MenuItem>
+          </MenuContent>
+        </Menu>
         <Button
           variant="primary"
           size="sm"
@@ -166,13 +201,21 @@ export function VaultBrowser({ entryId }: { entryId?: string }) {
             title={t('passwords.emptyTitle')}
             description={t('passwords.emptyText')}
             action={
-              <Button
-                variant="primary"
-                icon={<Plus className="size-4" strokeWidth={2.25} />}
-                onClick={openNew}
-              >
-                {t('passwords.newEntry')}
-              </Button>
+              <div className="flex flex-wrap justify-center gap-2">
+                <Button
+                  variant="primary"
+                  icon={<Plus className="size-4" strokeWidth={2.25} />}
+                  onClick={openNew}
+                >
+                  {t('passwords.newEntry')}
+                </Button>
+                <Button
+                  icon={<FileInput className="size-4" strokeWidth={1.9} />}
+                  onClick={() => setFileDialog('import')}
+                >
+                  {t('passwords.emptyImport')}
+                </Button>
+              </div>
             }
           />
         ) : (
@@ -273,6 +316,14 @@ export function VaultBrowser({ entryId }: { entryId?: string }) {
             }}
           />
         ) : null}
+      </Dialog>
+
+      <Dialog
+        open={fileDialog !== null}
+        onOpenChange={(open) => (open ? undefined : setFileDialog(null))}
+      >
+        {fileDialog === 'import' ? <ImportDialog onDone={() => setFileDialog(null)} /> : null}
+        {fileDialog === 'export' ? <ExportDialog onDone={() => setFileDialog(null)} /> : null}
       </Dialog>
 
       <ConfirmDialog

@@ -49,7 +49,7 @@ export function PasswordsPage({ entryId }: { entryId?: string }) {
         ) : state === 'missing' ? (
           <CreateVault />
         ) : status.data ? (
-          <UnlockVault files={status.data.files} />
+          <UnlockVault files={status.data.files} device={status.data.device} />
         ) : null}
       </PageBody>
     </>

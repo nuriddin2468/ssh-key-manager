@@ -108,7 +108,7 @@ export function OverviewPage() {
 
   return (
     <>
-      <Toolbar className="border-b-transparent bg-transparent backdrop-blur-none">
+      <Toolbar className="border-b-transparent bg-transparent">
         <Pill icon={<Clock className="size-[13px]" strokeWidth={2} />}>
           {scanning || !checkedAt
             ? t('overview.checkingNow')

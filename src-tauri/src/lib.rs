@@ -2,6 +2,8 @@
 
 mod commands;
 mod error;
+#[cfg(target_os = "linux")]
+mod gpu;
 #[cfg(target_os = "macos")]
 mod menu;
 mod process;
@@ -18,6 +20,9 @@ use tauri::Manager;
 use crate::state::AppState;
 
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    gpu::prefer_mesa_egl();
+
     let builder = tauri::Builder::default();
 
     #[cfg(desktop)]

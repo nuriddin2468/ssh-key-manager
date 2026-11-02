@@ -17,7 +17,7 @@ export function Toolbar({ title, meta, children, className }: ToolbarProps) {
     <header
       data-tauri-drag-region
       className={cn(
-        'flex min-h-[52px] shrink-0 flex-wrap items-center gap-2.5 border-b border-white/[0.06] bg-[rgb(11_15_23/0.55)] pr-5 pl-6 backdrop-blur-xl',
+        'flex min-h-[52px] shrink-0 flex-wrap items-center gap-2.5 border-b border-white/[0.06] bg-[rgb(11_15_23/0.55)] pr-5 pl-6',
         className,
       )}
     >

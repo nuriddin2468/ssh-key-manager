@@ -149,7 +149,7 @@ export function KeysPage({ keyId }: { keyId?: string }) {
                     <div
                       className={cn(
                         GRID,
-                        'sticky top-0 z-[1] h-[38px] items-center border-b border-white/[0.07] bg-[rgb(14_18_27/0.92)] px-[18px] text-[11.5px] font-medium tracking-[0.02em] text-subtle backdrop-blur',
+                        'sticky top-0 z-[1] h-[38px] items-center border-b border-white/[0.07] bg-[rgb(14_18_27/0.97)] px-[18px] text-[11.5px] font-medium tracking-[0.02em] text-subtle',
                       )}
                     >
                       <span>{t('keys.colName')}</span>

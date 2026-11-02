@@ -30,6 +30,17 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - Changes are written atomically and the previous file is backed up (20 copies,
     still encrypted). A write over a change made elsewhere is refused and saved as a
     separate copy.
+  - A saved key passphrase goes from the vault straight to `ssh-agent` or `ssh` inside
+    the Rust process; the interface never receives it. To say "saved, but the vault is
+    locked", the interface remembers the fingerprints (public) of keys with saved
+    passphrases in its local storage.
+  - Touch ID / Windows Hello adds one slot per computer, opened by a random key in that
+    computer's Keychain or Credential Manager, used only after the system prompt
+    succeeds. A new recovery key removes every such slot.
+  - Exports: the KeePass copy stays encrypted (it opens with the recovery key). The CSV
+    export is plain text: it needs the master password, is written with mode 0600 and
+    never into `~/.ssh` or over the vault's own files. Imported CSV files can be moved
+    to the Trash right after import.
 - **Answering `ssh` prompts.** To log in with a password or one-time code, the app acts
   as `ssh`'s askpass program.
   - The secret goes over a local socket only this user can reach (a private 0700

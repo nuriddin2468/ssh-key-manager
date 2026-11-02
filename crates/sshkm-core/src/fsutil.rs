@@ -233,10 +233,10 @@ fn resolve_symlinks(path: &Path) -> Result<PathBuf> {
 /// Flushes the directory entry after a rename (best effort, Unix only).
 fn sync_parent(path: &Path) {
     #[cfg(unix)]
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        if let Ok(dir) = fs::File::open(parent) {
-            let _ = dir.sync_all();
-        }
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty())
+        && let Ok(dir) = fs::File::open(parent)
+    {
+        let _ = dir.sync_all();
     }
     #[cfg(not(unix))]
     let _ = path;

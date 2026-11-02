@@ -402,21 +402,21 @@ fn key_findings(key: &KeyInfo, out: &mut Vec<Finding>) {
             fix,
         );
     }
-    if key.permissions.is_problem() {
-        if let Some(problem) = key.permissions.problem {
-            push(
-                "privateKeyPermissions",
-                Severity::Critical,
-                FindingKind::PrivateKeyPermissions {
-                    mode: key.permissions.mode.clone(),
-                    problem,
-                },
-                Some(FixAction::FixPermissions {
-                    path: private_path.clone(),
-                    target: PermKind::PrivateKey,
-                }),
-            );
-        }
+    if key.permissions.is_problem()
+        && let Some(problem) = key.permissions.problem
+    {
+        push(
+            "privateKeyPermissions",
+            Severity::Critical,
+            FindingKind::PrivateKeyPermissions {
+                mode: key.permissions.mode.clone(),
+                problem,
+            },
+            Some(FixAction::FixPermissions {
+                path: private_path.clone(),
+                target: PermKind::PrivateKey,
+            }),
+        );
     }
     if key.public_path.is_none() {
         // The public half can be derived from OpenSSH keys and unencrypted

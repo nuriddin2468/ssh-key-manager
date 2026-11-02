@@ -205,10 +205,10 @@ fn sec1_by_scalar(der: &[u8]) -> Option<(KeyAlgorithm, KeypairData)> {
     }
     let mut embedded_public = None;
     while let Some((tag, contents, rest)) = der_tlv(body) {
-        if tag == 0xa1 {
-            if let Some((0x03, [0, point @ ..], _)) = der_tlv(contents) {
-                embedded_public = Some(point);
-            }
+        if tag == 0xa1
+            && let Some((0x03, [0, point @ ..], _)) = der_tlv(contents)
+        {
+            embedded_public = Some(point);
         }
         body = rest;
     }
@@ -227,10 +227,11 @@ fn sec1_by_scalar(der: &[u8]) -> Option<(KeyAlgorithm, KeypairData)> {
         ),
         _ => return None,
     };
-    if let (Some(expected), KeypairData::Ecdsa(kp)) = (embedded_public, &keypair) {
-        if expected.first() == Some(&0x04) && expected != kp.public_key_bytes() {
-            return None;
-        }
+    if let (Some(expected), KeypairData::Ecdsa(kp)) = (embedded_public, &keypair)
+        && expected.first() == Some(&0x04)
+        && expected != kp.public_key_bytes()
+    {
+        return None;
     }
     Some((algorithm, keypair))
 }

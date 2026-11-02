@@ -370,11 +370,11 @@ pub fn import(dir: &Path, source: &Path, file_name: Option<&str>) -> Result<KeyI
 
     fsutil::ensure_private_dir(dir)?;
     fsutil::write_new(&dest, text.as_bytes(), 0o600)?;
-    if let Some(public_text) = public_text {
-        if let Err(e) = fsutil::write_new(&dest_pub, public_text.as_bytes(), 0o644) {
-            let _ = fs::remove_file(&dest);
-            return Err(e);
-        }
+    if let Some(public_text) = public_text
+        && let Err(e) = fsutil::write_new(&dest_pub, public_text.as_bytes(), 0o644)
+    {
+        let _ = fs::remove_file(&dest);
+        return Err(e);
     }
     restrict_private_key(&dest);
     inspect(&dest)

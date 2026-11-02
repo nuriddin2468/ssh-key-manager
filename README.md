@@ -22,6 +22,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/overview.png" alt="SSH Key Manager: the Overview screen after a health check" width="900">
+</p>
+
 ---
 
 SSH Key Manager is a desktop app for the SSH setup you already have.
@@ -54,6 +58,23 @@ Builds are not code-signed yet, so your system asks once whether you trust the a
 - **Linux.** Install the `.deb` or `.rpm` with your package manager. For the AppImage, run `chmod +x SSH*.AppImage` and start it.
 
 ## What it does
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/keys.png" alt="Keys: every key with its type, status and the hosts that use it"><p align="center"><b>Keys</b>: everything about each key, with fixes for what's wrong</p></td>
+    <td width="50%"><img src="docs/screenshots/generate.png" alt="Generate a new key dialog"><p align="center"><b>New key</b>: Ed25519, RSA or ECDSA in one dialog</p></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/hosts.png" alt="Hosts: a form editor for ~/.ssh/config with a live preview"><p align="center"><b>Hosts</b>: edit <code>~/.ssh/config</code> with a form</p></td>
+    <td width="50%"><img src="docs/screenshots/agent.png" alt="Agent: keys unlocked in ssh-agent with time left"><p align="center"><b>Agent</b>: unlock keys for 1 hour, 8 hours or until logout</p></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/audit.png" alt="Audit: findings grouped by severity with one-click fixes"><p align="center"><b>Audit</b>: what weakens your security, and how to fix it</p></td>
+    <td width="50%"><img src="docs/screenshots/known.png" alt="Known hosts: trusted server keys, including hashed entries"><p align="center"><b>Known hosts</b>: the servers you trust, and safe clean-up</p></td>
+  </tr>
+</table>
+
+<sub>Screenshots show sample data.</sub>
 
 **Overview.** One button checks your keys, config and file permissions and tells you, in a sentence, how things stand.
 

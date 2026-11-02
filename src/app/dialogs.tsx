@@ -1,6 +1,14 @@
 import { isTauri } from '@tauri-apps/api/core';
 import { open as openFile } from '@tauri-apps/plugin-dialog';
-import { createContext, type ReactNode, use, useCallback, useMemo, useState } from 'react';
+import {
+  createContext,
+  type ReactNode,
+  use,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
 import { useEnvironment } from '@/api/queries';
@@ -40,6 +48,13 @@ export function DialogsProvider({ children }: { children: ReactNode }) {
   const environment = useEnvironment();
   const [open, setOpen] = useState<Open>(null);
   const close = useCallback(() => setOpen(null), []);
+
+  // `pnpm dev` only: `?open=generate` or `?open=addHost` shows a dialog on load.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const dialog = new URLSearchParams(window.location.search).get('open');
+    if (dialog === 'generate' || dialog === 'addHost') setOpen({ kind: dialog });
+  }, []);
 
   const addPlain = useAppMutation(
     (vars: { key: KeyView; lifetime: number | null }) =>

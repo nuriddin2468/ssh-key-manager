@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Screenshot frame</title>
+    <!--
+      Shows the app (from `pnpm dev`, with mock data) inside a macOS-style
+      window for README screenshots. capture.sh passes the page via ?src=.
+    -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      body {
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(900px 520px at 12% 8%, rgb(20 184 166 / 0.32), transparent 62%),
+          radial-gradient(820px 520px at 92% 92%, rgb(124 58 237 / 0.34), transparent 62%),
+          #06080e;
+      }
+      .window {
+        position: relative;
+        width: 1280px;
+        height: 800px;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow:
+          0 0 0 1px rgb(255 255 255 / 0.12),
+          0 0 0 1.5px rgb(0 0 0 / 0.5),
+          0 40px 100px -20px rgb(0 0 0 / 0.85);
+      }
+      .lights {
+        position: absolute;
+        top: 20px;
+        left: 20px;
+        z-index: 1;
+        display: flex;
+        gap: 8px;
+      }
+      .lights span {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        box-shadow: inset 0 0 0 0.5px rgb(0 0 0 / 0.25);
+      }
+      iframe {
+        display: block;
+        width: 100%;
+        height: 100%;
+        border: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="window">
+      <div class="lights" aria-hidden="true">
+        <span style="background: #ff5f57"></span>
+        <span style="background: #febc2e"></span>
+        <span style="background: #28c840"></span>
+      </div>
+      <iframe id="app" title="SSH Key Manager"></iframe>
+    </div>
+    <script>
+      document.getElementById('app').src = new URLSearchParams(location.search).get('src');
+    </script>
+  </body>
+</html>

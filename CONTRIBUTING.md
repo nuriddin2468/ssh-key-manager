@@ -19,6 +19,16 @@ pnpm dev            # UI only, in a browser, backed by an in-memory mock
 pnpm app:build      # release build with installers for your platform
 ```
 
+## Screenshots
+
+The README screenshots come from `pnpm dev` with its sample data, so nothing from
+your own `~/.ssh` ends up in them. With `pnpm dev` running and Google Chrome
+installed, refresh them all with:
+
+```bash
+pnpm screenshots
+```
+
 ## Checks
 
 CI runs these on macOS, Windows and Linux; run them before you push:

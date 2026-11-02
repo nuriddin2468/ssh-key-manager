@@ -22,8 +22,31 @@ interface RouterValue {
 
 const RouterContext = createContext<RouterValue | null>(null);
 
+/**
+ * In `pnpm dev` only, `?page=keys&key=<id>` or `?page=hosts&host=3` opens a
+ * screen directly, e.g. for screenshots. Production builds ignore the URL.
+ */
+function devRoute(): Route | undefined {
+  if (!import.meta.env.DEV) return undefined;
+  const params = new URLSearchParams(window.location.search);
+  const page = params.get('page');
+  if (page === 'keys') return { page, keyId: params.get('key') ?? undefined };
+  if (page === 'hosts')
+    return { page, hostId: params.has('host') ? Number(params.get('host')) : undefined };
+  if (
+    page === 'overview' ||
+    page === 'agent' ||
+    page === 'known' ||
+    page === 'audit' ||
+    page === 'settings'
+  ) {
+    return { page };
+  }
+  return undefined;
+}
+
 export function RouterProvider({ initial, children }: { initial?: Route; children: ReactNode }) {
-  const [route, setRoute] = useState<Route>(initial ?? { page: 'overview' });
+  const [route, setRoute] = useState<Route>(() => initial ?? devRoute() ?? { page: 'overview' });
   const navigate = useCallback((next: Route) => setRoute(next), []);
   const value = useMemo(() => ({ route, navigate }), [route, navigate]);
   return <RouterContext value={value}>{children}</RouterContext>;

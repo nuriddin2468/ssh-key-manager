@@ -139,6 +139,31 @@ impl VaultRuntime {
         VaultPaths::new(database)
     }
 
+    /// The vault's default place, in the app's data folder.
+    pub fn default_paths(&self) -> VaultPaths {
+        VaultPaths::new(self.data_dir.join(DATABASE_FILE))
+    }
+
+    /// Points the settings at another database file and saves them. The
+    /// default place is stored as `None`, so it follows the data folder.
+    pub fn set_database(&self, database: &Path) -> AppResult<VaultSettings> {
+        let mut settings = self.settings();
+        settings.database =
+            (database != self.default_paths().database).then(|| database.to_path_buf());
+        self.set_settings(settings)
+    }
+
+    /// Runs `work` with the vault, unlocked (`Some`) or locked (`None`),
+    /// while no other command can use it: for moving or switching its files.
+    /// Taking the vault out of the slot locks it without telling the UI.
+    pub fn exclusive<T>(
+        &self,
+        work: impl FnOnce(&mut Option<Vault>) -> AppResult<T>,
+    ) -> AppResult<T> {
+        let mut guard = lock(&self.unlocked);
+        work(&mut guard)
+    }
+
     pub fn is_unlocked(&self) -> bool {
         lock(&self.unlocked).is_some()
     }

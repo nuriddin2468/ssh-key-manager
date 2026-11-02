@@ -9,6 +9,7 @@ pub mod keys;
 pub mod known_hosts;
 pub mod remote;
 pub mod vault;
+pub mod vault_files;
 pub mod vault_hosts;
 pub mod vault_links;
 

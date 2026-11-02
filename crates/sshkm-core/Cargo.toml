@@ -13,6 +13,7 @@ publish = false
 base64ct = "1.8.3"
 chacha20poly1305 = "0.11.0"
 chrono = { version = "0.4.23", default-features = false, features = ["std"] }
+csv = "1.4.0"
 diceware_wordlists = "1.2.3"
 dirs = "7.0.0"
 ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }

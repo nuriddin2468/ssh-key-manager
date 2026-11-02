@@ -19,7 +19,10 @@
 //! write that would overwrite it fails with [`Error::Conflict`] instead.
 
 mod audit;
+mod export;
 mod generator;
+mod import;
+mod location;
 mod recovery;
 mod slots;
 #[cfg(test)]
@@ -36,7 +39,10 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 pub use self::audit::{VaultAuditInput, VaultFinding, VaultFindingKind};
+pub use self::export::export_kdbx;
 pub use self::generator::{GenerateOptions, Strength, generate, strength};
+pub use self::import::{CsvFormat, ImportPreview, ImportRow};
+pub use self::location::{check_database, copy_files, remove_files};
 use self::slots::KeySlots;
 use crate::{Error, Result, fsutil};
 

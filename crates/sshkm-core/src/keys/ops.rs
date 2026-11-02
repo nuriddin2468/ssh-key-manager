@@ -775,7 +775,7 @@ mod tests {
         let dir = home.path().join(".ssh");
         let info = import(&dir, &source, Some("imported")).unwrap();
         assert_eq!(info.name, "imported");
-        assert!(info.permissions.ok);
+        assert!(info.permissions.ok, "{:?}", info.permissions);
         assert_eq!(
             fs::read_to_string(dir.join("imported")).unwrap(),
             td::OPENSSH_ED25519

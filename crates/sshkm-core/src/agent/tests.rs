@@ -113,7 +113,17 @@ fn public_key_lines() {
 #[test]
 fn missing_socket_is_reported() {
     let dir = tempfile::tempdir().unwrap();
-    let client = AgentClient::new(dir.path().join("nope.sock"));
+    // Windows reaches the agent through a named pipe; any other path is
+    // `Unsupported` there (see `non_pipe_path_is_unsupported_on_windows`).
+    let socket = if cfg!(windows) {
+        PathBuf::from(format!(
+            r"\\.\pipe\sshkm-test-missing-{}",
+            std::process::id()
+        ))
+    } else {
+        dir.path().join("nope.sock")
+    };
+    let client = AgentClient::new(socket);
     let status = client.status();
     assert!(!status.available);
     assert_eq!(status.error, Some(AgentProblem::NotFound));
@@ -123,6 +133,20 @@ fn missing_socket_is_reported() {
     );
     let v = serde_json::to_value(&status).unwrap();
     assert_eq!(v["error"], "notFound");
+}
+
+#[cfg(windows)]
+#[test]
+fn non_pipe_path_is_unsupported_on_windows() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = AgentClient::new(dir.path().join("agent.sock"));
+    let status = client.status();
+    assert!(!status.available);
+    assert_eq!(status.error, Some(AgentProblem::Unsupported));
+    assert_eq!(
+        client.list().unwrap_err().code(),
+        ErrorCode::AgentUnavailable
+    );
 }
 
 #[cfg(unix)]

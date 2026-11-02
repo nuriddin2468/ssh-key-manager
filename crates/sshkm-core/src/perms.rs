@@ -297,6 +297,11 @@ mod imp {
         let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let encoded = Base64::encode_string(&utf16);
         let output = Command::new("powershell.exe")
+            // Started from a PowerShell 7 session (directly or through other
+            // processes), `PSModulePath` lists PowerShell 7's modules first, and
+            // Windows PowerShell then fails to load `Get-Acl` and `Sort-Object`.
+            // Without it, Windows PowerShell uses its own default module path.
+            .env_remove("PSModulePath")
             .args([
                 "-NoLogo",
                 "-NoProfile",
@@ -488,6 +493,43 @@ mod tests {
         assert!(check(&key, PermKind::PrivateKey).ok);
         fix(dir.path(), PermKind::SshDir).unwrap();
         assert!(check(dir.path(), PermKind::SshDir).ok);
+        assert_eq!(
+            fix(&missing, PermKind::PrivateKey).unwrap_err().code(),
+            crate::ErrorCode::NotFound
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn check_and_fix_acl_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("id");
+        std::fs::write(&key, "x").unwrap();
+        // Let the local Users group read the key.
+        let granted = std::process::Command::new("icacls")
+            .arg(&key)
+            .args(["/grant", "*S-1-5-32-545:R"])
+            .output()
+            .unwrap();
+        assert!(granted.status.success(), "{granted:?}");
+        let missing = dir.path().join("missing");
+        let reports = check_many(&[
+            (key.clone(), PermKind::PrivateKey),
+            (missing.clone(), PermKind::PrivateKey),
+        ]);
+        assert_eq!(
+            reports[0].problem,
+            Some(PermissionProblem::OtherPrincipals),
+            "{reports:?}"
+        );
+        assert!(reports[0].is_problem());
+        assert_eq!(reports[1].problem, Some(PermissionProblem::NotFound));
+        fix(&key, PermKind::PrivateKey).unwrap();
+        let report = check(&key, PermKind::PrivateKey);
+        assert!(report.ok, "{report:?}");
+        fix(dir.path(), PermKind::SshDir).unwrap();
+        let report = check(dir.path(), PermKind::SshDir);
+        assert!(report.ok, "{report:?}");
         assert_eq!(
             fix(&missing, PermKind::PrivateKey).unwrap_err().code(),
             crate::ErrorCode::NotFound

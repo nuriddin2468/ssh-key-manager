@@ -54,6 +54,15 @@ translates.
   the hosts that use each key.
 - **Process helpers.** Run `ssh -V`, `ssh-keyscan` and `ssh` without a console window and
   with timeouts.
+- **Askpass.** The app executable doubles as `ssh`'s `SSH_ASKPASS` program, so `ssh` can
+  ask for a password, one-time code or key passphrase without a terminal.
+  - `main` runs the helper before Tauri starts when `SSHKM_ASKPASS_*` is set: it sends the
+    prompt to the running app and prints the reply.
+  - The app listens on a Unix socket in a private (0700) temp directory, or on a named
+    pipe with a random name that rejects remote clients.
+  - Each `ssh` run gets a session with a one-time 256-bit token and the caller's secrets.
+    Yes/no questions (an unknown host key) are always answered "no", each secret is given
+    at most once, and prompts naming another account are refused.
 - **Watcher.** Watches `~/.ssh` so changes made in a terminal appear immediately.
 - **Vault runtime.** The unlocked vault lives only in the Rust process. A timer locks
   it after inactivity or sleep; each lock emits `vault-locked`. Copied passwords go

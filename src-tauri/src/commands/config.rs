@@ -1,13 +1,15 @@
 use std::fs;
 use std::time::Duration;
 
+use sshkm_core::SecretString;
 use sshkm_core::config::{HostEdit, SshConfig};
 use sshkm_core::fsutil;
 use tauri::State;
 
+use super::remote::{check_alias, combined, run_ssh, with_timeout_note};
 use super::{Shared, blocking};
-use crate::error::{AppError, AppResult};
-use crate::process;
+use crate::askpass::Secrets;
+use crate::error::AppResult;
 use crate::state::AppState;
 use crate::types::{ConfigFile, ConnectionTest, SavedHost};
 
@@ -80,42 +82,35 @@ pub async fn write_config_raw(state: State<'_, Shared>, text: String) -> AppResu
     .await
 }
 
-/// Runs `ssh` against a host alias without prompting, so the user sees whether
-/// the key, host key and network all work.
+/// Runs `ssh` against a host alias, so the user sees whether the key, host key
+/// and network all work.
+///
+/// Without `password` and `otp` it never prompts (`BatchMode=yes`). With
+/// either, the app answers `ssh`'s password and one-time-code prompts with
+/// them through askpass, and `prompts` tells what was asked: a password asked
+/// again was rejected, a code asked with none given is missing, a declined
+/// host-key question means the host key is not trusted yet.
 #[tauri::command]
-pub async fn test_connection(state: State<'_, Shared>, alias: String) -> AppResult<ConnectionTest> {
-    blocking(&state, move |_| {
-        if alias.is_empty() || alias.starts_with('-') || alias.chars().any(char::is_whitespace) {
-            return Err(AppError::invalid("not a host alias"));
-        }
-        let output = process::run(
-            "ssh",
-            &[
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=8",
-                "-T",
-                "--",
-                &alias,
-                "exit",
-            ],
-            Duration::from_secs(20),
-        )?;
-        let text = format!("{}{}", output.stdout, output.stderr)
-            .trim()
-            .to_owned();
+pub async fn test_connection(
+    state: State<'_, Shared>,
+    alias: String,
+    password: Option<SecretString>,
+    otp: Option<SecretString>,
+) -> AppResult<ConnectionTest> {
+    blocking(&state, move |state| {
+        check_alias(&alias)?;
+        let secrets = Secrets::new(password, otp);
+        let timeout = Duration::from_secs(if secrets.is_empty() { 20 } else { 30 });
+        let run = run_ssh(state, &alias, &[], &["exit"], secrets, None, timeout)?;
+        let text = combined(&run.output);
         // Git hosts refuse shell access but confirm the key worked.
         let authenticated = text.contains("successfully authenticated")
             || text.contains("Welcome to GitLab")
             || text.contains("logged in as");
         Ok(ConnectionTest {
-            ok: output.success || authenticated,
-            output: if output.timed_out {
-                format!("{text}\n(timed out)").trim().to_owned()
-            } else {
-                text
-            },
+            ok: run.output.success || authenticated,
+            output: with_timeout_note(text, &run.output),
+            prompts: run.prompts,
         })
     })
     .await

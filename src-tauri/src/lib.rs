@@ -1,5 +1,6 @@
 //! SSH Key Manager desktop app: Tauri commands over [`sshkm_core`].
 
+pub mod askpass;
 mod commands;
 mod device_unlock;
 mod error;
@@ -14,8 +15,9 @@ mod watcher;
 use std::sync::Arc;
 
 use sshkm_core::paths::SshPaths;
-use tauri::{Manager, WindowEvent};
+use tauri::{Manager, RunEvent, WindowEvent};
 
+use crate::commands::Shared;
 use crate::state::AppState;
 use crate::vault::LockReason;
 
@@ -57,15 +59,7 @@ pub fn run() {
             menu::install(app)?;
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let WindowEvent::Resized(_) = event
-                && window.is_minimized().unwrap_or(false)
-                && let Some(state) = window.try_state::<Arc<AppState>>()
-                && state.vault.settings().lock_on_minimize
-            {
-                state.vault.lock(window.app_handle(), LockReason::Minimize);
-            }
-        })
+        .on_window_event(lock_on_minimize)
         .invoke_handler(tauri::generate_handler![
             commands::environment::get_environment,
             commands::keys::list_keys,
@@ -85,6 +79,7 @@ pub fn run() {
             commands::config::read_config_raw,
             commands::config::write_config_raw,
             commands::config::test_connection,
+            commands::remote::install_public_key,
             commands::known_hosts::read_known_hosts,
             commands::known_hosts::find_known_hosts,
             commands::known_hosts::remove_known_hosts,
@@ -117,6 +112,24 @@ pub fn run() {
             commands::vault::vault_new_recovery_key,
             commands::vault::vault_set_settings,
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to start SSH Key Manager");
+        .build(tauri::generate_context!())
+        .expect("failed to start SSH Key Manager")
+        .run(|app, event| {
+            if let RunEvent::Exit = event
+                && let Some(state) = app.try_state::<Shared>()
+            {
+                state.stop_askpass();
+            }
+        });
+}
+
+/// Locks the vault when the window is minimised, if the settings say so.
+fn lock_on_minimize(window: &tauri::Window, event: &WindowEvent) {
+    if let WindowEvent::Resized(_) = event
+        && window.is_minimized().unwrap_or(false)
+        && let Some(state) = window.try_state::<Arc<AppState>>()
+        && state.vault.settings().lock_on_minimize
+    {
+        state.vault.lock(window.app_handle(), LockReason::Minimize);
+    }
 }

@@ -30,6 +30,13 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - Changes are written atomically and the previous file is backed up (20 copies,
     still encrypted). A write over a change made elsewhere is refused and saved as a
     separate copy.
+- **Answering `ssh` prompts.** To log in with a password or one-time code, the app acts
+  as `ssh`'s askpass program.
+  - The secret goes over a local socket only this user can reach (a private 0700
+    directory; on Windows a named pipe that refuses remote clients), and only to an
+    `ssh` run holding that run's random token.
+  - Host keys are never accepted this way, a rejected password is not retried, and a
+    prompt that names another account, such as a `ProxyJump` host's, is refused.
 - **Minimal network access.** The app sends none of your data anywhere. Its only
   requests are:
   - the update check, which downloads `latest.json` from this repository's GitHub

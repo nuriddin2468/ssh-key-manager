@@ -1,0 +1,29 @@
+//! Tauri commands. Each one runs its file system, agent or process work on the
+//! blocking pool so the UI thread never waits on disk or sockets.
+
+pub mod agent;
+pub mod audit;
+pub mod config;
+pub mod environment;
+pub mod keys;
+pub mod known_hosts;
+
+use std::sync::Arc;
+
+use sshkm_core::ErrorCode;
+
+use crate::error::{AppError, AppResult};
+use crate::state::AppState;
+
+pub type Shared = Arc<AppState>;
+
+pub async fn blocking<T, F>(state: &Shared, work: F) -> AppResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce(&AppState) -> AppResult<T> + Send + 'static,
+{
+    let state = Arc::clone(state);
+    tauri::async_runtime::spawn_blocking(move || work(&state))
+        .await
+        .map_err(|e| AppError::new(ErrorCode::Io, format!("background task failed: {e}")))?
+}

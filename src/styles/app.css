@@ -1,0 +1,315 @@
+@import "tailwindcss";
+@import "@fontsource-variable/geist-mono";
+
+@custom-variant mac (&:where([data-platform="macos"], [data-platform="macos"] *));
+
+@theme {
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, Menlo, monospace;
+
+  --color-canvas: #0a0d14;
+  --color-surface: #0b0f17;
+  --color-sidebar: #11141e;
+  --color-popover: #161b27;
+
+  --color-fg: #f2f4f8;
+  --color-fg-2: #c9cfda;
+  --color-muted: #a7b0c0;
+  --color-subtle: #8892a6;
+  --color-faint: #5c667a;
+
+  --color-critical: #ff9b9b;
+  --color-critical-solid: #ff6b6b;
+  --color-warning: #ffc266;
+  --color-warning-solid: #ffb547;
+  --color-info: #9ccbff;
+  --color-info-solid: #6cb4ff;
+  --color-ok: #5eead4;
+
+  --animate-floaty: floaty 6s ease-in-out infinite;
+  --animate-orbit: spin 48s linear infinite;
+  --animate-orbit-reverse: spin 30s linear infinite reverse;
+  --animate-glow: glow 5s ease-in-out infinite;
+  --animate-pulse-ring: pulse-ring 2.8s ease-out infinite;
+  --animate-fade-in: fade-in 140ms ease-out;
+  --animate-dialog-in: dialog-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --animate-popover-in: popover-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --animate-popover-out: popover-out 100ms ease-in forwards;
+
+  @keyframes popover-in {
+    from {
+      opacity: 0;
+      transform: scale(0.96) translateY(-4px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes popover-out {
+    from {
+      opacity: 1;
+    }
+    to {
+      opacity: 0;
+      transform: scale(0.98);
+    }
+  }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes dialog-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes floaty {
+    0%,
+    100% {
+      transform: translateY(0) rotate(-8deg);
+    }
+    50% {
+      transform: translateY(-8px) rotate(-6deg);
+    }
+  }
+  @keyframes glow {
+    0%,
+    100% {
+      opacity: 0.75;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+  @keyframes pulse-ring {
+    0% {
+      transform: scale(0.9);
+      opacity: 0.7;
+    }
+    70% {
+      transform: scale(1.35);
+      opacity: 0;
+    }
+    100% {
+      opacity: 0;
+    }
+  }
+  @keyframes sweep {
+    from {
+      stroke-dashoffset: var(--sweep-length, 339);
+    }
+    to {
+      stroke-dashoffset: 0;
+    }
+  }
+}
+
+/*
+ * Every page sets data-section; its accent drives buttons, selection, focus
+ * rings and the background glow.
+ */
+:root,
+[data-section="overview"] {
+  --accent-1: #5eead4;
+  --accent-2: #a78bfa;
+  --accent-ink: #06201e;
+  --accent-text: #99f6e4;
+  --accent-rgb: 45 212 191;
+  --glow-a: rgb(20 184 166 / 0.22);
+  --glow-b: rgb(124 58 237 / 0.2);
+}
+[data-section="keys"] {
+  --accent-1: #5eead4;
+  --accent-2: #14b8a6;
+  --accent-ink: #06201e;
+  --accent-text: #99f6e4;
+  --accent-rgb: 45 212 191;
+  --glow-a: rgb(20 184 166 / 0.22);
+  --glow-b: rgb(124 58 237 / 0.1);
+}
+[data-section="hosts"] {
+  --accent-1: #93c5fd;
+  --accent-2: #3b82f6;
+  --accent-ink: #071833;
+  --accent-text: #bfdbfe;
+  --accent-rgb: 96 165 250;
+  --glow-a: rgb(37 99 235 / 0.26);
+  --glow-b: rgb(20 184 166 / 0.1);
+}
+[data-section="agent"] {
+  --accent-1: #c4b5fd;
+  --accent-2: #8b5cf6;
+  --accent-ink: #1e0b47;
+  --accent-text: #ddd6fe;
+  --accent-rgb: 167 139 250;
+  --glow-a: rgb(124 58 237 / 0.28);
+  --glow-b: rgb(37 99 235 / 0.1);
+}
+[data-section="known"] {
+  --accent-1: #fde68a;
+  --accent-2: #f59e0b;
+  --accent-ink: #3a2203;
+  --accent-text: #fde68a;
+  --accent-rgb: 252 211 77;
+  --glow-a: rgb(217 119 6 / 0.22);
+  --glow-b: rgb(37 99 235 / 0.1);
+}
+[data-section="audit"] {
+  --accent-1: #fda4af;
+  --accent-2: #f43f5e;
+  --accent-ink: #3b0712;
+  --accent-text: #fecdd3;
+  --accent-rgb: 251 113 133;
+  --glow-a: rgb(225 29 72 / 0.22);
+  --glow-b: rgb(124 58 237 / 0.1);
+}
+[data-section="settings"] {
+  --accent-1: #cbd5e1;
+  --accent-2: #64748b;
+  --accent-ink: #0b1220;
+  --accent-text: #e2e8f0;
+  --accent-rgb: 148 163 184;
+  --glow-a: rgb(100 116 139 / 0.18);
+  --glow-b: rgb(37 99 235 / 0.08);
+}
+
+@utility glass {
+  background: rgb(255 255 255 / 0.04);
+  border: 1px solid rgb(255 255 255 / 0.08);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+}
+@utility glass-raised {
+  background: rgb(255 255 255 / 0.045);
+  border: 1px solid rgb(255 255 255 / 0.09);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.05),
+    0 30px 60px -30px rgb(0 0 0 / 0.7);
+}
+@utility field {
+  background: rgb(255 255 255 / 0.05);
+  border: 1px solid rgb(255 255 255 / 0.1);
+}
+@utility accent-fill {
+  background: linear-gradient(135deg, var(--accent-1), var(--accent-2));
+  color: var(--accent-ink);
+  box-shadow:
+    0 8px 20px -8px rgb(var(--accent-rgb) / 0.75),
+    inset 0 1px 0 rgb(255 255 255 / 0.5);
+}
+@utility accent-soft {
+  background: rgb(var(--accent-rgb) / 0.12);
+  border: 1px solid rgb(var(--accent-rgb) / 0.4);
+  color: var(--accent-text);
+}
+@utility selected-row {
+  background: rgb(var(--accent-rgb) / 0.1);
+  box-shadow: inset 0 0 0 1px rgb(var(--accent-rgb) / 0.38);
+}
+/*
+ * Press feedback: controls dip slightly while held, like native buttons.
+ * `pressable` is for buttons and pills, `pressable-soft` for larger surfaces
+ * (cards, list rows) where a big scale would look like a jump.
+ */
+@layer components {
+  .pressable,
+  .pressable-soft {
+    transition-property:
+      background-color, border-color, color, filter, opacity, box-shadow, transform;
+    transition-duration: 160ms;
+    transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .pressable:active:not(:disabled, [aria-disabled="true"]) {
+    transform: scale(0.96);
+    transition-duration: 70ms;
+  }
+  .pressable-soft:active:not(:disabled, [aria-disabled="true"]) {
+    transform: scale(0.985);
+    transition-duration: 70ms;
+  }
+}
+
+@utility section-glow {
+  background:
+    radial-gradient(820px 420px at 78% -6%, var(--glow-a), transparent 62%),
+    radial-gradient(600px 380px at 0% 100%, var(--glow-b), transparent 60%), var(--color-surface);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  html {
+    color-scheme: dark;
+  }
+  body {
+    margin: 0;
+    overflow: hidden;
+    background: var(--color-canvas);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 20px;
+    -webkit-font-smoothing: antialiased;
+    /* Desktop apps don't select chrome text or show the browser's I-beam on it. */
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+  }
+  input,
+  textarea,
+  .selectable {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  a[href] {
+    cursor: default;
+  }
+  :focus-visible {
+    outline: 2px solid rgb(var(--accent-rgb) / 0.9);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: rgb(var(--accent-rgb) / 0.35);
+  }
+  ::placeholder {
+    color: var(--color-subtle);
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(255 255 255 / 0.14) transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

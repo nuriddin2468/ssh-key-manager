@@ -1,0 +1,36 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+repository = "https://github.com/nuriddin2468/ssh-key-manager"
+homepage = "https://github.com/nuriddin2468/ssh-key-manager"
+authors = ["SSH Key Manager contributors"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+
+# RSA key generation and bcrypt-pbkdf are unusably slow without optimisation,
+# so dependencies are always optimised, even in dev and test builds.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

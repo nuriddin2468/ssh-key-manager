@@ -1,0 +1,70 @@
+import { type InputHTMLAttributes, type ReactNode, type Ref, useId } from 'react';
+import { cn } from '@/lib/cn';
+
+interface TextFieldProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'prefix'> {
+  label: ReactNode;
+  hint?: ReactNode;
+  error?: ReactNode;
+  /** Fixed text shown inside the field before the value, e.g. `~/.ssh/`. */
+  prefix?: string;
+  mono?: boolean;
+  ref?: Ref<HTMLInputElement>;
+}
+
+export function TextField({
+  label,
+  hint,
+  error,
+  prefix,
+  mono = false,
+  className,
+  id,
+  ref,
+  ...props
+}: TextFieldProps) {
+  const autoId = useId();
+  const inputId = id ?? autoId;
+  const describedBy = error ? `${inputId}-error` : hint ? `${inputId}-hint` : undefined;
+
+  return (
+    <div className={cn('flex min-w-0 flex-col gap-1.5', className)}>
+      <label htmlFor={inputId} className="text-[12px] font-semibold text-fg-2">
+        {label}
+      </label>
+      <div
+        className={cn(
+          'field flex h-9 items-center overflow-hidden rounded-[10px] transition-colors focus-within:border-[rgb(var(--accent-rgb)/0.55)] focus-within:shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.15)]',
+          error && 'border-critical-solid/60',
+        )}
+      >
+        {prefix ? (
+          <span className="flex h-full items-center border-r border-white/[0.08] bg-white/[0.04] pr-2 pl-[11px] font-mono text-[12px] text-subtle">
+            {prefix}
+          </span>
+        ) : null}
+        <input
+          ref={ref}
+          id={inputId}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={describedBy}
+          spellCheck={false}
+          autoComplete="off"
+          className={cn(
+            'h-full min-w-0 flex-1 bg-transparent px-[11px] text-fg outline-none',
+            mono && 'font-mono text-[12.5px]',
+          )}
+          {...props}
+        />
+      </div>
+      {error ? (
+        <p id={`${inputId}-error`} className="text-[12px] text-critical">
+          {error}
+        </p>
+      ) : hint ? (
+        <p id={`${inputId}-hint`} className="text-[12px] text-subtle">
+          {hint}
+        </p>
+      ) : null}
+    </div>
+  );
+}

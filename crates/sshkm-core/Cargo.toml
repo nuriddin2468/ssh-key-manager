@@ -1,0 +1,43 @@
+[package]
+name = "sshkm-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Core library of SSH Key Manager: OpenSSH keys, ssh_config, known_hosts, ssh-agent, permissions and audit"
+readme = "README.md"
+publish = false
+
+[dependencies]
+base64ct = "1.8.3"
+dirs = "7.0.0"
+ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }
+hmac = "0.12"
+p256 = { version = "0.13", features = ["pem", "pkcs8"] }
+p384 = { version = "0.13", features = ["pem", "pkcs8"] }
+p521 = { version = "0.13", features = ["pem", "pkcs8"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+rsa = { version = "0.9", features = ["pem", "std"] }
+secrecy = { version = "0.10.3", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+sha1 = "0.10"
+sha2 = "0.10"
+ssh-encoding = { version = "0.2", features = ["std", "base64"] }
+ssh-key = { version = "0.6.7", features = ["ed25519", "rsa", "p256", "p384", "p521", "encryption", "std", "getrandom"] }
+tempfile = "3.27.0"
+thiserror = "2.0.21"
+time = { version = "0.3.45", features = ["formatting", "macros", "std"] }
+trash = "5.2.9"
+ts-rs = { version = "12.0.1", optional = true, features = ["no-serde-warnings"] }
+zeroize = "1.9.1"
+
+[lints]
+workspace = true
+
+[features]
+ts = ["dep:ts-rs"]
+
+[dev-dependencies]
+serde_json = "1.0.154"
+tempfile = "3.27.0"

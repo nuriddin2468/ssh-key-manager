@@ -1,4 +1,4 @@
-import { CheckCircle2, Plus, ShieldCheck, Terminal, Trash2, X, XCircle } from 'lucide-react';
+import { CheckCircle2, ShieldCheck, Terminal, Trash2, X, XCircle } from 'lucide-react';
 import { type FormEvent, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
@@ -18,9 +18,10 @@ import {
   type HostForm,
   hostLabel,
   hostMonogram,
-  optionRow,
+  optionProblem,
   previewLines,
 } from './model';
+import { OtherOptions } from './OtherOptions';
 
 interface HostEditorProps {
   host: HostEntry;
@@ -41,6 +42,7 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
   const edit = editFromForm(form, host.id);
   const dirty = JSON.stringify(edit) !== JSON.stringify(editFromForm(initial, host.id));
   const errors = useHostErrors(form, edit, hosts);
+  const invalid = Boolean(errors.alias || errors.port) || form.other.some((o) => optionProblem(o));
   const name = edit.patterns.join(' ') || hostLabel(host);
   const mono = hostMonogram(host);
 
@@ -61,7 +63,7 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (readOnly || errors.alias || errors.port || save.isPending) return;
+    if (readOnly || invalid || save.isPending) return;
     save.mutate(edit);
   };
   const testable = host.kind === 'host' && !host.isWildcard && !dirty;
@@ -165,63 +167,7 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
               errors={dirty ? errors : { port: errors.port }}
             />
 
-            <div className="flex flex-col gap-2">
-              <h3 className="text-[12px] font-semibold tracking-[0.02em] text-subtle">
-                {t('hosts.otherOptions')}
-              </h3>
-              {form.other.map((option, index) => (
-                <div
-                  key={option.uid}
-                  className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_32px] items-center gap-2"
-                >
-                  <input
-                    aria-label={t('hosts.optionName')}
-                    value={option.key}
-                    onChange={(e) =>
-                      set(
-                        'other',
-                        form.other.map((o, i) => (i === index ? { ...o, key: e.target.value } : o)),
-                      )
-                    }
-                    spellCheck={false}
-                    className="field h-[34px] rounded-[10px] px-[11px] font-mono text-[12.5px] outline-none focus:border-[rgb(var(--accent-rgb)/0.55)]"
-                  />
-                  <input
-                    aria-label={t('hosts.optionValue')}
-                    value={option.value}
-                    onChange={(e) =>
-                      set(
-                        'other',
-                        form.other.map((o, i) =>
-                          i === index ? { ...o, value: e.target.value } : o,
-                        ),
-                      )
-                    }
-                    spellCheck={false}
-                    className="field h-[34px] rounded-[10px] px-[11px] font-mono text-[12.5px] outline-none focus:border-[rgb(var(--accent-rgb)/0.55)]"
-                  />
-                  <IconButton
-                    label={t('hosts.removeOption')}
-                    icon={<X className="size-[15px]" strokeWidth={1.75} />}
-                    onClick={() =>
-                      set(
-                        'other',
-                        form.other.filter((_, i) => i !== index),
-                      )
-                    }
-                  />
-                </div>
-              ))}
-              <Button
-                variant="ghost"
-                size="sm"
-                className="self-start text-[var(--accent-text)]"
-                icon={<Plus className="size-[15px]" strokeWidth={2} />}
-                onClick={() => set('other', [...form.other, optionRow()])}
-              >
-                {t('hosts.addOption')}
-              </Button>
-            </div>
+            <OtherOptions rows={form.other} onChange={(rows) => set('other', rows)} />
           </fieldset>
         )}
 
@@ -266,7 +212,7 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
             type="submit"
             variant="primary"
             loading={save.isPending}
-            disabled={!dirty || Boolean(errors.alias || errors.port)}
+            disabled={!dirty || invalid}
           >
             {t('common.save')}
           </Button>

@@ -85,9 +85,30 @@ export function editFromForm(form: HostForm, id: number | null): HostEdit {
   push('ProxyJump', form.proxyJump);
   if (form.forwardAgent) push('ForwardAgent', 'yes');
   for (const option of form.other) {
-    if (option.key.trim()) options.push({ key: option.key.trim(), value: option.value.trim() });
+    const { key, value } = splitOption(option);
+    if (key) options.push({ key, value });
   }
   return { id, patterns: form.patterns.split(/\s+/).filter(Boolean), options };
+}
+
+/**
+ * People often type a whole config line (`HostKeyAlias github.com`) into the
+ * name field; treat that as name and value, the way ssh_config would.
+ */
+export function splitOption(option: HostOption): HostOption {
+  const key = option.key.trim();
+  const value = option.value.trim();
+  if (value) return { key, value };
+  const [first = '', ...rest] = key.split(/\s+/);
+  return { key: first, value: rest.join(' ') };
+}
+
+/** Why an option row can't be saved, if it can't. */
+export function optionProblem(option: HostOption): 'missingName' | 'oneWord' | null {
+  const { key, value } = splitOption(option);
+  if (!key && value) return 'missingName';
+  if (/\s/.test(key)) return 'oneWord';
+  return null;
 }
 
 /** The block as it will be written, for the preview. */

@@ -3,7 +3,9 @@
 //! - Unix: the socket in `SSH_AUTH_SOCK` (or an explicit path), with read and
 //!   write timeouts.
 //! - Windows: `SSH_AUTH_SOCK` if it names a pipe, else OpenSSH's
-//!   `\\.\pipe\openssh-ssh-agent`.
+//!   `\\.\pipe\openssh-ssh-agent`. A Unix-socket value (Cygwin, MSYS, Git
+//!   Bash) is ignored by [`socket_from_env`]; passed to [`AgentClient::new`]
+//!   it fails with [`AgentProblem::Unsupported`].
 //!
 //! Every call opens a fresh connection. Supported requests: list identities,
 //! add (optionally with lifetime / confirm constraints), remove one, remove
@@ -18,6 +20,7 @@ mod proto;
 mod transport;
 
 use std::{
+    ffi::OsString,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -107,9 +110,8 @@ pub struct AgentClient {
 }
 
 impl AgentClient {
-    /// The agent of the current session: `SSH_AUTH_SOCK`, or on Windows the
-    /// OpenSSH pipe. Fails with [`Error::AgentUnavailable`] when neither
-    /// applies.
+    /// The agent of the current session (see [`socket_from_env`]). Fails with
+    /// [`Error::AgentUnavailable`] when there is none.
     pub fn from_env() -> Result<Self> {
         socket_from_env()
             .map(Self::new)
@@ -221,13 +223,28 @@ impl AgentClient {
     }
 }
 
-/// The agent socket of the current session: `SSH_AUTH_SOCK` if set and
-/// non-empty, else on Windows the OpenSSH pipe.
+/// The agent socket of the current session.
+///
+/// - Unix: `SSH_AUTH_SOCK` if set and non-empty.
+/// - Windows: `SSH_AUTH_SOCK` if it names a pipe, else
+///   [`WINDOWS_OPENSSH_PIPE`]. Other values, such as the
+///   `/tmp/ssh-XXXX/agent.123` of a Cygwin, MSYS or Git Bash `ssh-agent`, are
+///   Unix sockets this client cannot reach, so they are ignored.
 pub fn socket_from_env() -> Option<PathBuf> {
-    match std::env::var_os("SSH_AUTH_SOCK") {
-        Some(s) if !s.is_empty() => Some(PathBuf::from(s)),
-        _ if cfg!(windows) => Some(PathBuf::from(WINDOWS_OPENSSH_PIPE)),
-        _ => None,
+    socket_for(std::env::var_os("SSH_AUTH_SOCK"), cfg!(windows))
+}
+
+/// [`socket_from_env`] for a given `SSH_AUTH_SOCK` value and platform.
+fn socket_for(auth_sock: Option<OsString>, windows: bool) -> Option<PathBuf> {
+    let from_env = auth_sock.filter(|s| !s.is_empty()).map(PathBuf::from);
+    if windows {
+        Some(
+            from_env
+                .filter(|p| transport::is_pipe_path(p))
+                .unwrap_or_else(|| PathBuf::from(WINDOWS_OPENSSH_PIPE)),
+        )
+    } else {
+        from_env
     }
 }
 

@@ -21,7 +21,8 @@ real `~/.ssh`. Its modules:
   - New hosts go before a trailing `Host *` block, because the first match wins.
 - `known_hosts`: a lossless model, including matching of hashed (`|1|`) entries.
 - `agent`: a small synchronous client for the ssh-agent protocol.
-  - Connects through a Unix socket (`SSH_AUTH_SOCK`), or the OpenSSH named pipe on Windows.
+  - Connects through a Unix socket (`SSH_AUTH_SOCK`), or on Windows a named pipe:
+    `SSH_AUTH_SOCK` if it names one, else the OpenSSH agent's pipe.
 - `perms`
   - Unix: checks and fixes file modes.
   - Windows: checks and fixes ACLs, using locale-independent SIDs through PowerShell and

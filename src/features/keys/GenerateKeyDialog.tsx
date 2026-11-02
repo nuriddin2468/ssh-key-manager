@@ -10,6 +10,7 @@ import { useRouter } from '@/app/router';
 import type { EcdsaCurve } from '@/bindings/EcdsaCurve';
 import type { GenerateAlgorithm } from '@/bindings/GenerateAlgorithm';
 import type { GenerateKeyRequest } from '@/bindings/GenerateKeyRequest';
+import type { KeyView } from '@/bindings/KeyView';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
@@ -33,7 +34,13 @@ const ALGOS: { id: Algo; tone: Tone; base: string }[] = [
 
 const CURVE_BITS: Record<EcdsaCurve, number> = { p256: 256, p384: 384, p521: 521 };
 
-export function GenerateKeyDialog({ onDone }: { onDone: () => void }) {
+interface GenerateKeyDialogProps {
+  onDone: () => void;
+  /** Gets the new key instead of opening it on the Keys page. */
+  onCreated?: (key: KeyView) => void;
+}
+
+export function GenerateKeyDialog({ onDone, onCreated }: GenerateKeyDialogProps) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const settings = useSettings();
@@ -120,7 +127,8 @@ export function GenerateKeyDialog({ onDone }: { onDone: () => void }) {
       success: ({ key, saved }) =>
         t(saved ? 'generate.createdSaved' : 'generate.created', { name: key.name }),
       onSuccess: ({ key }) => {
-        navigate({ page: 'keys', keyId: key.id });
+        if (onCreated) onCreated(key);
+        else navigate({ page: 'keys', keyId: key.id });
         onDone();
       },
     },

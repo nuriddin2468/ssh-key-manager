@@ -8,6 +8,7 @@ import {
   hostTarget,
   optionProblem,
   optionRow,
+  pointHostAtKey,
   splitOption,
   validatePort,
 } from './model';
@@ -119,5 +120,74 @@ describe('other options', () => {
     expect(optionProblem({ key: 'Host Key', value: 'x' })).toBe('oneWord');
     expect(optionProblem({ key: 'HostKeyAlias', value: 'github.com' })).toBeNull();
     expect(optionProblem({ key: '', value: '' })).toBeNull();
+  });
+});
+
+describe('pointHostAtKey', () => {
+  const NEW = '~/.ssh/id_ed25519_prod';
+
+  it('adds the key first and keeps every other option', () => {
+    const entry = host({
+      id: 3,
+      options: [
+        { key: 'HostName', value: '10.0.4.12' },
+        { key: 'User', value: 'deploy' },
+        { key: 'ServerAliveInterval', value: '60' },
+      ],
+    });
+    const { edit, changed } = pointHostAtKey(entry, NEW, { identitiesOnly: true });
+    expect(changed).toBe(true);
+    expect(edit).toEqual({
+      id: 3,
+      patterns: ['prod'],
+      options: [
+        { key: 'HostName', value: '10.0.4.12' },
+        { key: 'User', value: 'deploy' },
+        { key: 'IdentityFile', value: NEW },
+        { key: 'IdentitiesOnly', value: 'yes' },
+        { key: 'ServerAliveInterval', value: '60' },
+      ],
+    });
+  });
+
+  it('keeps the keys listed before, after the new one', () => {
+    const entry = host({
+      options: [
+        { key: 'IdentityFile', value: '~/.ssh/id_old' },
+        { key: 'IdentityFile', value: '~/.ssh/id_older' },
+      ],
+    });
+    const { edit } = pointHostAtKey(entry, NEW, { identitiesOnly: false });
+    expect(edit.options).toEqual([
+      { key: 'IdentityFile', value: NEW },
+      { key: 'IdentityFile', value: '~/.ssh/id_old' },
+      { key: 'IdentityFile', value: '~/.ssh/id_older' },
+    ]);
+  });
+
+  it('changes nothing when the block already names the key, in any spelling', () => {
+    const entry = host({
+      options: [
+        { key: 'IdentityFile', value: '~/.ssh/id_old' },
+        { key: 'IdentityFile', value: '/Users/dev/.ssh/id_ed25519_prod' },
+        { key: 'IdentitiesOnly', value: 'yes' },
+      ],
+    });
+    const isKey = (raw: string) => raw === NEW || raw === '/Users/dev/.ssh/id_ed25519_prod';
+    expect(pointHostAtKey(entry, NEW, { identitiesOnly: true, isKey }).changed).toBe(false);
+    // Declining IdentitiesOnly never removes it.
+    const kept = pointHostAtKey(entry, NEW, { identitiesOnly: false, isKey });
+    expect(kept.changed).toBe(false);
+    expect(kept.edit.options).toContainEqual({ key: 'IdentitiesOnly', value: 'yes' });
+  });
+
+  it('only turns IdentitiesOnly on when the key is already there', () => {
+    const entry = host({ options: [{ key: 'IdentityFile', value: NEW }] });
+    const { edit, changed } = pointHostAtKey(entry, NEW, { identitiesOnly: true });
+    expect(changed).toBe(true);
+    expect(edit.options).toEqual([
+      { key: 'IdentityFile', value: NEW },
+      { key: 'IdentitiesOnly', value: 'yes' },
+    ]);
   });
 });

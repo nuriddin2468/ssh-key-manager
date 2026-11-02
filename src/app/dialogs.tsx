@@ -23,7 +23,7 @@ import { useSettings } from '@/lib/settings';
 import { useRouter } from './router';
 
 type Open =
-  | { kind: 'generate' }
+  | { kind: 'generate'; onCreated?: (key: KeyView) => void }
   | { kind: 'addHost' }
   | { kind: 'passphrase'; key: KeyView; suggest: boolean }
   | { kind: 'unlock'; key: KeyView; lifetime: number | null }
@@ -31,6 +31,8 @@ type Open =
 
 interface DialogsValue {
   generateKey: () => void;
+  /** Generates a key and hands it to `onCreated`, staying on the current page. */
+  generateKeyFor: (onCreated: (key: KeyView) => void) => void;
   addHost: () => void;
   /** `suggest` starts with a generated passphrase, to be saved in the vault. */
   editPassphrase: (key: KeyView, options?: { suggest?: boolean }) => void;
@@ -70,6 +72,7 @@ export function DialogsProvider({ children }: { children: ReactNode }) {
   const value = useMemo<DialogsValue>(
     () => ({
       generateKey: () => setOpen({ kind: 'generate' }),
+      generateKeyFor: (onCreated) => setOpen({ kind: 'generate', onCreated }),
       addHost: () => setOpen({ kind: 'addHost' }),
       editPassphrase: (key, options) =>
         setOpen({ kind: 'passphrase', key, suggest: options?.suggest ?? false }),
@@ -100,7 +103,9 @@ export function DialogsProvider({ children }: { children: ReactNode }) {
     <DialogsContext value={value}>
       {children}
       <Dialog open={open !== null} onOpenChange={(next) => (next ? undefined : close())}>
-        {open?.kind === 'generate' ? <GenerateKeyDialog onDone={close} /> : null}
+        {open?.kind === 'generate' ? (
+          <GenerateKeyDialog onDone={close} onCreated={open.onCreated} />
+        ) : null}
         {open?.kind === 'addHost' ? <AddHostDialog onDone={close} /> : null}
         {open?.kind === 'passphrase' ? (
           <PassphraseDialog keyView={open.key} suggest={open.suggest} onDone={close} />

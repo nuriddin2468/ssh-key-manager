@@ -1,12 +1,14 @@
 // In-memory password vault for `pnpm dev` (see backend.ts). It starts locked;
 // the master password is `master`. Open `?vault=missing` to start without one.
 
+import type { AskedPrompt } from '@/bindings/AskedPrompt';
 import type { CopyResult } from '@/bindings/CopyResult';
 import type { EntryDetail } from '@/bindings/EntryDetail';
 import type { EntryInput } from '@/bindings/EntryInput';
 import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { GenerateOptions } from '@/bindings/GenerateOptions';
 import type { OtpCode } from '@/bindings/OtpCode';
+import type { PromptOutcome } from '@/bindings/PromptOutcome';
 import type { SecretField } from '@/bindings/SecretField';
 import type { Strength } from '@/bindings/Strength';
 import type { VaultSettings } from '@/bindings/VaultSettings';
@@ -185,6 +187,69 @@ function strength(password: string): Strength {
   return { score, guessesLog10 };
 }
 
+/** `alias#keyId` of the keys installed on mock servers this session. */
+const installed = new Set<string>();
+
+function hostEntry(alias: string): MockEntry | undefined {
+  return entries.find(
+    (e) => !e.detail.inTrash && e.detail.kind === 'host' && e.detail.host === alias,
+  );
+}
+
+function hostUser(alias: string): string {
+  return hostEntry(alias)?.detail.username || 'dev';
+}
+
+/**
+ * Signing in to a mock server with its saved password. Most let you in;
+ * `staging-api` turns the password down, `legacy-nas` has a host key that
+ * isn't trusted yet, and `bastion` wants a 2FA code as well.
+ */
+function passwordLogin(alias: string): { ok: boolean; output: string; prompts: AskedPrompt[] } {
+  const host = hostEntry(alias);
+  const user = hostUser(alias);
+  const account = { user, host: alias };
+  const denied = `${user}@${alias}: Permission denied (publickey,password).`;
+  const password = (outcome: PromptOutcome): AskedPrompt => ({
+    text: `${user}@${alias}'s password: `,
+    kind: { type: 'password' },
+    account,
+    outcome,
+  });
+  const code = (outcome: PromptOutcome): AskedPrompt => ({
+    text: 'Verification code: ',
+    kind: { type: 'oneTimeCode' },
+    account: null,
+    outcome,
+  });
+  if (alias === 'legacy-nas') {
+    return {
+      ok: false,
+      output: 'Host key verification failed.',
+      prompts: [
+        {
+          text: `The authenticity of host '${alias}' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])? `,
+          kind: { type: 'hostKeyConfirm' },
+          account: null,
+          outcome: 'declined',
+        },
+      ],
+    };
+  }
+  if (!host?.password) {
+    return { ok: false, output: denied, prompts: host ? [password('missing')] : [] };
+  }
+  if (alias === 'staging-api') {
+    return { ok: false, output: denied, prompts: [password('answered'), password('repeated')] };
+  }
+  if (alias === 'bastion') {
+    return host.otp
+      ? { ok: true, output: '', prompts: [password('answered'), code('answered')] }
+      : { ok: false, output: denied, prompts: [password('answered'), code('missing')] };
+  }
+  return { ok: true, output: '', prompts: [password('answered')] };
+}
+
 export const vaultHandlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   vault_status: status,
   vault_create: ({ master: next }) => {
@@ -302,29 +367,35 @@ export const vaultHandlers: Record<string, (args: Record<string, unknown>) => un
     deviceEnabled = false;
     return RECOVERY_KEY;
   },
-  vault_test_connection: ({ alias }) => {
-    const host = entries.find((e) => e.detail.kind === 'host' && e.detail.host === alias);
-    return (
-      requireUnlocked() ?? {
-        ok: Boolean(host),
-        output: host ? '' : `${alias}: Permission denied (publickey,password).`,
-        prompts: host
-          ? [
-              {
-                text: `${host.detail.username}@${alias}'s password: `,
-                kind: { type: 'password' },
-                account: { user: host.detail.username, host: alias },
-                outcome: 'answered',
-              },
-            ]
-          : [],
-      }
-    );
+  vault_test_connection: ({ alias }) => requireUnlocked() ?? passwordLogin(String(alias)),
+  vault_test_key_login: ({ alias }) => {
+    const locked = requireUnlocked();
+    if (locked) return locked;
+    const ok = [...installed].some((item) => item.startsWith(`${alias}#`));
+    return {
+      ok,
+      output: ok ? '' : `${hostUser(String(alias))}@${alias}: Permission denied (publickey).`,
+      prompts: [],
+    };
   },
-  vault_test_key_login: ({ alias }) =>
-    requireUnlocked() ?? { ok: true, output: `Logged in to ${alias} with a key.`, prompts: [] },
-  vault_install_public_key: ({ alias }) =>
-    requireUnlocked() ?? { ok: true, added: true, output: `Key added on ${alias}.`, prompts: [] },
+  vault_install_public_key: ({ alias, keyId }) => {
+    const locked = requireUnlocked();
+    if (locked) return locked;
+    const login = passwordLogin(String(alias));
+    if (!login.ok) return { ...login, added: false };
+    if (alias === 'old-vpn') {
+      return {
+        ...login,
+        ok: false,
+        added: false,
+        output: 'sh: 1: cannot create .ssh/authorized_keys: Read-only file system',
+      };
+    }
+    const item = `${alias}#${keyId}`;
+    const added = !installed.has(item);
+    installed.add(item);
+    return { ...login, added };
+  },
   vault_set_settings: ({ settings: next }) => {
     settings = { ...(next as VaultSettings), database: settings.database };
     return settings;

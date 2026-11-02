@@ -7,6 +7,8 @@ export interface Settings {
   defaultLifetime: number | null;
   /** Audit finding ids the user chose to ignore. */
   ignoredFindings: string[];
+  /** Look for a newer release at startup and every few hours. */
+  autoUpdate: boolean;
 }
 
 const KEY = 'sshkm.settings';
@@ -14,6 +16,7 @@ const DEFAULTS: Settings = {
   defaultAlgorithm: 'ed25519',
   defaultLifetime: 3600,
   ignoredFindings: [],
+  autoUpdate: true,
 };
 
 function load(): Settings {

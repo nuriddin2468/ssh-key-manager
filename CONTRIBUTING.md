@@ -65,11 +65,11 @@ cargo test --workspace --all-features
 
 There are three workflows:
 
-| Workflow      | Runs on                     | What it does                                                  |
-| ------------- | --------------------------- | ------------------------------------------------------------- |
-| `ci.yml`      | every push and pull request | runs the checks above on all three systems                    |
-| `build.yml`   | every push to `main`        | builds installers and keeps them as artifacts for 30 days     |
-| `release.yml` | a `v*` tag                  | builds installers and attaches them to a draft GitHub Release |
+| Workflow      | Runs on                     | What it does                                              |
+| ------------- | --------------------------- | --------------------------------------------------------- |
+| `ci.yml`      | every push and pull request | runs the checks above on all three systems                |
+| `build.yml`   | every push to `main`        | builds installers and keeps them as artifacts for 30 days |
+| `release.yml` | a `v*` tag                  | builds installers and publishes them as a GitHub Release  |
 
 To publish a release:
 
@@ -80,7 +80,18 @@ To publish a release:
    git tag v0.2.0 && git push origin v0.2.0
    ```
 
-3. Check the draft release on GitHub and publish it.
+3. Wait for the workflow. The release stays a draft while the three platforms build, and
+   is published once all of them have succeeded. Installed apps then offer the update
+   within a few hours: they read `latest.json` from the latest release. If a build fails,
+   the release stays a draft. Fix the problem and re-run the failed jobs, or delete the
+   draft and the tag and push the tag again.
+
+Releases are signed for the in-app updater. The workflow needs the `TAURI_SIGNING_PRIVATE_KEY`
+secret (plus `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if the key has a password): the private
+half of `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`. If that key is lost,
+installed apps can no longer update themselves, so keep a backup. The updater bundles are
+only built with `--config src-tauri/tauri.release.conf.json`, so `pnpm app:build` works
+without the key.
 
 Code signing (Apple Developer ID, a Windows certificate) is optional. The secrets it needs
 are listed at the top of `release.yml`.

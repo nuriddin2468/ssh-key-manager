@@ -9,8 +9,13 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   passed straight to `ssh-agent`.
 - **Passphrases are not stored.** They travel from the form to the Rust process for one
   operation and are held in `secrecy::SecretString`. They are never logged.
-- **No network access.** The app makes no requests. The only network activity is
-  `ssh-keyscan` and `ssh` when you explicitly check a host key or test a connection.
+- **Minimal network access.** The app sends none of your data anywhere. Its only
+  requests are:
+  - the update check, which downloads `latest.json` from this repository's GitHub
+    Releases at startup and every six hours (can be turned off in Settings);
+  - `ssh-keyscan` and `ssh` when you explicitly check a host key or test a connection.
+- **Signed updates.** An update is installed only if its signature matches the public key
+  built into the app (`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`).
 - **Standard files only.** The app edits the OpenSSH files in place.
   - Writes are atomic (temp file plus rename), keep the file's permissions, and follow
     symlinks.

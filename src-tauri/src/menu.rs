@@ -16,6 +16,7 @@ pub fn install(app: &App) -> tauri::Result<()> {
 
     let app_menu = SubmenuBuilder::new(handle, "SSH Key Manager")
         .about(Some(AboutMetadata::default()))
+        .item(&MenuItemBuilder::with_id("check-updates", "Check for Updates…").build(handle)?)
         .separator()
         .item(&item("settings", "Settings…", "CmdOrCtrl+,")?)
         .separator()

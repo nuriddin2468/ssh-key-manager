@@ -23,6 +23,7 @@ import { Tile, type Tone } from '@/components/ui/Tile';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { cn } from '@/lib/cn';
 import { modLabel, platform } from '@/lib/platform';
+import { useUpdateState } from '@/lib/updater';
 
 const PLATFORM_NAMES = { macos: 'macOS', windows: 'Windows', linux: 'Linux' } as const;
 
@@ -39,6 +40,8 @@ export function Sidebar() {
   const findings = audit.data ? audit.data.counts.critical + audit.data.counts.warning : 0;
   const unlocked = agent.data?.identities.length ?? 0;
   const running = agent.data?.status.available ?? false;
+  const update = useUpdateState();
+  const updateReady = update.status === 'available' || update.status === 'downloading';
 
   const item = (page: Page, label: string, tone: Tone, Icon: LucideIcon, count?: number) => (
     <NavItem
@@ -120,18 +123,32 @@ export function Sidebar() {
             ) : null}
           </span>
         </button>
-        <Tooltip content={t('nav.settings')} shortcut={`${modLabel},`} side="top">
+        <Tooltip
+          content={
+            updateReady
+              ? `${t('nav.settings')} · ${t('updates.available', { version: update.version })}`
+              : t('nav.settings')
+          }
+          shortcut={`${modLabel},`}
+          side="top"
+        >
           <button
             type="button"
             aria-label={t('nav.settings')}
             aria-pressed={route.page === 'settings'}
             onClick={() => navigate({ page: 'settings' })}
             className={cn(
-              'pressable grid size-8 shrink-0 place-items-center rounded-lg text-fg-2 hover:bg-white/[0.07] hover:text-fg',
+              'pressable relative grid size-8 shrink-0 place-items-center rounded-lg text-fg-2 hover:bg-white/[0.07] hover:text-fg',
               route.page === 'settings' && 'bg-white/10 text-fg',
             )}
           >
             <SettingsIcon aria-hidden="true" className="size-[17px]" strokeWidth={1.8} />
+            {updateReady ? (
+              <span
+                aria-hidden="true"
+                className="absolute top-1 right-1 size-[7px] rounded-full bg-teal-300 shadow-[0_0_8px_rgb(94_234_212/0.9)]"
+              />
+            ) : null}
           </button>
         </Tooltip>
       </div>

@@ -484,6 +484,21 @@ const uz = {
     opensshMissing: 'Topilmadi',
     license: 'MIT litsenziyasi ostidagi ochiq manbali dastur.',
   },
+  updates: {
+    title: 'Yangilanishlar',
+    automatic: 'Avtomatik tekshirish',
+    idle: 'Hali tekshirilmagan',
+    checking: 'Yangilanishlar tekshirilmoqda…',
+    upToDate: 'Eng soʻnggi versiya oʻrnatilgan',
+    available: '{{version}} versiyasi chiqdi',
+    availableHint: 'Yangilanishni yakunlash uchun ilova qayta ishga tushadi.',
+    downloading: '{{version}} versiyasi yuklab olinmoqda…',
+    error: 'Yangilanishlarni tekshirib boʻlmadi',
+    installFailed: 'Yangilanishni oʻrnatib boʻlmadi',
+    checkNow: 'Tekshirish',
+    install: 'Yangilash va qayta ishga tushirish',
+    later: 'Keyinroq',
+  },
 };
 
 export default uz;

@@ -478,6 +478,21 @@ const en = {
     opensshMissing: 'Not found',
     license: 'Open source under the MIT license.',
   },
+  updates: {
+    title: 'Updates',
+    automatic: 'Check automatically',
+    idle: 'Not checked yet',
+    checking: 'Checking for updates…',
+    upToDate: 'You have the latest version',
+    available: 'Version {{version}} is available',
+    availableHint: 'The app restarts to finish the update.',
+    downloading: 'Downloading version {{version}}…',
+    error: 'Couldn’t check for updates',
+    installFailed: 'Couldn’t install the update',
+    checkNow: 'Check now',
+    install: 'Update and restart',
+    later: 'Later',
+  },
 } as const;
 
 export default en;

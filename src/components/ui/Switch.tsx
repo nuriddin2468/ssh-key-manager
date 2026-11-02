@@ -1,5 +1,5 @@
 import { Switch as RSwitch } from 'radix-ui';
-import { type ReactNode, useId } from 'react';
+import { type ComponentProps, type ReactNode, useId } from 'react';
 import { cn } from '@/lib/cn';
 
 interface SwitchRowProps {
@@ -25,21 +25,31 @@ export function SwitchRow({ label, hint, checked, onCheckedChange, disabled }: S
           </span>
         ) : null}
       </div>
-      <RSwitch.Root
+      <Switch
         id={id}
         checked={checked}
         onCheckedChange={onCheckedChange}
         disabled={disabled}
         aria-describedby={hint ? `${id}-hint` : undefined}
-        className={cn(
-          'group relative h-[22px] w-[38px] shrink-0 rounded-full shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] transition-colors duration-150 disabled:opacity-50',
-          'bg-white/10 data-[state=checked]:bg-[linear-gradient(135deg,var(--accent-1),var(--accent-2))]',
-        )}
-      >
-        {/* While pressed the knob stretches toward the other side, like macOS. */}
-        <RSwitch.Thumb className="block h-4 w-4 translate-x-[3px] rounded-full bg-white shadow-[0_2px_4px_rgb(0_0_0/0.35)] transition-[translate,width] duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)] group-active:w-5 data-[state=checked]:translate-x-[19px] group-active:data-[state=checked]:translate-x-[15px]" />
-      </RSwitch.Root>
+      />
     </div>
+  );
+}
+
+/** The bare switch, for rows that lay out their own label. */
+export function Switch({ className, ...props }: ComponentProps<typeof RSwitch.Root>) {
+  return (
+    <RSwitch.Root
+      className={cn(
+        'group relative h-[22px] w-[38px] shrink-0 rounded-full shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] transition-colors duration-150 disabled:opacity-50',
+        'bg-white/10 data-[state=checked]:bg-[linear-gradient(135deg,var(--accent-1),var(--accent-2))]',
+        className,
+      )}
+      {...props}
+    >
+      {/* While pressed the knob stretches toward the other side, like macOS. */}
+      <RSwitch.Thumb className="block h-4 w-4 translate-x-[3px] rounded-full bg-white shadow-[0_2px_4px_rgb(0_0_0/0.35)] transition-[translate,width] duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)] group-active:w-5 data-[state=checked]:translate-x-[19px] group-active:data-[state=checked]:translate-x-[15px]" />
+    </RSwitch.Root>
   );
 }
 

@@ -49,6 +49,8 @@ Want the newest version before a release? Every change to the `main` branch is b
 1. Open the [latest builds](https://github.com/nuriddin2468/ssh-key-manager/actions/workflows/build.yml) and pick the top green run.
 2. Download your system's file from **Artifacts**. You need to be signed in to GitHub, and the files are kept for 30 days.
 
+Once installed, the app keeps itself up to date: it offers new versions as they are released, and checks every update's signature before installing it.
+
 ### First launch
 
 Builds are not code-signed yet, so your system asks once whether you trust the app.
@@ -108,7 +110,7 @@ Builds are not code-signed yet, so your system asks once whether you trust the a
 
 ## Privacy and safety
 
-- **Nothing leaves your computer.** The app makes no network requests. The only exceptions are the two times you ask it to reach a server: when checking a host key and when testing a connection.
+- **Nothing leaves your computer.** The app sends none of your data anywhere. It goes online only to check GitHub for a new version of itself (you can turn this off in **Settings → Updates**) and when you ask it to reach a server: checking a host key or testing a connection.
 - **Your private keys stay private.** The interface only ever sees public keys and fingerprints. Passphrases are used once and never stored.
 - **Your files stay standard.** Everything is plain OpenSSH, and you can stop using the app at any time.
 - **Mistakes can be undone.** Config files are backed up before every edit, and keys go to the Trash, not into oblivion.

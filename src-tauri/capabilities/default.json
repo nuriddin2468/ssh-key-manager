@@ -11,6 +11,8 @@
     "clipboard-manager:allow-write-text",
     "dialog:allow-open",
     "window-state:default",
-    "log:default"
+    "log:default",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

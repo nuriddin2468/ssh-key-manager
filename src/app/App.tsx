@@ -12,6 +12,8 @@ import { KnownHostsPage } from '@/features/known/KnownHostsPage';
 import { OverviewPage } from '@/features/overview/OverviewPage';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { platform } from '@/lib/platform';
+import { useSettings } from '@/lib/settings';
+import { useAutomaticUpdates } from '@/lib/updater';
 import { DialogsProvider } from './dialogs';
 import { RouterProvider, useRouter } from './router';
 import { useAppEvents } from './useAppEvents';
@@ -41,6 +43,7 @@ export function App() {
 function Shell() {
   const { route } = useRouter();
   useAppEvents();
+  useAutomaticUpdates(useSettings().autoUpdate);
 
   // Popovers render in a portal under <body>; giving it the section too lets
   // dropdowns and menus pick up the page's accent colour.

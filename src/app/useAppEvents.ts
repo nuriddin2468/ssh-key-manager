@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { type RefObject, useEffect } from 'react';
 import { invalidateAll } from '@/api/queries';
 import { platform } from '@/lib/platform';
+import { checkForUpdates } from '@/lib/updater';
 import { useDialogs } from './dialogs';
 import { type Page, type Route, useRouter } from './router';
 
@@ -25,6 +26,7 @@ export function useAppEvents(): void {
       else if (id === 'import-key') void dialogs.importKey();
       else if (id === 'add-host') dialogs.addHost();
       else if (id === 'check') void invalidateAll();
+      else if (id === 'check-updates') void checkForUpdates();
       else if (id === 'find') window.dispatchEvent(new Event(FIND_EVENT));
     };
 

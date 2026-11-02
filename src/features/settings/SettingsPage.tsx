@@ -9,12 +9,14 @@ import { Logo } from '@/components/Logo';
 import { PageBody, Toolbar } from '@/components/layout/Toolbar';
 import { Button } from '@/components/ui/Button';
 import { Select } from '@/components/ui/Select';
+import { Switch } from '@/components/ui/Switch';
 import { Tile, type Tone } from '@/components/ui/Tile';
 import { LifetimeSelect } from '@/features/agent/LifetimeSelect';
 import { LANGUAGE_NAMES, LANGUAGES, type Language, setLanguage, storedLanguage } from '@/i18n';
 import { displayPath } from '@/lib/format';
 import { fileManagerName } from '@/lib/platform';
 import { type Settings, updateSettings, useSettings } from '@/lib/settings';
+import { checkForUpdates, installUpdate, useUpdateState } from '@/lib/updater';
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -111,6 +113,17 @@ export function SettingsPage() {
           ))}
         </Group>
 
+        <Group title={t('updates.title')}>
+          <Row label={t('updates.automatic')}>
+            <Switch
+              aria-label={t('updates.automatic')}
+              checked={settings.autoUpdate}
+              onCheckedChange={(autoUpdate) => updateSettings({ autoUpdate })}
+            />
+          </Row>
+          <UpdateRow />
+        </Group>
+
         <Group title={t('settings.about')}>
           <div className="flex items-center gap-4 px-4 py-4">
             <Logo size={52} />
@@ -147,6 +160,41 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
       <span className="shrink-0 font-medium">{label}</span>
       <span className="ml-auto flex min-w-0 items-center justify-end gap-2">{children}</span>
     </div>
+  );
+}
+
+function UpdateRow() {
+  const { t } = useTranslation();
+  const update = useUpdateState();
+
+  let status: string;
+  if (update.status === 'available') status = t('updates.available', { version: update.version });
+  else if (update.status === 'downloading') {
+    status = t('updates.downloading', { version: update.version });
+    if (update.percent !== null) status += ` ${update.percent}%`;
+  } else status = t(`updates.${update.status}`);
+
+  return (
+    <Row label={status}>
+      {update.status === 'available' || update.status === 'downloading' ? (
+        <Button
+          size="sm"
+          variant="primary"
+          loading={update.status === 'downloading'}
+          onClick={() => void installUpdate()}
+        >
+          {t('updates.install')}
+        </Button>
+      ) : (
+        <Button
+          size="sm"
+          loading={update.status === 'checking'}
+          onClick={() => void checkForUpdates()}
+        >
+          {t('updates.checkNow')}
+        </Button>
+      )}
+    </Row>
   );
 }
 

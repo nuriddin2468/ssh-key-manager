@@ -1,7 +1,15 @@
 name: Release
 
 # Builds installers for every platform when a version tag is pushed and
-# attaches them to a draft GitHub release. Code signing needs these secrets:
+# attaches them to a draft GitHub release, together with the signed update
+# bundles and the latest.json manifest that the in-app updater reads. Once every
+# platform has built, the release is published and installed apps offer the
+# update. If any build fails, the release stays a draft and nobody is offered it.
+#
+# Required: TAURI_SIGNING_PRIVATE_KEY (and TAURI_SIGNING_PRIVATE_KEY_PASSWORD if
+# the key has one), the private half of plugins.updater.pubkey in tauri.conf.json.
+#
+# Optional code signing needs these secrets:
 #   macOS:   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
 #            APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
 #   Windows: configure signing in tauri.conf.json (bundle.windows) or Azure Trusted Signing
@@ -28,6 +36,8 @@ jobs:
     runs-on: ${{ matrix.platform }}
     env:
       HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux dependencies
@@ -64,7 +74,7 @@ jobs:
           releaseName: SSH Key Manager ${{ github.ref_name }}
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json
       - name: Build and upload
         if: runner.os != 'macOS' || env.HAS_APPLE_SIGNING != 'true'
         uses: tauri-apps/tauri-action@v0
@@ -75,4 +85,15 @@ jobs:
           releaseName: SSH Key Manager ${{ github.ref_name }}
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest

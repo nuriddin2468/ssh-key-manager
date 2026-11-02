@@ -4,15 +4,26 @@ import type { AgentView } from '@/bindings/AgentView';
 import type { AuditReport } from '@/bindings/AuditReport';
 import type { ConfigFile } from '@/bindings/ConfigFile';
 import type { ConnectionTest } from '@/bindings/ConnectionTest';
+import type { CopyField } from '@/bindings/CopyField';
+import type { CopyResult } from '@/bindings/CopyResult';
+import type { EntryDetail } from '@/bindings/EntryDetail';
+import type { EntryInput } from '@/bindings/EntryInput';
+import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { Environment } from '@/bindings/Environment';
 import type { GenerateKeyRequest } from '@/bindings/GenerateKeyRequest';
+import type { GenerateOptions } from '@/bindings/GenerateOptions';
 import type { HostEdit } from '@/bindings/HostEdit';
 import type { HostKeyCheck } from '@/bindings/HostKeyCheck';
 import type { KeysView } from '@/bindings/KeysView';
 import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostsFile } from '@/bindings/KnownHostsFile';
+import type { OtpCode } from '@/bindings/OtpCode';
 import type { PermissionFix } from '@/bindings/PermissionFix';
 import type { SavedHost } from '@/bindings/SavedHost';
+import type { SecretField } from '@/bindings/SecretField';
+import type { Strength } from '@/bindings/Strength';
+import type { VaultSettings } from '@/bindings/VaultSettings';
+import type { VaultStatus } from '@/bindings/VaultStatus';
 import { call } from '@/lib/ipc';
 
 export const api = {
@@ -51,4 +62,34 @@ export const api = {
 
   audit: () => call<AuditReport>('run_audit'),
   fixPermissions: (items: PermissionFix[]) => call<number>('fix_permissions', { items }),
+
+  vaultStatus: () => call<VaultStatus>('vault_status'),
+  /** Returns the recovery key, to be shown once. */
+  vaultCreate: (master: string) => call<string>('vault_create', { master }),
+  vaultUnlock: (master: string) => call<void>('vault_unlock', { master }),
+  vaultRecover: (recoveryKey: string, newMaster: string) =>
+    call<void>('vault_recover', { recoveryKey, newMaster }),
+  vaultLock: () => call<void>('vault_lock'),
+  /** Postpones the auto-lock; call on user activity, throttled. */
+  vaultActivity: () => call<void>('vault_activity'),
+  vaultEntries: () => call<EntrySummary[]>('vault_entries'),
+  vaultEntry: (id: string) => call<EntryDetail>('vault_entry', { id }),
+  vaultReveal: (id: string, field: SecretField) => call<string>('vault_reveal', { id, field }),
+  vaultCopy: (id: string, field: CopyField) => call<CopyResult>('vault_copy', { id, field }),
+  vaultOtp: (id: string) => call<OtpCode>('vault_otp', { id }),
+  vaultAdd: (input: EntryInput) => call<EntryDetail>('vault_add', { input }),
+  vaultUpdate: (id: string, input: EntryInput) => call<EntryDetail>('vault_update', { id, input }),
+  vaultTrash: (id: string) => call<void>('vault_trash', { id }),
+  vaultRestore: (id: string) => call<void>('vault_restore', { id }),
+  vaultDelete: (id: string) => call<void>('vault_delete', { id }),
+  vaultEmptyTrash: () => call<number>('vault_empty_trash'),
+  vaultGenerate: (options: GenerateOptions) => call<string>('vault_generate', { options }),
+  vaultStrength: (password: string, context: string[]) =>
+    call<Strength>('vault_strength', { password, context }),
+  vaultChangeMaster: (current: string, next: string) =>
+    call<void>('vault_change_master', { current, new: next }),
+  /** Returns the new recovery key, to be shown once. */
+  vaultNewRecoveryKey: (master: string) => call<string>('vault_new_recovery_key', { master }),
+  vaultSetSettings: (settings: VaultSettings) =>
+    call<VaultSettings>('vault_set_settings', { settings }),
 };

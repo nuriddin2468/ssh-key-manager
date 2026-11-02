@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use sshkm_core::paths::SshPaths;
 use time::OffsetDateTime;
+
+use crate::vault::VaultRuntime;
 
 /// Shared by all commands.
 pub struct AppState {
@@ -14,15 +16,18 @@ pub struct AppState {
     /// agent protocol has no way to ask for it.
     lifetimes: Mutex<HashMap<String, OffsetDateTime>>,
     openssh_version: OnceLock<Option<String>>,
+    pub vault: Arc<VaultRuntime>,
 }
 
 impl AppState {
-    pub fn new(paths: SshPaths, backup_dir: PathBuf) -> Self {
+    /// `data_dir` is the app's own data folder, home of the vault by default.
+    pub fn new(paths: SshPaths, backup_dir: PathBuf, data_dir: PathBuf) -> Self {
         Self {
             paths,
             backup_dir,
             lifetimes: Mutex::new(HashMap::new()),
             openssh_version: OnceLock::new(),
+            vault: Arc::new(VaultRuntime::new(data_dir)),
         }
     }
 

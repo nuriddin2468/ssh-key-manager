@@ -4760,11 +4760,13 @@ dependencies = [
 name = "sshkm-app"
 version = "0.2.1"
 dependencies = [
+ "arboard",
  "gethostname",
  "log",
  "notify",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "ssh-key",
  "sshkm-core",
  "tauri",

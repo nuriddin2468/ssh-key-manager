@@ -7,14 +7,16 @@ mod menu;
 mod process;
 mod state;
 mod types;
+mod vault;
 mod watcher;
 
 use std::sync::Arc;
 
 use sshkm_core::paths::SshPaths;
-use tauri::Manager;
+use tauri::{Manager, WindowEvent};
 
 use crate::state::AppState;
+use crate::vault::LockReason;
 
 pub fn run() {
     let builder = tauri::Builder::default();
@@ -43,12 +45,24 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let paths = SshPaths::detect()?;
-            let backup_dir = app.path().app_data_dir()?.join("backups");
+            let data_dir = app.path().app_data_dir()?;
+            let backup_dir = data_dir.join("backups");
             watcher::start(app.handle(), &paths.dir);
-            app.manage(Arc::new(AppState::new(paths, backup_dir)));
+            let state = Arc::new(AppState::new(paths, backup_dir, data_dir));
+            state.vault.start_timer(app.handle().clone());
+            app.manage(state);
             #[cfg(target_os = "macos")]
             menu::install(app)?;
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::Resized(_) = event
+                && window.is_minimized().unwrap_or(false)
+                && let Some(state) = window.try_state::<Arc<AppState>>()
+                && state.vault.settings().lock_on_minimize
+            {
+                state.vault.lock(window.app_handle(), LockReason::Minimize);
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::environment::get_environment,
@@ -75,6 +89,28 @@ pub fn run() {
             commands::known_hosts::check_host_key,
             commands::audit::run_audit,
             commands::audit::fix_permissions,
+            commands::vault::vault_status,
+            commands::vault::vault_create,
+            commands::vault::vault_unlock,
+            commands::vault::vault_recover,
+            commands::vault::vault_lock,
+            commands::vault::vault_activity,
+            commands::vault::vault_entries,
+            commands::vault::vault_entry,
+            commands::vault::vault_reveal,
+            commands::vault::vault_copy,
+            commands::vault::vault_otp,
+            commands::vault::vault_add,
+            commands::vault::vault_update,
+            commands::vault::vault_trash,
+            commands::vault::vault_restore,
+            commands::vault::vault_delete,
+            commands::vault::vault_empty_trash,
+            commands::vault::vault_generate,
+            commands::vault::vault_strength,
+            commands::vault::vault_change_master,
+            commands::vault::vault_new_recovery_key,
+            commands::vault::vault_set_settings,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start SSH Key Manager");

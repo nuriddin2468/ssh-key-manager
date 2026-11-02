@@ -8,9 +8,12 @@ use sshkm_core::keys::{GenerateRequest, KeyInfo, SkippedFile};
 use sshkm_core::known_hosts::{KnownHostEntry, KnownHostsView};
 use sshkm_core::paths::SshPaths;
 use sshkm_core::perms::PermKind;
+use sshkm_core::vault::{VaultFiles, VaultPaths};
+
+use crate::vault::VaultSettings;
 
 #[cfg(test)]
-const BINDINGS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/bindings/");
+pub(crate) const BINDINGS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/bindings/");
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -196,4 +199,55 @@ pub struct ConnectionTest {
 pub struct PermissionFix {
     pub path: String,
     pub kind: PermKind,
+}
+
+/// Whether there is a vault and whether it is open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub enum VaultState {
+    /// No database file yet.
+    Missing,
+    Locked,
+    Unlocked,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub struct VaultStatus {
+    pub state: VaultState,
+    pub files: VaultFiles,
+    pub paths: VaultPaths,
+    pub settings: VaultSettings,
+}
+
+/// What [`crate::commands::vault::vault_copy`] copies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub enum CopyField {
+    Username,
+    Password,
+    Url,
+    /// The current 2FA code.
+    Otp,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub struct CopyResult {
+    /// Seconds until the clipboard is cleared; `None` if it won't be.
+    pub clears_in_secs: Option<u32>,
+}
+
+/// A 2FA code and how long it stays valid.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub struct OtpCode {
+    pub code: String,
+    /// Seconds.
+    pub valid_for: u32,
 }

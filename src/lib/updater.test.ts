@@ -1,10 +1,18 @@
-import { renderHook } from '@testing-library/react';
+import { render, renderHook, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import type { ReactElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UpdateState } from './updater';
 
 const check = vi.fn();
 const relaunch = vi.fn();
-const toast = Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), loading: vi.fn() });
+const toast = {
+  success: vi.fn(),
+  error: vi.fn(),
+  loading: vi.fn(),
+  custom: vi.fn(),
+  dismiss: vi.fn(),
+};
 
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }));
 vi.mock('@tauri-apps/plugin-updater', () => ({ check }));
@@ -63,10 +71,10 @@ describe('checkForUpdates', () => {
     await checkForUpdates({ quiet: true });
     await checkForUpdates({ quiet: true });
     expect(currentStatus(useUpdateState)).toEqual({ status: 'available', version: '0.2.0' });
-    expect(toast).toHaveBeenCalledOnce();
+    expect(toast.custom).toHaveBeenCalledOnce();
 
     await checkForUpdates();
-    expect(toast).toHaveBeenCalledTimes(2);
+    expect(toast.custom).toHaveBeenCalledTimes(2);
   });
 
   it('reports a failed check only when asked', async () => {
@@ -122,5 +130,37 @@ describe('installUpdate', () => {
     const { installUpdate } = await load();
     await installUpdate();
     expect(toast.loading).not.toHaveBeenCalled();
+  });
+});
+
+describe('the update offer', () => {
+  /** Renders what the last offer asked sonner to show. */
+  function renderOffer() {
+    const [content] = toast.custom.mock.lastCall as [() => ReactElement];
+    render(content());
+  }
+
+  it('installs and restarts from its button', async () => {
+    check.mockResolvedValue(fakeUpdate('0.2.0'));
+    const { checkForUpdates } = await load();
+    await checkForUpdates();
+    renderOffer();
+
+    expect(screen.getByText('Version 0.2.0 is available')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Update and restart' }));
+    expect(toast.dismiss).toHaveBeenCalledWith('update-offer');
+    await vi.waitFor(() => expect(relaunch).toHaveBeenCalledOnce());
+  });
+
+  it('can be put off', async () => {
+    const update = fakeUpdate('0.2.0');
+    check.mockResolvedValue(update);
+    const { checkForUpdates } = await load();
+    await checkForUpdates();
+    renderOffer();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Later' }));
+    expect(toast.dismiss).toHaveBeenCalledWith('update-offer');
+    expect(update.downloadAndInstall).not.toHaveBeenCalled();
   });
 });

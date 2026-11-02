@@ -1,8 +1,9 @@
 import { isTauri } from '@tauri-apps/api/core';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { check, type Update } from '@tauri-apps/plugin-updater';
-import { useEffect, useSyncExternalStore } from 'react';
+import { createElement, useEffect, useSyncExternalStore } from 'react';
 import { toast } from 'sonner';
+import { UpdateToast } from '@/components/UpdateToast';
 import i18n from '@/i18n';
 
 /** Where the app is in finding, downloading and installing a newer release. */
@@ -15,6 +16,11 @@ export type UpdateState =
   | { status: 'error' };
 
 const TOAST_ID = 'update';
+/**
+ * The offer is a custom toast, and sonner keeps a toast's custom content when
+ * another toast reuses its id, so progress and results use `TOAST_ID` instead.
+ */
+const OFFER_ID = 'update-offer';
 const CHECK_INTERVAL = 6 * 60 * 60 * 1000;
 
 let state: UpdateState = { status: 'idle' };
@@ -108,13 +114,18 @@ export function useAutomaticUpdates(enabled: boolean): void {
 
 function offer(version: string): void {
   announced = version;
-  toast(i18n.t('updates.available', { version }), {
-    id: TOAST_ID,
-    description: i18n.t('updates.availableHint'),
-    duration: Number.POSITIVE_INFINITY,
-    action: { label: i18n.t('updates.install'), onClick: () => void installUpdate() },
-    cancel: { label: i18n.t('updates.later'), onClick: () => {} },
-  });
+  toast.custom(
+    () =>
+      createElement(UpdateToast, {
+        version,
+        onLater: () => toast.dismiss(OFFER_ID),
+        onInstall: () => {
+          toast.dismiss(OFFER_ID);
+          void installUpdate();
+        },
+      }),
+    { id: OFFER_ID, duration: Number.POSITIVE_INFINITY },
+  );
 }
 
 function reason(error: unknown): string {

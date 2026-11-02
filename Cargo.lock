@@ -4421,7 +4421,7 @@ dependencies = [
 
 [[package]]
 name = "sshkm-app"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "gethostname",
  "log",
@@ -4448,7 +4448,7 @@ dependencies = [
 
 [[package]]
 name = "sshkm-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64ct",
  "dirs",

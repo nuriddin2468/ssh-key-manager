@@ -167,6 +167,14 @@ const uz = {
     bits: '{{bits}} bit',
     hardwareKey: 'FIDO2 apparat kaliti',
     mismatch: '.pub fayli boshqa kalitga tegishli.',
+    savedInVault: 'Omborda saqlangan',
+    openInPasswords: '«Parollar»da ochish',
+    vaultSaveFailed: 'Parol iborasini omborga saqlab boʻlmadi',
+    passphraseSavedVault: 'Parol iborasi kalitga va omborga saqlandi',
+    passphraseRemovedVault:
+      'Parol iborasi olib tashlandi. Uning yozuvi ombor savatiga koʻchirildi.',
+    vaultTrash: 'Saqlangan iborani savatga koʻchirish',
+    vaultTrashHint: 'U endi bu kalitni ochmaydi. Uni «Parollar» boʻlimida qaytarish mumkin.',
   },
   generate: {
     title: 'Yangi kalit yaratish',
@@ -209,6 +217,18 @@ const uz = {
     command: 'Terminalda xuddi shunday',
     submit: 'Kalit yaratish',
     created: '{{name}} yaratildi',
+    suggest: 'Kuchli parol iborasi yaratish',
+    suggested: 'Parol iborasi yaratildi va kiritildi',
+    saveInVault: 'Parol iborasini omborga saqlash',
+    updateInVault: 'Ombordagi parol iborasini yangilash',
+    saveInVaultHint: 'Keyin kalitni iborani kiritmasdan faollashtirasiz.',
+    vaultLocked: 'Ombor qulflangan',
+    vaultLockedHint: 'Parol iborasini u yerga saqlash uchun omborni oching.',
+    vaultMissing: 'Parol iboralarini omborda saqlang',
+    vaultMissingHint: 'Parollar omborini yarating va iboralarni unda saqlang.',
+    unlockVault: 'Omborni ochish',
+    setUpVault: 'Ombor yaratish',
+    createdSaved: '{{name}} yaratildi. Parol iborasi omborda saqlandi.',
   },
   hosts: {
     title: 'Xostlar',
@@ -321,6 +341,25 @@ const uz = {
     unlockTitle: '{{name}} ni faollashtirish',
     unlockDescription: 'Kalitni ssh-agentga qoʻshish uchun parol iborasini kiriting.',
     unlockPassphrase: 'Parol iborasi',
+    savedTitle: 'Parol iborasi omborda saqlangan',
+    savedUse: 'Saqlangan ibora bilan faollashtirish',
+    orType: 'Yoki parol iborasini kiriting',
+    savedLocked:
+      'Bu kalitning parol iborasi omborda saqlangan. Undan foydalanish uchun omborni oching.',
+    openVault: 'Omborni ochish',
+    savedOutdated:
+      'Saqlangan parol iborasi bu kalitga endi mos kelmaydi. Joriy iborani kiriting va «Parollar» boʻlimida yozuvni yangilang.',
+    savedGone: 'Omborda bu kalit uchun parol iborasi endi yoʻq.',
+    inVault: 'Parol iborasi omborda',
+    unlockSaved_one: '{{count}} ta kalitni saqlangan ibora bilan faollashtirish',
+    unlockSaved_other: '{{count}} ta kalitni saqlangan iboralar bilan faollashtirish',
+    unlockedSaved_one: '{{count}} ta kalit saqlangan ibora bilan faollashtirildi',
+    unlockedSaved_other: '{{count}} ta kalit saqlangan iboralar bilan faollashtirildi',
+    failedSaved: '{{names}} faollashtirilmadi',
+    failedSavedHint_one:
+      'Saqlangan parol iborasi mos kelmadi. «Parollar» boʻlimida yozuvni yangilang.',
+    failedSavedHint_other:
+      'Saqlangan parol iboralari mos kelmadi. «Parollar» boʻlimida yozuvlarni yangilang.',
   },
   known: {
     title: 'Maʼlum xostlar',
@@ -407,6 +446,42 @@ const uz = {
       removeIdentityFile: 'Xostdan olib tashlash',
       openKey: 'Kalitni ochish',
       openHost: 'Xostni ochish',
+    },
+    vault: {
+      title: 'Parollar',
+      lockedTitle: 'Ombor qulflangan',
+      lockedText: 'Zaif, takroriy va eski parollarni topish uchun omborni oching.',
+      open: '«Parollar»ni ochish',
+      clear: 'Zaif, takroriy yoki eski parollar yoʻq.',
+      openEntry: 'Yozuvni ochish',
+      kinds: {
+        weakPassword: {
+          title: 'Zaif parol',
+          text: 'Uni topish oson. Yaratilgan parol bilan almashtiring.',
+          textScore0: 'Deyarli darhol topiladi. Yaratilgan parol bilan almashtiring.',
+        },
+        reusedPassword: {
+          title: 'Takroriy parol',
+          text: 'U bu yerlarda ham ishlatilgan: {{names}}. Bir joyda sizib chiqsa, qolganlari ham xavf ostida qoladi.',
+        },
+        oldPassword: {
+          title: 'Eski parol',
+          text_one: '{{date}} dan beri, bir yildan ortiq oʻzgartirilmagan.',
+          text_other: '{{date}} dan beri, {{count}} yildan ortiq oʻzgartirilmagan.',
+        },
+        keyNotFound: {
+          title: 'Mavjud boʻlmagan kalitning parol iborasi',
+          text: '~/.ssh da bunday barmoq izli kalit yoʻq. Kalit endi boʻlmasa, yozuvni savatga koʻchiring.',
+        },
+        hostNotFound: {
+          title: 'Mavjud boʻlmagan xost paroli',
+          text: '{{host}} ~/.ssh/config dagi xostlar orasida yoʻq. Taxallusni tuzating yoki xostni qoʻshing.',
+        },
+        passwordLogin: {
+          title: 'Parol bilan kirish',
+          text: '{{host}} uchun kalit xavfsizroq. Kalit yarating va uni serverga qoʻshing.',
+        },
+      },
     },
     kinds: {
       dsaKey: {

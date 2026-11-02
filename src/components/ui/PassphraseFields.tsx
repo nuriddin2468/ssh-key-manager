@@ -10,6 +10,8 @@ interface PassphraseFieldsProps {
   onChange: (value: string) => void;
   onRepeatChange: (value: string) => void;
   autoFocus?: boolean;
+  /** Show the text, e.g. after a passphrase was generated. */
+  visible?: boolean;
 }
 
 const SEGMENT_COLORS = ['', '#FF6B6B', '#FFB547', '#5EEAD4', '#14B8A6'];
@@ -21,18 +23,20 @@ export function PassphraseFields({
   onChange,
   onRepeatChange,
   autoFocus,
+  visible = false,
 }: PassphraseFieldsProps) {
   const { t } = useTranslation();
   const strength = passphraseStrength(value);
   const mismatch = repeat.length > 0 && repeat !== value;
   const matches = repeat.length > 0 && repeat === value;
+  const type = visible ? 'text' : 'password';
 
   return (
     <>
       <div className="flex min-w-0 flex-col gap-1.5">
         <TextField
           label={t('generate.passphrase')}
-          type="password"
+          type={type}
           autoComplete="new-password"
           value={value}
           onChange={(event) => onChange(event.target.value)}
@@ -61,7 +65,7 @@ export function PassphraseFields({
       <div className="flex min-w-0 flex-col gap-1.5">
         <TextField
           label={t('generate.repeat')}
-          type="password"
+          type={type}
           autoComplete="new-password"
           value={repeat}
           onChange={(event) => onRepeatChange(event.target.value)}

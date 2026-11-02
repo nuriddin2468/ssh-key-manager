@@ -18,6 +18,7 @@
 //! vault in a synced folder — [`Vault::refresh`] picks the change up, and a
 //! write that would overwrite it fails with [`Error::Conflict`] instead.
 
+mod audit;
 mod generator;
 mod recovery;
 mod slots;
@@ -34,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
+pub use self::audit::{VaultAuditInput, VaultFinding, VaultFindingKind};
 pub use self::generator::{GenerateOptions, Strength, generate, strength};
 use self::slots::KeySlots;
 use crate::{Error, Result, fsutil};
@@ -503,7 +505,7 @@ impl Vault {
         Ok(EntryDetail {
             summary: self.summary(&entry),
             notes: text(entry.get(fields::NOTES)),
-            password_changed: password_changed(&entry, history.unwrap_or_default()),
+            password_changed: password_changed(&entry, history.unwrap_or_default()).map(rfc3339),
             history_len: history.map_or(0, |h| u32::try_from(h.len()).unwrap_or(u32::MAX)),
         })
     }
@@ -801,7 +803,10 @@ fn otp_uri(input: &str, title: &str) -> Result<String> {
 
 /// When the current password was set: the oldest version in the unbroken run
 /// of versions, newest first, that have it.
-fn password_changed(entry: &EntryRef<'_>, history: &[keepass::db::Entry]) -> Option<String> {
+fn password_changed(
+    entry: &EntryRef<'_>,
+    history: &[keepass::db::Entry],
+) -> Option<chrono::NaiveDateTime> {
     let password = entry.get(fields::PASSWORD);
     let mut changed = entry.times.last_modification;
     for version in history.iter().rev() {
@@ -810,7 +815,7 @@ fn password_changed(entry: &EntryRef<'_>, history: &[keepass::db::Entry]) -> Opt
         }
         changed = version.times.last_modification.or(changed);
     }
-    changed.map(rfc3339)
+    changed
 }
 
 fn in_group(group: GroupId, ancestor: Option<uuid::Uuid>, db: &Database) -> bool {

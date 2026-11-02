@@ -3,12 +3,22 @@ import { type FormEvent, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
 import { useAppMutation } from '@/api/useAppMutation';
+import { useRouter } from '@/app/router';
 import type { KeyView } from '@/bindings/KeyView';
 import { Button } from '@/components/ui/Button';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
 import { TextField } from '@/components/ui/TextField';
 import { Tile } from '@/components/ui/Tile';
+import { VaultCallout } from '@/features/keys/VaultControls';
+import { useVaultKey } from '@/features/keys/vaultKey';
 import { LifetimeSelect } from './LifetimeSelect';
+
+/** Why the saved passphrase did not work, by error code. */
+const SAVED_ERRORS = {
+  wrong_passphrase: 'agent.savedOutdated',
+  not_found: 'agent.savedGone',
+  vault_locked: 'agent.savedLocked',
+} as const;
 
 interface UnlockDialogProps {
   keyView: KeyView;
@@ -16,12 +26,36 @@ interface UnlockDialogProps {
   onDone: () => void;
 }
 
-/** Asks for a key's passphrase and adds it to ssh-agent. */
+/**
+ * Adds a key to ssh-agent with its passphrase: the one saved in the vault,
+ * which stays in the backend, or one the user types.
+ */
 export function UnlockDialog({ keyView, lifetime: initialLifetime, onDone }: UnlockDialogProps) {
   const { t } = useTranslation();
+  const { navigate } = useRouter();
+  const vault = useVaultKey(keyView.fingerprint);
+  const saved = vault.vault === 'unlocked' ? vault.entry : undefined;
   const [passphrase, setPassphrase] = useState('');
   const [lifetime, setLifetime] = useState(initialLifetime);
   const [wrong, setWrong] = useState(false);
+  const [savedError, setSavedError] = useState<keyof typeof SAVED_ERRORS | null>(null);
+
+  const unlockSaved = useAppMutation(
+    (vars: { lifetime: number | null }) => api.agentAddFromVault(keyView.id, vars.lifetime),
+    {
+      success: () => t('keys.unlocked', { name: keyView.name }),
+      onSuccess: onDone,
+      onError: (error) => {
+        if (!(error.code in SAVED_ERRORS)) return false;
+        setSavedError(error.code as keyof typeof SAVED_ERRORS);
+        return true;
+      },
+    },
+  );
+  const openVault = () => {
+    onDone();
+    navigate({ page: 'passwords' });
+  };
 
   const unlock = useAppMutation(
     (vars: { passphrase: string; lifetime: number | null }) =>
@@ -56,8 +90,45 @@ export function UnlockDialog({ keyView, lifetime: initialLifetime, onDone }: Unl
           description={t('agent.unlockDescription')}
         />
         <DialogBody>
+          {saved ? (
+            <div className="flex flex-col gap-1.5">
+              <VaultCallout
+                action={
+                  <Button
+                    variant="soft"
+                    size="sm"
+                    loading={unlockSaved.isPending}
+                    disabled={unlock.isPending}
+                    onClick={() => {
+                      setSavedError(null);
+                      unlockSaved.mutate({ lifetime });
+                    }}
+                  >
+                    {t('agent.savedUse')}
+                  </Button>
+                }
+              >
+                {t('agent.savedTitle')}
+              </VaultCallout>
+              {savedError ? (
+                <p role="alert" className="text-[12px] text-critical">
+                  {t(SAVED_ERRORS[savedError])}
+                </p>
+              ) : null}
+            </div>
+          ) : vault.vault === 'locked' && vault.saved ? (
+            <VaultCallout
+              action={
+                <Button size="sm" onClick={openVault}>
+                  {t('agent.openVault')}
+                </Button>
+              }
+            >
+              {t('agent.savedLocked')}
+            </VaultCallout>
+          ) : null}
           <TextField
-            label={t('agent.unlockPassphrase')}
+            label={saved ? t('agent.orType') : t('agent.unlockPassphrase')}
             type="password"
             autoComplete="current-password"
             value={passphrase}
@@ -79,7 +150,7 @@ export function UnlockDialog({ keyView, lifetime: initialLifetime, onDone }: Unl
             variant="primary"
             size="lg"
             loading={unlock.isPending}
-            disabled={!passphrase}
+            disabled={!passphrase || unlockSaved.isPending}
           >
             {t('agent.unlock')}
           </Button>

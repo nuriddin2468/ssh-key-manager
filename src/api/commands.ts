@@ -1,5 +1,6 @@
 // Typed wrappers for the Tauri commands in `src-tauri/src/commands`.
 
+import type { AddFromVaultReport } from '@/bindings/AddFromVaultReport';
 import type { AgentView } from '@/bindings/AgentView';
 import type { AuditReport } from '@/bindings/AuditReport';
 import type { ConfigFile } from '@/bindings/ConfigFile';
@@ -23,6 +24,7 @@ import type { PermissionFix } from '@/bindings/PermissionFix';
 import type { SavedHost } from '@/bindings/SavedHost';
 import type { SecretField } from '@/bindings/SecretField';
 import type { Strength } from '@/bindings/Strength';
+import type { VaultAudit } from '@/bindings/VaultAudit';
 import type { VaultSettings } from '@/bindings/VaultSettings';
 import type { VaultStatus } from '@/bindings/VaultStatus';
 import { call } from '@/lib/ipc';
@@ -44,6 +46,12 @@ export const api = {
     call<void>('agent_add', { keyId, passphrase, lifetimeSecs }),
   agentRemove: (fingerprint: string) => call<void>('agent_remove', { fingerprint }),
   agentRemoveAll: () => call<void>('agent_remove_all'),
+  /** Adds a key with the passphrase saved in the vault, which stays in Rust. */
+  agentAddFromVault: (keyId: string, lifetimeSecs: number | null) =>
+    call<void>('agent_add_from_vault', { keyId, lifetimeSecs }),
+  /** Adds every key with a saved passphrase that the agent does not hold yet. */
+  agentAddAllFromVault: (lifetimeSecs: number | null) =>
+    call<AddFromVaultReport>('agent_add_all_from_vault', { lifetimeSecs }),
 
   config: () => call<ConfigFile>('read_config'),
   saveHost: (edit: HostEdit) => call<SavedHost>('save_host', { edit }),
@@ -65,6 +73,7 @@ export const api = {
 
   audit: () => call<AuditReport>('run_audit'),
   fixPermissions: (items: PermissionFix[]) => call<number>('fix_permissions', { items }),
+  vaultAudit: () => call<VaultAudit>('run_vault_audit'),
 
   vaultStatus: () => call<VaultStatus>('vault_status'),
   /** Returns the recovery key, to be shown once. */

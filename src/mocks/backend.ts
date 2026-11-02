@@ -16,6 +16,7 @@ import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostEntry } from '@/bindings/KnownHostEntry';
 import type { PermissionFix } from '@/bindings/PermissionFix';
 import { vaultHandlers } from './vault';
+import { vaultLinkHandlers } from './vaultLinks';
 
 const HOME = '/Users/dev';
 const DIR = `${HOME}/.ssh`;
@@ -358,6 +359,7 @@ const findKey = (id: unknown) => keys.find((k) => k.id === id);
 
 const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   ...vaultHandlers,
+  ...vaultLinkHandlers({ keys: () => keys, hosts, agent: agentLoaded }),
   get_environment: (): Environment => ({
     paths: { home: HOME, dir: DIR, config: `${DIR}/config`, knownHosts: `${DIR}/known_hosts` },
     platform: 'macos',

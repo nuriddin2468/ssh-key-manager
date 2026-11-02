@@ -46,19 +46,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
-            let paths = SshPaths::detect()?;
-            let data_dir = app.path().app_data_dir()?;
-            let backup_dir = data_dir.join("backups");
-            watcher::start(app.handle(), &paths.dir);
-            let state = Arc::new(AppState::new(paths, backup_dir, data_dir));
-            state.vault.start_timer(app.handle().clone());
-            device_unlock::watch_screen_lock(Arc::clone(&state.vault), app.handle().clone());
-            app.manage(state);
-            #[cfg(target_os = "macos")]
-            menu::install(app)?;
-            Ok(())
-        })
+        .setup(setup)
         .on_window_event(lock_on_minimize)
         .invoke_handler(tauri::generate_handler![
             commands::environment::get_environment,
@@ -113,6 +101,9 @@ pub fn run() {
             commands::vault::vault_set_settings,
             commands::vault_hosts::vault_test_connection,
             commands::vault_hosts::vault_install_public_key,
+            commands::vault_links::agent_add_from_vault,
+            commands::vault_links::agent_add_all_from_vault,
+            commands::vault_links::run_vault_audit,
         ])
         .build(tauri::generate_context!())
         .expect("failed to start SSH Key Manager")
@@ -134,4 +125,19 @@ fn lock_on_minimize(window: &tauri::Window, event: &WindowEvent) {
     {
         state.vault.lock(window.app_handle(), LockReason::Minimize);
     }
+}
+
+/// Shared state, background watchers and the macOS menu.
+fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let paths = SshPaths::detect()?;
+    let data_dir = app.path().app_data_dir()?;
+    let backup_dir = data_dir.join("backups");
+    watcher::start(app.handle(), &paths.dir);
+    let state = Arc::new(AppState::new(paths, backup_dir, data_dir));
+    state.vault.start_timer(app.handle().clone());
+    device_unlock::watch_screen_lock(Arc::clone(&state.vault), app.handle().clone());
+    app.manage(state);
+    #[cfg(target_os = "macos")]
+    menu::install(app)?;
+    Ok(())
 }

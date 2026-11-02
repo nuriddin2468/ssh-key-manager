@@ -117,8 +117,10 @@ pub(crate) fn request(
     }
 }
 
-#[cfg(windows)]
-fn is_pipe_path(path: &Path) -> bool {
+/// The path names a local Windows named pipe (`\\.\pipe\…`, either slash
+/// style, any case). Not `cfg(windows)`: the env-based discovery decides on
+/// every platform, so its tests run everywhere.
+pub(crate) fn is_pipe_path(path: &Path) -> bool {
     let s = path
         .to_string_lossy()
         .replace('/', "\\")

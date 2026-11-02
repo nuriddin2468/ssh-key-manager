@@ -149,6 +149,43 @@ fn non_pipe_path_is_unsupported_on_windows() {
     );
 }
 
+#[test]
+fn env_socket_on_unix() {
+    assert_eq!(socket_for(None, false), None);
+    assert_eq!(socket_for(Some("".into()), false), None);
+    assert_eq!(
+        socket_for(Some("/tmp/ssh-XXXX/agent.123".into()), false),
+        Some(PathBuf::from("/tmp/ssh-XXXX/agent.123"))
+    );
+}
+
+#[test]
+fn env_socket_on_windows() {
+    let openssh = Some(PathBuf::from(WINDOWS_OPENSSH_PIPE));
+    assert_eq!(socket_for(None, true), openssh);
+    assert_eq!(socket_for(Some("".into()), true), openssh);
+    // A pipe (e.g. Pageant's) is used as given.
+    for pipe in [
+        r"\\.\pipe\pageant.me.0123abcd",
+        "//./pipe/openssh-ssh-agent",
+        r"\\.\PIPE\Agent",
+    ] {
+        assert_eq!(
+            socket_for(Some(pipe.into()), true),
+            Some(PathBuf::from(pipe))
+        );
+    }
+    // Unix sockets (Cygwin, MSYS, Git Bash) fall back to the OpenSSH pipe
+    // instead of failing as `Unsupported`.
+    for other in [
+        "/tmp/ssh-XXXX/agent.123",
+        r"C:\Users\me\.ssh\agent.sock",
+        "agent.sock",
+    ] {
+        assert_eq!(socket_for(Some(other.into()), true), openssh, "{other}");
+    }
+}
+
 #[cfg(unix)]
 mod mock {
     use std::{

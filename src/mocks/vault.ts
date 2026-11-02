@@ -321,6 +321,8 @@ export const vaultHandlers: Record<string, (args: Record<string, unknown>) => un
       }
     );
   },
+  vault_test_key_login: ({ alias }) =>
+    requireUnlocked() ?? { ok: true, output: `Logged in to ${alias} with a key.`, prompts: [] },
   vault_install_public_key: ({ alias }) =>
     requireUnlocked() ?? { ok: true, added: true, output: `Key added on ${alias}.`, prompts: [] },
   vault_set_settings: ({ settings: next }) => {

@@ -114,4 +114,6 @@ export const api = {
   /** Installs a public key on a host, logging in with the saved password. */
   vaultInstallPublicKey: (alias: string, keyId: string) =>
     call<KeyInstall>('vault_install_public_key', { alias, keyId }),
+  /** Tests that the host lets the user in with a key alone (no password). */
+  vaultTestKeyLogin: (alias: string) => call<ConnectionTest>('vault_test_key_login', { alias }),
 };

@@ -128,6 +128,14 @@ impl Secrets {
     }
 
     /// No secret at all, so there is nothing to answer prompts with.
+    /// The same key passphrases without the password and one-time code.
+    #[must_use]
+    pub fn without_login_secrets(mut self) -> Self {
+        self.password = None;
+        self.one_time_code = None;
+        self
+    }
+
     pub fn is_empty(&self) -> bool {
         self.password.is_none() && self.one_time_code.is_none() && self.passphrases.is_empty()
     }

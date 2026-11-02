@@ -101,6 +101,7 @@ pub fn run() {
             commands::vault::vault_set_settings,
             commands::vault_hosts::vault_test_connection,
             commands::vault_hosts::vault_install_public_key,
+            commands::vault_hosts::vault_test_key_login,
             commands::vault_links::agent_add_from_vault,
             commands::vault_links::agent_add_all_from_vault,
             commands::vault_links::run_vault_audit,

@@ -11,7 +11,7 @@ use sshkm_core::{ExposeSecret, SecretString};
 use tauri::{AppHandle, State};
 
 use super::config::connection_test;
-use super::remote::install_key;
+use super::remote::{check_alias, combined, install_key, run_ssh, with_timeout_note};
 use super::{Shared, blocking};
 use crate::askpass::Secrets;
 use crate::error::AppResult;
@@ -47,6 +47,44 @@ pub async fn vault_install_public_key(
     blocking(&state, move |state| {
         let secrets = saved_secrets(state, &app, &alias)?;
         install_key(state, &alias, &key_id, secrets)
+    })
+    .await
+}
+
+/// Tests that `alias` lets the user in with a key alone: password and
+/// keyboard-interactive logins are switched off for this run, and only saved
+/// key passphrases are offered. The last step of moving a host to keys.
+#[tauri::command]
+pub async fn vault_test_key_login(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    alias: String,
+) -> AppResult<ConnectionTest> {
+    blocking(&state, move |state| {
+        check_alias(&alias)?;
+        let passphrases = saved_secrets(state, &app, &alias)?.without_login_secrets();
+        let run = run_ssh(
+            state,
+            &alias,
+            &[
+                "-o",
+                "PreferredAuthentications=publickey",
+                "-o",
+                "PasswordAuthentication=no",
+                "-o",
+                "KbdInteractiveAuthentication=no",
+            ],
+            &["exit"],
+            passphrases,
+            None,
+            Duration::from_secs(30),
+        )?;
+        let text = combined(&run.output);
+        Ok(ConnectionTest {
+            ok: run.output.success,
+            output: with_timeout_note(text, &run.output),
+            prompts: run.prompts,
+        })
     })
     .await
 }

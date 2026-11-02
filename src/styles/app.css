@@ -176,6 +176,15 @@
   --glow-a: rgb(225 29 72 / 0.22);
   --glow-b: rgb(124 58 237 / 0.1);
 }
+[data-section="passwords"] {
+  --accent-1: #a5b4fc;
+  --accent-2: #818cf8;
+  --accent-ink: #0e1240;
+  --accent-text: #c7d2fe;
+  --accent-rgb: 129 140 248;
+  --glow-a: rgb(79 70 229 / 0.26);
+  --glow-b: rgb(20 184 166 / 0.08);
+}
 [data-section="settings"] {
   --accent-1: #cbd5e1;
   --accent-2: #64748b;

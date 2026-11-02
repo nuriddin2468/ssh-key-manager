@@ -8,7 +8,7 @@ import { useDialogs } from './dialogs';
 import { type Page, type Route, useRouter } from './router';
 
 const FIND_EVENT = 'sshkm:find';
-const PAGES: Page[] = ['overview', 'keys', 'hosts', 'agent', 'known', 'audit'];
+const PAGES: Page[] = ['overview', 'keys', 'hosts', 'agent', 'known', 'audit', 'passwords'];
 
 /**
  * Wires the native menu (macOS), keyboard shortcuts (Windows/Linux, where

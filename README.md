@@ -51,9 +51,11 @@ Want the newest version before a release? Every change to the `main` branch is b
 
 Once installed, the app keeps itself up to date: it offers new versions as they are released, and checks every update's signature before installing it.
 
+See also the [Code signing policy](#code-signing-policy).
+
 ### First launch
 
-Builds are not code-signed yet, so your system asks once whether you trust the app.
+Builds are not code-signed yet (it's on the [roadmap](#roadmap)), so your system asks once whether you trust the app.
 
 - **macOS.** Open the `.dmg` and drag the app to **Applications**. The first time, right-click it and choose **Open**, then **Open** again. If macOS still refuses, go to **System Settings → Privacy & Security** and click **Open Anyway**.
 - **Windows.** If SmartScreen says "Windows protected your PC", click **More info → Run anyway**.
@@ -130,6 +132,22 @@ Hosts can point to keys anywhere, and the app shows them. The key list itself co
 
 **Something doesn't look right?**
 [Open an issue](https://github.com/nuriddin2468/ssh-key-manager/issues/new) with your system and what you expected to see.
+
+## Roadmap
+
+- **Signed Windows builds**, so Windows names the publisher instead of "Unknown publisher" and SmartScreen stops warning as the app builds a reputation. Signing through SignPath Foundation is being set up.
+- **Signed and notarized macOS builds**, so macOS opens the app without asking. This needs an Apple Developer account.
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+Windows releases are built by GitHub Actions from this repository, and each release is signed only after a maintainer approves it.
+
+- Committers and reviewers: [nuriddin2468](https://github.com/nuriddin2468)
+- Approvers: [nuriddin2468](https://github.com/nuriddin2468)
+
+Privacy policy: this program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. The one exception is the update check, which downloads the release list from this repository's GitHub Releases at startup and every six hours; turn it off in **Settings → Updates**. See [Privacy and safety](#privacy-and-safety).
 
 ## Contributing
 

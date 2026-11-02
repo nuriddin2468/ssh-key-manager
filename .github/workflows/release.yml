@@ -72,6 +72,10 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: SSH Key Manager ${{ github.ref_name }}
+          releaseBody: |
+            Which file to download: see [Download](https://github.com/nuriddin2468/ssh-key-manager#download) in the README.
+
+            [Code signing policy](https://github.com/nuriddin2468/ssh-key-manager#code-signing-policy)
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json
@@ -83,6 +87,10 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: SSH Key Manager ${{ github.ref_name }}
+          releaseBody: |
+            Which file to download: see [Download](https://github.com/nuriddin2468/ssh-key-manager#download) in the README.
+
+            [Code signing policy](https://github.com/nuriddin2468/ssh-key-manager#code-signing-policy)
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json

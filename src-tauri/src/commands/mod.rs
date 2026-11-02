@@ -9,6 +9,7 @@ pub mod keys;
 pub mod known_hosts;
 pub mod remote;
 pub mod vault;
+pub mod vault_hosts;
 
 use std::sync::Arc;
 

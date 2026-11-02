@@ -469,8 +469,19 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
           ok: true,
           output:
             "Hi dev! You've successfully authenticated, but GitHub does not provide shell access.",
+          prompts: [],
         }
-      : { ok: false, output: `ssh: connect to host ${alias} port 22: Operation timed out` },
+      : {
+          ok: false,
+          output: `ssh: connect to host ${alias} port 22: Operation timed out`,
+          prompts: [],
+        },
+  install_public_key: ({ alias }) => ({
+    ok: false,
+    added: false,
+    output: `deploy@${alias}: Permission denied (publickey,password).`,
+    prompts: [],
+  }),
   read_known_hosts: () => ({
     path: `${DIR}/known_hosts`,
     exists: true,

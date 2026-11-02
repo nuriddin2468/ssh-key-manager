@@ -111,6 +111,8 @@ pub fn run() {
             commands::vault::vault_change_master,
             commands::vault::vault_new_recovery_key,
             commands::vault::vault_set_settings,
+            commands::vault_hosts::vault_test_connection,
+            commands::vault_hosts::vault_install_public_key,
         ])
         .build(tauri::generate_context!())
         .expect("failed to start SSH Key Manager")

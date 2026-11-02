@@ -98,22 +98,30 @@ pub async fn test_connection(
     otp: Option<SecretString>,
 ) -> AppResult<ConnectionTest> {
     blocking(&state, move |state| {
-        check_alias(&alias)?;
-        let secrets = Secrets::new(password, otp);
-        let timeout = Duration::from_secs(if secrets.is_empty() { 20 } else { 30 });
-        let run = run_ssh(state, &alias, &[], &["exit"], secrets, None, timeout)?;
-        let text = combined(&run.output);
-        // Git hosts refuse shell access but confirm the key worked.
-        let authenticated = text.contains("successfully authenticated")
-            || text.contains("Welcome to GitLab")
-            || text.contains("logged in as");
-        Ok(ConnectionTest {
-            ok: run.output.success || authenticated,
-            output: with_timeout_note(text, &run.output),
-            prompts: run.prompts,
-        })
+        connection_test(state, &alias, Secrets::new(password, otp))
     })
     .await
+}
+
+/// [`test_connection`] with the secrets already gathered.
+pub fn connection_test(
+    state: &AppState,
+    alias: &str,
+    secrets: Secrets,
+) -> AppResult<ConnectionTest> {
+    check_alias(alias)?;
+    let timeout = Duration::from_secs(if secrets.is_empty() { 20 } else { 30 });
+    let run = run_ssh(state, alias, &[], &["exit"], secrets, None, timeout)?;
+    let text = combined(&run.output);
+    // Git hosts refuse shell access but confirm the key worked.
+    let authenticated = text.contains("successfully authenticated")
+        || text.contains("Welcome to GitLab")
+        || text.contains("logged in as");
+    Ok(ConnectionTest {
+        ok: run.output.success || authenticated,
+        output: with_timeout_note(text, &run.output),
+        prompts: run.prompts,
+    })
 }
 
 pub fn config_file(state: &AppState) -> AppResult<ConfigFile> {

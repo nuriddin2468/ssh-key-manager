@@ -302,6 +302,27 @@ export const vaultHandlers: Record<string, (args: Record<string, unknown>) => un
     deviceEnabled = false;
     return RECOVERY_KEY;
   },
+  vault_test_connection: ({ alias }) => {
+    const host = entries.find((e) => e.detail.kind === 'host' && e.detail.host === alias);
+    return (
+      requireUnlocked() ?? {
+        ok: Boolean(host),
+        output: host ? '' : `${alias}: Permission denied (publickey,password).`,
+        prompts: host
+          ? [
+              {
+                text: `${host.detail.username}@${alias}'s password: `,
+                kind: { type: 'password' },
+                account: { user: host.detail.username, host: alias },
+                outcome: 'answered',
+              },
+            ]
+          : [],
+      }
+    );
+  },
+  vault_install_public_key: ({ alias }) =>
+    requireUnlocked() ?? { ok: true, added: true, output: `Key added on ${alias}.`, prompts: [] },
   vault_set_settings: ({ settings: next }) => {
     settings = { ...(next as VaultSettings), database: settings.database };
     return settings;

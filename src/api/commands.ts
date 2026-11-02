@@ -14,6 +14,7 @@ import type { GenerateKeyRequest } from '@/bindings/GenerateKeyRequest';
 import type { GenerateOptions } from '@/bindings/GenerateOptions';
 import type { HostEdit } from '@/bindings/HostEdit';
 import type { HostKeyCheck } from '@/bindings/HostKeyCheck';
+import type { KeyInstall } from '@/bindings/KeyInstall';
 import type { KeysView } from '@/bindings/KeysView';
 import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostsFile } from '@/bindings/KnownHostsFile';
@@ -52,6 +53,8 @@ export const api = {
   configRaw: () => call<string>('read_config_raw'),
   writeConfigRaw: (text: string) => call<ConfigFile>('write_config_raw', { text }),
   testConnection: (alias: string) => call<ConnectionTest>('test_connection', { alias }),
+  installPublicKey: (alias: string, keyId: string) =>
+    call<KeyInstall>('install_public_key', { alias, keyId }),
 
   knownHosts: () => call<KnownHostsFile>('read_known_hosts'),
   findKnownHosts: (host: string, port: number | null) =>
@@ -97,4 +100,9 @@ export const api = {
   vaultNewRecoveryKey: (master: string) => call<string>('vault_new_recovery_key', { master }),
   vaultSetSettings: (settings: VaultSettings) =>
     call<VaultSettings>('vault_set_settings', { settings }),
+  /** Tests a host with its password, 2FA code and key passphrases from the vault. */
+  vaultTestConnection: (alias: string) => call<ConnectionTest>('vault_test_connection', { alias }),
+  /** Installs a public key on a host, logging in with the saved password. */
+  vaultInstallPublicKey: (alias: string, keyId: string) =>
+    call<KeyInstall>('vault_install_public_key', { alias, keyId }),
 };

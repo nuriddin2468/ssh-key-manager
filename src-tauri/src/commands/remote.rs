@@ -32,46 +32,56 @@ pub async fn install_public_key(
     otp: Option<SecretString>,
 ) -> AppResult<KeyInstall> {
     blocking(&state, move |state| {
-        check_alias(&alias)?;
-        let line = public_line(&find_key(state, &key_id)?)?;
-        let remote = format!("sh -c '{INSTALL_SCRIPT}'");
-        let run = run_ssh(
-            state,
-            &alias,
-            &[
-                // Only the command: no forwarding, no tty, no configured
-                // RemoteCommand in the way.
-                "-o",
-                "RemoteCommand=none",
-                "-o",
-                "RequestTTY=no",
-                "-o",
-                "ClearAllForwardings=yes",
-                "-o",
-                "ForwardAgent=no",
-                "-o",
-                "ForwardX11=no",
-            ],
-            &[&remote],
-            Secrets::new(password, otp),
-            Some(format!("{line}\n").into_bytes()),
-            Duration::from_secs(30),
-        )?;
-        let added = run.output.success && has_line(&run.output.stdout, ADDED);
-        let present = run.output.success && has_line(&run.output.stdout, PRESENT);
-        let output = combined(&run.output)
-            .lines()
-            .filter(|line| *line != ADDED && *line != PRESENT)
-            .collect::<Vec<_>>()
-            .join("\n");
-        Ok(KeyInstall {
-            ok: added || present,
-            added,
-            output: with_timeout_note(output.trim().to_owned(), &run.output),
-            prompts: run.prompts,
-        })
+        install_key(state, &alias, &key_id, Secrets::new(password, otp))
     })
     .await
+}
+
+/// [`install_public_key`] with the secrets already gathered.
+pub fn install_key(
+    state: &AppState,
+    alias: &str,
+    key_id: &str,
+    secrets: Secrets,
+) -> AppResult<KeyInstall> {
+    check_alias(alias)?;
+    let line = public_line(&find_key(state, key_id)?)?;
+    let remote = format!("sh -c '{INSTALL_SCRIPT}'");
+    let run = run_ssh(
+        state,
+        alias,
+        &[
+            // Only the command: no forwarding, no tty, no configured
+            // RemoteCommand in the way.
+            "-o",
+            "RemoteCommand=none",
+            "-o",
+            "RequestTTY=no",
+            "-o",
+            "ClearAllForwardings=yes",
+            "-o",
+            "ForwardAgent=no",
+            "-o",
+            "ForwardX11=no",
+        ],
+        &[&remote],
+        secrets,
+        Some(format!("{line}\n").into_bytes()),
+        Duration::from_secs(30),
+    )?;
+    let added = run.output.success && has_line(&run.output.stdout, ADDED);
+    let present = run.output.success && has_line(&run.output.stdout, PRESENT);
+    let output = combined(&run.output)
+        .lines()
+        .filter(|line| *line != ADDED && *line != PRESENT)
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(KeyInstall {
+        ok: added || present,
+        added,
+        output: with_timeout_note(output.trim().to_owned(), &run.output),
+        prompts: run.prompts,
+    })
 }
 
 /// A host alias as `ssh` takes it on the command line.

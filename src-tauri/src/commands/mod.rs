@@ -5,6 +5,7 @@ pub mod agent;
 pub mod audit;
 pub mod config;
 pub mod environment;
+pub mod hosts_file;
 pub mod keys;
 pub mod known_hosts;
 

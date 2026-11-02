@@ -1,4 +1,13 @@
-import { createContext, type ReactNode, use, useCallback, useMemo, useState } from 'react';
+import {
+  createContext,
+  type ReactNode,
+  use,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 /**
  * The app has a handful of top-level sections and no URLs to share, so a
@@ -10,14 +19,20 @@ export type Route =
   | { page: 'hosts'; hostId?: number }
   | { page: 'agent' }
   | { page: 'known' }
+  | { page: 'hostsFile'; line?: number }
   | { page: 'audit' }
   | { page: 'settings' };
 
 export type Page = Route['page'];
 
+/** Returns true to stop a navigation (it then asks the user itself). */
+type Blocker = (next: Route) => boolean;
+
 interface RouterValue {
   route: Route;
-  navigate: (route: Route) => void;
+  /** Goes to `route` unless a page blocks it; `force` skips the page's guard. */
+  navigate: (route: Route, options?: { force?: boolean }) => void;
+  setBlocker: (blocker: Blocker | null) => void;
 }
 
 const RouterContext = createContext<RouterValue | null>(null);
@@ -33,6 +48,8 @@ function devRoute(): Route | undefined {
   if (page === 'keys') return { page, keyId: params.get('key') ?? undefined };
   if (page === 'hosts')
     return { page, hostId: params.has('host') ? Number(params.get('host')) : undefined };
+  if (page === 'hostsFile')
+    return { page, line: params.has('line') ? Number(params.get('line')) : undefined };
   if (
     page === 'overview' ||
     page === 'agent' ||
@@ -47,8 +64,15 @@ function devRoute(): Route | undefined {
 
 export function RouterProvider({ initial, children }: { initial?: Route; children: ReactNode }) {
   const [route, setRoute] = useState<Route>(() => initial ?? devRoute() ?? { page: 'overview' });
-  const navigate = useCallback((next: Route) => setRoute(next), []);
-  const value = useMemo(() => ({ route, navigate }), [route, navigate]);
+  const blocker = useRef<Blocker | null>(null);
+  const navigate = useCallback((next: Route, options?: { force?: boolean }) => {
+    if (!options?.force && blocker.current?.(next)) return;
+    setRoute(next);
+  }, []);
+  const setBlocker = useCallback((next: Blocker | null) => {
+    blocker.current = next;
+  }, []);
+  const value = useMemo(() => ({ route, navigate, setBlocker }), [route, navigate, setBlocker]);
   return <RouterContext value={value}>{children}</RouterContext>;
 }
 
@@ -56,4 +80,30 @@ export function useRouter(): RouterValue {
   const value = use(RouterContext);
   if (!value) throw new Error('useRouter must be used inside <RouterProvider>');
   return value;
+}
+
+/**
+ * While `active`, leaving the current page is held until the user decides:
+ * `pending` is where they wanted to go, `leave()` goes there, `stay()` drops it.
+ */
+export function useLeaveGuard(active: boolean) {
+  const { route, navigate, setBlocker } = useRouter();
+  const [pending, setPending] = useState<Route | null>(null);
+  useEffect(() => {
+    if (!active) return;
+    setBlocker((next) => {
+      if (next.page === route.page) return false;
+      setPending(next);
+      return true;
+    });
+    return () => setBlocker(null);
+  }, [active, route.page, setBlocker]);
+  return {
+    pending,
+    stay: () => setPending(null),
+    leave: () => {
+      setPending(null);
+      if (pending) navigate(pending, { force: true });
+    },
+  };
 }

@@ -7,6 +7,7 @@ import { TooltipProvider } from '@/components/ui/Tooltip';
 import { AgentPage } from '@/features/agent/AgentPage';
 import { AuditPage } from '@/features/audit/AuditPage';
 import { HostsPage } from '@/features/hosts/HostsPage';
+import { HostsFilePage } from '@/features/hostsFile/HostsFilePage';
 import { KeysPage } from '@/features/keys/KeysPage';
 import { KnownHostsPage } from '@/features/known/KnownHostsPage';
 import { OverviewPage } from '@/features/overview/OverviewPage';
@@ -63,6 +64,7 @@ function Shell() {
         {route.page === 'hosts' ? <HostsPage hostId={route.hostId} /> : null}
         {route.page === 'agent' ? <AgentPage /> : null}
         {route.page === 'known' ? <KnownHostsPage /> : null}
+        {route.page === 'hostsFile' ? <HostsFilePage line={route.line} /> : null}
         {route.page === 'audit' ? <AuditPage /> : null}
         {route.page === 'settings' ? <SettingsPage /> : null}
       </main>

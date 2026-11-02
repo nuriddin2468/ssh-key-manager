@@ -11,6 +11,7 @@ mod watcher;
 
 use std::sync::Arc;
 
+use sshkm_core::hosts_file;
 use sshkm_core::paths::SshPaths;
 use tauri::Manager;
 
@@ -43,9 +44,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let paths = SshPaths::detect()?;
+            let hosts_file = hosts_file::system_path();
             let backup_dir = app.path().app_data_dir()?.join("backups");
-            watcher::start(app.handle(), &paths.dir);
-            app.manage(Arc::new(AppState::new(paths, backup_dir)));
+            watcher::start(app.handle(), &paths.dir, &hosts_file);
+            app.manage(Arc::new(AppState::new(paths, hosts_file, backup_dir)));
             #[cfg(target_os = "macos")]
             menu::install(app)?;
             Ok(())
@@ -73,6 +75,12 @@ pub fn run() {
             commands::known_hosts::find_known_hosts,
             commands::known_hosts::remove_known_hosts,
             commands::known_hosts::check_host_key,
+            commands::hosts_file::read_hosts_file,
+            commands::hosts_file::lookup_host,
+            commands::hosts_file::preview_hosts_changes,
+            commands::hosts_file::apply_hosts_changes,
+            commands::hosts_file::list_hosts_backups,
+            commands::hosts_file::restore_hosts_backup,
             commands::audit::run_audit,
             commands::audit::fix_permissions,
         ])

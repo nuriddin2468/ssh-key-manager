@@ -6,6 +6,9 @@ import {
   formFromHost,
   hostMonogram,
   hostTarget,
+  optionProblem,
+  optionRow,
+  splitOption,
   validatePort,
 } from './model';
 
@@ -90,5 +93,31 @@ describe('host display', () => {
   it('builds a monogram from the first two words', () => {
     expect(hostMonogram(host({ patterns: ['prod-api'] })).text).toBe('PA');
     expect(hostMonogram(host({ patterns: ['*'], isWildcard: true })).text).toBe('*');
+  });
+});
+
+describe('other options', () => {
+  it('splits a whole line typed into the name field', () => {
+    expect(splitOption({ key: ' HostKeyAlias  github.com ', value: '' })).toEqual({
+      key: 'HostKeyAlias',
+      value: 'github.com',
+    });
+    const edit = editFromForm(
+      {
+        ...EMPTY_FORM,
+        patterns: 'github.com',
+        identitiesOnly: false,
+        other: [optionRow('HostKeyAlias github.com')],
+      },
+      null,
+    );
+    expect(edit.options).toEqual([{ key: 'HostKeyAlias', value: 'github.com' }]);
+  });
+
+  it('flags a value without a name and a multi-word name', () => {
+    expect(optionProblem({ key: '', value: 'github.com' })).toBe('missingName');
+    expect(optionProblem({ key: 'Host Key', value: 'x' })).toBe('oneWord');
+    expect(optionProblem({ key: 'HostKeyAlias', value: 'github.com' })).toBeNull();
+    expect(optionProblem({ key: '', value: '' })).toBeNull();
   });
 });

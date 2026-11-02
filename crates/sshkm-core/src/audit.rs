@@ -20,17 +20,22 @@
 //! | same key in several files | info |
 //! | `IdentityFile` pointing to a missing file | warning |
 //! | legacy PEM / PKCS#8 format | info |
+//! | hosts file sends a code host elsewhere, or `localhost` off this computer | critical |
+//! | hosts file gives a name several addresses | warning |
+//! | temporary hosts file entry past its time | warning |
 
 use std::{
     collections::{BTreeMap, HashSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use crate::{
     Result,
     config::{IdentityUsage, SshConfig},
+    hosts_file::{self, HostsAddressKind, HostsFile, HostsFileEntry},
     keys::{self, KeyAlgorithm, KeyFormat, KeyInfo},
     paths::{SshPaths, path_string},
     perms::{self, PermKind, PermissionProblem, PermissionReport},
@@ -40,6 +45,22 @@ use crate::{
 pub const RSA_MIN_BITS: u32 = 2048;
 /// RSA keys below this size are discouraged (NIST: 3072 bits for use beyond 2030).
 pub const RSA_RECOMMENDED_BITS: u32 = 3072;
+
+/// Names `ssh` and `git` reach on well-known code hosts. The hosts file has no
+/// reason to send them anywhere, and malware does exactly that.
+const CODE_HOSTS: &[&str] = &[
+    "github.com",
+    "ssh.github.com",
+    "gitlab.com",
+    "altssh.gitlab.com",
+    "bitbucket.org",
+    "altssh.bitbucket.org",
+    "codeberg.org",
+    "ssh.dev.azure.com",
+    "vs-ssh.visualstudio.com",
+    "git.sr.ht",
+    "gitea.com",
+];
 
 /// How serious a finding is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -124,6 +145,37 @@ pub enum FindingKind {
         /// `pem` or `pkcs8`.
         format: KeyFormat,
     },
+    /// The hosts file sends a well-known code host to an address of its
+    /// choosing, or `localhost` off this computer.
+    HostsFileRedirect {
+        /// The name as written.
+        name: String,
+        /// Where it is sent.
+        address: String,
+        /// 1-based line in the hosts file.
+        line: u32,
+    },
+    /// The hosts file lists a name with different addresses of one family;
+    /// resolvers use the first line.
+    HostsFileConflict {
+        /// The name, normalised.
+        name: String,
+        /// The distinct addresses in file order.
+        addresses: Vec<String>,
+        /// 1-based lines that list the name.
+        lines: Vec<u32>,
+    },
+    /// A temporary hosts file entry is still turned on after its time.
+    HostsFileExpired {
+        /// The entry's names.
+        names: Vec<String>,
+        /// Its address.
+        address: String,
+        /// 1-based line in the hosts file.
+        line: u32,
+        /// When it expired (RFC 3339).
+        expires: String,
+    },
 }
 
 /// What a finding is about.
@@ -171,6 +223,11 @@ pub enum FixAction {
         host_id: Option<u32>,
         /// The `IdentityFile` value as written.
         path: String,
+    },
+    /// Turn the hosts file entry on `line` off (needs administrator rights).
+    TurnOffHostsEntry {
+        /// 1-based line in the hosts file.
+        line: u32,
     },
 }
 
@@ -239,6 +296,10 @@ pub struct AuditInput<'a> {
     pub config_file: Option<&'a PathPermissions>,
     /// `IdentityFile` references.
     pub identity_usage: &'a [IdentityUsage],
+    /// Entries of the system hosts file.
+    pub hosts_file: &'a [HostsFileEntry],
+    /// The time temporary entries are compared with (none: never expired).
+    pub now: Option<OffsetDateTime>,
 }
 
 /// Runs all rules. Pure: no file system access.
@@ -297,6 +358,7 @@ pub fn run(input: &AuditInput<'_>) -> AuditReport {
             }),
         });
     }
+    hosts_file_findings(input.hosts_file, input.now, &mut findings);
 
     findings.sort_by(|a, b| a.severity.cmp(&b.severity).then_with(|| a.id.cmp(&b.id)));
     let mut counts = AuditCounts::default();
@@ -310,15 +372,18 @@ pub fn run(input: &AuditInput<'_>) -> AuditReport {
     AuditReport { findings, counts }
 }
 
-/// Scans `paths.dir`, loads `paths.config`, checks the directory and config
-/// permissions and runs the audit. A config file that cannot be read is
-/// skipped (its problems are reported by [`SshConfig::load`] itself).
-pub fn run_for_paths(paths: &SshPaths) -> Result<AuditReport> {
+/// Scans `paths.dir`, loads `paths.config` and the hosts file, checks the
+/// directory and config permissions and runs the audit. A config or hosts
+/// file that cannot be read is skipped (the pages that show them report why).
+pub fn run_for_paths(paths: &SshPaths, hosts_file: &Path) -> Result<AuditReport> {
     let scan = keys::scan(&paths.dir)?;
     let config = SshConfig::load(&paths.config).ok();
     let usage = config
         .as_ref()
         .map(|c| c.identity_usage(paths))
+        .unwrap_or_default();
+    let hosts = HostsFile::load(hosts_file)
+        .map(|file| file.entries())
         .unwrap_or_default();
     let mut items: Vec<(PathBuf, PermKind)> = Vec::new();
     if paths.dir.exists() {
@@ -328,7 +393,7 @@ pub fn run_for_paths(paths: &SshPaths) -> Result<AuditReport> {
         items.push((paths.config.clone(), PermKind::Config));
     }
     let mut reports = perms::check_many(&items).into_iter();
-    let mut take = |present: bool, path: &std::path::Path| {
+    let mut take = |present: bool, path: &Path| {
         present.then(|| PathPermissions {
             path: path_string(path),
             permissions: reports.next().unwrap_or(PermissionReport {
@@ -345,6 +410,8 @@ pub fn run_for_paths(paths: &SshPaths) -> Result<AuditReport> {
         ssh_dir: ssh_dir.as_ref(),
         config_file: config_file.as_ref(),
         identity_usage: &usage,
+        hosts_file: &hosts,
+        now: Some(OffsetDateTime::now_utc()),
     }))
 }
 
@@ -469,6 +536,97 @@ fn duplicate_findings(keys: &[KeyInfo], out: &mut Vec<Finding>) {
                 key_id: Some(group[0].id.clone()),
                 ..FindingSubject::default()
             },
+            fix: None,
+        });
+    }
+}
+
+/// The distinct addresses the hosts file gives a name, and the lines that do.
+#[derive(Default)]
+struct NameUse<'a> {
+    addresses: Vec<&'a str>,
+    lines: Vec<u32>,
+}
+
+fn hosts_file_findings(
+    entries: &[HostsFileEntry],
+    now: Option<OffsetDateTime>,
+    out: &mut Vec<Finding>,
+) {
+    if let Some(now) = now {
+        for entry in entries.iter().filter(|e| e.enabled && e.is_expired(now)) {
+            out.push(Finding {
+                id: format!(
+                    "hostsFileExpired:{}:{}",
+                    entry.address,
+                    entry.names.join(",")
+                ),
+                severity: Severity::Warning,
+                kind: FindingKind::HostsFileExpired {
+                    names: entry.names.clone(),
+                    address: entry.address.clone(),
+                    line: entry.line,
+                    expires: entry.expires.clone().unwrap_or_default(),
+                },
+                subject: FindingSubject::default(),
+                fix: Some(FixAction::TurnOffHostsEntry { line: entry.line }),
+            });
+        }
+    }
+    // Keyed by name and IPv6-ness: each address family resolves on its own.
+    let mut by_name: BTreeMap<(String, bool), NameUse<'_>> = BTreeMap::new();
+    // Scoped addresses (`fe80::1%lo0 localhost`) apply to one interface and
+    // are left alone.
+    for entry in entries
+        .iter()
+        .filter(|e| e.enabled && !e.address.contains('%'))
+    {
+        for name in &entry.names {
+            let key = hosts_file::normalize_name(name);
+            let redirected = if key == "localhost" {
+                matches!(
+                    entry.kind,
+                    HostsAddressKind::Private | HostsAddressKind::Public
+                )
+            } else {
+                CODE_HOSTS.contains(&key.as_str())
+            };
+            if redirected && !entry.shadowed.contains(name) {
+                out.push(Finding {
+                    id: format!("hostsFileRedirect:{key}:{}", entry.address),
+                    severity: Severity::Critical,
+                    kind: FindingKind::HostsFileRedirect {
+                        name: name.clone(),
+                        address: entry.address.clone(),
+                        line: entry.line,
+                    },
+                    subject: FindingSubject::default(),
+                    fix: None,
+                });
+            }
+            let uses = by_name.entry((key, entry.is_ipv6())).or_default();
+            if !uses.addresses.contains(&entry.address.as_str()) {
+                uses.addresses.push(&entry.address);
+            }
+            if !uses.lines.contains(&entry.line) {
+                uses.lines.push(entry.line);
+            }
+        }
+    }
+    for ((name, ipv6), NameUse { addresses, lines }) in by_name {
+        if addresses.len() < 2 {
+            continue;
+        }
+        let family = if ipv6 { "ipv6" } else { "ipv4" };
+        out.push(Finding {
+            id: format!("hostsFileConflict:{name}:{family}"),
+            severity: Severity::Warning,
+            kind: FindingKind::HostsFileConflict {
+                name,
+                addresses: addresses.into_iter().map(str::to_owned).collect(),
+                lines,
+            },
+            subject: FindingSubject::default(),
             fix: None,
         });
     }
@@ -679,6 +837,8 @@ mod tests {
             ssh_dir: Some(&dir),
             config_file: Some(&cfg),
             identity_usage: &usage,
+            hosts_file: &[],
+            now: None,
         });
         assert_eq!(
             ids(&report),
@@ -705,6 +865,83 @@ mod tests {
                 key_ids: vec!["a".into(), "SHA256:a#copy".into()],
             }
         );
+    }
+
+    #[test]
+    fn hosts_file_rules() {
+        let entries = HostsFile::parse(
+            "127.0.0.1 localhost\n\
+             ::1 localhost\n\
+             fe80::1%lo0 localhost\n\
+             10.0.4.12 api.internal\n\
+             10.0.9.9 API.internal\n\
+             10.0.4.12 api.internal\n\
+             ::1 api.internal\n\
+             # 6.6.6.6 github.com\n\
+             6.6.6.6 GitHub.com # mirror\n\
+             0.0.0.0 gitlab.com\n\
+             203.0.113.5 example.com\n",
+        )
+        .entries();
+        let report = run(&AuditInput {
+            hosts_file: &entries,
+            ..AuditInput::default()
+        });
+        assert_eq!(
+            ids(&report),
+            [
+                "hostsFileRedirect:github.com:6.6.6.6",
+                "hostsFileRedirect:gitlab.com:0.0.0.0",
+                "hostsFileConflict:api.internal:ipv4",
+            ]
+        );
+        assert_eq!(
+            report.findings[0].kind,
+            FindingKind::HostsFileRedirect {
+                name: "GitHub.com".into(),
+                address: "6.6.6.6".into(),
+                line: 9,
+            }
+        );
+        assert_eq!(
+            report.findings[2].kind,
+            FindingKind::HostsFileConflict {
+                name: "api.internal".into(),
+                addresses: vec!["10.0.4.12".into(), "10.0.9.9".into()],
+                lines: vec![4, 5, 6],
+            }
+        );
+
+        let entries = HostsFile::parse(
+            "10.0.9.1 demo.local # sshkm-until=2026-11-02T19:00:00Z\n\
+             # 10.0.9.2 old.local # sshkm-until=2026-11-02T19:00:00Z\n",
+        )
+        .entries();
+        let at = |now| {
+            run(&AuditInput {
+                hosts_file: &entries,
+                now: Some(now),
+                ..AuditInput::default()
+            })
+        };
+        assert_eq!(
+            ids(&at(time::macros::datetime!(2026-11-02 18:00 UTC))),
+            Vec::<&str>::new()
+        );
+        let report = at(time::macros::datetime!(2026-11-02 19:30 UTC));
+        assert_eq!(ids(&report), ["hostsFileExpired:10.0.9.1:demo.local"]);
+        assert_eq!(
+            report.findings[0].fix,
+            Some(FixAction::TurnOffHostsEntry { line: 1 })
+        );
+
+        let entries = HostsFile::parse("10.1.1.1 localhost\n").entries();
+        let report = run(&AuditInput {
+            hosts_file: &entries,
+            ..AuditInput::default()
+        });
+        assert_eq!(ids(&report), ["hostsFileRedirect:localhost:10.1.1.1"]);
+        assert_eq!(report.counts.critical, 1);
     }
 
     #[test]
@@ -765,7 +1002,7 @@ mod tests {
         .unwrap();
         fs::set_permissions(dir.join("config"), fs::Permissions::from_mode(0o600)).unwrap();
         let paths = SshPaths::with_home(home.path(), &dir);
-        let report = run_for_paths(&paths).unwrap();
+        let report = run_for_paths(&paths, &home.path().join("hosts")).unwrap();
         let kinds: Vec<_> = report
             .findings
             .iter()
@@ -784,7 +1021,7 @@ mod tests {
         // Apply the offered fixes and re-run.
         for f in &report.findings {
             if let Some(FixAction::FixPermissions { path, target }) = &f.fix {
-                perms::fix(std::path::Path::new(path), *target).unwrap();
+                perms::fix(Path::new(path), *target).unwrap();
             }
             if let Some(FixAction::RegeneratePublic { .. }) = &f.fix {
                 keys::regenerate_public(&key).unwrap();
@@ -797,7 +1034,7 @@ mod tests {
                     .unwrap();
             }
         }
-        let report = run_for_paths(&paths).unwrap();
+        let report = run_for_paths(&paths, &home.path().join("hosts")).unwrap();
         assert_eq!(
             ids(&report),
             [format!(

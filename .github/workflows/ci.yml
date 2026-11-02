@@ -3,7 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore: ["**.md", "docs/**"]
   pull_request:
+    paths-ignore: ["**.md", "docs/**"]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -32,6 +34,10 @@ jobs:
       matrix:
         os: [ubuntu-22.04, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # No debug info: faster to compile and link (Windows most of all) and a
+      # smaller cache. Panics still report the file and line.
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux dependencies
@@ -42,7 +48,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # Saved even when a step fails; otherwise one red job leaves every later
+      # run of it building all dependencies from scratch.
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       # tauri::generate_context! embeds the built frontend, so it must exist.
       - run: mkdir -p dist && echo '<!doctype html>' > dist/index.html
         shell: bash

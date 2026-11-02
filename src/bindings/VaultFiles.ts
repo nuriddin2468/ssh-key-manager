@@ -15,9 +15,13 @@ exists: boolean,
  */
 hasMasterPassword: boolean, 
 /**
- * Touch ID / Windows Hello opens it on this computer.
+ * Some computer can open it with Touch ID / Windows Hello.
  */
 hasDeviceUnlock: boolean, 
+/**
+ * Ids of the device slots, one per computer with device unlock.
+ */
+deviceSlots: Array<string>, 
 /**
  * Random id of the vault; names its item in the OS credential store.
  */

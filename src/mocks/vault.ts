@@ -24,6 +24,7 @@ interface MockEntry {
 let exists = new URLSearchParams(window.location.search).get('vault') !== 'missing';
 let master = 'master';
 let unlocked = false;
+let deviceEnabled = false;
 let settings: VaultSettings = {
   database: null,
   autoLockMinutes: 5,
@@ -135,11 +136,13 @@ function status(): VaultStatus {
     files: {
       exists,
       hasMasterPassword: exists,
-      hasDeviceUnlock: false,
+      hasDeviceUnlock: exists && deviceEnabled,
+      deviceSlots: exists && deviceEnabled ? ['9b2e4c1a-7f3d-4e8a-b6c5-1d0f2a3e4b5c'] : [],
       vaultId: exists ? '3f0c7a52-0d5e-4c1b-9a51-7b0f4e2a8c11' : null,
     },
     paths: { database: `${DATA}/vault.kdbx`, keys: `${DATA}/vault.keys` },
     settings,
+    device: { kind: 'touchId', unavailableReason: null, enabled: exists && deviceEnabled },
   };
 }
 
@@ -203,6 +206,17 @@ export const vaultHandlers: Record<string, (args: Record<string, unknown>) => un
     }
     master = newMaster as string;
     unlocked = true;
+  },
+  vault_unlock_device: () => {
+    if (!deviceEnabled) return fail('not_found', 'device unlock is not set up here');
+    unlocked = true;
+  },
+  vault_enable_device: ({ master: typed }) => {
+    if (typed !== master) return fail('wrong_passphrase', 'wrong passphrase');
+    deviceEnabled = true;
+  },
+  vault_disable_device: () => {
+    deviceEnabled = false;
   },
   vault_lock: () => {
     unlocked = false;
@@ -283,8 +297,11 @@ export const vaultHandlers: Record<string, (args: Record<string, unknown>) => un
     if (current !== master) return fail('wrong_passphrase', 'wrong passphrase');
     master = next as string;
   },
-  vault_new_recovery_key: ({ master: typed }) =>
-    typed === master ? RECOVERY_KEY : fail('wrong_passphrase', 'wrong passphrase'),
+  vault_new_recovery_key: ({ master: typed }) => {
+    if (typed !== master) return fail('wrong_passphrase', 'wrong passphrase');
+    deviceEnabled = false;
+    return RECOVERY_KEY;
+  },
   vault_set_settings: ({ settings: next }) => {
     settings = { ...(next as VaultSettings), database: settings.database };
     return settings;

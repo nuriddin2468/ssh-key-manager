@@ -69,6 +69,11 @@ export const api = {
   vaultUnlock: (master: string) => call<void>('vault_unlock', { master }),
   vaultRecover: (recoveryKey: string, newMaster: string) =>
     call<void>('vault_recover', { recoveryKey, newMaster }),
+  /** `reason` completes "<app> is trying to …" in the Touch ID prompt. */
+  vaultUnlockDevice: (reason: string) => call<void>('vault_unlock_device', { reason }),
+  vaultEnableDevice: (master: string, reason: string) =>
+    call<void>('vault_enable_device', { master, reason }),
+  vaultDisableDevice: () => call<void>('vault_disable_device'),
   vaultLock: () => call<void>('vault_lock'),
   /** Postpones the auto-lock; call on user activity, throttled. */
   vaultActivity: () => call<void>('vault_activity'),

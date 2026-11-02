@@ -1,6 +1,7 @@
 //! SSH Key Manager desktop app: Tauri commands over [`sshkm_core`].
 
 mod commands;
+mod device_unlock;
 mod error;
 #[cfg(target_os = "macos")]
 mod menu;
@@ -50,6 +51,7 @@ pub fn run() {
             watcher::start(app.handle(), &paths.dir);
             let state = Arc::new(AppState::new(paths, backup_dir, data_dir));
             state.vault.start_timer(app.handle().clone());
+            device_unlock::watch_screen_lock(Arc::clone(&state.vault), app.handle().clone());
             app.manage(state);
             #[cfg(target_os = "macos")]
             menu::install(app)?;
@@ -93,6 +95,9 @@ pub fn run() {
             commands::vault::vault_create,
             commands::vault::vault_unlock,
             commands::vault::vault_recover,
+            commands::vault::vault_unlock_device,
+            commands::vault::vault_enable_device,
+            commands::vault::vault_disable_device,
             commands::vault::vault_lock,
             commands::vault::vault_activity,
             commands::vault::vault_entries,

@@ -2,8 +2,9 @@
 //! unlocked, when it locks itself, and copying its secrets to the clipboard.
 //!
 //! The unlocked [`Vault`] exists only in this process and is dropped (locked)
-//! on request, after a period without activity, after the computer slept, or
-//! when the window is minimised, as the settings say. Every lock emits
+//! on request, after a period without activity, after the computer slept,
+//! when the screen locks ([`crate::device_unlock`]) or when the window is
+//! minimised, as the settings say. Every lock emits
 //! [`LOCKED_EVENT`] so the UI can switch to its lock screen.
 
 use std::path::{Path, PathBuf};
@@ -72,7 +73,6 @@ pub enum LockReason {
     Manual,
     Idle,
     Sleep,
-    #[expect(dead_code, reason = "sent once the screen-lock watcher is wired in")]
     ScreenLock,
     Minimize,
     /// The vault changed elsewhere in a way this copy can't follow, e.g. its
@@ -111,6 +111,11 @@ impl VaultRuntime {
 
     pub fn settings(&self) -> VaultSettings {
         lock(&self.settings).clone()
+    }
+
+    /// The app's data folder, home of the vault's settings.
+    pub fn data_dir(&self) -> &Path {
+        &self.data_dir
     }
 
     pub fn set_settings(&self, settings: VaultSettings) -> AppResult<VaultSettings> {

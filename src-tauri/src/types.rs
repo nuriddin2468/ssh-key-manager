@@ -220,6 +220,29 @@ pub struct VaultStatus {
     pub files: VaultFiles,
     pub paths: VaultPaths,
     pub settings: VaultSettings,
+    pub device: DeviceUnlockStatus,
+}
+
+/// The system's way of confirming it's the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub enum BiometricKind {
+    TouchId,
+    WindowsHello,
+}
+
+/// Touch ID / Windows Hello for the vault on this computer.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub struct DeviceUnlockStatus {
+    /// What this computer offers; `None` when it offers nothing usable.
+    pub kind: Option<BiometricKind>,
+    /// Why it can't be used, in English, for logs and tooltips.
+    pub unavailable_reason: Option<String>,
+    /// Turned on for this vault on this computer.
+    pub enabled: bool,
 }
 
 /// What [`crate::commands::vault::vault_copy`] copies.

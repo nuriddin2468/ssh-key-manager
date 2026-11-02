@@ -42,6 +42,8 @@ pub enum ErrorCode {
     Conflict,
     /// The password vault is locked; unlock it and try again.
     VaultLocked,
+    /// The user dismissed a system prompt (Touch ID, Windows Hello).
+    Cancelled,
 }
 
 impl ErrorCode {
@@ -61,6 +63,7 @@ impl ErrorCode {
             Self::PermissionDenied => "permission_denied",
             Self::Conflict => "conflict",
             Self::VaultLocked => "vault_locked",
+            Self::Cancelled => "cancelled",
         }
     }
 }
@@ -210,6 +213,7 @@ mod tests {
             ErrorCode::PermissionDenied,
             ErrorCode::Conflict,
             ErrorCode::VaultLocked,
+            ErrorCode::Cancelled,
         ];
         for code in all {
             let json = serde_json::to_value(code).unwrap();

@@ -375,9 +375,10 @@ fn master_password_and_recovery_key_can_be_replaced() {
     vault.change_master_password(&s("one"), &s("two")).unwrap();
 
     vault.enable_device_unlock().unwrap();
+    vault.enable_device_unlock().unwrap();
     let new_key = vault.new_recovery_key(&s("two"), &fx.backups()).unwrap();
     assert_ne!(new_key.expose_secret(), old_key.expose_secret());
-    assert!(!vault.has_device_unlock());
+    assert_eq!(vault.device_slots(), Vec::<String>::new());
     drop(vault);
 
     let vault = Vault::unlock(&fx.paths, &s("two")).unwrap();
@@ -388,25 +389,32 @@ fn master_password_and_recovery_key_can_be_replaced() {
 }
 
 #[test]
-fn device_unlock_opens_the_vault_with_its_key() {
+fn device_unlock_works_per_computer() {
     let fx = Fixture::new();
     let (mut vault, _) = Vault::create(&fx.paths, &s("master")).unwrap();
-    let device_key = vault.enable_device_unlock().unwrap();
+    let laptop = vault.enable_device_unlock().unwrap();
+    let desktop = vault.enable_device_unlock().unwrap();
     let id = vault.vault_id().to_owned();
     drop(vault);
 
     let files = probe(&fx.paths).unwrap();
     assert!(files.has_device_unlock);
+    assert_eq!(
+        files.device_slots,
+        [laptop.slot_id.clone(), desktop.slot_id.clone()]
+    );
     assert_eq!(files.vault_id.as_deref(), Some(id.as_str()));
-    assert!(Vault::unlock_with_device(&fx.paths, &device_key).is_ok());
+    assert!(Vault::unlock_with_device(&fx.paths, &laptop.slot_id, &laptop.key).is_ok());
+    assert!(Vault::unlock_with_device(&fx.paths, &desktop.slot_id, &desktop.key).is_ok());
     assert!(matches!(
-        Vault::unlock_with_device(&fx.paths, &[0; 32]),
+        Vault::unlock_with_device(&fx.paths, &laptop.slot_id, &[0; 32]),
         Err(Error::WrongPassphrase)
     ));
 
     let mut vault = Vault::unlock(&fx.paths, &s("master")).unwrap();
-    vault.disable_device_unlock().unwrap();
-    assert!(Vault::unlock_with_device(&fx.paths, &device_key).is_err());
+    vault.disable_device_unlock(&laptop.slot_id).unwrap();
+    assert!(Vault::unlock_with_device(&fx.paths, &laptop.slot_id, &laptop.key).is_err());
+    assert!(Vault::unlock_with_device(&fx.paths, &desktop.slot_id, &desktop.key).is_ok());
 }
 
 #[test]

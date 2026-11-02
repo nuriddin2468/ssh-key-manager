@@ -83,8 +83,10 @@ pub struct VaultFiles {
     /// (a KeePass file brought from elsewhere, or a lost keys file), it opens
     /// with the recovery key / KeePass password, which then sets one.
     pub has_master_password: bool,
-    /// Touch ID / Windows Hello opens it on this computer.
+    /// Some computer can open it with Touch ID / Windows Hello.
     pub has_device_unlock: bool,
+    /// Ids of the device slots, one per computer with device unlock.
+    pub device_slots: Vec<String>,
     /// Random id of the vault; names its item in the OS credential store.
     pub vault_id: Option<String>,
 }
@@ -95,7 +97,8 @@ pub fn probe(paths: &VaultPaths) -> Result<VaultFiles> {
     Ok(VaultFiles {
         exists: paths.database.is_file(),
         has_master_password: slots.as_ref().is_some_and(KeySlots::has_password),
-        has_device_unlock: slots.as_ref().is_some_and(KeySlots::has_device),
+        has_device_unlock: slots.as_ref().is_some_and(|s| !s.device_ids().is_empty()),
+        device_slots: slots.as_ref().map(KeySlots::device_ids).unwrap_or_default(),
         vault_id: slots.map(|s| s.vault_id),
     })
 }
@@ -217,6 +220,13 @@ pub enum SecretField {
     Otp,
 }
 
+/// A new device slot: its id and the random key that opens it, to be kept in
+/// this computer's credential store.
+pub struct DeviceKey {
+    pub slot_id: String,
+    pub key: Zeroizing<[u8; 32]>,
+}
+
 /// An unlocked vault. Dropping it locks the vault.
 pub struct Vault {
     paths: VaultPaths,
@@ -273,10 +283,15 @@ impl Vault {
         Self::open(paths, secret, slots)
     }
 
-    /// Unlocks with the device key released by Touch ID / Windows Hello.
-    pub fn unlock_with_device(paths: &VaultPaths, device_key: &[u8; 32]) -> Result<Self> {
+    /// Unlocks with this computer's device key, released by Touch ID /
+    /// Windows Hello.
+    pub fn unlock_with_device(
+        paths: &VaultPaths,
+        slot_id: &str,
+        device_key: &[u8; 32],
+    ) -> Result<Self> {
         let slots = load_slots(paths)?;
-        let secret = slots.open_device(device_key)?;
+        let secret = slots.open_device(slot_id, device_key)?;
         Self::open(paths, secret, slots)
     }
 
@@ -348,8 +363,9 @@ impl Vault {
         &self.slots.vault_id
     }
 
-    pub fn has_device_unlock(&self) -> bool {
-        self.slots.has_device()
+    /// Ids of the device slots, one per computer with device unlock.
+    pub fn device_slots(&self) -> Vec<String> {
+        self.slots.device_ids()
     }
 
     /// Re-reads the files if another program or computer changed the
@@ -434,8 +450,8 @@ impl Vault {
     }
 
     /// Replaces the recovery key and re-encrypts the database with it. Device
-    /// unlock is switched off, because its slot holds the old key: turn it on
-    /// again and delete the old item from the OS credential store.
+    /// unlock is switched off on every computer, because those slots hold the
+    /// old key: turn it on again and delete the old credential store items.
     pub fn new_recovery_key(
         &mut self,
         master: &SecretString,
@@ -447,7 +463,7 @@ impl Vault {
         let bytes = serialize(&self.db, &secret)?;
         let mut slots = self.slots.clone();
         slots.set_password(&secret, master)?;
-        slots.remove_device();
+        slots.remove_all_devices();
         // The keys first: on a crash in between, the old recovery key still
         // opens the database and sets the master password again.
         slots.save(&self.paths.keys)?;
@@ -457,16 +473,16 @@ impl Vault {
         Ok(secret)
     }
 
-    /// Adds Touch ID / Windows Hello unlock. Returns the device key, which the
-    /// caller keeps in the OS credential store under [`Vault::vault_id`].
-    pub fn enable_device_unlock(&mut self) -> Result<Zeroizing<[u8; 32]>> {
-        let device_key = self.slots.set_device(&self.secret)?;
+    /// Adds Touch ID / Windows Hello unlock for this computer.
+    pub fn enable_device_unlock(&mut self) -> Result<DeviceKey> {
+        let (slot_id, key) = self.slots.add_device(&self.secret)?;
         self.slots.save(&self.paths.keys)?;
-        Ok(device_key)
+        Ok(DeviceKey { slot_id, key })
     }
 
-    pub fn disable_device_unlock(&mut self) -> Result<()> {
-        self.slots.remove_device();
+    /// Removes one computer's device slot.
+    pub fn disable_device_unlock(&mut self, slot_id: &str) -> Result<()> {
+        self.slots.remove_device(slot_id);
         self.slots.save(&self.paths.keys)
     }
 

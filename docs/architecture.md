@@ -31,7 +31,7 @@ real `~/.ssh`. Its modules:
   parameters, so the UI can localise them.
 - `vault`: the password vault, two files side by side.
   - `vault.kdbx` is a standard KeePass database (KDBX 4.1, Argon2id, ChaCha20). Its
-    password is the *vault secret*: a random 256-bit recovery key, shown once, which
+    password is the _vault secret_: a random 256-bit recovery key, shown once, which
     also opens the file in KeePassXC.
   - `vault.keys` holds key slots: the secret encrypted with XChaCha20-Poly1305 under a
     key derived from the master password (Argon2id, 128 MiB) and, optionally, under a

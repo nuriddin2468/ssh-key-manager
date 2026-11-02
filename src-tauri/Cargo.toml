@@ -30,10 +30,12 @@ sha2 = "0.10"
 ssh-key = { version = "0.6.7", default-features = false, features = ["std", "alloc"] }
 thiserror = "2"
 time = { version = "0.3", features = ["formatting", "std"] }
+zeroize = "1"
 gethostname = "1"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 arboard = { version = "3.7", features = ["wayland-data-control"] }
+sshkm-os = { path = "../crates/sshkm-os" }
 tauri-plugin-process = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"

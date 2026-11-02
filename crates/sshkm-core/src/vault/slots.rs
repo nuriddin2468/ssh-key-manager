@@ -5,8 +5,9 @@
 //! XChaCha20-Poly1305 under a different key:
 //!
 //! - `password`: a key derived from the master password with Argon2id;
-//! - `device`: a random key kept in the operating system's credential store,
-//!   released after Touch ID or Windows Hello.
+//! - `device`: one per computer that turned on Touch ID or Windows Hello, under
+//!   a random key kept in that computer's credential store. A vault in a synced
+//!   folder can have several.
 //!
 //! Losing this file loses no data: the recovery key opens the database alone.
 
@@ -48,7 +49,7 @@ pub(crate) struct KeySlots {
 #[serde(tag = "type", rename_all = "camelCase")]
 enum Slot {
     Password { kdf: Kdf, sealed: Sealed },
-    Device { sealed: Sealed },
+    Device { id: String, sealed: Sealed },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,8 +116,15 @@ impl KeySlots {
             .any(|s| matches!(s, Slot::Password { .. }))
     }
 
-    pub(crate) fn has_device(&self) -> bool {
-        self.slots.iter().any(|s| matches!(s, Slot::Device { .. }))
+    /// Ids of the device slots, one per computer with device unlock.
+    pub(crate) fn device_ids(&self) -> Vec<String> {
+        self.slots
+            .iter()
+            .filter_map(|s| match s {
+                Slot::Device { id, .. } => Some(id.clone()),
+                Slot::Password { .. } => None,
+            })
+            .collect()
     }
 
     /// Replaces the password slot with one for `master`.
@@ -156,30 +164,41 @@ impl KeySlots {
         open(&key, sealed, b"password")
     }
 
-    /// Adds (or replaces) the device slot and returns its new random key, to
-    /// be kept in the OS credential store.
-    pub(crate) fn set_device(&mut self, secret: &SecretString) -> Result<Zeroizing<[u8; 32]>> {
+    /// Adds a device slot and returns its id and new random key, to be kept
+    /// in this computer's credential store.
+    pub(crate) fn add_device(
+        &mut self,
+        secret: &SecretString,
+    ) -> Result<(String, Zeroizing<[u8; 32]>)> {
+        let id = uuid::Uuid::new_v4().to_string();
         let mut key = Zeroizing::new([0u8; 32]);
         OsRng.fill_bytes(key.as_mut());
-        let sealed = seal(&key, secret, b"device")?;
-        self.remove_device();
-        self.slots.push(Slot::Device { sealed });
-        Ok(key)
+        let sealed = seal(&key, secret, &device_purpose(&id))?;
+        self.slots.push(Slot::Device {
+            id: id.clone(),
+            sealed,
+        });
+        Ok((id, key))
     }
 
-    pub(crate) fn open_device(&self, key: &[u8; 32]) -> Result<SecretString> {
+    pub(crate) fn open_device(&self, id: &str, key: &[u8; 32]) -> Result<SecretString> {
         let sealed = self
             .slots
             .iter()
             .find_map(|s| match s {
-                Slot::Device { sealed } => Some(sealed),
-                Slot::Password { .. } => None,
+                Slot::Device { id: slot, sealed } if slot == id => Some(sealed),
+                _ => None,
             })
             .ok_or_else(|| Error::NotFound("device unlock slot".into()))?;
-        open(key, sealed, b"device")
+        open(key, sealed, &device_purpose(id))
     }
 
-    pub(crate) fn remove_device(&mut self) {
+    pub(crate) fn remove_device(&mut self, id: &str) {
+        self.slots
+            .retain(|s| !matches!(s, Slot::Device { id: slot, .. } if slot == id));
+    }
+
+    pub(crate) fn remove_all_devices(&mut self) {
         self.slots.retain(|s| !matches!(s, Slot::Device { .. }));
     }
 }
@@ -252,7 +271,11 @@ fn open(key: &[u8; 32], sealed: &Sealed, purpose: &[u8]) -> Result<SecretString>
     Ok(SecretString::from(text.to_owned()))
 }
 
-/// Binds a ciphertext to its slot type, so one can't be swapped for another.
+fn device_purpose(id: &str) -> Vec<u8> {
+    format!("device/{id}").into_bytes()
+}
+
+/// Binds a ciphertext to its slot, so one can't be swapped for another.
 fn aad(purpose: &[u8]) -> Vec<u8> {
     [FORMAT.as_bytes(), b"/", purpose].concat()
 }
@@ -284,29 +307,39 @@ mod tests {
     }
 
     #[test]
-    fn device_slot_round_trips_and_can_be_removed() {
+    fn device_slots_are_per_computer() {
         let mut slots = KeySlots::new();
-        let key = slots.set_device(&secret()).unwrap();
-        assert_eq!(
-            slots.open_device(&key).unwrap().expose_secret(),
-            "ABCD-EFGH"
-        );
+        let (laptop, laptop_key) = slots.add_device(&secret()).unwrap();
+        let (desktop, desktop_key) = slots.add_device(&secret()).unwrap();
+        assert_eq!(slots.device_ids(), [laptop.clone(), desktop.clone()]);
+        let opened = slots.open_device(&laptop, &laptop_key).unwrap();
+        assert_eq!(opened.expose_secret(), "ABCD-EFGH");
+        assert!(slots.open_device(&desktop, &desktop_key).is_ok());
+        // One computer's key does not open another's slot.
         assert!(matches!(
-            slots.open_device(&[7; 32]),
+            slots.open_device(&laptop, &desktop_key),
             Err(Error::WrongPassphrase)
         ));
-        slots.remove_device();
-        assert!(!slots.has_device());
+        slots.remove_device(&laptop);
+        assert_eq!(slots.device_ids(), std::slice::from_ref(&desktop));
+        assert!(matches!(
+            slots.open_device(&laptop, &laptop_key),
+            Err(Error::NotFound(_))
+        ));
+        slots.remove_all_devices();
+        assert_eq!(slots.device_ids(), Vec::<String>::new());
     }
 
     #[test]
-    fn a_slot_cannot_be_moved_to_another_type() {
+    fn a_slot_cannot_be_moved_to_another_slot() {
         let mut slots = KeySlots::new();
-        let key = slots.set_device(&secret()).unwrap();
-        let Some(Slot::Device { sealed }) = slots.slots.first().cloned() else {
+        let (id, key) = slots.add_device(&secret()).unwrap();
+        let Some(Slot::Device { sealed, .. }) = slots.slots.first().cloned() else {
             panic!("no device slot");
         };
         assert!(open(&key, &sealed, b"password").is_err());
+        assert!(open(&key, &sealed, &device_purpose("other")).is_err());
+        assert!(open(&key, &sealed, &device_purpose(&id)).is_ok());
     }
 
     #[test]
@@ -324,7 +357,8 @@ mod tests {
         slots.save(&path).unwrap();
         let loaded = KeySlots::load(&path).unwrap().unwrap();
         assert_eq!(loaded.vault_id, slots.vault_id);
-        assert!(loaded.has_password() && !loaded.has_device());
+        assert!(loaded.has_password());
+        assert_eq!(loaded.device_ids(), Vec::<String>::new());
         assert!(loaded.open_password(&SecretString::from("a")).is_err());
         assert!(loaded.open_password(&SecretString::from("b")).is_ok());
         let text = std::fs::read_to_string(&path).unwrap();

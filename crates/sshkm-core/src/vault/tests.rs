@@ -1,0 +1,428 @@
+use std::path::PathBuf;
+
+use secrecy::{ExposeSecret, SecretString};
+use tempfile::TempDir;
+
+use super::*;
+
+struct Fixture {
+    dir: TempDir,
+    paths: VaultPaths,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = VaultPaths::new(dir.path().join("vault.kdbx"));
+        Self { dir, paths }
+    }
+
+    fn backups(&self) -> PathBuf {
+        self.dir.path().join("backups")
+    }
+}
+
+fn s(text: &str) -> SecretString {
+    SecretString::from(text.to_owned())
+}
+
+fn login(title: &str, password: &str) -> EntryInput {
+    EntryInput {
+        title: title.into(),
+        username: "me@example.com".into(),
+        password: Some(s(password)),
+        url: "https://example.com".into(),
+        ..EntryInput::default()
+    }
+}
+
+#[test]
+fn create_writes_two_files_and_unlocks_with_the_master_password() {
+    let fx = Fixture::new();
+    let (vault, recovery) = Vault::create(&fx.paths, &s("master")).unwrap();
+    assert_eq!(recovery.expose_secret().len(), 64);
+    assert!(fx.paths.database.is_file() && fx.paths.keys.is_file());
+    assert_eq!(fx.paths.keys.file_name().unwrap(), "vault.keys");
+    drop(vault);
+
+    let files = probe(&fx.paths).unwrap();
+    assert!(files.exists && files.has_master_password && !files.has_device_unlock);
+    assert!(Vault::unlock(&fx.paths, &s("master")).is_ok());
+    let wrong = Vault::unlock(&fx.paths, &s("Master")).unwrap_err();
+    assert!(matches!(wrong, Error::WrongPassphrase));
+}
+
+#[test]
+fn create_refuses_to_overwrite_and_needs_a_password() {
+    let fx = Fixture::new();
+    Vault::create(&fx.paths, &s("master")).unwrap();
+    assert!(matches!(
+        Vault::create(&fx.paths, &s("master")),
+        Err(Error::AlreadyExists(_))
+    ));
+    let other = Fixture::new();
+    assert!(matches!(
+        Vault::create(&other.paths, &s("")),
+        Err(Error::InvalidInput(_))
+    ));
+}
+
+#[test]
+fn probe_reports_a_missing_vault() {
+    let fx = Fixture::new();
+    let files = probe(&fx.paths).unwrap();
+    assert!(!files.exists && !files.has_master_password && files.vault_id.is_none());
+}
+
+#[test]
+fn the_database_is_a_keepass_file_opened_by_the_recovery_key() {
+    let fx = Fixture::new();
+    let (mut vault, recovery) = Vault::create(&fx.paths, &s("master")).unwrap();
+    vault.add_entry(&login("GitHub", "hunter2")).unwrap();
+    vault.save(&fx.backups()).unwrap();
+
+    // What KeePassXC does with the key typed exactly as printed.
+    let bytes = std::fs::read(&fx.paths.database).unwrap();
+    let db = Database::parse(&bytes, key(&recovery)).unwrap();
+    assert!(matches!(db.config.version, DatabaseVersion::KDB4(1)));
+    let entry = db.iter_all_entries().next().unwrap();
+    assert_eq!(entry.get_title(), Some("GitHub"));
+    assert_eq!(entry.get_password(), Some("hunter2"));
+    assert!(!String::from_utf8_lossy(&bytes).contains("hunter2"));
+}
+
+#[test]
+fn recover_accepts_a_sloppily_typed_key_and_sets_a_new_master_password() {
+    let fx = Fixture::new();
+    let (_, recovery) = Vault::create(&fx.paths, &s("forgotten")).unwrap();
+    let typed = recovery.expose_secret().replace('-', " ").to_lowercase();
+    assert!(matches!(
+        Vault::recover(&fx.paths, &s("not the key"), &s("new")),
+        Err(Error::WrongPassphrase)
+    ));
+    Vault::recover(&fx.paths, &s(&typed), &s("new")).unwrap();
+    assert!(Vault::unlock(&fx.paths, &s("new")).is_ok());
+    assert!(Vault::unlock(&fx.paths, &s("forgotten")).is_err());
+}
+
+#[test]
+fn recover_opens_a_keepass_file_brought_from_elsewhere() {
+    let fx = Fixture::new();
+    let mut db = Database::new();
+    db.root_mut()
+        .add_entry()
+        .set_unprotected(fields::TITLE, "From KeePassXC");
+    let mut bytes = Vec::new();
+    db.save(&mut bytes, key(&s("my keepass password"))).unwrap();
+    std::fs::write(&fx.paths.database, bytes).unwrap();
+
+    let files = probe(&fx.paths).unwrap();
+    assert!(files.exists && !files.has_master_password);
+    let vault = Vault::recover(&fx.paths, &s("my keepass password"), &s("master")).unwrap();
+    assert_eq!(vault.entries()[0].title, "From KeePassXC");
+    drop(vault);
+    assert!(Vault::unlock(&fx.paths, &s("master")).is_ok());
+}
+
+#[test]
+fn a_keys_file_from_another_vault_is_reported() {
+    let a = Fixture::new();
+    let b = Fixture::new();
+    Vault::create(&a.paths, &s("master")).unwrap();
+    Vault::create(&b.paths, &s("master")).unwrap();
+    std::fs::copy(&b.paths.keys, &a.paths.keys).unwrap();
+    assert!(matches!(
+        Vault::unlock(&a.paths, &s("master")),
+        Err(Error::Parse(_))
+    ));
+}
+
+#[test]
+fn entries_round_trip_without_exposing_secrets() {
+    let fx = Fixture::new();
+    let (mut vault, _) = Vault::create(&fx.paths, &s("master")).unwrap();
+    let id = vault.add_entry(&login("GitHub", "hunter2")).unwrap();
+    vault
+        .add_entry(&EntryInput {
+            title: "prod".into(),
+            username: "root".into(),
+            password: Some(s("sesame")),
+            kind: EntryKind::Host,
+            host: Some("prod".into()),
+            ..EntryInput::default()
+        })
+        .unwrap();
+    vault.save(&fx.backups()).unwrap();
+    drop(vault);
+
+    let vault = Vault::unlock(&fx.paths, &s("master")).unwrap();
+    let entries = vault.entries();
+    assert_eq!(
+        entries.iter().map(|e| e.title.as_str()).collect::<Vec<_>>(),
+        ["GitHub", "prod"]
+    );
+    let github = &entries[0];
+    assert_eq!(github.id, id);
+    assert_eq!(github.kind, EntryKind::Login);
+    assert!(github.has_password && !github.has_otp && !github.in_trash);
+    assert_eq!(entries[1].kind, EntryKind::Host);
+    assert_eq!(entries[1].host.as_deref(), Some("prod"));
+
+    let json = serde_json::to_string(&vault.entry(&id).unwrap()).unwrap();
+    assert!(!json.contains("hunter2"));
+    assert!(json.contains("\"title\":\"GitHub\""));
+    let password = vault.secret(&id, SecretField::Password).unwrap();
+    assert_eq!(password.expose_secret(), "hunter2");
+}
+
+#[test]
+fn updates_keep_history_and_leave_omitted_secrets_alone() {
+    let fx = Fixture::new();
+    let (mut vault, _) = Vault::create(&fx.paths, &s("master")).unwrap();
+    let id = vault.add_entry(&login("GitHub", "first")).unwrap();
+
+    let mut rename = login("GitHub (work)", "ignored");
+    rename.password = None;
+    vault.update_entry(&id, &rename).unwrap();
+    assert_eq!(
+        vault
+            .secret(&id, SecretField::Password)
+            .unwrap()
+            .expose_secret(),
+        "first"
+    );
+    assert_eq!(vault.entry(&id).unwrap().history_len, 1);
+
+    // Saving the same values again is not a new version.
+    vault.update_entry(&id, &rename).unwrap();
+    assert_eq!(vault.entry(&id).unwrap().history_len, 1);
+
+    vault
+        .update_entry(&id, &login("GitHub (work)", "second"))
+        .unwrap();
+    let detail = vault.entry(&id).unwrap();
+    assert_eq!(detail.history_len, 2);
+    assert_eq!(detail.summary.title, "GitHub (work)");
+    assert!(detail.password_changed.is_some());
+    assert_eq!(
+        vault
+            .secret(&id, SecretField::Password)
+            .unwrap()
+            .expose_secret(),
+        "second"
+    );
+}
+
+#[test]
+fn links_are_validated_and_cleared_when_the_kind_changes() {
+    let fx = Fixture::new();
+    let (mut vault, _) = Vault::create(&fx.paths, &s("master")).unwrap();
+    let missing = EntryInput {
+        title: "k".into(),
+        kind: EntryKind::Key,
+        ..EntryInput::default()
+    };
+    assert!(matches!(
+        vault.add_entry(&missing),
+        Err(Error::InvalidInput(_))
+    ));
+    let id = vault
+        .add_entry(&EntryInput {
+            key_fingerprint: Some("SHA256:abc".into()),
+            ..missing
+        })
+        .unwrap();
+    assert_eq!(
+        vault.entries()[0].key_fingerprint.as_deref(),
+        Some("SHA256:abc")
+    );
+    vault.update_entry(&id, &login("k", "x")).unwrap();
+    let entry = &vault.entries()[0];
+    assert_eq!(entry.kind, EntryKind::Login);
+    assert!(entry.key_fingerprint.is_none());
+    assert!(matches!(
+        vault.add_entry(&EntryInput::default()),
+        Err(Error::InvalidInput(_))
+    ));
+}
+
+#[test]
+fn otp_secrets_become_uris_and_produce_codes() {
+    let fx = Fixture::new();
+    let (mut vault, _) = Vault::create(&fx.paths, &s("master")).unwrap();
+    let mut input = login("GitHub", "x");
+    input.otp = Some(s("JBSW Y3DP EHPK 3PXP JBSW Y3DP EHPK 3PXP"));
+    let id = vault.add_entry(&input).unwrap();
+    assert!(vault.entries()[0].has_otp);
+    let uri = vault.secret(&id, SecretField::Otp).unwrap();
+    assert!(
+        uri.expose_secret()
+            .starts_with("otpauth://totp/GitHub?secret=JBSWY3DP")
+    );
+    let (code, valid_for) = vault.otp_code(&id).unwrap();
+    assert_eq!(code.len(), 6);
+    assert!(code.chars().all(|c| c.is_ascii_digit()));
+    assert!((1..=30).contains(&valid_for));
+
+    input.otp = Some(s("not base32!"));
+    assert!(matches!(
+        vault.add_entry(&input),
+        Err(Error::InvalidInput(_))
+    ));
+    input.otp = Some(s(""));
+    input.password = None;
+    vault.update_entry(&id, &input).unwrap();
+    assert!(!vault.entries()[0].has_otp);
+}
+
+#[test]
+fn trash_restore_and_delete() {
+    let fx = Fixture::new();
+    let (mut vault, recovery) = Vault::create(&fx.paths, &s("master")).unwrap();
+    let id = vault.add_entry(&login("Old", "x")).unwrap();
+    let keep = vault.add_entry(&login("Keep", "y")).unwrap();
+
+    assert!(matches!(
+        vault.delete_entry(&id),
+        Err(Error::InvalidInput(_))
+    ));
+    vault.trash_entry(&id).unwrap();
+    let old = vault.entries().into_iter().find(|e| e.id == id).unwrap();
+    assert!(old.in_trash);
+    assert_eq!(old.group.as_deref(), Some("Recycle Bin"));
+
+    vault.restore_entry(&id).unwrap();
+    let old = vault.entries().into_iter().find(|e| e.id == id).unwrap();
+    assert!(!old.in_trash && old.group.is_none());
+
+    vault.trash_entry(&id).unwrap();
+    assert_eq!(vault.empty_trash().unwrap(), 1);
+    assert_eq!(vault.entries().len(), 1);
+    assert_eq!(vault.entries()[0].id, keep);
+    vault.save(&fx.backups()).unwrap();
+
+    // KeePassXC sees the same recycle bin.
+    let bytes = std::fs::read(&fx.paths.database).unwrap();
+    let db = Database::parse(&bytes, key(&recovery)).unwrap();
+    assert_eq!(db.recycle_bin().unwrap().name, "Recycle Bin");
+    assert!(
+        db.deleted_objects
+            .contains_key(&uuid::Uuid::parse_str(&id).unwrap())
+    );
+}
+
+#[test]
+fn saves_keep_backups() {
+    let fx = Fixture::new();
+    let (mut vault, _) = Vault::create(&fx.paths, &s("master")).unwrap();
+    vault.add_entry(&login("A", "x")).unwrap();
+    vault.save(&fx.backups()).unwrap();
+    vault.add_entry(&login("B", "y")).unwrap();
+    vault.save(&fx.backups()).unwrap();
+    assert_eq!(fsutil::list_backups(&fx.backups(), "vault.kdbx").len(), 2);
+}
+
+#[test]
+fn changes_from_another_computer_are_picked_up() {
+    let fx = Fixture::new();
+    let (mut here, _) = Vault::create(&fx.paths, &s("master")).unwrap();
+    assert!(!here.refresh().unwrap());
+
+    let mut there = Vault::unlock(&fx.paths, &s("master")).unwrap();
+    there.add_entry(&login("Added there", "x")).unwrap();
+    there.save(&fx.backups()).unwrap();
+
+    assert!(here.refresh().unwrap());
+    assert_eq!(here.entries()[0].title, "Added there");
+    here.add_entry(&login("Added here", "y")).unwrap();
+    here.save(&fx.backups()).unwrap();
+    assert!(there.refresh().unwrap());
+    assert_eq!(there.entries().len(), 2);
+}
+
+#[test]
+fn a_write_over_someone_elses_change_is_a_conflict() {
+    let fx = Fixture::new();
+    let (mut here, _) = Vault::create(&fx.paths, &s("master")).unwrap();
+    let mut there = Vault::unlock(&fx.paths, &s("master")).unwrap();
+    there.add_entry(&login("There", "x")).unwrap();
+    there.save(&fx.backups()).unwrap();
+
+    here.add_entry(&login("Here", "y")).unwrap();
+    let Err(Error::Conflict(copy)) = here.save(&fx.backups()) else {
+        panic!("expected a conflict");
+    };
+    let copy = PathBuf::from(copy);
+    assert_eq!(copy.extension().unwrap(), "kdbx");
+    assert!(copy.to_string_lossy().contains("vault-conflict-"));
+    assert!(copy.is_file());
+    // The other computer's version is untouched.
+    let fresh = Vault::unlock(&fx.paths, &s("master")).unwrap();
+    assert_eq!(fresh.entries()[0].title, "There");
+}
+
+#[test]
+fn master_password_and_recovery_key_can_be_replaced() {
+    let fx = Fixture::new();
+    let (mut vault, old_key) = Vault::create(&fx.paths, &s("one")).unwrap();
+    vault.add_entry(&login("A", "x")).unwrap();
+    vault.save(&fx.backups()).unwrap();
+
+    assert!(matches!(
+        vault.change_master_password(&s("wrong"), &s("two")),
+        Err(Error::WrongPassphrase)
+    ));
+    vault.change_master_password(&s("one"), &s("two")).unwrap();
+
+    vault.enable_device_unlock().unwrap();
+    let new_key = vault.new_recovery_key(&s("two"), &fx.backups()).unwrap();
+    assert_ne!(new_key.expose_secret(), old_key.expose_secret());
+    assert!(!vault.has_device_unlock());
+    drop(vault);
+
+    let vault = Vault::unlock(&fx.paths, &s("two")).unwrap();
+    assert_eq!(vault.entries().len(), 1);
+    let bytes = std::fs::read(&fx.paths.database).unwrap();
+    assert!(Database::parse(&bytes, key(&new_key)).is_ok());
+    assert!(Database::parse(&bytes, key(&old_key)).is_err());
+}
+
+#[test]
+fn device_unlock_opens_the_vault_with_its_key() {
+    let fx = Fixture::new();
+    let (mut vault, _) = Vault::create(&fx.paths, &s("master")).unwrap();
+    let device_key = vault.enable_device_unlock().unwrap();
+    let id = vault.vault_id().to_owned();
+    drop(vault);
+
+    let files = probe(&fx.paths).unwrap();
+    assert!(files.has_device_unlock);
+    assert_eq!(files.vault_id.as_deref(), Some(id.as_str()));
+    assert!(Vault::unlock_with_device(&fx.paths, &device_key).is_ok());
+    assert!(matches!(
+        Vault::unlock_with_device(&fx.paths, &[0; 32]),
+        Err(Error::WrongPassphrase)
+    ));
+
+    let mut vault = Vault::unlock(&fx.paths, &s("master")).unwrap();
+    vault.disable_device_unlock().unwrap();
+    assert!(Vault::unlock_with_device(&fx.paths, &device_key).is_err());
+}
+
+#[test]
+fn folders_of_keepass_files_show_as_groups() {
+    let fx = Fixture::new();
+    let mut db = Database::new();
+    let mut root = db.root_mut();
+    let mut work = root.add_group();
+    work.name = "Work".into();
+    let mut servers = work.add_group();
+    servers.name = "Servers".into();
+    servers.add_entry().set_unprotected(fields::TITLE, "db1");
+    let mut bytes = Vec::new();
+    db.save(&mut bytes, key(&s("pw"))).unwrap();
+    std::fs::write(&fx.paths.database, bytes).unwrap();
+
+    let vault = Vault::recover(&fx.paths, &s("pw"), &s("master")).unwrap();
+    assert_eq!(vault.entries()[0].group.as_deref(), Some("Work/Servers"));
+}

@@ -37,6 +37,11 @@ pub enum ErrorCode {
     Io,
     /// The operating system denied access.
     PermissionDenied,
+    /// The file changed on disk since it was read (e.g. a synced vault edited
+    /// on another computer), so the write was not made.
+    Conflict,
+    /// The password vault is locked; unlock it and try again.
+    VaultLocked,
 }
 
 impl ErrorCode {
@@ -54,6 +59,8 @@ impl ErrorCode {
             Self::Parse => "parse",
             Self::Io => "io",
             Self::PermissionDenied => "permission_denied",
+            Self::Conflict => "conflict",
+            Self::VaultLocked => "vault_locked",
         }
     }
 }
@@ -105,6 +112,9 @@ pub enum Error {
     /// See [`ErrorCode::PermissionDenied`].
     #[error("permission denied: {0}")]
     PermissionDenied(String),
+    /// See [`ErrorCode::Conflict`].
+    #[error("changed on disk: {0}")]
+    Conflict(String),
     /// See [`ErrorCode::Io`].
     #[error("I/O error: {context}: {source}")]
     Io {
@@ -130,6 +140,7 @@ impl Error {
             Self::Unsupported(_) => ErrorCode::Unsupported,
             Self::Parse(_) => ErrorCode::Parse,
             Self::PermissionDenied(_) => ErrorCode::PermissionDenied,
+            Self::Conflict(_) => ErrorCode::Conflict,
             Self::Io { .. } => ErrorCode::Io,
         }
     }
@@ -197,6 +208,8 @@ mod tests {
             ErrorCode::Parse,
             ErrorCode::Io,
             ErrorCode::PermissionDenied,
+            ErrorCode::Conflict,
+            ErrorCode::VaultLocked,
         ];
         for code in all {
             let json = serde_json::to_value(code).unwrap();

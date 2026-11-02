@@ -36,6 +36,8 @@ import { cn } from '@/lib/cn';
 import { displayPath } from '@/lib/format';
 import { fileManagerName } from '@/lib/platform';
 import { algorithmDescription, hasPrivate, isPlain, keyTone } from './model';
+import { VaultIcon } from './VaultControls';
+import { useVaultKey } from './vaultKey';
 
 const SEVERITY_STYLE = {
   critical: {
@@ -62,6 +64,15 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
   const tone = keyTone(key);
   const keysById = new Map((keys.data?.keys ?? []).map((k) => [k.id, k]));
   const { fix } = useFix(keysById);
+  const vault = useVaultKey(key.fingerprint);
+  // While the vault is locked the entry is unknown; the Passwords page then
+  // asks to unlock it first.
+  const savedIn =
+    vault.vault === 'unlocked' && vault.entry
+      ? { entry: vault.entry }
+      : vault.vault === 'locked' && vault.saved
+        ? { entry: undefined }
+        : undefined;
 
   const lock = useAppMutation((fingerprint: string) => api.agentRemove(fingerprint), {
     success: () => t('keys.locked', { name: key.name }),
@@ -242,7 +253,24 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
           <dt className="text-subtle">{t('keys.algorithm')}</dt>
           <dd>{algorithmDescription(key, (bits) => t('keys.bits', { bits }))}</dd>
           <dt className="text-subtle">{t('keys.passphrase')}</dt>
-          <dd className={cn(isPlain(key) && 'text-warning')}>{passLabel}</dd>
+          <dd className="flex flex-col gap-1">
+            <span className={cn(isPlain(key) && 'text-warning')}>{passLabel}</span>
+            {savedIn ? (
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-fg-2">
+                <span className="inline-flex items-center gap-1.5">
+                  <VaultIcon className="size-3.5 text-[var(--accent-text)]" />
+                  {t('keys.savedInVault')}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => navigate({ page: 'passwords', entryId: savedIn.entry?.id })}
+                  className="inline-flex h-[22px] items-center rounded-md border border-[rgb(var(--accent-rgb)/0.3)] bg-[rgb(var(--accent-rgb)/0.12)] px-2 text-[11.5px] text-[var(--accent-text)] hover:bg-[rgb(var(--accent-rgb)/0.2)]"
+                >
+                  {t('keys.openInPasswords')}
+                </button>
+              </span>
+            ) : null}
+          </dd>
           <dt className="text-subtle">{t('keys.location')}</dt>
           <dd className="selectable font-mono text-[12px] [overflow-wrap:anywhere]">
             {displayPath(path, home)}

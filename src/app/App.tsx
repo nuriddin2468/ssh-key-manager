@@ -5,6 +5,7 @@ import { queryClient } from '@/api/queries';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 import { AgentPage } from '@/features/agent/AgentPage';
+import { useKeysFromVault } from '@/features/agent/useKeysFromVault';
 import { AuditPage } from '@/features/audit/AuditPage';
 import { HostsPage } from '@/features/hosts/HostsPage';
 import { KeysPage } from '@/features/keys/KeysPage';
@@ -44,6 +45,7 @@ function Shell() {
   const { route } = useRouter();
   useAppEvents();
   useAutomaticUpdates(useSettings().autoUpdate);
+  useKeysFromVault();
 
   // Popovers render in a portal under <body>; giving it the section too lets
   // dropdowns and menus pick up the page's accent colour.

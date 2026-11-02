@@ -2,12 +2,14 @@ import { KeyRound, Plus } from 'lucide-react';
 import { RadioGroup } from 'radix-ui';
 import { type FormEvent, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import { api } from '@/api/commands';
 import { useAgent, useEnvironment, useKeys } from '@/api/queries';
-import { useAppMutation } from '@/api/useAppMutation';
+import { errorMessage, useAppMutation } from '@/api/useAppMutation';
 import { useRouter } from '@/app/router';
 import type { EcdsaCurve } from '@/bindings/EcdsaCurve';
 import type { GenerateAlgorithm } from '@/bindings/GenerateAlgorithm';
+import type { GenerateKeyRequest } from '@/bindings/GenerateKeyRequest';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
@@ -18,6 +20,8 @@ import { Tile, type Tone } from '@/components/ui/Tile';
 import { cn } from '@/lib/cn';
 import { useSettings } from '@/lib/settings';
 import { FILE_NAME_PATTERN, suggestFileName } from './model';
+import { GeneratePassphraseButton, savePassphrase, VaultSaveRow } from './VaultControls';
+import { useVaultKey } from './vaultKey';
 
 type Algo = 'ed25519' | 'rsa' | 'ecdsa';
 
@@ -56,6 +60,10 @@ export function GenerateKeyDialog({ onDone }: { onDone: () => void }) {
   const [comment, setComment] = useState<string | null>(null);
   const [passphrase, setPassphrase] = useState('');
   const [repeat, setRepeat] = useState('');
+  const [showPassphrase, setShowPassphrase] = useState(false);
+  // A new key has no entry yet, so only the vault's state matters here.
+  const vault = useVaultKey(null);
+  const [saveToVault, setSaveToVault] = useState(true);
   const [addToAgent, setAddToAgent] = useState(true);
   const [addHost, setAddHost] = useState(false);
   const [alias, setAlias] = useState('');
@@ -93,24 +101,44 @@ export function GenerateKeyDialog({ onDone }: { onDone: () => void }) {
     `-C "${commentValue}"`,
   ].join(' ');
 
-  const generate = useAppMutation(api.generateKey, {
-    success: (key) => t('generate.created', { name: key.name }),
-    onSuccess: (key) => {
-      navigate({ page: 'keys', keyId: key.id });
-      onDone();
+  const generate = useAppMutation(
+    async (vars: { request: GenerateKeyRequest; saveToVault: boolean }) => {
+      const key = await api.generateKey(vars.request);
+      const passphrase = vars.request.key.passphrase;
+      let saved = false;
+      if (vars.saveToVault && passphrase && key.fingerprint) {
+        try {
+          await savePassphrase({ name: key.name, fingerprint: key.fingerprint }, passphrase);
+          saved = true;
+        } catch (error) {
+          toast.error(t('keys.vaultSaveFailed'), { description: errorMessage(t, error) });
+        }
+      }
+      return { key, saved };
     },
-  });
+    {
+      success: ({ key, saved }) =>
+        t(saved ? 'generate.createdSaved' : 'generate.created', { name: key.name }),
+      onSuccess: ({ key }) => {
+        navigate({ page: 'keys', keyId: key.id });
+        onDone();
+      },
+    },
+  );
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (nameError || mismatch || hostInvalid || generate.isPending) return;
     generate.mutate({
-      key: { algorithm, fileName, comment: commentValue.trim(), passphrase: passphrase || null },
-      addToAgent: addToAgent && agentAvailable,
-      agentLifetimeSecs: settings.defaultLifetime,
-      host: addHost
-        ? { alias: alias.trim(), hostName: hostName.trim() || null, user: user.trim() || null }
-        : null,
+      request: {
+        key: { algorithm, fileName, comment: commentValue.trim(), passphrase: passphrase || null },
+        addToAgent: addToAgent && agentAvailable,
+        agentLifetimeSecs: settings.defaultLifetime,
+        host: addHost
+          ? { alias: alias.trim(), hostName: hostName.trim() || null, user: user.trim() || null }
+          : null,
+      },
+      saveToVault: saveToVault && vault.vault === 'unlocked',
     });
   };
 
@@ -212,17 +240,34 @@ export function GenerateKeyDialog({ onDone }: { onDone: () => void }) {
               repeat={repeat}
               onChange={setPassphrase}
               onRepeatChange={setRepeat}
+              visible={showPassphrase}
             />
           </div>
-          {passphrase === '' ? (
-            <p className="-mt-2 text-[12px] text-warning">{t('generate.noPassphrase')}</p>
-          ) : null}
+          <div className="-mt-2 flex flex-col gap-1.5">
+            {passphrase === '' ? (
+              <p className="text-[12px] text-warning">{t('generate.noPassphrase')}</p>
+            ) : null}
+            <GeneratePassphraseButton
+              onGenerated={(value) => {
+                setPassphrase(value);
+                setRepeat(value);
+                setShowPassphrase(true);
+              }}
+            />
+          </div>
 
           <fieldset className="flex flex-col">
             <legend className="mb-2 text-[12px] font-semibold tracking-[0.02em] text-subtle">
               {t('generate.afterCreating')}
             </legend>
             <SwitchGroup>
+              <VaultSaveRow
+                vault={vault}
+                checked={saveToVault}
+                onCheckedChange={setSaveToVault}
+                disabled={passphrase === ''}
+                onLeave={onDone}
+              />
               <SwitchRow
                 label={t('generate.addToAgent')}
                 hint={agentAvailable ? t('generate.addToAgentHint') : t('agent.stoppedTitle')}

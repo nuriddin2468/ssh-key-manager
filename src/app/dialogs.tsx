@@ -25,14 +25,15 @@ import { useRouter } from './router';
 type Open =
   | { kind: 'generate' }
   | { kind: 'addHost' }
-  | { kind: 'passphrase'; key: KeyView }
+  | { kind: 'passphrase'; key: KeyView; suggest: boolean }
   | { kind: 'unlock'; key: KeyView; lifetime: number | null }
   | null;
 
 interface DialogsValue {
   generateKey: () => void;
   addHost: () => void;
-  editPassphrase: (key: KeyView) => void;
+  /** `suggest` starts with a generated passphrase, to be saved in the vault. */
+  editPassphrase: (key: KeyView, options?: { suggest?: boolean }) => void;
   /** Adds a key to the agent, asking for its passphrase when it has one. */
   unlockKey: (key: KeyView, lifetime?: number | null) => void;
   importKey: () => Promise<void>;
@@ -70,7 +71,8 @@ export function DialogsProvider({ children }: { children: ReactNode }) {
     () => ({
       generateKey: () => setOpen({ kind: 'generate' }),
       addHost: () => setOpen({ kind: 'addHost' }),
-      editPassphrase: (key) => setOpen({ kind: 'passphrase', key }),
+      editPassphrase: (key, options) =>
+        setOpen({ kind: 'passphrase', key, suggest: options?.suggest ?? false }),
       unlockKey: (key, lifetime = settings.defaultLifetime) => {
         if (key.encrypted) setOpen({ kind: 'unlock', key, lifetime });
         else addPlain.mutate({ key, lifetime });
@@ -101,7 +103,7 @@ export function DialogsProvider({ children }: { children: ReactNode }) {
         {open?.kind === 'generate' ? <GenerateKeyDialog onDone={close} /> : null}
         {open?.kind === 'addHost' ? <AddHostDialog onDone={close} /> : null}
         {open?.kind === 'passphrase' ? (
-          <PassphraseDialog keyView={open.key} onDone={close} />
+          <PassphraseDialog keyView={open.key} suggest={open.suggest} onDone={close} />
         ) : null}
         {open?.kind === 'unlock' ? (
           <UnlockDialog keyView={open.key} lifetime={open.lifetime} onDone={close} />

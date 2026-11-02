@@ -2,7 +2,14 @@ import { Cpu, KeyRound, Lock, LockOpen, RefreshCw } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
-import { invalidateAll, useAgent, useEnvironment, useKeys } from '@/api/queries';
+import {
+  invalidateAll,
+  useAgent,
+  useEnvironment,
+  useKeys,
+  useVaultEntries,
+  useVaultStatus,
+} from '@/api/queries';
 import { useAppMutation } from '@/api/useAppMutation';
 import { useDialogs } from '@/app/dialogs';
 import type { AgentIdentityView } from '@/bindings/AgentIdentityView';
@@ -14,9 +21,11 @@ import { IconButton } from '@/components/ui/IconButton';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
 import { hasPrivate, isPlain, keyTone } from '@/features/keys/model';
+import { findKeyEntry, useVaultKey } from '@/features/keys/vaultKey';
 import { formatDuration, shortFingerprint } from '@/lib/format';
 import { useSettings } from '@/lib/settings';
 import { LifetimeSelect } from './LifetimeSelect';
+import { toastAddedFromVault } from './useKeysFromVault';
 
 const STOPPED_COMMANDS = {
   macos: null,
@@ -25,15 +34,21 @@ const STOPPED_COMMANDS = {
 } as const;
 
 export function AgentPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const agent = useAgent();
   const keys = useKeys();
   const environment = useEnvironment();
+  const settings = useSettings();
+  const vaultUnlocked = useVaultStatus().data?.state === 'unlocked';
+  const entries = useVaultEntries();
   const [confirmLockAll, setConfirmLockAll] = useState(false);
 
   const lockAll = useAppMutation(api.agentRemoveAll, {
     success: () => t('agent.lockedAll'),
     onSuccess: () => setConfirmLockAll(false),
+  });
+  const unlockSaved = useAppMutation(() => api.agentAddAllFromVault(settings.defaultLifetime), {
+    onSuccess: (report) => toastAddedFromVault(t, i18n.language, report),
   });
 
   const identities = agent.data?.identities ?? [];
@@ -44,6 +59,9 @@ export function AgentPage() {
   );
   const keysById = new Map((keys.data?.keys ?? []).map((key) => [key.id, key]));
   const platform = environment.data?.platform ?? 'macos';
+  const readySaved = vaultUnlocked
+    ? ready.filter((key) => !key.hardware && findKeyEntry(entries.data, key.fingerprint))
+    : [];
 
   return (
     <>
@@ -167,6 +185,18 @@ export function AgentPage() {
                       {t('agent.readyToUnlock')}
                     </h2>
                     <span className="text-[12.5px] text-subtle">{t('agent.readyHint')}</span>
+                    {readySaved.length > 0 ? (
+                      <Button
+                        variant="soft"
+                        size="sm"
+                        className="ml-auto self-center"
+                        loading={unlockSaved.isPending}
+                        icon={<LockOpen aria-hidden="true" className="size-3.5" strokeWidth={2} />}
+                        onClick={() => unlockSaved.mutate(undefined)}
+                      >
+                        {t('agent.unlockSaved', { count: readySaved.length })}
+                      </Button>
+                    ) : null}
                   </div>
                   {ready.length > 0 ? (
                     <div className="glass flex flex-col overflow-hidden rounded-2xl">
@@ -286,11 +316,17 @@ function ReadyRow({ keyView: key }: { keyView: KeyView }) {
   const dialogs = useDialogs();
   const settings = useSettings();
   const [lifetime, setLifetime] = useState(settings.defaultLifetime);
+  const vault = useVaultKey(key.fingerprint);
+  const inVault =
+    (vault.vault === 'unlocked' && vault.entry !== undefined) ||
+    (vault.vault === 'locked' && vault.saved);
   const note = key.hardware
     ? t('agent.hardware')
     : isPlain(key)
       ? t('agent.plain')
-      : t('agent.passphraseSaved');
+      : inVault
+        ? t('agent.inVault')
+        : t('agent.passphraseSaved');
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-3 border-b border-white/[0.05] px-4 py-3 last:border-b-0">
       <Tile tone={keyTone(key)} size={32}>

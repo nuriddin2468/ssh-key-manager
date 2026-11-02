@@ -8,6 +8,7 @@ pub mod environment;
 pub mod keys;
 pub mod known_hosts;
 pub mod vault;
+pub mod vault_links;
 
 use std::sync::Arc;
 

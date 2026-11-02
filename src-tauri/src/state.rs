@@ -1,9 +1,12 @@
 use std::collections::HashMap;
+use std::io;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 use sshkm_core::paths::SshPaths;
 use time::OffsetDateTime;
+
+use crate::askpass::{self, Responder, Session};
 
 /// Shared by all commands.
 pub struct AppState {
@@ -14,6 +17,8 @@ pub struct AppState {
     /// agent protocol has no way to ask for it.
     lifetimes: Mutex<HashMap<String, OffsetDateTime>>,
     openssh_version: OnceLock<Option<String>>,
+    /// Answers `ssh`'s prompts; started on first use.
+    askpass: Mutex<Option<askpass::Server>>,
 }
 
 impl AppState {
@@ -23,6 +28,7 @@ impl AppState {
             backup_dir,
             lifetimes: Mutex::new(HashMap::new()),
             openssh_version: OnceLock::new(),
+            askpass: Mutex::new(None),
         }
     }
 
@@ -68,5 +74,26 @@ impl AppState {
         self.openssh_version
             .get_or_init(crate::process::openssh_version)
             .clone()
+    }
+
+    /// A session of the askpass server whose prompts `responder` answers.
+    /// Starts the server if it is not running.
+    pub fn askpass_session(&self, responder: impl Responder) -> io::Result<Session> {
+        let mut server = self.askpass.lock().unwrap_or_else(PoisonError::into_inner);
+        if server.is_none() {
+            *server = Some(askpass::Server::start()?);
+        }
+        Ok(server
+            .as_ref()
+            .expect("the askpass server was just started")
+            .session(responder))
+    }
+
+    /// Stops the askpass server and removes its socket, when the app exits.
+    pub fn stop_askpass(&self) {
+        self.askpass
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
     }
 }

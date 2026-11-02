@@ -9,8 +9,10 @@ use sshkm_core::known_hosts::{KnownHostEntry, KnownHostsView};
 use sshkm_core::paths::SshPaths;
 use sshkm_core::perms::PermKind;
 
+use crate::askpass::AskedPrompt;
+
 #[cfg(test)]
-const BINDINGS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/bindings/");
+pub(crate) const BINDINGS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/bindings/");
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -188,6 +190,25 @@ pub struct ConnectionTest {
     pub ok: bool,
     /// What `ssh` printed, for the user to read.
     pub output: String,
+    /// What `ssh` asked the app for and what became of it, in order. Empty
+    /// unless a password or one-time code was given: without one `ssh` runs in
+    /// batch mode and asks nothing.
+    pub prompts: Vec<AskedPrompt>,
+}
+
+/// The result of adding a public key to a server's `~/.ssh/authorized_keys`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub struct KeyInstall {
+    /// The key is in `authorized_keys` now.
+    pub ok: bool,
+    /// It was added; `false` if it was there already or the install failed.
+    pub added: bool,
+    /// What `ssh` and the remote shell printed, for the user to read.
+    pub output: String,
+    /// As in [`ConnectionTest`].
+    pub prompts: Vec<AskedPrompt>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

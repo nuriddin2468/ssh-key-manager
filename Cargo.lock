@@ -4426,10 +4426,12 @@ dependencies = [
  "gethostname",
  "log",
  "notify",
+ "rand_core",
  "serde",
  "serde_json",
  "ssh-key",
  "sshkm-core",
+ "subtle",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
@@ -4443,7 +4445,9 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "time",
+ "tokio",
  "ts-rs",
+ "zeroize",
 ]
 
 [[package]]

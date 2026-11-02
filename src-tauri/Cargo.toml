@@ -24,12 +24,23 @@ tauri-plugin-opener = "2"
 tauri-plugin-window-state = "2"
 log = "0.4"
 notify = "8"
+rand_core = { version = "0.6", features = ["getrandom"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ssh-key = { version = "0.6.7", default-features = false, features = ["std", "alloc"] }
+subtle = "2.6"
 thiserror = "2"
 time = { version = "0.3", features = ["formatting", "std"] }
 gethostname = "1"
+zeroize = "1.9"
+
+[target.'cfg(unix)'.dependencies]
+tempfile = "3"
+
+# Named pipes for the askpass server. Tauri already depends on tokio with these
+# features, so this adds no crate to the build.
+[target.'cfg(windows)'.dependencies]
+tokio = { version = "1", features = ["net", "rt", "io-util", "time"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-process = "2"

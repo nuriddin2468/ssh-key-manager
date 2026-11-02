@@ -1,5 +1,6 @@
 //! SSH Key Manager desktop app: Tauri commands over [`sshkm_core`].
 
+pub mod askpass;
 mod commands;
 mod error;
 #[cfg(target_os = "macos")]
@@ -12,8 +13,9 @@ mod watcher;
 use std::sync::Arc;
 
 use sshkm_core::paths::SshPaths;
-use tauri::Manager;
+use tauri::{Manager, RunEvent};
 
+use crate::commands::Shared;
 use crate::state::AppState;
 
 pub fn run() {
@@ -69,6 +71,7 @@ pub fn run() {
             commands::config::read_config_raw,
             commands::config::write_config_raw,
             commands::config::test_connection,
+            commands::remote::install_public_key,
             commands::known_hosts::read_known_hosts,
             commands::known_hosts::find_known_hosts,
             commands::known_hosts::remove_known_hosts,
@@ -76,6 +79,13 @@ pub fn run() {
             commands::audit::run_audit,
             commands::audit::fix_permissions,
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to start SSH Key Manager");
+        .build(tauri::generate_context!())
+        .expect("failed to start SSH Key Manager")
+        .run(|app, event| {
+            if let RunEvent::Exit = event
+                && let Some(state) = app.try_state::<Shared>()
+            {
+                state.stop_askpass();
+            }
+        });
 }

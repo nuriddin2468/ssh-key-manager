@@ -1,6 +1,7 @@
-import { CheckCircle2, ShieldCheck, Terminal, Trash2, X, XCircle } from 'lucide-react';
-import { type FormEvent, useMemo, useState } from 'react';
+import { ShieldCheck, Terminal, Trash2 } from 'lucide-react';
+import { type FormEvent, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import { api } from '@/api/commands';
 import { useAppMutation } from '@/api/useAppMutation';
 import { useRouter } from '@/app/router';
@@ -8,10 +9,17 @@ import type { ConnectionTest } from '@/bindings/ConnectionTest';
 import type { HostEntry } from '@/bindings/HostEntry';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { Dialog } from '@/components/ui/Dialog';
 import { IconButton } from '@/components/ui/IconButton';
+import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
-import { cn } from '@/lib/cn';
+import { CheckHostKeyDialog } from '@/features/known/CheckHostKeyDialog';
+import { AppError } from '@/lib/ipc';
 import { ConfigPreview, HostFields, useHostErrors } from './HostFields';
+import { HostPassword } from './HostPassword';
+import { HostPasswordDialog } from './HostPasswordDialog';
+import { LoginResult } from './LoginResult';
+import type { MessageAction } from './login';
 import {
   editFromForm,
   formFromHost,
@@ -22,19 +30,45 @@ import {
   previewLines,
 } from './model';
 import { OtherOptions } from './OtherOptions';
+import { SwitchToKeyDialog } from './SwitchToKeyDialog';
+import { useDialog } from './useDialog';
+import { useHostVault, vaultErrorMessage } from './vault';
 
 interface HostEditorProps {
   host: HostEntry;
   hosts: HostEntry[];
 }
 
+const sameEdit = (a: HostForm, b: HostForm, id: number) =>
+  JSON.stringify(editFromForm(a, id)) === JSON.stringify(editFromForm(b, id));
+
 export function HostEditor({ host, hosts }: HostEditorProps) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const initial = useMemo(() => formFromHost(host), [host]);
   const [form, setForm] = useState<HostForm>(initial);
+  // The block changed on disk (the switch to a key saved it, or a terminal
+  // did): take the new version unless the form has edits of its own.
+  const [base, setBase] = useState(initial);
+  if (base !== initial) {
+    setBase(initial);
+    if (!sameEdit(initial, base, host.id) && sameEdit(form, base, host.id)) setForm(initial);
+  }
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [test, setTest] = useState<ConnectionTest | null>(null);
+  const [test, setTest] = useState<{ run: ConnectionTest; withVault: boolean } | null>(null);
+  // Recycling the password at the end removes the button that opened the
+  // switch to a key; focus then goes to the password section's first one.
+  const passwordSection = useRef<HTMLElement>(null);
+  const sectionButton = () => passwordSection.current?.querySelector<HTMLElement>('button');
+  // `otp`: opened to add a 2FA secret, so that field takes focus.
+  const [passwordOpen, openPassword, closePassword] = useDialog<'edit' | 'otp'>(sectionButton);
+  const [hostKeyOpen, openHostKey, closeHostKey] = useDialog<true>();
+  // Captured when it opens, so it stays put if the vault locks meanwhile.
+  const [switching, openSwitch, closeSwitch] = useDialog<{ alias: string; entryId: string }>(
+    sectionButton,
+  );
+  const [toRemove, setToRemove] = useState<number[] | null>(null);
+  const header = useRef<HTMLDivElement>(null);
   const set = <K extends keyof HostForm>(key: K, value: HostForm[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
 
@@ -45,10 +79,13 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
   const invalid = Boolean(errors.alias || errors.port) || form.other.some((o) => optionProblem(o));
   const name = edit.patterns.join(' ') || hostLabel(host);
   const mono = hostMonogram(host);
+  const vault = useHostVault(host);
+  const saved = vault.vault === 'unlocked' ? vault.entry : undefined;
+  const alias = vault.vault === 'unlocked' ? vault.alias : (host.patterns[0] ?? '');
 
   const save = useAppMutation(api.saveHost, {
     success: () => t('hosts.saved', { name }),
-    onSuccess: (saved) => navigate({ page: 'hosts', hostId: saved.id }),
+    onSuccess: (result) => navigate({ page: 'hosts', hostId: result.id }),
   });
   const remove = useAppMutation((id: number) => api.deleteHost(id), {
     success: () => t('hosts.deleted', { name }),
@@ -57,28 +94,58 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
       navigate({ page: 'hosts' });
     },
   });
-  const connect = useAppMutation((alias: string) => api.testConnection(alias), {
-    onSuccess: setTest,
+  // With a saved password the test signs in with it (and the 2FA code);
+  // otherwise ssh runs in batch mode and only keys can get in.
+  const connect = useAppMutation(
+    async (withVault: boolean) => ({
+      run: withVault ? await api.vaultTestConnection(alias) : await api.testConnection(alias),
+      withVault,
+    }),
+    {
+      onSuccess: setTest,
+      onError: (error) => {
+        if (AppError.from(error).code !== 'vault_locked') return false;
+        toast.error(vaultErrorMessage(t, error));
+        return true;
+      },
+    },
+  );
+  const removeKnown = useAppMutation((lines: number[]) => api.removeKnownHosts(lines), {
+    success: (_, lines) => t('known.removed', { line: lines.join(', ') }),
+    onSuccess: () => setToRemove(null),
   });
 
   const submit = (event: FormEvent) => {
+    // Forms in dialogs opened from here bubble their submit up React's tree.
+    if (event.target !== event.currentTarget) return;
     event.preventDefault();
     if (readOnly || invalid || save.isPending) return;
     save.mutate(edit);
   };
   const testable = host.kind === 'host' && !host.isWildcard && !dirty;
+  const fixes: Partial<Record<MessageAction, () => void>> = {
+    checkHostKey: () => openHostKey(true),
+    ...(saved
+      ? { editPassword: () => openPassword('edit'), addOtp: () => openPassword('otp') }
+      : {}),
+  };
 
   return (
     <form
       onSubmit={submit}
       aria-labelledby="host-title"
-      className="glass-raised relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl"
+      // `clip`, not `hidden`: the glow sticks out on the right, and a hidden
+      // overflow would let focus scroll the whole editor sideways.
+      className="glass-raised relative flex min-w-0 flex-1 flex-col overflow-clip rounded-2xl"
     >
       <div
         aria-hidden="true"
         className="pointer-events-none absolute -top-[110px] -right-[60px] h-[220px] w-[320px] rounded-full bg-[#2563EB] opacity-35 blur-[60px]"
       />
-      <div className="relative flex flex-wrap items-center gap-2.5 px-5 pt-[18px] pb-3.5">
+      <div
+        ref={header}
+        className="relative flex flex-wrap items-center gap-2.5 px-5 pt-[18px] pb-3.5"
+      >
         <Tile tone={mono.tone} size={44}>
           <span className="font-mono text-[14px] font-semibold">{mono.text}</span>
         </Tile>
@@ -93,11 +160,21 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
           </p>
         </div>
         {testable ? (
+          // Not disabled while it runs, so it keeps focus for the next try.
           <Button
+            data-test-connection=""
             variant="soft"
-            icon={<Terminal className="size-[15px]" strokeWidth={1.75} />}
-            loading={connect.isPending}
-            onClick={() => connect.mutate(host.patterns[0] ?? '')}
+            className="aria-disabled:opacity-60"
+            icon={
+              connect.isPending ? (
+                <Spinner className="size-4" />
+              ) : (
+                <Terminal className="size-[15px]" strokeWidth={1.75} />
+              )
+            }
+            aria-busy={connect.isPending || undefined}
+            aria-disabled={connect.isPending || undefined}
+            onClick={() => connect.isPending || connect.mutate(Boolean(saved))}
           >
             {t('hosts.testConnection')}
           </Button>
@@ -111,44 +188,23 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
         />
       </div>
 
-      {test ? (
-        <div
-          role="status"
-          className={cn(
-            'relative mx-5 mb-3 flex gap-2.5 rounded-xl border px-3 py-2.5',
-            test.ok ? 'border-ok/30 bg-ok/[0.08]' : 'border-critical-solid/30 bg-critical-solid/10',
-          )}
-        >
-          {test.ok ? (
-            <CheckCircle2
-              aria-hidden="true"
-              className="mt-0.5 size-4 shrink-0 text-ok"
-              strokeWidth={2}
-            />
-          ) : (
-            <XCircle
-              aria-hidden="true"
-              className="mt-0.5 size-4 shrink-0 text-critical"
-              strokeWidth={2}
-            />
-          )}
-          <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <span className="font-medium">
-              {test.ok ? t('hosts.testOk') : t('hosts.testFailed')}
-            </span>
-            {test.output ? (
-              <pre className="selectable max-h-24 overflow-auto font-mono text-[11.5px] leading-[17px] whitespace-pre-wrap text-fg-2">
-                {test.output}
-              </pre>
-            ) : null}
-          </div>
-          <IconButton
-            label={t('common.close')}
-            icon={<X className="size-3.5" />}
-            onClick={() => setTest(null)}
+      {/* Mounted before any result, so screen readers announce each one. */}
+      <div role="status" className="relative">
+        {test ? (
+          <LoginResult
+            className="mx-5 mb-3"
+            run={test.run}
+            context={test.withVault ? 'vaultTest' : 'test'}
+            alias={alias}
+            vaultLocked={vault.vault === 'locked'}
+            onAction={fixes}
+            onClose={() => {
+              setTest(null);
+              header.current?.querySelector<HTMLElement>('[data-test-connection]')?.focus();
+            }}
           />
-        </div>
-      ) : null}
+        ) : null}
+      </div>
 
       <div className="relative flex min-h-0 flex-1 flex-wrap gap-[18px] overflow-y-auto px-5 pt-0.5 pb-[18px]">
         {readOnly ? (
@@ -165,6 +221,14 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
               hosts={hosts}
               hostId={host.id}
               errors={dirty ? errors : { port: errors.port }}
+            />
+
+            <HostPassword
+              ref={passwordSection}
+              vault={vault}
+              dirty={dirty}
+              onEdit={() => openPassword('edit')}
+              onSwitch={() => saved && openSwitch({ alias, entryId: saved.id })}
             />
 
             <OtherOptions rows={form.other} onChange={(rows) => set('other', rows)} />
@@ -228,6 +292,53 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
         destructive
         busy={remove.isPending}
         onConfirm={() => remove.mutate(host.id)}
+      />
+
+      {/* The switch to a key stays open under the password and host key dialogs it opens. */}
+      <Dialog open={switching !== null} onOpenChange={(open) => open || closeSwitch()}>
+        {switching ? (
+          <SwitchToKeyDialog
+            host={host}
+            alias={switching.alias}
+            entryId={switching.entryId}
+            onAction={{
+              checkHostKey: () => openHostKey(true),
+              editPassword: () => openPassword('edit'),
+              addOtp: () => openPassword('otp'),
+            }}
+            onDone={closeSwitch}
+          />
+        ) : null}
+      </Dialog>
+      <Dialog open={passwordOpen !== null} onOpenChange={(open) => open || closePassword()}>
+        {passwordOpen && vault.vault === 'unlocked' ? (
+          <HostPasswordDialog
+            alias={alias}
+            user={host.user}
+            entry={saved}
+            focusOtp={passwordOpen === 'otp'}
+            onDone={closePassword}
+          />
+        ) : null}
+      </Dialog>
+      <Dialog open={hostKeyOpen !== null} onOpenChange={(open) => open || closeHostKey()}>
+        {hostKeyOpen ? (
+          <CheckHostKeyDialog
+            initialHost={host.hostName ?? alias}
+            onRemove={setToRemove}
+            onDone={closeHostKey}
+          />
+        ) : null}
+      </Dialog>
+      <ConfirmDialog
+        open={toRemove !== null}
+        onOpenChange={(open) => open || setToRemove(null)}
+        title={t('known.removeTitle')}
+        description={t('known.removeText')}
+        confirmLabel={t('common.delete')}
+        destructive
+        busy={removeKnown.isPending}
+        onConfirm={() => toRemove && removeKnown.mutate(toRemove)}
       />
     </form>
   );

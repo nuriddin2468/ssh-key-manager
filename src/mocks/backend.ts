@@ -477,7 +477,14 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
         }
       : {
           ok: false,
-          output: `ssh: connect to host ${alias} port 22: Operation timed out`,
+          // Batch mode: an unknown host key fails outright, and servers
+          // that want a password turn every key down.
+          output:
+            alias === 'legacy-nas'
+              ? 'Host key verification failed.'
+              : ['prod-api', 'staging-api', 'bastion'].includes(String(alias))
+                ? `ubuntu@${alias}: Permission denied (publickey,password).`
+                : `ssh: connect to host ${alias} port 22: Operation timed out`,
           prompts: [],
         },
   install_public_key: ({ alias }) => ({

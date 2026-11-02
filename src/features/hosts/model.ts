@@ -92,6 +92,38 @@ export function editFromForm(form: HostForm, id: number | null): HostEdit {
 }
 
 /**
+ * The edit that points `host` at the key file `file`, through the same form
+ * model as the editor, so every other option is kept:
+ * - unless the block already lists the key (`isKey` recognises another
+ *   spelling of its path), it becomes the first `IdentityFile`, and the ones
+ *   listed before stay after it;
+ * - `identitiesOnly` turns `IdentitiesOnly yes` on; it never turns it off.
+ *
+ * `changed` is false when the block already says all that.
+ */
+export function pointHostAtKey(
+  host: HostEntry,
+  file: string,
+  options: { identitiesOnly: boolean; isKey?: (raw: string) => boolean },
+): { edit: HostEdit; changed: boolean } {
+  const isKey = options.isKey ?? ((raw: string) => raw === file);
+  const before = formFromHost(host);
+  const form: HostForm = { ...before, other: [...before.other] };
+  const listed = [
+    form.identityFile,
+    ...form.other.filter((o) => o.key.toLowerCase() === 'identityfile').map((o) => o.value),
+  ].some((value) => value !== '' && isKey(value));
+  if (!listed) {
+    if (form.identityFile) form.other.unshift(optionRow('IdentityFile', form.identityFile));
+    form.identityFile = file;
+  }
+  if (options.identitiesOnly) form.identitiesOnly = true;
+  const edit = editFromForm(form, host.id);
+  const changed = JSON.stringify(edit) !== JSON.stringify(editFromForm(before, host.id));
+  return { edit, changed };
+}
+
+/**
  * People often type a whole config line (`HostKeyAlias github.com`) into the
  * name field; treat that as name and value, the way ssh_config would.
  */

@@ -44,6 +44,7 @@
   --animate-popover-in: popover-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
   --animate-popover-out: popover-out 100ms ease-in forwards;
   --animate-pulse-dot: pulse-dot 1.2s ease-in-out infinite;
+  --animate-flash: flash 1.6s ease-out;
 
   @keyframes pulse-dot {
     0%,
@@ -75,6 +76,14 @@
     }
   }
 
+  @keyframes flash {
+    from {
+      background-color: rgb(var(--accent-rgb) / 0.22);
+    }
+    to {
+      background-color: transparent;
+    }
+  }
   @keyframes fade-in {
     from {
       opacity: 0;
@@ -363,6 +372,11 @@
   * {
     scrollbar-width: thin;
     scrollbar-color: rgb(255 255 255 / 0.14) transparent;
+  }
+  /* While an item is dragged, the whole window shows the grabbing hand. */
+  body.dragging,
+  body.dragging * {
+    cursor: grabbing !important;
   }
 }
 

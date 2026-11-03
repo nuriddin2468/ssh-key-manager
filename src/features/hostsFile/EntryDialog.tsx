@@ -1,5 +1,5 @@
-import { Clock, Network } from 'lucide-react';
-import { type FormEvent, useState } from 'react';
+import { Clock, FolderPlus, Network } from 'lucide-react';
+import { type FormEvent, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { HostsEntryEdit } from '@/bindings/HostsEntryEdit';
 import { Button } from '@/components/ui/Button';
@@ -47,6 +47,7 @@ export function EntryDialog({ initial, groups, defaultGroup, onSave, onDone }: E
   const startGroup = initial ? initial.group : (defaultGroup ?? null);
   const [group, setGroup] = useState(startGroup ?? NONE);
   const [newGroup, setNewGroup] = useState('');
+  const newGroupField = useRef<HTMLInputElement>(null);
   const [expiry, setExpiry] = useState<string>(initial?.expires ? KEEP : 'never');
   const [touched, setTouched] = useState(false);
 
@@ -136,6 +137,12 @@ export function EntryDialog({ initial, groups, defaultGroup, onSave, onDone }: E
               label={t('hostsFile.group')}
               value={group}
               onValueChange={setGroup}
+              onCloseAutoFocus={(event) => {
+                // Choosing a new group goes on to its name.
+                if (group !== NEW) return;
+                event.preventDefault();
+                newGroupField.current?.focus();
+              }}
               options={[
                 { value: NONE, label: t('hostsFile.groupNone') },
                 ...groups.map((name) => ({ value: name, label: name })),
@@ -166,11 +173,11 @@ export function EntryDialog({ initial, groups, defaultGroup, onSave, onDone }: E
           </div>
           {group === NEW ? (
             <TextField
+              ref={newGroupField}
               label={t('hostsFile.groupName')}
               value={newGroup}
               onChange={(event) => setNewGroup(event.target.value)}
               error={touched && newGroupError ? t(newGroupError) : undefined}
-              autoFocus
             />
           ) : null}
           <SwitchRow
@@ -194,27 +201,42 @@ export function EntryDialog({ initial, groups, defaultGroup, onSave, onDone }: E
 }
 
 interface GroupDialogProps {
-  name: string;
+  /** The group to rename; `null` makes a new one. */
+  name: string | null;
   taken: string[];
   onSave: (name: string) => void;
   onDone: () => void;
 }
 
-/** Renames a group. */
+/** Renames a group, or names a new one. */
 export function GroupDialog({ name, taken, onSave, onDone }: GroupDialogProps) {
   const { t } = useTranslation();
-  const [value, setValue] = useState(name);
-  const error = value.trim() === name ? undefined : groupNameError(value, taken);
+  const [value, setValue] = useState(name ?? '');
+  const unchanged = value.trim() === (name ?? '');
+  // A new group's empty name is only an error once there is something to fix.
+  const error = unchanged ? undefined : groupNameError(value, taken);
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (error) return;
-    if (value.trim() !== name) onSave(value.trim());
+    if (error || (name === null && unchanged)) return;
+    if (!unchanged) onSave(value.trim());
     onDone();
   };
   return (
     <DialogContent section="hostsFile" className="max-w-[440px]">
       <form onSubmit={submit} className="flex min-h-0 flex-col">
-        <DialogHeader title={t('hostsFile.renameTitle')} />
+        {name === null ? (
+          <DialogHeader
+            icon={
+              <Tile tone="indigo" size={44} glow>
+                <FolderPlus className="size-5" strokeWidth={2} />
+              </Tile>
+            }
+            title={t('hostsFile.groupCreateTitle')}
+            description={t('hostsFile.groupCreateDescription')}
+          />
+        ) : (
+          <DialogHeader title={t('hostsFile.renameTitle')} />
+        )}
         <DialogBody>
           <TextField
             label={t('hostsFile.groupName')}
@@ -228,8 +250,13 @@ export function GroupDialog({ name, taken, onSave, onDone }: GroupDialogProps) {
           <Button size="lg" onClick={onDone}>
             {t('common.cancel')}
           </Button>
-          <Button type="submit" variant="primary" size="lg" disabled={Boolean(error)}>
-            {t('common.save')}
+          <Button
+            type="submit"
+            variant="primary"
+            size="lg"
+            disabled={Boolean(error) || (name === null && unchanged)}
+          >
+            {name === null ? t('hostsFile.groupCreateSubmit') : t('common.save')}
           </Button>
         </DialogFooter>
       </form>

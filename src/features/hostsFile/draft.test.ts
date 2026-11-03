@@ -4,13 +4,15 @@ import type { HostsFileView } from '@/bindings/HostsFileView';
 import {
   addEntry,
   changeCount,
+  createGroup,
   editOf,
   emptyDraft,
   groupNames,
   removeEntry,
   renameGroup,
   restoreEntry,
-  rows,
+  restoreGroup,
+  sections,
   setEntry,
   toChanges,
   ungroup,
@@ -39,7 +41,10 @@ const view: HostsFileView = {
 const [loose, api, db] = view.entries as [HostsFileEntry, HostsFileEntry, HostsFileEntry];
 
 const keys = (draft = emptyDraft('r1')) =>
-  rows(view, draft).map((row) => (row.kind === 'group' ? `[${row.name}]` : row.entry.names[0]));
+  sections(view, draft).flatMap((section) => [
+    ...(section.group ? [`[${section.group.name}]`] : []),
+    ...section.entries.map((row) => row.entry.names[0]),
+  ]);
 
 describe('draft', () => {
   it('drops a change that sets an entry back', () => {
@@ -57,7 +62,7 @@ describe('draft', () => {
     expect(changeCount(draft)).toBe(0);
   });
 
-  it('places new entries at the end of their group, or of the file', () => {
+  it('places new entries at the end of their group, or with the loose ones', () => {
     let draft = addEntry(emptyDraft('r1'), {
       ...editOf(loose),
       names: ['cache'],
@@ -68,12 +73,12 @@ describe('draft', () => {
     draft = addEntry(draft, { ...editOf(loose), names: ['demo'], group: 'Demo' });
     expect(keys(draft)).toEqual([
       'loose',
+      'plain',
       '[Staging]',
       'api',
       'db',
       'cache',
       'queue',
-      'plain',
       '[Demo]',
       'demo',
     ]);
@@ -103,9 +108,65 @@ describe('draft', () => {
   it('ungroups without touching the entries', () => {
     const draft = ungroup(emptyDraft('r1'), view, 'Staging');
     expect(toChanges(draft)).toEqual([{ kind: 'ungroup', name: 'Staging' }]);
-    const group = rows(view, draft).find((row) => row.kind === 'group');
-    expect(group?.kind === 'group' && group.status).toBe('ungrouped');
-    const dbRow = rows(view, draft).find((row) => row.kind === 'entry' && row.base === db);
-    expect(dbRow?.kind === 'entry' && dbRow.entry.group).toBe(null);
+    expect(sections(view, draft)[1]?.group?.status).toBe('ungrouped');
+    expect(keys(draft)).toEqual(['loose', 'api', 'db', '[Staging]']);
+    const dbRow = sections(view, draft)[0]?.entries.find((row) => row.base === db);
+    expect(dbRow?.entry.group).toBe(null);
+  });
+
+  it('takes an ungroup back', () => {
+    let draft = setEntry(emptyDraft('r1'), db, { ...editOf(db), enabled: false });
+    draft = ungroup(draft, view, 'Staging');
+    draft = restoreGroup(draft, view, 'Staging');
+    expect(toChanges(draft)).toEqual([
+      { kind: 'set', line: 4, entry: { ...editOf(db), enabled: false } },
+    ]);
+    expect(keys(draft)).toEqual(['loose', '[Staging]', 'api', 'db']);
+  });
+
+  it('keeps removed entries in their group', () => {
+    let draft = removeEntry(emptyDraft('r1'), api.line);
+    draft = ungroup(draft, view, 'Staging');
+    expect(keys(draft)).toEqual(['loose', 'db', '[Staging]', 'api']);
+  });
+
+  it('shows an entry moved into a new group under that group', () => {
+    const draft = setEntry(emptyDraft('r1'), loose, { ...editOf(loose), group: 'Work' });
+    expect(keys(draft)).toEqual(['[Staging]', 'api', 'db', '[Work]', 'loose']);
+    // Other entries can be put in it before anything is saved.
+    expect(groupNames(view, draft)).toEqual(['Staging', 'Work']);
+  });
+
+  it('moves an entry taken out of a group out of it', () => {
+    const draft = setEntry(emptyDraft('r1'), api, { ...editOf(api), group: null });
+    expect(keys(draft)).toEqual(['loose', 'api', '[Staging]', 'db']);
+    expect(toChanges(draft)).toEqual([
+      { kind: 'set', line: 3, entry: { ...editOf(api), group: null } },
+    ]);
+  });
+
+  it('moves entries to the end of another group, and back to their place', () => {
+    let draft = setEntry(emptyDraft('r1'), loose, { ...editOf(loose), group: 'Staging' });
+    draft = addEntry(draft, { ...editOf(loose), names: ['cache'], group: 'Staging' });
+    expect(keys(draft)).toEqual(['[Staging]', 'api', 'db', 'loose', 'cache']);
+    draft = setEntry(draft, loose, { ...editOf(loose), group: null });
+    expect(keys(draft)).toEqual(['loose', '[Staging]', 'api', 'db', 'cache']);
+    expect(changeCount(draft)).toBe(1);
+  });
+
+  it('keeps an empty new group until it is renamed away or dropped', () => {
+    let draft = createGroup(emptyDraft('r1'), 'Work');
+    expect(changeCount(draft)).toBe(0);
+    expect(keys(draft)).toEqual(['loose', '[Staging]', 'api', 'db', '[Work]']);
+    expect(groupNames(view, draft)).toEqual(['Staging', 'Work']);
+    draft = setEntry(draft, db, { ...editOf(db), group: 'Work' });
+    draft = renameGroup(draft, view, 'Work', 'Office');
+    expect(keys(draft)).toEqual(['loose', '[Staging]', 'api', '[Office]', 'db']);
+    expect(toChanges(draft)).toEqual([
+      { kind: 'set', line: 4, entry: { ...editOf(db), group: 'Office' } },
+    ]);
+    draft = ungroup(draft, view, 'Office');
+    expect(draft.created).toEqual([]);
+    expect(keys(draft)).toEqual(['loose', 'db', '[Staging]', 'api']);
   });
 });

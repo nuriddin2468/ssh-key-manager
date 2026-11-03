@@ -1557,6 +1557,37 @@ const en = {
       opened: 'Now using {{file}}. Unlock it to continue.',
     },
   },
+  browser: {
+    title: 'Browser autofill',
+    enable: 'Fill passwords in your browser',
+    enableHint:
+      'The SSH Key Manager extension for Chrome, Edge and Firefox fills logins from the vault and offers to save new ones.',
+    browsers: 'Browsers',
+    notSetUp: '{{name}} · not set up',
+    noBrowsers: 'No supported browser found',
+    setUpAgain: 'Set up again',
+    connected: 'Connected browsers',
+    connectedNone:
+      'No browser is connected yet. Install the extension, open it and choose Connect.',
+    connectedOn: '{{browser}} on {{computer}}',
+    connectedSince: 'Connected {{date}}',
+    disconnect: 'Disconnect',
+    disconnectTitle: 'Disconnect {{browser}}?',
+    disconnectText:
+      'It will stop filling passwords from this vault. You can connect it again from the extension.',
+    disconnected: '{{browser}} disconnected',
+    locked: 'Unlock the vault to see connected browsers.',
+    problem: 'Browsers can’t reach the app: {{error}}',
+    pairTitle: 'Connect {{browser}}?',
+    pairText: 'The SSH Key Manager extension wants to fill and save passwords from your vault.',
+    pairCode: 'Code in the browser',
+    pairCheck: 'Connect only if your browser shows this same code.',
+    pairDecline: 'Decline',
+    pairConnect: 'Connect',
+    pairExpired: 'The connection request timed out',
+    paired: '{{browser}} connected',
+    unlockRequest: 'Unlock the vault to fill passwords in your browser',
+  },
 } as const;
 
 export default en;

@@ -115,6 +115,7 @@ Builds are not code-signed yet (it's on the [roadmap](#roadmap)), so your system
 - It locks itself after a few idle minutes, when the computer sleeps and when the screen locks.
 - Works with the rest of the app: a new key's passphrase can be generated and saved for you, keys unlock in the agent with their saved passphrase, a server's saved password and 2FA code are used to test the connection, and a guided step moves a server from a password to a key.
 - Import from Bitwarden, 1Password, Chrome, Edge, Firefox, Apple Passwords or KeePassXC; export as a KeePass copy or CSV. The Audit points out weak, reused and old passwords.
+- Browser autofill (optional): the SSH Key Manager extension for Chrome, Edge and Firefox fills a site's saved logins on that site only, and offers to save new ones. Each browser is connected once, with a code you compare in the app.
 
 **Terminal**
 - Connect to a server in the app: sessions open in tabs and keep running while you use other sections.
@@ -132,7 +133,7 @@ Builds are not code-signed yet (it's on the [roadmap](#roadmap)), so your system
 - **Mistakes can be undone.** Config files are backed up before every edit, and keys go to the Trash, not into oblivion.
 - **Administrator rights only when you save the hosts file.** The app never keeps them: it shows you the diff, asks for your password once, and backs up the file first.
 
-Details in [SECURITY.md](SECURITY.md).
+Details in [SECURITY.md](SECURITY.md); the privacy policy for the app and the browser extension is in [PRIVACY.md](PRIVACY.md).
 
 ## FAQ
 

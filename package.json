@@ -30,7 +30,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "bindings": "cargo test -p sshkm-core --features ts export_bindings",
-    "screenshots": "node scripts/screenshots/capture.mjs"
+    "screenshots": "node scripts/screenshots/capture.mjs",
+    "extension:build": "node extension/build.mjs",
+    "extension:package": "node extension/build.mjs && node extension/package.mjs"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

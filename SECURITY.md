@@ -55,6 +55,9 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     after seeing its fingerprint, which answers `ssh`'s own question; a changed host key
     stops the connection. An answer you choose to save goes into the vault only after
     the session has signed in. Terminal output and answers are never logged.
+- **Browser autofill** (optional, off by default) lets the SSH Key Manager extension for
+  Chrome, Edge and Firefox fill and save logins from the vault. See
+  [Browser autofill](#browser-autofill) below.
 - **Minimal network access.** The app sends none of your data anywhere. Its only
   requests are:
   - the update check, which downloads `latest.json` from this repository's GitHub
@@ -94,6 +97,104 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     forbids, and the whole page then failed to start in 0.3.0.
   - Only the Tauri capabilities the UI needs are granted (`src-tauri/capabilities`).
   - Permission fixes are limited to paths inside `~/.ssh`.
+
+## Browser autofill
+
+```text
+extension ──native messaging──▶ host (the app's executable) ──socket / pipe──▶ app
+```
+
+Turning on **Settings → Browser autofill** writes a native messaging manifest for each
+installed browser. The manifest names the app's executable and only this extension
+(by its Chrome ids and its Firefox add-on id). Turning it off removes the manifests and
+stops the listener. Nothing listens while it is off.
+
+**What the extension can get.**
+
+- The app answers four questions, each about one page:
+  - which logins belong to it: titles and usernames only;
+  - the username and password of the one login the user picked there;
+  - whether a login typed there is new, changed or already saved;
+  - saving or updating that login.
+- Every lookup checks the login's address against the page's origin:
+  - same registrable domain, compared exactly after IDNA normalisation, from the
+    Public Suffix List with its private section (`github.io` users don't share
+    logins);
+  - a login saved for `https` is never offered on `http`;
+  - ports must match;
+  - IP addresses and single-label names must match exactly.
+- Look-alike and punycode domains get nothing. A login picked by its id is checked
+  again, so a browser cannot ask for another site's password by naming its id.
+- Nothing is filled until the user picks a login in the menu with a real click or key
+  press. Pages get no automatic fill on load, so an invisible form, or a script
+  injected into a site, can't harvest passwords.
+- Nothing else of the vault is reachable: not other entries, 2FA secrets, notes, key
+  passphrases or the vault's settings.
+
+**Which page is asking.** The content script runs in each http(s) frame. The background
+script names the page by the origin the browser reports for the sending frame, never
+by what the page or the content script says. A frame from another site gets that
+site's logins only. Opaque origins (`null`, `data:`, sandboxed frames) get nothing.
+The menu and the save banner live in closed shadow roots, so page scripts can't read
+the logins listed. A password the user typed waits for the banner in the background's
+`storage.session` (memory only). It is offered for at most three minutes, dropped at
+the next page load after that or when the tab closes, and never goes back to a page.
+
+**Pairing.**
+
+- A browser must be paired before it gets anything but the vault's lock state.
+- The extension makes a P-256 key pair and a random client id. Both the extension and
+  the app show a six-digit code computed from them, and the user connects in the app
+  after checking that the codes match.
+- Pairing needs an unlocked vault. Only one pairing waits at a time, for at most two
+  minutes.
+- Both sides derive two AES-256-GCM keys (requests, responses) with HKDF-SHA-256 from
+  the ECDH secret. The app's key pair is used once and dropped.
+- The app keeps a pairing in the vault's encrypted custom data
+  (`sshkm.browser.<id>`), so it can only be checked while the vault is unlocked and it
+  goes away with the vault.
+- The extension keeps its keys in its IndexedDB as non-extractable `CryptoKey`s.
+  Content scripts can't reach that database.
+- **Settings → Browser autofill** lists paired browsers and can disconnect each one.
+  The extension's own Disconnect also removes its pairing from the vault when the vault
+  is unlocked; when it's locked, only the extension forgets its keys.
+
+**Messages.**
+
+- Every request after pairing is sealed with the request key, a random 96-bit nonce
+  and the client id as associated data.
+- A request is refused if:
+  - it opens with no paired browser's key;
+  - it is more than two minutes old or new;
+  - its nonce was seen in the last five minutes.
+- Each response is sealed with the response key and bound to the request's nonce.
+- The native host and the browser see only ciphertext. The one secret that leaves the
+  app is the password of the login being filled, sealed for that browser and opened by
+  the extension's background script, which passes it to the content script of the
+  frame that asked.
+- Logs never contain messages.
+- Listing logins and checking a typed login don't count as activity, so they don't
+  keep the vault from locking itself; filling and saving do.
+
+**The local channel.**
+
+- The app listens on a Unix socket in a fresh private (0700) directory, or on Windows
+  on a named pipe with a random name that rejects remote clients.
+- It writes where to an endpoint file in its local data folder, which only this user
+  can write. Other users therefore can't point the host somewhere else, or squat a
+  well-known name.
+- On macOS and Linux the host also checks that the socket's directory belongs to the
+  user and is private.
+
+**Outside this model.**
+
+- Malware running as the same user can read the browser profile, including the
+  extension's pairing keys, or the app's memory. It can also impersonate the user to
+  the app. Browser autofill does not protect against it, and neither does any password
+  manager's browser integration.
+- A compromised browser renderer for a site can ask for that site's logins without a
+  click, but no other site's.
+- A site you log in to sees the password you fill there, as it would if you typed it.
 
 ## Reporting a vulnerability
 

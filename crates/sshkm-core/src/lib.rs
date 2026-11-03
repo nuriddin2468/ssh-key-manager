@@ -23,6 +23,8 @@
 //! - [`audit`]: security findings computed from all of the above.
 //! - [`vault`]: the encrypted password vault, its key slots and the password
 //!   generator.
+//! - [`browser`]: what the browser extension may see of the vault: which
+//!   logins belong to a page, and the encrypted channel to the extension.
 //!
 //! Every public data type implements [`serde::Serialize`] with camelCase field
 //! names so it can be returned from Tauri commands unchanged. With the `ts`
@@ -36,6 +38,7 @@
 
 pub mod agent;
 pub mod audit;
+pub mod browser;
 pub mod config;
 mod error;
 pub mod fsutil;

@@ -1,6 +1,7 @@
 //! SSH Key Manager desktop app: Tauri commands over [`sshkm_core`].
 
 pub mod askpass;
+pub mod browser;
 mod commands;
 mod device_unlock;
 mod error;
@@ -22,6 +23,8 @@ use sshkm_core::hosts_file;
 use sshkm_core::paths::SshPaths;
 use tauri::webview::PageLoadEvent;
 use tauri::{Manager, RunEvent, WindowEvent};
+
+pub use crate::error::{AppError, AppResult};
 
 use crate::commands::Shared;
 use crate::state::AppState;
@@ -145,6 +148,10 @@ pub fn run() {
             commands::terminal::terminal_close,
             commands::terminal::terminal_list,
             commands::terminal::terminal_open_external,
+            commands::browser::browser_status,
+            commands::browser::browser_set_enabled,
+            commands::browser::browser_answer_pairing,
+            commands::browser::browser_revoke,
         ])
         .build(tauri::generate_context!())
         .expect("failed to start SSH Key Manager")
@@ -154,6 +161,11 @@ pub fn run() {
             {
                 state.terminals.close_all();
                 state.stop_askpass();
+            }
+            if let RunEvent::Exit = event
+                && let Some(bridge) = app.try_state::<Arc<browser::Bridge>>()
+            {
+                bridge.stop();
             }
         });
 }
@@ -176,11 +188,14 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = app.path().app_data_dir()?;
     let backup_dir = data_dir.join("backups");
     watcher::start(app.handle(), &paths.dir, &hosts_file);
+    let bridge = Arc::new(browser::Bridge::new(&data_dir));
     let state = Arc::new(AppState::new(paths, hosts_file, backup_dir, data_dir));
     state.vault.start_timer(app.handle().clone());
     device_unlock::watch_screen_lock(Arc::clone(&state.vault), app.handle().clone());
     vault_watcher::start(app.handle(), &state.vault.paths());
     app.manage(state);
+    bridge.start_if_enabled(app.handle());
+    app.manage(bridge);
     #[cfg(target_os = "macos")]
     menu::install(app)?;
     Ok(())

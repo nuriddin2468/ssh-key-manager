@@ -1,0 +1,8 @@
+{
+  "extensionName": {
+    "message": "SSH Key Manager"
+  },
+  "extensionDescription": {
+    "message": "SSH Key Manager omboridagi parollarni faqat oʻz saytlarida toʻldiradi va saqlaydi. SSH Key Manager ilovasi bilan ishlaydi."
+  }
+}

@@ -1578,6 +1578,38 @@ const uz = {
       opened: 'Hozir {{file}} ishlatilmoqda. Davom etish uchun uni oching.',
     },
   },
+  browser: {
+    title: 'Brauzerda avtomatik toʻldirish',
+    enable: 'Parollarni brauzerda toʻldirish',
+    enableHint:
+      'Chrome, Edge va Firefox uchun SSH Key Manager kengaytmasi ombordagi loginlarni toʻldiradi va yangilarini saqlashni taklif qiladi.',
+    browsers: 'Brauzerlar',
+    notSetUp: '{{name}} · sozlanmagan',
+    noBrowsers: 'Mos brauzer topilmadi',
+    setUpAgain: 'Qayta sozlash',
+    connected: 'Ulangan brauzerlar',
+    connectedNone:
+      'Hali hech qanday brauzer ulanmagan. Kengaytmani oʻrnating, uni oching va «Ulash»ni tanlang.',
+    connectedOn: '{{browser}} ({{computer}})',
+    connectedSince: 'Ulangan: {{date}}',
+    disconnect: 'Uzish',
+    disconnectTitle: '{{browser}} uzilsinmi?',
+    disconnectText:
+      'U bu ombordagi parollarni boshqa toʻldirmaydi. Uni kengaytmadan qayta ulash mumkin.',
+    disconnected: '{{browser}} uzildi',
+    locked: 'Ulangan brauzerlarni koʻrish uchun omborni oching.',
+    problem: 'Brauzerlar ilovaga ulana olmayapti: {{error}}',
+    pairTitle: '{{browser}} ulansinmi?',
+    pairText:
+      'SSH Key Manager kengaytmasi omboringizdagi parollarni toʻldirish va saqlashga ruxsat soʻramoqda.',
+    pairCode: 'Brauzerdagi kod',
+    pairCheck: 'Faqat brauzer xuddi shu kodni koʻrsatsa, ulang.',
+    pairDecline: 'Rad etish',
+    pairConnect: 'Ulash',
+    pairExpired: 'Ulanish soʻrovining vaqti tugadi',
+    paired: '{{browser}} ulandi',
+    unlockRequest: 'Brauzerda parollarni toʻldirish uchun omborni oching',
+  },
 };
 
 export default uz;

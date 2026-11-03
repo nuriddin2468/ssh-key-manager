@@ -1,0 +1,16 @@
+{
+  "clientId": "dGVzdC1jbGllbnQtaWQtMDE",
+  "clientSecret": "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721",
+  "appSecret": "0f56db78ca460b055c500064824bed999a25aaf48ebb519ac201537b85479813",
+  "clientPublic": "BGD+1LolWp0xyWHrdMY1bWjASbiSO2H6bOZpYi5g8p+2eQP+EAi4vJmkGunpVii8ZPLxsgwtfp9Rd6PClNRGIpk=",
+  "appPublic": "BOJm3f3BJmjbMNTKPo93SUMsQWBE8tK4wQvz1AEq7/qKv6hkBKLp/+Z9R8WH73qXp/RWuGO00Cz8aSiXOrWxyzk=",
+  "code": "624499",
+  "requestKey": "dXpi7IeML+GVPhZLtDD/6SLhpPl+fiRDNMqPt+SeCyI=",
+  "responseKey": "kUL3+IEDTxVH1p5sgWQcS4nGl00LSHwbytYG/A9IRtw=",
+  "requestNonce": "AAECAwQFBgcICQoL",
+  "requestPlain": "{\"sentAt\":1767225600000,\"action\":\"status\"}",
+  "requestSealed": "HbO7P7mR5YH6H7jIIrErKjLapzzVhEPq4kOoyhtfVJlbcaTIdtGu25S9OB9TV/juJFNH5gFc7ZJc8w==",
+  "responseNonce": "DA0ODxAREhMUFRYX",
+  "responsePlain": "{\"vault\":\"unlocked\"}",
+  "responseSealed": "6ZFQal49B3QOfSdqkYYlzR4MNNdZ6fPad/lfKXzVe18vq/ju"
+}

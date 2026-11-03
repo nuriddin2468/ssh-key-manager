@@ -4,6 +4,7 @@
 # Node / Vite
 node_modules/
 /dist/
+/extension/dist/
 *.tsbuildinfo
 
 # Tauri

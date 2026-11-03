@@ -73,9 +73,11 @@ There are three workflows:
 
 To publish a release:
 
-1. Bump the version in `package.json`, `Cargo.toml` and `src-tauri/tauri.conf.json`, and
-   commit it to `main` as `Release 0.2.0`. `ci.yml` and `build.yml` skip a commit whose
-   message starts with `Release `, since `release.yml` builds it from the tag.
+1. Bump the version in `package.json`, `Cargo.toml`, `src-tauri/tauri.conf.json` and
+   `extension/manifest.json` (the browser extension ships with the app, and a test fails
+   if its version differs), and commit it to `main` as `Release 0.2.0`. `ci.yml` and
+   `build.yml` skip a commit whose message starts with `Release `, since `release.yml`
+   builds it from the tag.
 2. Push a tag:
 
    ```bash
@@ -87,6 +89,10 @@ To publish a release:
    within a few hours: they read `latest.json` from the latest release. If a build fails,
    the release stays a draft. Fix the problem and re-run the failed jobs, or delete the
    draft and the tag and push the tag again.
+4. Publish the extension: run `pnpm extension:package` on the release commit and upload
+   the zip to the Chrome Web Store item (**Package → Upload new package**, then
+   **Submit for review**). [extension/store/README.md](extension/store/README.md) has
+   the details.
 
 Releases are signed for the in-app updater. The workflow needs the `TAURI_SIGNING_PRIVATE_KEY`
 secret (plus `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if the key has a password): the private

@@ -5,6 +5,13 @@
 //! `readpass.c`) plus whatever a server sends for keyboard-interactive
 //! authentication (PAM, Google Authenticator, Duo, …), which OpenSSH 8.5 and
 //! later prefix with `(user@host) `.
+//!
+//! The server writes the text of those, so a prompt with the prefix is only
+//! ever a password, a one-time code or something else: never a key's
+//! passphrase or a question only `ssh` asks, whatever the text says. Before
+//! OpenSSH 8.5 a server's prompt has no prefix and its text cannot be told
+//! from `ssh`'s own; the session decides what that means for its answers
+//! (see [`Connection`](super::Connection)).
 
 use serde::Serialize;
 
@@ -100,6 +107,11 @@ pub struct Prompt {
     /// The account the prompt names, if it names one (password prompts, and
     /// keyboard-interactive prompts from OpenSSH 8.5 on).
     pub account: Option<PromptAccount>,
+    /// The text starts with `(user@host) `: a server's keyboard-interactive
+    /// prompt (or, before OpenSSH 8.5, a server's text made to look like one).
+    #[serde(skip)]
+    #[cfg_attr(test, ts(skip))]
+    pub from_server: bool,
 }
 
 impl Prompt {
@@ -111,21 +123,30 @@ impl Prompt {
         let question = last_line(body);
         let whole = text.to_lowercase();
         let lower = question.to_lowercase();
+        let from_server = prefix_account.is_some();
 
-        let kind =
-            if whole.contains("continue connecting") || whole.contains("authenticity of host") {
-                PromptKind::HostKeyConfirm
-            } else if hint.eq_ignore_ascii_case("confirm") || is_yes_no(&whole) {
-                PromptKind::Confirm
-            } else if let Some(key) = passphrase_key(question) {
-                PromptKind::Passphrase { key }
-            } else if is_one_time_code(&lower) {
+        let kind = if from_server {
+            // The server wrote everything after the prefix.
+            if is_one_time_code(&lower) {
                 PromptKind::OneTimeCode
             } else if is_password(&lower) {
                 PromptKind::Password
             } else {
                 PromptKind::Other
-            };
+            }
+        } else if whole.contains("continue connecting") || whole.contains("authenticity of host") {
+            PromptKind::HostKeyConfirm
+        } else if hint.eq_ignore_ascii_case("confirm") || is_yes_no(&whole) {
+            PromptKind::Confirm
+        } else if let Some(key) = passphrase_key(question) {
+            PromptKind::Passphrase { key }
+        } else if is_one_time_code(&lower) {
+            PromptKind::OneTimeCode
+        } else if is_password(&lower) {
+            PromptKind::Password
+        } else {
+            PromptKind::Other
+        };
 
         let account = prefix_account.or_else(|| match kind {
             PromptKind::Password => password_account(question),
@@ -135,6 +156,16 @@ impl Prompt {
             text: text.to_owned(),
             kind,
             account,
+            from_server,
+        }
+    }
+
+    /// The text without the `(user@host) ` prefix of a server's prompt,
+    /// trimmed.
+    pub fn question(&self) -> &str {
+        match split_kbdint_prefix(&self.text) {
+            (Some(_), rest) => rest.trim(),
+            (None, text) => text.trim(),
         }
     }
 }
@@ -402,6 +433,64 @@ mod tests {
                 "{text:?}"
             );
         }
+    }
+
+    #[test]
+    fn server_prompts_are_never_passphrases_or_questions() {
+        let host_key = "(alice@example.com) The authenticity of host 'example.com (10.0.0.1)' \
+                        can't be established.\nED25519 key fingerprint is SHA256:abc.\nAre you \
+                        sure you want to continue connecting (yes/no/[fingerprint])? ";
+        for (text, hint) in [
+            (
+                "(alice@example.com) Enter passphrase for key '/Users/alice/.ssh/id_ed25519': ",
+                "",
+            ),
+            (
+                "(alice@example.com) Bad passphrase, try again for /home/alice/.ssh/id_rsa: ",
+                "",
+            ),
+            (host_key, ""),
+            (
+                "(alice@example.com) Accept updated hostkeys? (yes/no): ",
+                "",
+            ),
+            ("(alice@example.com) Allow use of key /k?", "confirm"),
+            ("(alice@example.com) Are you sure? (yes/no) ", ""),
+        ] {
+            let prompt = Prompt::parse(text, hint);
+            assert_eq!(prompt.kind, PromptKind::Other, "{text:?}");
+            assert!(prompt.from_server, "{text:?}");
+            assert_eq!(
+                prompt.account,
+                Some(PromptAccount::new("alice", "example.com"))
+            );
+        }
+        // Passwords and codes keep their kinds; only the first prefix counts.
+        let nested = Prompt::parse("(bob@jump.example) (alice@target.example) Password: ", "");
+        assert_eq!(nested.kind, PromptKind::Password);
+        assert_eq!(
+            nested.account,
+            Some(PromptAccount::new("bob", "jump.example"))
+        );
+        assert!(!Prompt::parse("alice@example.com's password: ", "").from_server);
+        assert!(!Prompt::parse("Enter passphrase for key '/k': ", "").from_server);
+    }
+
+    #[test]
+    fn questions_lose_the_prefix() {
+        let question = |text| Prompt::parse(text, "").question().to_owned();
+        assert_eq!(
+            question("(ubuntu@10.0.4.12) Verification code: "),
+            "Verification code:"
+        );
+        assert_eq!(
+            question("Enter PIN for 'token': "),
+            "Enter PIN for 'token':"
+        );
+        assert_eq!(
+            question("ubuntu@10.0.4.12's password: "),
+            "ubuntu@10.0.4.12's password:"
+        );
     }
 
     #[test]

@@ -184,7 +184,7 @@ interface KeyCardProps {
 function KeyCard({ form, update, canInstall, otherDirty, onInstall, onCreate }: KeyCardProps) {
   const { t } = useTranslation();
   const hintId = useId();
-  const { key, missing } = useKeyForFile(form.identityFile);
+  const { key, missing, remote } = useKeyForFile(form.identityFile);
   const vaultKey = useVaultKey(key?.fingerprint);
   const passphraseSaved =
     (vaultKey.vault === 'unlocked' && Boolean(vaultKey.entry)) ||
@@ -193,6 +193,7 @@ function KeyCard({ form, update, canInstall, otherDirty, onInstall, onCreate }: 
   let status: string | null = null;
   if (!form.identityFile) status = t('hosts.signIn.anyKeyStatus');
   else if (missing) status = t('hosts.missingKey');
+  else if (remote) status = t('hosts.remoteKey');
   else if (key) {
     const state = key.hardware
       ? t('hosts.signIn.securityKey')
@@ -215,7 +216,9 @@ function KeyCard({ form, update, canInstall, otherDirty, onInstall, onCreate }: 
         onCreate={onCreate}
       />
       {status ? (
-        <p className={missing ? 'text-[12px] text-warning' : 'text-[12px] text-muted'}>{status}</p>
+        <p className={missing || remote ? 'text-[12px] text-warning' : 'text-[12px] text-muted'}>
+          {status}
+        </p>
       ) : null}
       {form.identityFile ? (
         <div className="-mx-2.5 -my-1">

@@ -78,7 +78,7 @@ export function EntryDialog({ initial, groups, defaultGroup, onSave, onDone }: E
     const expires =
       expiry === KEEP
         ? (initial?.expires ?? null)
-        : expiry in EXPIRY_SECONDS
+        : Object.hasOwn(EXPIRY_SECONDS, expiry)
           ? expiryIn(EXPIRY_SECONDS[expiry as keyof typeof EXPIRY_SECONDS])
           : null;
     onSave({

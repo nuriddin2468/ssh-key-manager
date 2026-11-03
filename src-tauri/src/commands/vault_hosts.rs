@@ -90,7 +90,10 @@ pub async fn vault_test_key_login(
 }
 
 /// The host's saved password and 2FA code, and the passphrases of keys in
-/// `~/.ssh` that are saved too, in case `ssh` offers one of them.
+/// `~/.ssh` that are saved too, in case `ssh` offers one of them. A server
+/// never gets a passphrase: [`run_ssh`] switches keyboard-interactive off
+/// unless a 2FA code is saved, and its session refuses a server's prompt
+/// that asks for one.
 fn saved_secrets(state: &AppState, app: &AppHandle, alias: &str) -> AppResult<Secrets> {
     let scanned = keys::scan(&state.paths.dir)
         .map(|scan| scan.keys)

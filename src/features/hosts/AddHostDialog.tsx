@@ -5,9 +5,11 @@ import { api } from '@/api/commands';
 import { useConfig } from '@/api/queries';
 import { useAppMutation } from '@/api/useAppMutation';
 import { useRouter } from '@/app/router';
+import type { HostEdit } from '@/bindings/HostEdit';
 import { Button } from '@/components/ui/Button';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
 import { Tile } from '@/components/ui/Tile';
+import { configChangeError } from './fileErrors';
 import { ConfigPreview, HostFields, useHostErrors } from './HostFields';
 import { EMPTY_FORM, editFromForm, type HostForm, previewLines } from './model';
 
@@ -17,6 +19,7 @@ export function AddHostDialog({ onDone }: { onDone: () => void }) {
   const { navigate } = useRouter();
   const config = useConfig();
   const hosts = config.data?.view.hosts ?? [];
+  const revision = config.data?.view.revision ?? '';
   const [form, setForm] = useState<HostForm>(EMPTY_FORM);
   const [touched, setTouched] = useState(false);
   const set = <K extends keyof HostForm>(key: K, value: HostForm[K]) => {
@@ -28,18 +31,19 @@ export function AddHostDialog({ onDone }: { onDone: () => void }) {
   const errors = useHostErrors(form, edit, hosts);
   const invalid = Boolean(errors.alias || errors.port);
 
-  const add = useAppMutation(api.saveHost, {
+  const add = useAppMutation((next: HostEdit) => api.saveHost(next, revision), {
     success: () => t('hosts.added', { name: edit.patterns.join(' ') }),
     onSuccess: (saved) => {
       navigate({ page: 'hosts', hostId: saved.id });
       onDone();
     },
+    onError: (error) => configChangeError(t, error),
   });
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     setTouched(true);
-    if (invalid || add.isPending) return;
+    if (invalid || add.isPending || !config.data) return;
     add.mutate(edit);
   };
 

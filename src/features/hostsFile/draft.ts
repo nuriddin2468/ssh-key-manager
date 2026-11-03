@@ -14,8 +14,11 @@ export interface Draft {
   sets: Record<number, HostsEntryEdit>;
   removes: number[];
   adds: { id: number; entry: HostsEntryEdit }[];
-  /** New names of existing groups, by their name in the file. */
-  renames: Record<string, string>;
+  /**
+   * New names of existing groups, by their name in the file. A map, as a group
+   * may be called `__proto__`.
+   */
+  renames: ReadonlyMap<string, string>;
   /** Existing groups whose markers go (by their name in the file). */
   ungroups: string[];
   /** Groups made in the draft, shown before any entry is in them. An empty one is not written. */
@@ -27,7 +30,7 @@ export const emptyDraft = (revision: string): Draft => ({
   sets: {},
   removes: [],
   adds: [],
-  renames: {},
+  renames: new Map(),
   ungroups: [],
   created: [],
 });
@@ -52,7 +55,7 @@ export function changeCount(draft: Draft): number {
     Object.keys(draft.sets).length +
     draft.removes.length +
     draft.adds.length +
-    Object.keys(draft.renames).length +
+    draft.renames.size +
     draft.ungroups.length
   );
 }
@@ -60,9 +63,7 @@ export function changeCount(draft: Draft): number {
 /** The draft as the backend's list of changes. */
 export function toChanges(draft: Draft): HostsChange[] {
   return [
-    ...Object.entries(draft.renames).map(
-      ([name, to]): HostsChange => ({ kind: 'renameGroup', name, to }),
-    ),
+    ...[...draft.renames].map(([name, to]): HostsChange => ({ kind: 'renameGroup', name, to })),
     ...draft.ungroups.map((name): HostsChange => ({ kind: 'ungroup', name })),
     ...Object.entries(draft.sets).map(
       ([line, entry]): HostsChange => ({ kind: 'set', line: Number(line), entry }),
@@ -137,18 +138,24 @@ export function createGroup(draft: Draft, name: string): Draft {
 /** The name a group in the file has in the draft (`null` once ungrouped). */
 export function displayGroup(draft: Draft, original: string | null): string | null {
   if (original === null || draft.ungroups.includes(original)) return null;
-  return draft.renames[original] ?? original;
+  return draft.renames.get(original) ?? original;
+}
+
+/** The name in the file of the group shown as `shown`, if it is in the file. */
+function originalGroup(draft: Draft, view: HostsFileView, shown: string): string | null {
+  return (
+    [...draft.renames].find(([, to]) => to === shown)?.[0] ??
+    (view.groups.some((g) => g.name === shown) ? shown : null)
+  );
 }
 
 /** Renames a group shown as `from`: an existing one, or one only new entries use. */
 export function renameGroup(draft: Draft, view: HostsFileView, from: string, to: string): Draft {
-  const original =
-    Object.entries(draft.renames).find(([, shown]) => shown === from)?.[0] ??
-    (view.groups.some((g) => g.name === from) ? from : null);
-  const renames = { ...draft.renames };
+  const original = originalGroup(draft, view, from);
+  const renames = new Map(draft.renames);
   if (original !== null) {
-    if (original === to) delete renames[original];
-    else renames[original] = to;
+    if (original === to) renames.delete(original);
+    else renames.set(original, to);
   }
   const regroup = (edit: HostsEntryEdit) => (edit.group === from ? { ...edit, group: to } : edit);
   const sets: Record<number, HostsEntryEdit> = {};
@@ -167,11 +174,9 @@ export function renameGroup(draft: Draft, view: HostsFileView, from: string, to:
 
 /** Removes a group's markers; its entries stay, outside any group. */
 export function ungroup(draft: Draft, view: HostsFileView, name: string): Draft {
-  const original =
-    Object.entries(draft.renames).find(([, shown]) => shown === name)?.[0] ??
-    (view.groups.some((g) => g.name === name) ? name : null);
-  const renames = { ...draft.renames };
-  if (original !== null) delete renames[original];
+  const original = originalGroup(draft, view, name);
+  const renames = new Map(draft.renames);
+  if (original !== null) renames.delete(original);
   const loose = (edit: HostsEntryEdit) => (edit.group === name ? { ...edit, group: null } : edit);
   const sets: Record<number, HostsEntryEdit> = {};
   for (const [line, edit] of Object.entries(draft.sets)) sets[Number(line)] = loose(edit);
@@ -200,6 +205,48 @@ export function restoreGroup(draft: Draft, view: HostsFileView, original: string
     { ...draft, sets, ungroups: draft.ungroups.filter((name) => name !== original) },
     view,
   );
+}
+
+/** Lines of the entries in a view, by everything about them but the line. */
+function linesByContent(view: HostsFileView): Map<string, number[]> {
+  const lines = new Map<string, number[]>();
+  for (const entry of view.entries) {
+    const key = JSON.stringify(editOf(entry));
+    const found = lines.get(key);
+    if (found) found.push(entry.line);
+    else lines.set(key, [entry.line]);
+  }
+  return lines;
+}
+
+/**
+ * The draft carried over from the file in `from` to its newer `revision` in
+ * `to`, or `null` when it no longer fits: every entry it changes or deletes
+ * must be in both, listed once and the same apart from its line, and every
+ * group it renames or ungroups must still be there.
+ */
+export function rebase(
+  draft: Draft,
+  from: HostsFileView,
+  to: HostsFileView,
+  revision: string,
+): Draft | null {
+  const before = linesByContent(from);
+  const after = linesByContent(to);
+  const moved = new Map<number, number>();
+  for (const line of [...Object.keys(draft.sets).map(Number), ...draft.removes]) {
+    const base = from.entries.find((entry) => entry.line === line);
+    const key = base ? JSON.stringify(editOf(base)) : '';
+    const target = after.get(key);
+    if (!base || before.get(key)?.length !== 1 || target?.length !== 1) return null;
+    moved.set(line, target[0] ?? line);
+  }
+  const groups = new Set(to.groups.map((group) => group.name));
+  if (![...draft.renames.keys(), ...draft.ungroups].every((name) => groups.has(name))) return null;
+  const at = (line: number) => moved.get(line) ?? line;
+  const sets: Record<number, HostsEntryEdit> = {};
+  for (const [line, edit] of Object.entries(draft.sets)) sets[at(Number(line))] = edit;
+  return { ...draft, revision, sets, removes: draft.removes.map(at) };
 }
 
 export type RowStatus = 'same' | 'changed' | 'new' | 'removed';
@@ -246,7 +293,7 @@ export const LOOSE = 'loose';
 export function sections(view: HostsFileView, draft: Draft): Section[] {
   const loose: Section = { key: LOOSE, group: null, entries: [] };
   const inFile = view.groups.map((group, index) => {
-    const renamed = draft.renames[group.name];
+    const renamed = draft.renames.get(group.name);
     const key = `group-${group.line}`;
     const header: GroupRow = {
       kind: 'group',

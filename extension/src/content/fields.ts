@@ -21,17 +21,82 @@ export interface Typed {
   password: string;
 }
 
-/** On screen and big enough to be meant for people. */
+/** Smaller than this either way, what shows of a field isn't meant for people. */
+const MIN_SIZE = 8;
+/** Fainter than this, a field is as good as invisible. */
+const MIN_OPACITY = 0.1;
+/** The `overflow` values that cut off what sticks out. */
+const CLIPPING = new Set(['hidden', 'clip', 'scroll', 'auto']);
+
+/**
+ * On screen and big enough to be meant for people: not hidden, not nearly
+ * transparent, and not cut down to a sliver by the boxes around it. A page
+ * that focuses a field nobody can see gets no menu under it.
+ */
 export function isVisible(input: HTMLElement): boolean {
   if (input.hidden) return false;
   if (typeof input.checkVisibility === 'function') {
     if (!input.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
-    const rect = input.getBoundingClientRect();
-    return rect.width >= 4 && rect.height >= 4;
+    const shown = shownSize(input);
+    if (shown.width < MIN_SIZE || shown.height < MIN_SIZE) return false;
+  } else {
+    // jsdom: no layout to ask.
+    const style = getComputedStyle(input);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
   }
-  // jsdom: no layout to ask.
-  const style = getComputedStyle(input);
-  return style.display !== 'none' && style.visibility !== 'hidden';
+  return opacityOf(input) >= MIN_OPACITY;
+}
+
+/** An element's opacity times its ancestors'. */
+function opacityOf(element: Element): number {
+  let opacity = 1;
+  for (let node: Element | null = element; node; node = node.parentElement) {
+    const own = Number.parseFloat(getComputedStyle(node).opacity);
+    if (!Number.isNaN(own)) opacity *= own;
+  }
+  return opacity;
+}
+
+/**
+ * How much of an element's box shows: what the boxes it is laid out in let
+ * through where they clip their overflow, and nothing left of or above the
+ * page's start, where no scrolling reaches. The page's own `html` and `body`
+ * are left out: their overflow is the window's.
+ */
+function shownSize(element: HTMLElement): { width: number; height: number } {
+  const rect = element.getBoundingClientRect();
+  let left = Math.max(rect.left, -window.scrollX);
+  let top = Math.max(rect.top, -window.scrollY);
+  let right = rect.right;
+  let bottom = rect.bottom;
+  const { body, documentElement } = element.ownerDocument;
+  // Only the boxes it is positioned in can clip it: an absolutely positioned
+  // element escapes the static ones around it, a fixed one all of them.
+  let position = getComputedStyle(element).position;
+  for (let node = element.parentElement; node; node = node.parentElement) {
+    if (node === body || node === documentElement || position === 'fixed') break;
+    const style = getComputedStyle(node);
+    if (position === 'absolute' && style.position === 'static') continue;
+    const box = node.getBoundingClientRect();
+    if (CLIPPING.has(style.overflowX)) {
+      left = Math.max(left, box.left);
+      right = Math.min(right, box.right);
+    }
+    if (CLIPPING.has(style.overflowY)) {
+      top = Math.max(top, box.top);
+      bottom = Math.min(bottom, box.bottom);
+    }
+    position = style.position;
+  }
+  return { width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+}
+
+/** Whether at least a few pixels of `input` are inside the window. */
+export function onScreen(input: HTMLElement): boolean {
+  const rect = input.getBoundingClientRect();
+  const width = Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0);
+  const height = Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0);
+  return width >= MIN_SIZE && height >= MIN_SIZE;
 }
 
 function usable(input: HTMLInputElement): boolean {

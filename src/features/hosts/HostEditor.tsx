@@ -19,7 +19,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
-import { useEnvironment } from '@/api/queries';
+import { useConfig, useEnvironment } from '@/api/queries';
 import { toastError, useAppMutation } from '@/api/useAppMutation';
 import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
@@ -36,10 +36,12 @@ import { Tile } from '@/components/ui/Tile';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { HostResolution } from '@/features/hostsFile/HostResolution';
 import { CheckHostKeyDialog } from '@/features/known/CheckHostKeyDialog';
+import type { KnownHostsRemoval } from '@/features/known/removal';
 import { useConnect } from '@/features/terminal/connect';
 import { copyText } from '@/lib/clipboard';
 import { displayPath } from '@/lib/format';
 import { AppError } from '@/lib/ipc';
+import { configChangeError, fileChangeError } from './fileErrors';
 import { ConfigPreview, ServerFields, useHostErrors } from './HostFields';
 import { HostPasswordDialog } from './HostPasswordDialog';
 import { LoginResult } from './LoginResult';
@@ -157,8 +159,10 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
     switchSaved.current = false;
     closeSwitch();
   }, [closeSwitch]);
-  const [toRemove, setToRemove] = useState<number[] | null>(null);
+  const [toRemove, setToRemove] = useState<KnownHostsRemoval | null>(null);
   const header = useRef<HTMLDivElement>(null);
+  // The file `host` was read from; saves and deletes are made against it.
+  const revision = useConfig().data?.view.revision ?? '';
   const set = <K extends keyof HostForm>(key: K, value: HostForm[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
 
@@ -188,7 +192,7 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
 
   const save = useAppMutation(
     async (vars: { edit: HostEdit; followUp: EntryFollowUp }) => {
-      const result = await api.saveHost(vars.edit);
+      const result = await api.saveHost(vars.edit, revision);
       // The block is saved either way; the vault entry follows it if it can.
       let vaultError: unknown = null;
       try {
@@ -213,13 +217,21 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
         }
         navigate({ page: 'hosts', hostId: result.id });
       },
+      // Changed on disk: the form follows the new file (edits are kept), so
+      // saving again saves against it.
+      onError: (error) => configChangeError(t, error),
     },
   );
-  const remove = useAppMutation((id: number) => api.deleteHost(id), {
+  const remove = useAppMutation((id: number) => api.deleteHost(id, revision), {
     success: () => t('hosts.deleted', { name }),
     onSuccess: () => {
       setConfirmDelete(false);
       navigate({ page: 'hosts' });
+    },
+    onError: (error) => {
+      if (!configChangeError(t, error)) return false;
+      setConfirmDelete(false);
+      return true;
     },
   });
   // With a saved password the check signs in with it (and the 2FA code);
@@ -238,9 +250,14 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
       },
     },
   );
-  const removeKnown = useAppMutation((lines: number[]) => api.removeKnownHosts(lines), {
-    success: (_, lines) => t('known.removed', { line: lines.join(', ') }),
+  const removeKnown = useAppMutation(api.removeKnownHosts, {
+    success: (_, { lines }) => t('known.removed', { line: lines.join(', ') }),
     onSuccess: () => setToRemove(null),
+    onError: (error) => {
+      if (!fileChangeError(error, t('known.changedOnDisk'))) return false;
+      setToRemove(null);
+      return true;
+    },
   });
 
   const submit = (event: FormEvent) => {

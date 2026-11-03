@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
+import { configChangeError } from './fileErrors';
 
 /** Plain-text editor for the whole `~/.ssh/config`. */
 export function RawConfigDialog({ onDone }: { onDone: () => void }) {
@@ -24,6 +25,8 @@ export function RawConfigDialog({ onDone }: { onDone: () => void }) {
   const save = useAppMutation(api.writeConfigRaw, {
     success: () => t('hosts.rawSaved'),
     onSuccess: onDone,
+    // Declined in the system's dialog: the text stays here to change.
+    onError: (error) => configChangeError(t, error),
   });
 
   return (

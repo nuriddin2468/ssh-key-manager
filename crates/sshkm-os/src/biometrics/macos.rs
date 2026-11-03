@@ -30,6 +30,24 @@ pub(super) fn authenticate(reason: &str) -> Result<()> {
     prompt::show(reason)
 }
 
+/// The policy domain state of a fresh context, which Local Authentication
+/// fills in once `canEvaluatePolicy` succeeds for a biometric policy.
+pub(super) fn enrollment() -> Option<Vec<u8>> {
+    // SAFETY: as in `availability`: a new context, used on this thread only.
+    let context = unsafe { LAContext::new() };
+    // SAFETY: a documented policy constant on a live context; no UI is shown.
+    let usable = unsafe {
+        context.canEvaluatePolicy_error(LAPolicy::DeviceOwnerAuthenticationWithBiometrics)
+    };
+    usable.ok()?;
+    // `domainState` replaces it from macOS 15 on, but the app supports older
+    // versions, and the old property still works.
+    #[allow(deprecated)]
+    // SAFETY: a read-only property of the context just evaluated.
+    let state = unsafe { context.evaluatedPolicyDomainState() }?;
+    Some(state.to_vec())
+}
+
 fn describe(err: LAError) -> String {
     let text = match err {
         LAError::BiometryNotAvailable => "Touch ID is not available on this Mac",

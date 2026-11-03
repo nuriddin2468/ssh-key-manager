@@ -2,10 +2,10 @@ import { AlertTriangle, Copy } from 'lucide-react';
 import { Fragment } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
+import { api } from '@/api/commands';
 import { toastError } from '@/api/useAppMutation';
 import { Button } from '@/components/ui/Button';
 import { Checkbox } from '@/components/ui/Checkbox';
-import { copyText } from '@/lib/clipboard';
 import { recoveryKeyGroups } from './model';
 
 interface RecoveryKeyPanelProps {
@@ -16,7 +16,9 @@ interface RecoveryKeyPanelProps {
 
 /**
  * A recovery key shown once: large, in groups, with Copy, a warning and the
- * "I've saved it" checkbox the caller requires before moving on.
+ * "I've saved it" checkbox the caller requires before moving on. Copy goes
+ * through the backend, like a password: kept out of clipboard history and
+ * cloud clipboards, and cleared after a while.
  */
 export function RecoveryKeyPanel({ recoveryKey, saved, onSavedChange }: RecoveryKeyPanelProps) {
   const { t } = useTranslation();
@@ -24,8 +26,12 @@ export function RecoveryKeyPanel({ recoveryKey, saved, onSavedChange }: Recovery
 
   const copy = async () => {
     try {
-      await copyText(recoveryKey);
-      toast.success(t('passwords.keyCopied'), { description: t('passwords.keyCopiedHint') });
+      const { clearsInSecs } = await api.vaultCopyRecoveryKey(recoveryKey);
+      toast.success(t('passwords.keyCopied'), {
+        description: clearsInSecs
+          ? t('passwords.keyCopiedHint', { seconds: clearsInSecs })
+          : undefined,
+      });
     } catch (error) {
       toastError(t, error);
     }

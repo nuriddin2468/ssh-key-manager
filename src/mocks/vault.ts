@@ -353,6 +353,10 @@ export const vaultHandlers: Record<string, (args: Record<string, unknown>) => un
     const secret = field === 'password' || field === 'otp';
     return { clearsInSecs: secret && settings.clipboardSeconds ? settings.clipboardSeconds : null };
   },
+  vault_copy_recovery_key: async ({ key }): Promise<CopyResult> => {
+    await navigator.clipboard.writeText(String(key)).catch(() => undefined);
+    return { clearsInSecs: settings.clipboardSeconds || 30 };
+  },
   vault_otp: ({ id }): OtpCode | Promise<never> => {
     const locked = requireUnlocked();
     if (locked) return locked;

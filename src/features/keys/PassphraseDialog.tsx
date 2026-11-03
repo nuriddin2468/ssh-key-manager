@@ -104,6 +104,8 @@ export function PassphraseDialog({ keyView, suggest = false, onDone }: Passphras
             : t('keys.passphraseSaved'),
       onSuccess: onDone,
       onError: (error) => {
+        // Declined in the system's confirmation: the dialog stays as it is.
+        if (error.code === 'cancelled') return true;
         if (error.code !== 'wrong_passphrase') return false;
         setWrong(true);
         return true;

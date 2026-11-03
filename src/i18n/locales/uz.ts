@@ -251,6 +251,7 @@ const uz = {
     defaults: 'Standart',
     appliesToAll: 'Barcha xostlarga qoʻllaniladi',
     missingKey: 'Kalit fayli yoʻq',
+    remoteKey: 'Tarmoq papkasida, shuning uchun tekshirilmaydi',
     via: '{{jump}} orqali',
     noMatches: 'Hech narsa topilmadi.',
     emptyTitle: 'Hali xostlar yoʻq',
@@ -303,6 +304,8 @@ const uz = {
     rawTitle: '~/.ssh/config',
     rawDescription: 'Faylni bevosita tahrirlash. Avval zaxira nusxa saqlanadi.',
     rawSaved: '~/.ssh/config saqlandi',
+    changedOnDisk:
+      '~/.ssh/config oʻqilgandan keyin oʻzgardi, shuning uchun hech narsa saqlanmadi. Fayl qayta oʻqildi: tekshirib, yana urinib koʻring.',
     issues_one: '{{count}} ta qatorni tushunib boʻlmadi, u oʻzgarishsiz qoldirildi.',
     issues_other: '{{count}} ta qatorni tushunib boʻlmadi, ular oʻzgarishsiz qoldirildi.',
     selectPrompt: 'Tahrirlash uchun xostni tanlang.',
@@ -638,6 +641,8 @@ const uz = {
     revoked: 'Bekor qilingan',
     remove: '{{line}}-qatorni oʻchirish',
     removed: '{{line}}-qator oʻchirildi',
+    changedOnDisk:
+      'known_hosts oʻqilgandan keyin oʻzgardi, shuning uchun hech narsa oʻchirilmadi. Fayl qayta oʻqildi: tekshirib, yana urinib koʻring.',
     removeTitle: 'Server kaliti oʻchirilsinmi?',
     removeText:
       'Keyingi ulanishda ssh server kalitini qayta tasdiqlashni soʻraydi. Zaxira nusxa saqlanadi.',
@@ -783,6 +788,8 @@ const uz = {
     cancelled: 'Hech narsa saqlanmadi: parol oynasi yopildi.',
     stale:
       'Boshqa dastur hosts faylini oʻzgartirdi, shuning uchun hech narsa saqlanmadi. Oʻzgarishlaringiz bekor qilindi.',
+    reviewConflict:
+      'Parol oynasi ochiq turganda boshqa dastur hosts faylini oʻzgartirdi, shuning uchun hech narsa saqlanmadi. Oʻzgarishlaringiz faylning hozirgi holatiga nisbatan koʻrsatilgan. Ularni tekshirib, qaytadan saqlang.',
     authPrompt: 'SSH Key Manager hosts faylini yangilamoqchi.',
     entryAddTitle: 'Yangi yozuv',
     entryEditTitle: 'Yozuvni tahrirlash',
@@ -820,6 +827,8 @@ const uz = {
     backupsEmpty: 'Hozircha nusxalar yoʻq. Birinchi oʻzgarishni saqlaganingizda paydo boʻladi.',
     restore: 'Tiklash',
     restored: 'Nusxa tiklandi',
+    restoreStale:
+      'Parol oynasi ochiq turganda boshqa dastur hosts faylini oʻzgartirdi, shuning uchun hech narsa tiklanmadi. Uning oʻzgarishlarini ham almashtirish uchun yana tiklang.',
     turnedOff: '{{name}} oʻchirildi',
     colExpires: 'Oʻchadi',
     showInList: 'Koʻrsatish',
@@ -1019,7 +1028,7 @@ const uz = {
     copyKey: 'Nusxalash',
     keyCopied: 'Tiklash kaliti nusxalandi',
     keyCopiedHint:
-      'Uni xavfsiz joyga qoʻying, soʻng buferni tozalash uchun boshqa narsani nusxalang.',
+      'Uni xavfsiz joyga qoʻying. U bufer tarixiga tushmaydi va {{seconds}} soniyadan keyin buferdan oʻchiriladi.',
     savedIt: 'Tiklash kalitini saqlab qoʻydim',
     continue: 'Davom etish',
     lockedTitle: 'Ombor qulflangan',
@@ -1051,8 +1060,6 @@ const uz = {
     emptyImport: 'Boshqa ilovadan import qilish',
     unlockWithDevice: '{{method}} bilan ochish',
     orMaster: 'yoki asosiy parolni kiriting',
-    deviceReasonMac: 'parollar omborini ochish',
-    deviceReasonWin: 'SSH Key Manager parollar omborini ochish',
     deviceGone:
       '{{method}} bu ombor uchun endi sozlanmagan. Asosiy parolni kiriting va uni Sozlamalarda qayta yoqing.',
     deviceUnavailable: '{{method}} hozir mavjud emas. Asosiy parolni kiriting.',
@@ -1061,8 +1068,6 @@ const uz = {
     deviceEnableTitle: '{{method}}ni yoqish',
     deviceEnableText: 'Asosiy parolni kiriting, soʻng {{method}} orqali bir marta tasdiqlang.',
     deviceEnableButton: 'Yoqish',
-    deviceEnableReasonMac: 'parollar ombori uchun Touch IDni yoqish',
-    deviceEnableReasonWin: 'SSH Key Manager parollar ombori uchun Windows Helloni yoqish',
     deviceOn: '{{method}} bu ombor uchun yoqildi.',
     deviceOff: '{{method}} oʻchirildi.',
     newEntry: 'Yangi yozuv',
@@ -1224,14 +1229,15 @@ const uz = {
     changeMaster: 'Asosiy parol',
     changeMasterButton: 'Oʻzgartirish…',
     changeMasterTitle: 'Asosiy parolni oʻzgartirish',
-    changeMasterText: 'Tiklash kaliti oʻzgarmaydi.',
+    changeMasterText:
+      'Tiklash kaliti oʻzgarmaydi. Ombor fayllarining eski nusxalari, masalan zaxira nusxalar yoki bulutdagi versiyalar, eski parol bilan ochilaveradi: agar u oshkor boʻlgan boʻlishi mumkin boʻlsa, yangi tiklash kalitini ham yarating.',
     currentMaster: 'Joriy asosiy parol',
     masterChanged: 'Asosiy parol oʻzgartirildi',
     newRecoveryKey: 'Tiklash kaliti',
     newRecoveryButton: 'Yangisini yaratish…',
     newRecoveryTitle: 'Yangi tiklash kaliti',
     newRecoveryText:
-      'Joriy tiklash kaliti ishlamay qoladi. Davom etish uchun asosiy parolni kiriting.',
+      'Joriy tiklash kaliti bu omborni va ilova saqlaydigan zaxira nusxalarni endi ochmaydi. Boshqa joylardagi nusxalar, masalan eksport, bulutdagi versiyalar yoki Time Machine, u bilan ochilaveradi. Davom etish uchun asosiy parolni kiriting.',
     newRecoveryDevice: 'Agar omborni {{method}} bilan ochsangiz, uni qayta yoqing.',
     newRecoverySubmit: 'Kalit yaratish',
     newRecoveryDone: 'Tayyor',
@@ -1246,6 +1252,8 @@ const uz = {
     lockedChanged: 'Ombor qulflandi',
     lockedChangedHint: 'U boshqa kompyuterda oʻzgartirildi. Davom etish uchun uni qayta oching.',
     conflictCopy: 'Sizning versiyangiz: {{path}}',
+    keysConflict:
+      'Ombor kalitlari bir vaqtning oʻzida boshqa kompyuterda oʻzgartirildi. Bu yerda hech narsa oʻzgarmadi. Qayta urinib koʻring.',
   },
   settings: {
     title: 'Sozlamalar',
@@ -1400,20 +1408,32 @@ const uz = {
       passphraseRetry: 'Parol iborasi notoʻgʻri. Qayta urinib koʻring.',
       passphrase: 'Parol iborasi',
       unlock: 'Ochish',
-      codeTitle: '{{alias}} uchun tasdiqlash kodi',
+      codeTitle: '{{account}} uchun tasdiqlash kodi',
       codeAsked: 'Server soʻramoqda: «{{question}}»',
+      codeForeign: '{{alias}} ga boradigan yoʻldagi server oʻz kodini soʻramoqda: «{{question}}»',
       codeRetry: 'Kod mos kelmadi. Yangisini kiriting.',
       code: 'Autentifikator ilovasidagi kod',
       codeHint: 'Xost yozuviga 2FA sirini saqlang, shunda kod oʻzi kiritiladi.',
       send: 'Yuborish',
-      hostKeyTitle: '{{alias}} ga ishonilsinmi?',
+      hostKeyTitle: '{{host}} ga ishonilsinmi?',
       hostKeyText:
         'Unga birinchi marta ulanmoqdasiz. Barmoq izini administrator bergani bilan solishtiring.',
+      hostKeyExtra:
+        'ssh bu kalit haqida qoʻshimcha maʼlumot bermoqda. Ishonishdan oldin uni oʻqing.',
+      hostKeyExtraLabel: 'ssh nima deyapti',
       hostKeyNote:
         'Kalit ~/.ssh/known_hosts ga qoʻshiladi, xuddi ssh da «yes» deb javob bergandek.',
       dontConnect: 'Ulanmaslik',
       trust: 'Ishonish va ulanish',
-      otherTitle: '{{alias}} javob soʻramoqda',
+      otherTitle: '{{account}} javob soʻramoqda',
+      otherUnverifiedTitle: 'ssh yoki server javob soʻramoqda',
+      otherFromServer:
+        'Bu savolni SSH Key Manager emas, ssh yoki server bermoqda. Bu yerga hech qachon asosiy parolni kiritmang.',
+      otherFromForeign:
+        'Bu savolni SSH Key Manager emas, {{alias}} ga boradigan yoʻldagi server bermoqda. Bu yerga hech qachon asosiy parolni kiritmang.',
+      otherUnverified:
+        'OpenSSH versiyangiz 8.5 dan eski, shuning uchun savolni qaysi server yuborganini koʻrsata olmaydi. Bu {{alias}} boʻlmasligi mumkin: faqat shu savolni kutayotgan boʻlsangiz, javob bering.',
+      otherQuote: 'Savolning oʻzi',
       otherAnswer: 'Javob',
       changedTitle: '{{alias}} kaliti oʻzgargan',
       changedText:
@@ -1470,8 +1490,6 @@ const uz = {
         'CSV faylni ochgan har kim parollaringizni koʻra oladi. Ular omborga tushgach, faylni savatga tashlang.',
       choose: 'CSV faylni tanlash…',
       chooseOther: 'Boshqa fayl tanlash',
-      pickerTitle: 'Parollar eksportini tanlang',
-      csvFiles: 'CSV fayllar',
       reading: 'Fayl oʻqilmoqda…',
       source: 'Format: {{format}}',
       found_one: '{{count}} ta yozuv',
@@ -1491,6 +1509,9 @@ const uz = {
       inVault: 'Omborda bor',
       noPassword: 'Parolsiz',
       otp: '2FA',
+      otpUnreadable: 'KeePassXC uchun 2FA',
+      otpUnreadableHint:
+        'Ilova bu 2FA siridan kod yarata olmaydi. U parol kabi himoyalangan holda saqlanadi va KeePassXC uni koʻrsatadi.',
       folder: 'Papka: {{folder}}',
       submit_one: '{{count}} ta yozuvni import qilish',
       submit_other: '{{count}} ta yozuvni import qilish',
@@ -1524,11 +1545,9 @@ const uz = {
       master: 'Asosiy parol',
       masterHint: 'Parollarni ochiq matnda eksport qilish uchun kerak.',
       wrongMaster: 'Asosiy parol notoʻgʻri.',
-      unlockFirst: 'CSV faylni eksport qilish uchun omborni oching.',
+      masterHintKdbx: 'Shifrlangan nusxa uchun ham kerak.',
+      unlockFirst: 'Eksport qilish uchun omborni oching.',
       submit: 'Eksport qilish…',
-      saveTitle: 'Eksport qilingan parollarni saqlash',
-      keepassFiles: 'KeePass bazalari',
-      csvFiles: 'CSV fayllar',
       exportedCsv_one: '{{count}} ta yozuv {{file}} ga eksport qilindi',
       exportedCsv_other: '{{count}} ta yozuv {{file}} ga eksport qilindi',
       exportedKdbx: 'Ombor {{file}} ga nusxalandi',
@@ -1599,6 +1618,8 @@ const uz = {
     disconnected: '{{browser}} uzildi',
     locked: 'Ulangan brauzerlarni koʻrish uchun omborni oching.',
     problem: 'Brauzerlar ilovaga ulana olmayapti: {{error}}',
+    temporary:
+      'Brauzerlar sozlanmadi: SSH Key Manager vaqtinchalik jilddan ({{path}}) ishga tushirilgan, u ilova yopilganda yoʻqoladi. Ilovani (AppImage uchun .AppImage faylining oʻzini) doimiy jildga koʻchiring va uni oʻsha yerdan oching.',
     pairTitle: '{{browser}} ulansinmi?',
     pairText:
       'SSH Key Manager kengaytmasi omboringizdagi parollarni toʻldirish va saqlashga ruxsat soʻramoqda.',

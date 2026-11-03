@@ -8,7 +8,7 @@ import type { DeviceUnlockStatus } from '@/bindings/DeviceUnlockStatus';
 import type { VaultFiles } from '@/bindings/VaultFiles';
 import { Button } from '@/components/ui/Button';
 import { TextField } from '@/components/ui/TextField';
-import { DeviceIcon, deviceReason, METHOD_NAME } from './device';
+import { DeviceIcon, METHOD_NAME } from './device';
 import { MasterPasswordFields, masterReady } from './MasterPasswordFields';
 import { VaultCard } from './VaultCard';
 import { requestSearchFocus, takeSearchFocusRequest, useVaultMutation } from './vault';
@@ -142,7 +142,7 @@ function DeviceUnlock({ kind }: { kind: BiometricKind }) {
         onClick={() => {
           setProblem(null);
           requestSearchFocus();
-          unlock.mutate(deviceReason(t, kind, 'unlock'));
+          unlock.mutate();
         }}
         autoFocus
       >

@@ -8,6 +8,8 @@ name: Release
 #
 # Required: TAURI_SIGNING_PRIVATE_KEY (and TAURI_SIGNING_PRIVATE_KEY_PASSWORD if
 # the key has one), the private half of plugins.updater.pubkey in tauri.conf.json.
+# Only the tauri-action steps see it: they bundle and sign an app that the
+# steps before them have already compiled without it.
 #
 # Optional code signing needs these secrets:
 #   macOS:   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
@@ -19,8 +21,15 @@ on:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: read
+
 jobs:
   build:
+    # Secrets and protection rules (required reviewers, v* tags only) set on
+    # this environment apply to these jobs alone. GitHub creates it, without
+    # rules, on the first run.
+    environment: release
     permissions:
       contents: write
     strategy:
@@ -36,33 +45,54 @@ jobs:
     runs-on: ${{ matrix.platform }}
     env:
       HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' }}
-      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
         with:
+          toolchain: stable
           targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: pnpm install --frozen-lockfile
+      # The frontend build and the compile (build scripts and proc macros of
+      # every crate) run here, before the signing key is in the environment.
+      # tauri-action then runs the same `tauri build`, finds the app compiled
+      # and only bundles, signs and uploads it. The extra config stops it from
+      # building the frontend again; both builds need the same config, or
+      # Cargo would compile the app a second time.
+      # tauri-cli would set this for the frontend build; the Vite config
+      # picks the JavaScript target from it.
+      - run: pnpm build
+        env:
+          TAURI_ENV_PLATFORM: ${{ runner.os == 'Windows' && 'windows' || runner.os == 'macOS' && 'darwin' || 'linux' }}
+      - name: Compile
+        shell: bash
+        env:
+          ARGS: ${{ matrix.args }}
+        run: |
+          echo '{ "build": { "beforeBuildCommand": "" } }' > src-tauri/tauri.prebuilt.conf.json
+          pnpm tauri build $ARGS --config src-tauri/tauri.release.conf.json --config src-tauri/tauri.prebuilt.conf.json --no-bundle
       # Tauri signs and notarizes as soon as APPLE_CERTIFICATE is set, even to
       # an empty string, so the signing variables are only passed when the
       # secrets exist.
-      - name: Build and upload (signed)
+      - name: Bundle, sign and upload (signed)
         if: runner.os == 'macOS' && env.HAS_APPLE_SIGNING == 'true'
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -78,12 +108,14 @@ jobs:
             [Code signing policy](https://github.com/nuriddin2468/ssh-key-manager#code-signing-policy)
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json
-      - name: Build and upload
+          args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json --config src-tauri/tauri.prebuilt.conf.json
+      - name: Bundle, sign and upload
         if: runner.os != 'macOS' || env.HAS_APPLE_SIGNING != 'true'
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: SSH Key Manager ${{ github.ref_name }}
@@ -93,7 +125,7 @@ jobs:
             [Code signing policy](https://github.com/nuriddin2468/ssh-key-manager#code-signing-policy)
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json
+          args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json --config src-tauri/tauri.prebuilt.conf.json
 
   publish:
     needs: build

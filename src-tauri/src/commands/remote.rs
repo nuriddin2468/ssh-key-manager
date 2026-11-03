@@ -10,7 +10,7 @@ use tauri::State;
 
 use super::keys::find_key;
 use super::{Shared, blocking};
-use crate::askpass::{AskedPrompt, PromptAccount, Secrets};
+use crate::askpass::{AskedPrompt, Connection, PromptAccount, Secrets};
 use crate::error::{AppError, AppResult};
 use crate::process::{self, Output};
 use crate::state::AppState;
@@ -102,11 +102,13 @@ pub struct SshRun {
 /// Runs `ssh <mode> -o ConnectTimeout=8 <options> -T -- <alias> <remote>`.
 ///
 /// - Without secrets the mode is `-o BatchMode=yes`: `ssh` asks nothing.
-/// - With secrets it is `-o BatchMode=no -o NumberOfPasswordPrompts=1` and an
-///   askpass session answers `ssh`'s prompts: each secret at most once, yes/no
-///   questions (an unknown host key) always "no", and only for the account
-///   `ssh -G` says the alias connects to, so a `ProxyJump` host never gets the
-///   target's password.
+/// - With secrets it is [`askpass_options`] and an askpass session answers
+///   `ssh`'s prompts: each secret at most once, yes/no questions (an unknown
+///   host key) always "no", and only for the account `ssh -G` says the alias
+///   connects to, so a `ProxyJump` host never gets the target's password.
+///   Prompts the session cannot vouch for are refused: a server's prompt
+///   posing as `ssh`'s own, and with OpenSSH before 8.5 anything through a
+///   `ProxyJump` or `ProxyCommand` (see [`Connection`]).
 pub fn run_ssh(
     state: &AppState,
     alias: &str,
@@ -121,8 +123,8 @@ pub fn run_ssh(
         command.args(["-o", "BatchMode=yes"]);
         None
     } else {
-        let account = match ssh_account(alias)? {
-            Ok(account) => account,
+        let target = match ssh_target(alias)? {
+            Ok(target) => target,
             // `ssh` cannot read its configuration for this host: report what
             // it said, as a failed run would.
             Err(output) => {
@@ -132,10 +134,19 @@ pub fn run_ssh(
                 });
             }
         };
+        let askpass = askpass_options(&secrets);
+        let keyboard_interactive = target.keyboard_interactive
+            && !askpass.contains(&"KbdInteractiveAuthentication=no")
+            && !options.contains(&"KbdInteractiveAuthentication=no");
         let session = state.askpass_session(secrets)?;
-        session.expect_account(account);
+        session.expect_account(target.account);
+        session.expect_connection(Connection::new(
+            state.openssh_version().as_deref(),
+            keyboard_interactive,
+            target.proxied,
+        ));
         session.configure(&mut command);
-        command.args(["-o", "BatchMode=no", "-o", "NumberOfPasswordPrompts=1"]);
+        command.args(askpass);
         Some(session)
     };
     command
@@ -150,10 +161,36 @@ pub fn run_ssh(
     })
 }
 
-/// The account `ssh` logs in to for `alias`, from `ssh -G`: `User`, and
-/// `HostKeyAlias` or else `HostName`, as `ssh` names them in its prompts.
-/// `Err` holds the output of a failed `ssh -G`.
-fn ssh_account(alias: &str) -> AppResult<Result<PromptAccount, Output>> {
+/// The options of a run whose prompts an askpass session answers: `ssh` may
+/// ask, once per password. With only key passphrases saved,
+/// keyboard-interactive is off too, so a server cannot even put a prompt of
+/// its own to the session. A saved password or 2FA code keeps it on: many
+/// servers (FreeBSD, pfSense) ask for the password that way. Their prompts
+/// still never get a passphrase (see [`Connection`]).
+fn askpass_options(secrets: &Secrets) -> Vec<&'static str> {
+    let mut options = vec!["-o", "BatchMode=no", "-o", "NumberOfPasswordPrompts=1"];
+    if secrets.password.is_none() && secrets.one_time_code.is_none() {
+        options.extend(["-o", "KbdInteractiveAuthentication=no"]);
+    }
+    options
+}
+
+/// What `ssh -G` says about the host a run connects to, as far as its
+/// prompts go.
+#[derive(Debug, PartialEq, Eq)]
+struct Target {
+    /// `User`, and `HostKeyAlias` or else `HostName`, as `ssh` names them in
+    /// its prompts.
+    account: PromptAccount,
+    /// Through a `ProxyJump` or `ProxyCommand`.
+    proxied: bool,
+    /// `KbdInteractiveAuthentication` is not off.
+    keyboard_interactive: bool,
+}
+
+/// What `ssh -G` says about `alias`. `Err` holds the output of a failed
+/// `ssh -G`.
+fn ssh_target(alias: &str) -> AppResult<Result<Target, Output>> {
     let output = process::run("ssh", &["-G", "--", alias], Duration::from_secs(10))?;
     if !output.success {
         return Ok(Err(output));
@@ -163,21 +200,35 @@ fn ssh_account(alias: &str) -> AppResult<Result<PromptAccount, Output>> {
         .ok_or_else(|| AppError::invalid("ssh -G printed no user or host name"))
 }
 
-fn parse_ssh_g(text: &str) -> Option<PromptAccount> {
+fn parse_ssh_g(text: &str) -> Option<Target> {
     let (mut user, mut host_name, mut host_key_alias) = (None, None, None);
+    let (mut proxied, mut keyboard_interactive) = (false, true);
     for line in text.lines() {
         let Some((key, value)) = line.split_once(' ') else {
             continue;
         };
+        let value = value.trim();
         let slot = match key {
             "user" => &mut user,
             "hostname" => &mut host_name,
             "hostkeyalias" => &mut host_key_alias,
+            "proxyjump" | "proxycommand" => {
+                proxied |= value != "none";
+                continue;
+            }
+            "kbdinteractiveauthentication" => {
+                keyboard_interactive = value != "no";
+                continue;
+            }
             _ => continue,
         };
-        slot.get_or_insert_with(|| value.trim().to_owned());
+        slot.get_or_insert_with(|| value.to_owned());
     }
-    Some(PromptAccount::new(user?, host_key_alias.or(host_name)?))
+    Some(Target {
+        account: PromptAccount::new(user?, host_key_alias.or(host_name)?),
+        proxied,
+        keyboard_interactive,
+    })
 }
 
 /// stdout then stderr, trimmed.
@@ -262,37 +313,88 @@ mod tests {
     #[test]
     fn reads_ssh_g() {
         let text = "host prod\nuser alice\nhostname 10.0.0.5\nport 22\nidentityfile \
-                    ~/.ssh/id_ed25519\n";
+                    ~/.ssh/id_ed25519\nkbdinteractiveauthentication yes\n";
         assert_eq!(
             parse_ssh_g(text),
-            Some(PromptAccount::new("alice", "10.0.0.5"))
+            Some(Target {
+                account: PromptAccount::new("alice", "10.0.0.5"),
+                proxied: false,
+                keyboard_interactive: true,
+            })
         );
         let aliased = format!("{text}hostkeyalias prod.example\n");
         assert_eq!(
-            parse_ssh_g(&aliased),
-            Some(PromptAccount::new("alice", "prod.example"))
+            parse_ssh_g(&aliased).unwrap().account,
+            PromptAccount::new("alice", "prod.example")
         );
         assert_eq!(parse_ssh_g("host prod\nport 22\n"), None);
+
+        let jumped = "user alice\nhostname 10.0.0.5\nproxyjump bastion\n\
+                      kbdinteractiveauthentication no\n";
+        let target = parse_ssh_g(jumped).unwrap();
+        assert!(target.proxied && !target.keyboard_interactive);
+        let command = parse_ssh_g("user a\nhostname h\nproxycommand nc %h %p\n").unwrap();
+        assert!(command.proxied);
+        let none = parse_ssh_g("user a\nhostname h\nproxyjump none\nproxycommand none\n");
+        assert!(!none.unwrap().proxied);
     }
 
     #[test]
     fn reads_real_ssh_g_output() {
         let dir = tempfile::tempdir().unwrap();
         let config = dir.path().join("config");
-        std::fs::write(&config, "Host prod\n  HostName 10.0.0.5\n  User alice\n").unwrap();
+        std::fs::write(
+            &config,
+            "Host prod\n  HostName 10.0.0.5\n  User alice\nHost inner\n  HostName 10.0.0.6\n  \
+             User bob\n  ProxyJump prod\n  KbdInteractiveAuthentication no\n",
+        )
+        .unwrap();
         let config = config.to_string_lossy();
-        let Ok(output) = process::run(
-            "ssh",
-            &["-F", &config, "-G", "--", "prod"],
-            Duration::from_secs(10),
-        ) else {
+        let ssh_g = |alias| {
+            process::run(
+                "ssh",
+                &["-F", &config, "-G", "--", alias],
+                Duration::from_secs(10),
+            )
+        };
+        let Ok(output) = ssh_g("prod") else {
             return; // No ssh here.
         };
         assert!(output.success, "{}", output.stderr);
         assert_eq!(
             parse_ssh_g(&output.stdout),
-            Some(PromptAccount::new("alice", "10.0.0.5"))
+            Some(Target {
+                account: PromptAccount::new("alice", "10.0.0.5"),
+                proxied: false,
+                keyboard_interactive: true,
+            })
         );
+        let inner = parse_ssh_g(&ssh_g("inner").unwrap().stdout).unwrap();
+        assert_eq!(inner.account, PromptAccount::new("bob", "10.0.0.6"));
+        assert!(inner.proxied && !inner.keyboard_interactive);
+    }
+
+    #[test]
+    fn keyboard_interactive_is_off_with_only_passphrases() {
+        let off = |secrets: &Secrets| {
+            askpass_options(secrets)
+                .windows(2)
+                .any(|pair| pair == ["-o", "KbdInteractiveAuthentication=no"])
+        };
+        assert!(off(&Secrets::default().with_passphrase("/k", "pp".into())));
+        assert!(!off(
+            &Secrets::new(Some("pw".into()), None).with_passphrase("/k", "pp".into())
+        ));
+        assert!(!off(&Secrets::new(
+            Some("pw".into()),
+            Some("123456".into())
+        )));
+        assert!(askpass_options(&Secrets::default()).starts_with(&[
+            "-o",
+            "BatchMode=no",
+            "-o",
+            "NumberOfPasswordPrompts=1"
+        ]));
     }
 
     #[test]

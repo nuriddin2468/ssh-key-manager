@@ -96,6 +96,10 @@ pub struct KnownHostsView {
     pub entries: Vec<KnownHostEntry>,
     /// Lines that could not be parsed.
     pub invalid: Vec<InvalidLine>,
+    /// SHA-256 of the file's bytes, in hex. Removals name the revision their
+    /// line numbers belong to, so a line that moved in the meantime (an
+    /// `@revoked` one, say) is never removed instead.
+    pub revision: String,
 }
 
 /// The parsed file.
@@ -182,7 +186,13 @@ impl KnownHosts {
         KnownHostsView {
             entries: self.entries(),
             invalid: self.invalid_lines(),
+            revision: self.revision(),
         }
+    }
+
+    /// SHA-256 of the file's bytes (see [`KnownHostsView::revision`]).
+    pub fn revision(&self) -> String {
+        fsutil::revision(self.to_string().as_bytes())
     }
 
     /// Entries (of any marker) that apply to `host` on `port`.
@@ -566,6 +576,22 @@ mod tests {
     }
 
     #[test]
+    fn revision_is_the_hash_of_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_hosts");
+        let missing = KnownHosts::load(&path).unwrap();
+        assert_eq!(missing.revision(), fsutil::revision(b""));
+        let text = format!("example.com {KEY}\r\n@revoked bad.example {KEY}");
+        std::fs::write(&path, &text).unwrap();
+        let kh = KnownHosts::load(&path).unwrap();
+        assert_eq!(kh.revision(), fsutil::revision(text.as_bytes()));
+        assert_eq!(kh.view().revision, kh.revision());
+        let mut edited = kh.clone();
+        edited.remove_lines(&[1]);
+        assert_ne!(edited.revision(), kh.revision());
+    }
+
+    #[test]
     fn parsing_is_total() {
         for line in [
             "@",
@@ -593,5 +619,6 @@ mod tests {
         assert_eq!(v["entries"][5]["marker"], "certAuthority");
         assert_eq!(v["entries"][0]["keyType"], "ssh-ed25519");
         assert_eq!(v["invalid"][0]["reason"], "unknownMarker");
+        assert_eq!(v["revision"].as_str().map(str::len), Some(64));
     }
 }

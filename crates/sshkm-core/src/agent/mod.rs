@@ -5,7 +5,8 @@
 //! - Windows: `SSH_AUTH_SOCK` if it names a pipe, else OpenSSH's
 //!   `\\.\pipe\openssh-ssh-agent`. A Unix-socket value (Cygwin, MSYS, Git
 //!   Bash) is ignored by [`socket_from_env`]; passed to [`AgentClient::new`]
-//!   it fails with [`AgentProblem::Unsupported`].
+//!   it fails with [`AgentProblem::Unsupported`]. Nothing is sent over a pipe
+//!   until [`set_pipe_check`]'s check has passed.
 //!
 //! Every call opens a fresh connection. Supported requests: list identities,
 //! add (optionally with lifetime / confirm constraints), remove one, remove
@@ -21,7 +22,10 @@ mod transport;
 
 use std::{
     ffi::OsString,
+    fs::File,
+    io,
     path::{Path, PathBuf},
+    sync::OnceLock,
     time::Duration,
 };
 
@@ -39,6 +43,30 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The named pipe of the OpenSSH for Windows agent service.
 pub const WINDOWS_OPENSSH_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
+
+/// Checks who serves an agent pipe the client has just opened (Windows); an
+/// error refuses the pipe. See [`set_pipe_check`].
+pub type PipeCheck = fn(&File) -> io::Result<()>;
+
+static PIPE_CHECK: OnceLock<PipeCheck> = OnceLock::new();
+
+/// Sets the check the client runs on every agent pipe it opens, before it
+/// sends anything over it (Windows; elsewhere it is never called). The check
+/// must pass only for a pipe served by this user or by the system.
+///
+/// Any local user can create `\\.\pipe\openssh-ssh-agent` while the OpenSSH
+/// agent service is stopped, which it is by default, and would then receive
+/// the decrypted keys added to the agent. Telling who serves a pipe takes
+/// system calls this crate doesn't make, so the app sets the check at
+/// startup; until it has, every pipe is refused. Only the first call counts.
+pub fn set_pipe_check(check: PipeCheck) {
+    let _ = PIPE_CHECK.set(check);
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn pipe_check() -> Option<PipeCheck> {
+    PIPE_CHECK.get().copied()
+}
 
 /// Why the agent cannot be used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

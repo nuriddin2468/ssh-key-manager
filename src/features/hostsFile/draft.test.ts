@@ -8,6 +8,7 @@ import {
   editOf,
   emptyDraft,
   groupNames,
+  rebase,
   removeEntry,
   renameGroup,
   restoreEntry,
@@ -40,8 +41,8 @@ const view: HostsFileView = {
 };
 const [loose, api, db] = view.entries as [HostsFileEntry, HostsFileEntry, HostsFileEntry];
 
-const keys = (draft = emptyDraft('r1')) =>
-  sections(view, draft).flatMap((section) => [
+const keys = (draft = emptyDraft('r1'), file = view) =>
+  sections(file, draft).flatMap((section) => [
     ...(section.group ? [`[${section.group.name}]`] : []),
     ...section.entries.map((row) => row.entry.names[0]),
   ]);
@@ -101,8 +102,28 @@ describe('draft', () => {
     ]);
     // Renaming back leaves only the real changes.
     draft = renameGroup(draft, view, 'QA', 'Staging');
-    expect(Object.keys(draft.renames)).toEqual([]);
+    expect(draft.renames.size).toBe(0);
     expect(changeCount(draft)).toBe(2);
+  });
+
+  it('takes any group name, also those of object members', () => {
+    for (const name of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+      const file: HostsFileView = {
+        entries: [entry(2, ['api'], name)],
+        invalid: [],
+        groups: [{ name, line: 1, endLine: 3 }],
+      };
+      expect(keys(emptyDraft('r1'), file)).toEqual([`[${name}]`, 'api']);
+      let draft = renameGroup(emptyDraft('r1'), file, name, 'QA');
+      expect(keys(draft, file)).toEqual(['[QA]', 'api']);
+      expect(toChanges(draft)).toEqual([{ kind: 'renameGroup', name, to: 'QA' }]);
+      draft = renameGroup(draft, file, 'QA', name);
+      expect(changeCount(draft)).toBe(0);
+      expect(toChanges(ungroup(emptyDraft('r1'), file, name))).toEqual([{ kind: 'ungroup', name }]);
+      draft = renameGroup(emptyDraft('r1'), view, 'Staging', name);
+      expect(keys(draft)).toEqual(['loose', `[${name}]`, 'api', 'db']);
+      expect(toChanges(draft)).toEqual([{ kind: 'renameGroup', name: 'Staging', to: name }]);
+    }
   });
 
   it('ungroups without touching the entries', () => {
@@ -168,5 +189,45 @@ describe('draft', () => {
     draft = ungroup(draft, view, 'Office');
     expect(draft.created).toEqual([]);
     expect(keys(draft)).toEqual(['loose', 'db', '[Staging]', 'api']);
+  });
+});
+
+describe('rebase', () => {
+  let draft = setEntry(emptyDraft('r1'), api, { ...editOf(api), enabled: false });
+  draft = removeEntry(draft, db.line);
+  draft = renameGroup(draft, view, 'Staging', 'QA');
+  draft = addEntry(draft, { ...editOf(loose), names: ['cache'] });
+
+  it('carries changes over to entries that only moved', () => {
+    // Another program put two lines at the top.
+    const moved: HostsFileView = {
+      entries: [entry(1, ['vpn']), ...view.entries.map((e) => ({ ...e, line: e.line + 2 }))],
+      invalid: [],
+      groups: [{ name: 'Staging', line: 4, endLine: 7 }],
+    };
+    const carried = rebase(draft, view, moved, 'r2');
+    expect(carried?.revision).toBe('r2');
+    expect(carried && toChanges(carried)).toEqual([
+      { kind: 'renameGroup', name: 'Staging', to: 'QA' },
+      { kind: 'set', line: 5, entry: { ...editOf(api), enabled: false, group: 'QA' } },
+      { kind: 'remove', line: 6 },
+      { kind: 'add', entry: { ...editOf(loose), names: ['cache'] } },
+    ]);
+    // New entries fit any file.
+    const added = addEntry(emptyDraft('r1'), editOf(loose));
+    expect(rebase(added, view, { entries: [], invalid: [], groups: [] }, 'r2')?.revision).toBe(
+      'r2',
+    );
+  });
+
+  it('gives up when what it changes changed too', () => {
+    const edited = view.entries.map((e) => (e.line === api.line ? { ...e, comment: 'x' } : e));
+    expect(rebase(draft, view, { ...view, entries: edited }, 'r2')).toBe(null);
+    const gone = view.entries.filter((e) => e.line !== db.line);
+    expect(rebase(draft, view, { ...view, entries: gone }, 'r2')).toBe(null);
+    // Two lines like the changed one: which is meant is unclear.
+    const twice = [...view.entries, { ...api, line: 9 }];
+    expect(rebase(draft, view, { ...view, entries: twice }, 'r2')).toBe(null);
+    expect(rebase(draft, view, { ...view, groups: [] }, 'r2')).toBe(null);
   });
 });

@@ -1,0 +1,22 @@
+# cargo-deny settings. CI runs `cargo deny check advisories` on every push and
+# pull request; every advisory ignored here says why it doesn't apply.
+
+[advisories]
+ignore = [
+    # rsa 0.9 (Marvin) and crypto-bigint 0.5 (under p256): timing side
+    # channels in private-key operations. The app does no private-key
+    # operation whose timing can be measured remotely: the agent signs, and
+    # the browser pairing's ECDH runs locally. ssh-key 0.6 pins both; they
+    # can go once ssh-key moves to the fixed versions (sshkm-core with it).
+    { id = "RUSTSEC-2023-0071", reason = "no remotely timed private-key operations; waiting for ssh-key to move to a fixed rsa" },
+    { id = "RUSTSEC-2026-0387", reason = "no remotely timed private-key operations; waiting for ssh-key to move to crypto-bigint 0.7" },
+    # zvariant, zbus_names and zvariant_derive are unmaintained since zbus 6
+    # merged them. zbus 5 comes with the Tauri plugins, secret-service and
+    # robius-authentication, so it stays until they move to zbus 6.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: part of zbus 5, which the Tauri plugins and keyring crates still use" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: part of zbus 5, which the Tauri plugins and keyring crates still use" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: part of zbus 5, which the Tauri plugins and keyring crates still use" },
+    # proc-macro-error is unmaintained; glib-macros (the GTK bindings Tauri
+    # uses on Linux) needs it at build time. No release without it yet.
+    { id = "RUSTSEC-2024-0370", reason = "build-time only, through glib-macros of Tauri's GTK bindings; no fixed version" },
+]

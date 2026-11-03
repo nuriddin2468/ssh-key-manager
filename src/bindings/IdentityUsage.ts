@@ -23,11 +23,19 @@ path: string,
  */
 raw: string, 
 /**
- * True if `path` is absolute and fully expanded (no unknown tokens).
+ * True if `path` is absolute and fully expanded (no unknown tokens), and
+ * not `remote`.
  */
 resolved: boolean, 
 /**
  * True if `path` or `path.pub` exists (`ssh` uses the `.pub` to pick the
  * key from the agent). Always false when not `resolved`.
  */
-exists: boolean, };
+exists: boolean, 
+/**
+ * Windows: the path names a network share or a device (`\\server\share\…`,
+ * `//server/…`, `\\?\UNC\…`, `\\.\…`). It is never looked at: that would
+ * connect to the server and offer it the user's Windows credentials,
+ * as `ssh` itself does when it reads the key.
+ */
+remote: boolean, };

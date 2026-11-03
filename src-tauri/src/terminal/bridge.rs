@@ -2,15 +2,21 @@
 //!
 //! - A saved secret (the host's password, its current 2FA code, a key's
 //!   passphrase) is given automatically, once, and only to prompts for the
-//!   host's own account.
+//!   host's own account that the session can vouch for.
 //! - Anything else becomes a [`TerminalEvent::Prompt`] and waits, up to five
 //!   minutes, for the user's [`answer`](Bridge::answer): a secret not saved,
 //!   a saved one that was refused, another account's password, a new host
-//!   key.
+//!   key. A prompt the session cannot vouch for (OpenSSH before 8.5, see
+//!   [`crate::askpass::Connection`]) is shown as it is, never as one of the
+//!   app's own password or passphrase dialogs.
+//! - A host key is offered for trust only when `ssh` asks the plain
+//!   question; one of a type the host is not known by, while keys of other
+//!   types are, is declined like a changed key.
 //! - Answers the user asked to save are kept until the session signs in
 //!   ([`Bridge::signed_in`]), then written to the vault
 //!   ([`Bridge::save_answers`]); a refused password is never saved. The 2FA
-//!   code is never saved.
+//!   code is never saved. Where signing in cannot be told for sure
+//!   (Windows, see [`Options::can_save`]) nothing is offered for saving.
 //! - What was used is remembered for the "Signed in: …" banner and for
 //!   telling why a session failed ([`Bridge::failure`]).
 //!
@@ -74,6 +80,11 @@ pub struct Options {
     pub key_offered: bool,
     /// Do not give the saved password; ask the user (after it was refused).
     pub ask_password: bool,
+    /// The session can tell for sure when it signed in (the terminal's raw
+    /// mode), so answers may be saved then. Without that (Windows) the first
+    /// output only *looks* like the session, and may be the server's banner
+    /// before a wrong password: saving is not offered.
+    pub can_save: bool,
     pub timeout: Duration,
 }
 
@@ -82,6 +93,7 @@ impl Default for Options {
         Self {
             key_offered: false,
             ask_password: false,
+            can_save: true,
             timeout: ANSWER_TIMEOUT,
         }
     }
@@ -104,6 +116,17 @@ enum Secret {
     Other,
 }
 
+impl Secret {
+    fn of(kind: &PromptKind) -> Self {
+        match kind {
+            PromptKind::Password => Self::Password,
+            PromptKind::OneTimeCode => Self::OneTimeCode,
+            PromptKind::Passphrase { .. } => Self::Passphrase,
+            _ => Self::Other,
+        }
+    }
+}
+
 #[derive(Default)]
 struct State {
     next_id: u32,
@@ -118,6 +141,9 @@ struct State {
     cancelled: Option<Secret>,
     /// `Some(false)` when a host key was declined.
     host_key_trusted: Option<bool>,
+    /// A host key was declined because the host is known by keys of other
+    /// types.
+    host_key_conflict: bool,
     /// Answers to save once signed in.
     to_save: Vec<(SaveTarget, SecretString)>,
     /// Answers to save now: the session signed in.
@@ -172,6 +198,16 @@ impl Bridge {
         self.changed.notify_all();
         let to_save = std::mem::take(&mut state.to_save);
         state.ready.extend(to_save);
+        state.sign_in.clone()
+    }
+
+    /// The session's output started, and nothing surer tells that it signed
+    /// in (Windows): returns what signing in used so far, but keeps answering
+    /// prompts and saves nothing, since the output may be the server's banner
+    /// or keyboard-interactive text before a password that will be refused.
+    pub fn output_started(&self) -> SignIn {
+        let mut state = self.lock();
+        state.to_save.clear();
         state.sign_in.clone()
     }
 
@@ -311,7 +347,7 @@ impl Bridge {
         let save = (!ask.foreign).then_some(SaveTarget::Password);
         let offer = save
             .as_ref()
-            .map_or(SaveOffer::None, |target| self.store.offer(target));
+            .map_or(SaveOffer::None, |target| self.offer(target));
         let reply = self.ask_secret(
             Secret::Password,
             PromptAsk::Password {
@@ -341,8 +377,10 @@ impl Bridge {
         let reply = self.ask_secret(
             Secret::OneTimeCode,
             PromptAsk::OneTimeCode {
-                question: question(ask.prompt),
+                question: ask.prompt.question().to_owned(),
                 retry: ask.given > 0,
+                account: ask.prompt.account.clone(),
+                foreign: ask.foreign,
             },
             None,
         );
@@ -353,6 +391,10 @@ impl Bridge {
     }
 
     fn passphrase(&self, ask: &Ask<'_>, key: &str) -> Reply {
+        // Only `ssh` asks for a key's passphrase, and it names no account.
+        if ask.foreign {
+            return Reply::Refuse;
+        }
         let record = |source| {
             let mut state = self.lock();
             state.sign_in.key = Some(key.to_owned());
@@ -368,7 +410,7 @@ impl Bridge {
         let target = SaveTarget::Passphrase {
             key: key.to_owned(),
         };
-        let offer = self.store.offer(&target);
+        let offer = self.offer(&target);
         let reply = self.ask_secret(
             Secret::Passphrase,
             PromptAsk::Passphrase {
@@ -384,18 +426,63 @@ impl Bridge {
         reply
     }
 
+    /// Shows the prompt's text as it is, for the user to answer: an
+    /// unrecognised prompt, or one the session cannot vouch for (`secret`
+    /// then says what it claims to ask, for telling why a session failed).
+    fn as_it_is(&self, ask: &Ask<'_>, secret: Secret) -> Reply {
+        let prompt = ask.prompt;
+        let shown = if ask.unverified {
+            // Whatever account it names may be made up: show all of it.
+            PromptAsk::Other {
+                text: prompt.text.trim().to_owned(),
+                account: None,
+                foreign: false,
+                unverified: true,
+            }
+        } else {
+            PromptAsk::Other {
+                text: prompt.question().to_owned(),
+                account: prompt.account.clone(),
+                foreign: ask.foreign,
+                unverified: false,
+            }
+        };
+        self.ask_secret(secret, shown, None)
+    }
+
+    /// What "Save in the vault" would do for `target`, if saving is possible
+    /// at all.
+    fn offer(&self, target: &SaveTarget) -> SaveOffer {
+        if self.options.can_save {
+            self.store.offer(target)
+        } else {
+            SaveOffer::None
+        }
+    }
+
     fn host_key(&self, prompt: &Prompt) -> Reply {
-        // Only the plain "unknown key" question is offered for trust; other
+        // Only the "unknown key" question is offered for trust; other
         // warnings (a key that differs from the IP address's) are declined.
         let Some(question) = host_key_question(&prompt.text) else {
             self.lock().host_key_trusted = Some(false);
             return Reply::No;
         };
+        // `ssh` prefers the key types it knows for a host, so a known host
+        // offers one of another type only once it has dropped those, or when
+        // the connection is intercepted. One click must not trust that: it is
+        // declined like a changed key, for the user to compare in Known hosts.
+        if question.other_types_known {
+            let mut state = self.lock();
+            state.host_key_trusted = Some(false);
+            state.host_key_conflict = true;
+            return Reply::No;
+        }
         let trusted = matches!(
             self.ask_user(PromptAsk::HostKey {
                 host: question.host,
                 key_type: question.key_type,
                 fingerprint: question.fingerprint,
+                extra: question.extra,
             }),
             Some(PromptAnswer::Trust { trust: true })
         );
@@ -410,39 +497,22 @@ impl Interactive for Arc<Bridge> {
             return Reply::Refuse;
         }
         match &ask.prompt.kind {
-            PromptKind::Password => self.password(ask),
-            PromptKind::OneTimeCode => self.one_time_code(ask),
-            PromptKind::Passphrase { key } => self.passphrase(ask, key),
             PromptKind::HostKeyConfirm => self.host_key(ask.prompt),
             // The session answers other yes/no questions itself.
             PromptKind::Confirm => Reply::No,
-            PromptKind::Other => self.ask_secret(
-                Secret::Other,
-                PromptAsk::Other {
-                    text: ask.prompt.text.trim().to_owned(),
-                },
-                None,
-            ),
+            // It may not be what it says: no saved secret, and not the app's
+            // own password or passphrase dialog.
+            kind if ask.unverified => self.as_it_is(ask, Secret::of(kind)),
+            PromptKind::Password => self.password(ask),
+            PromptKind::OneTimeCode => self.one_time_code(ask),
+            PromptKind::Passphrase { key } => self.passphrase(ask, key),
+            PromptKind::Other => self.as_it_is(ask, Secret::Other),
         }
     }
 }
 
-/// The question of a keyboard-interactive prompt, without OpenSSH's
-/// `(user@host) ` prefix.
-fn question(prompt: &Prompt) -> String {
-    let text = prompt.text.trim();
-    match (&prompt.account, text.strip_prefix('(')) {
-        (Some(_), Some(rest)) => rest
-            .split_once(") ")
-            .map_or(text, |(_, question)| question)
-            .trim()
-            .to_owned(),
-        _ => text.to_owned(),
-    }
-}
-
 fn fail_reason(state: &State, output: &str) -> FailReason {
-    if text::says_host_key_changed(output) {
+    if text::says_host_key_changed(output) || state.host_key_conflict {
         FailReason::HostKeyChanged
     } else if state.host_key_trusted == Some(false) || text::says_host_key_failed(output) {
         FailReason::HostKeyNotTrusted
@@ -564,6 +634,18 @@ mod tests {
             foreign: bool,
             answer: Option<PromptAnswer>,
         ) -> (Reply, Option<PromptAsk>) {
+            self.ask_unverified(text, given, foreign, false, answer)
+        }
+
+        /// [`ask`](Self::ask) for a prompt the session may not vouch for.
+        fn ask_unverified(
+            &self,
+            text: &str,
+            given: u32,
+            foreign: bool,
+            unverified: bool,
+            answer: Option<PromptAnswer>,
+        ) -> (Reply, Option<PromptAsk>) {
             let prompt = Prompt::parse(text, "");
             let bridge = &self.bridge;
             thread::scope(|scope| {
@@ -571,6 +653,7 @@ mod tests {
                     bridge.respond(&Ask {
                         prompt: &prompt,
                         foreign,
+                        unverified,
                         given,
                     })
                 });
@@ -778,7 +861,9 @@ mod tests {
             shown,
             Some(PromptAsk::OneTimeCode {
                 question: "Verification code:".into(),
-                retry: false
+                retry: false,
+                account: Some(PromptAccount::new("bob", "jump.example")),
+                foreign: true,
             })
         );
         h.bridge.signed_in();
@@ -889,6 +974,7 @@ mod tests {
                 host: "bastion.example.net (203.0.113.7)".into(),
                 key_type: "ED25519".into(),
                 fingerprint: "SHA256:Ka7Sd1Fg5Hj9".into(),
+                extra: Vec::new(),
             })
         );
         let (reply, _) = h.ask(
@@ -958,6 +1044,7 @@ mod tests {
                 h.bridge.respond(&Ask {
                     prompt: &prompt,
                     foreign: false,
+                    unverified: false,
                     given: 0,
                 })
             });
@@ -1059,7 +1146,26 @@ mod tests {
         assert_eq!(
             shown,
             Some(PromptAsk::Other {
-                text: "Enter PIN for 'token':".into()
+                text: "Enter PIN for 'token':".into(),
+                account: None,
+                foreign: false,
+                unverified: false,
+            })
+        );
+        // A server's question: its account shown apart from the text.
+        let (_, shown) = h.ask(
+            "(bob@jump.example) Enter the code from the email: ",
+            0,
+            true,
+            typed("4711", false),
+        );
+        assert_eq!(
+            shown,
+            Some(PromptAsk::Other {
+                text: "Enter the code from the email:".into(),
+                account: Some(PromptAccount::new("bob", "jump.example")),
+                foreign: true,
+                unverified: false,
             })
         );
         h.bridge.signed_in();
@@ -1068,5 +1174,182 @@ mod tests {
             h.saved.lock().unwrap().is_empty(),
             "only passwords and passphrases"
         );
+    }
+
+    const KEY: &str = "/Users/dev/.ssh/id_ed25519";
+
+    /// A vault with everything saved.
+    fn full_store() -> FakeStore {
+        FakeStore {
+            password: Some("saved-pw"),
+            code: Some("123456"),
+            passphrase: Some("saved-pp"),
+            ..FakeStore::default()
+        }
+    }
+
+    #[test]
+    fn server_prompts_get_no_passphrase_or_host_key_dialog() {
+        let h = harness(full_store(), Options::default());
+        let host_key = format!("(ubuntu@10.0.4.12) {HOST_KEY}");
+        for text in [
+            format!("(ubuntu@10.0.4.12) Enter passphrase for key '{KEY}': "),
+            host_key,
+            "(ubuntu@10.0.4.12) Accept updated hostkeys? (yes/no): ".to_owned(),
+        ] {
+            let (reply, shown) = h.ask(&text, 0, false, Some(PromptAnswer::Cancel));
+            assert!(matches!(reply, Reply::Refuse), "{text:?}");
+            assert!(
+                matches!(
+                    &shown,
+                    Some(PromptAsk::Other {
+                        account: Some(account),
+                        unverified: false,
+                        ..
+                    }) if *account == PromptAccount::new("ubuntu", "10.0.4.12")
+                ),
+                "{text:?}: {shown:?}"
+            );
+            // Cancelling one does not stop the next from being asked.
+            h.bridge.lock().cancelled = None;
+        }
+        assert_eq!(h.bridge.lock().sign_in, SignIn::default());
+    }
+
+    #[test]
+    fn unverified_prompts_are_shown_as_they_are() {
+        let h = harness(full_store(), Options::default());
+        for (text, quoted) in [
+            (
+                "ubuntu@10.0.4.12's password: ".to_owned(),
+                "ubuntu@10.0.4.12's password:".to_owned(),
+            ),
+            (
+                format!("Enter passphrase for key '{KEY}': "),
+                format!("Enter passphrase for key '{KEY}':"),
+            ),
+            (
+                "(ubuntu@10.0.4.12) Verification code: ".to_owned(),
+                "(ubuntu@10.0.4.12) Verification code:".to_owned(),
+            ),
+        ] {
+            let (reply, shown) = h.ask_unverified(&text, 0, false, true, typed("typed", true));
+            assert_eq!(secret(&reply), Some("typed"), "not the saved one");
+            assert_eq!(
+                shown,
+                Some(PromptAsk::Other {
+                    text: quoted,
+                    account: None,
+                    foreign: false,
+                    unverified: true,
+                })
+            );
+        }
+        h.bridge.signed_in();
+        h.bridge.save_answers();
+        assert!(h.saved.lock().unwrap().is_empty());
+        assert_eq!(h.bridge.lock().sign_in, SignIn::default());
+    }
+
+    #[test]
+    fn foreign_passphrase_prompts_are_refused() {
+        let h = harness(full_store(), Options::default());
+        let (reply, shown) = h.ask(
+            &format!("Enter passphrase for key '{KEY}': "),
+            0,
+            true,
+            None,
+        );
+        assert!(matches!(reply, Reply::Refuse) && shown.is_none());
+    }
+
+    #[test]
+    fn keys_of_another_type_are_declined_like_changed_ones() {
+        let h = harness(FakeStore::default(), Options::default());
+        let (reply, shown) = h.ask(
+            "The authenticity of host 'prod.example (10.0.4.12)' can't be established\nbut keys \
+             of different type are already known for this host.\nECDSA key fingerprint is \
+             SHA256:abc.\nAre you sure you want to continue connecting (yes/no/[fingerprint])? ",
+            0,
+            false,
+            None,
+        );
+        assert!(matches!(reply, Reply::No) && shown.is_none());
+        assert_eq!(
+            h.bridge
+                .failure("Host key verification failed.", Some(255))
+                .reason,
+            FailReason::HostKeyChanged
+        );
+    }
+
+    #[test]
+    fn host_key_warnings_are_shown() {
+        let h = harness(FakeStore::default(), Options::default());
+        let (_, shown) = h.ask(
+            "The authenticity of host 'db (10.0.4.20)' can't be established.\nED25519 key \
+             fingerprint is SHA256:abc.\nThis host key is known by the following other \
+             names/addresses:\n    ~/.ssh/known_hosts:3: db.example\nAre you sure you want to \
+             continue connecting (yes/no/[fingerprint])? ",
+            0,
+            false,
+            Some(PromptAnswer::Trust { trust: false }),
+        );
+        assert_eq!(
+            shown,
+            Some(PromptAsk::HostKey {
+                host: "db (10.0.4.20)".into(),
+                key_type: "ED25519".into(),
+                fingerprint: "SHA256:abc".into(),
+                extra: vec![
+                    "This host key is known by the following other names/addresses:".into(),
+                    "    ~/.ssh/known_hosts:3: db.example".into(),
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn without_a_sure_sign_in_nothing_is_saved() {
+        let h = harness(
+            FakeStore {
+                offer: Some(SaveOffer::Update),
+                ..FakeStore::default()
+            },
+            Options {
+                can_save: false,
+                ..Options::default()
+            },
+        );
+        let (_, shown) = h.ask(PASSWORD, 0, false, typed("pw", true));
+        assert!(matches!(
+            shown,
+            Some(PromptAsk::Password {
+                save: SaveOffer::None,
+                ..
+            })
+        ));
+        // The server's banner came out: prompts are still answered.
+        assert_eq!(h.bridge.output_started().password, Some(Source::User));
+        let (reply, shown) = h.ask(PASSWORD, 1, false, typed("pw2", true));
+        assert_eq!(secret(&reply), Some("pw2"));
+        assert!(shown.is_some());
+        h.bridge.output_started();
+        h.bridge.save_answers();
+        assert!(h.saved.lock().unwrap().is_empty());
+        assert!(
+            !h.events()
+                .iter()
+                .any(|e| matches!(e, TerminalEvent::Saved { .. }))
+        );
+    }
+
+    #[test]
+    fn output_alone_saves_nothing_even_where_saving_is_offered() {
+        let h = harness(FakeStore::default(), Options::default());
+        h.ask(PASSWORD, 0, false, typed("pw", true));
+        h.bridge.output_started();
+        h.bridge.save_answers();
+        assert!(h.saved.lock().unwrap().is_empty());
     }
 }

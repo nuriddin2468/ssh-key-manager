@@ -24,7 +24,7 @@ import { cn } from '@/lib/cn';
 import { AppError } from '@/lib/ipc';
 import { Callout } from './Callout';
 import { showFileError } from './errors';
-import { baseName, pickFile } from './pickers';
+import { baseName } from './pickers';
 
 export interface ImportDialogProps {
   /** Closes the dialog. Render it inside `<Dialog>`, like the app's other dialogs. */
@@ -36,11 +36,10 @@ type Step =
   | { kind: 'preview'; path: string; preview: ImportPreview; selected: ReadonlySet<number> }
   | { kind: 'done'; path: string; count: number };
 
-const DEV_CSV = '/Users/dev/Downloads/bitwarden_export.csv';
-
 /**
- * Imports a CSV export of another password manager: choose the file, check
- * the rows (entries already in the vault start unchecked), import, then
+ * Imports a CSV export of another password manager: choose the file (in a
+ * system dialog the backend opens, so the page never names a file to read),
+ * check the rows (entries already in the vault start unchecked), import, then
  * move the plain-text file to the Trash.
  */
 export function ImportDialog({ onDone }: ImportDialogProps) {
@@ -52,14 +51,17 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
   const [error, setError] = useState<string | null>(null);
 
   const preview = useMutation({
-    mutationFn: async (path: string) => ({ path, preview: await api.vaultImportPreview(path) }),
-    onSuccess: ({ path, preview }) =>
+    mutationFn: () => api.vaultImportPreview(),
+    onSuccess: (picked) => {
+      if (!picked) return;
+      const { path, preview } = picked;
       setStep({
         kind: 'preview',
         path,
         preview,
         selected: new Set(preview.rows.filter((r) => !r.duplicateOf).map((r) => r.index)),
-      }),
+      });
+    },
     onError: (cause) => {
       const appError = AppError.from(cause);
       const messages: Partial<Record<string, string>> = {
@@ -70,12 +72,12 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
       };
       const message = messages[appError.code];
       if (message) setError(message);
-      else toastError(t, appError);
+      else if (appError.code !== 'cancelled') toastError(t, appError);
     },
   });
 
   const importRows = useAppMutation(
-    (vars: { path: string; indices: number[] }) => api.vaultImport(vars.path, vars.indices),
+    (vars: { path: string; indices: number[] }) => api.vaultImport(vars.indices),
     {
       onSuccess: (count, vars) => setStep({ kind: 'done', path: vars.path, count }),
       onError: (appError) =>
@@ -86,23 +88,14 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
     },
   );
 
-  const trash = useAppMutation((path: string) => api.vaultTrashImportFile(path), {
+  const trash = useAppMutation((_path: string) => api.vaultTrashImportFile(), {
     success: (_, path) => t('vaultFiles.import.trashed', { file: baseName(path) }),
     onSuccess: onDone,
   });
 
-  const choose = async () => {
+  const choose = () => {
     setError(null);
-    try {
-      const path = await pickFile(
-        t('vaultFiles.import.pickerTitle'),
-        { name: t('vaultFiles.import.csvFiles'), extensions: ['csv'] },
-        DEV_CSV,
-      );
-      if (path) preview.mutate(path);
-    } catch (cause) {
-      toastError(t, cause);
-    }
+    preview.mutate();
   };
 
   return (
@@ -150,7 +143,7 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
               autoFocus
               loading={preview.isPending}
               disabled={locked}
-              onClick={() => void choose()}
+              onClick={choose}
             >
               {preview.isPending ? t('vaultFiles.import.reading') : t('vaultFiles.import.choose')}
             </Button>
@@ -165,7 +158,7 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
           selected={step.selected}
           onSelect={(selected) => setStep({ ...step, selected })}
           busy={importRows.isPending}
-          onChooseOther={() => void choose()}
+          onChooseOther={choose}
           onCancel={onDone}
           onImport={() =>
             importRows.mutate({
@@ -408,6 +401,11 @@ function PreviewRow({
         <span className="flex flex-wrap justify-end gap-1">
           {row.duplicateOf ? <Badge tone="warning">{t('vaultFiles.import.inVault')}</Badge> : null}
           {row.hasOtp ? <Badge tone="info">{t('vaultFiles.import.otp')}</Badge> : null}
+          {row.hasUnreadableOtp ? (
+            <span title={t('vaultFiles.import.otpUnreadableHint')}>
+              <Badge>{t('vaultFiles.import.otpUnreadable')}</Badge>
+            </span>
+          ) : null}
           {row.hasPassword ? null : <Badge>{t('vaultFiles.import.noPassword')}</Badge>}
         </span>
       </td>

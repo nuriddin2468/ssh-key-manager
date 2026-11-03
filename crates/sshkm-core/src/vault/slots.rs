@@ -5,9 +5,11 @@
 //! XChaCha20-Poly1305 under a different key:
 //!
 //! - `password`: a key derived from the master password with Argon2id;
-//! - `device`: one per computer that turned on Touch ID or Windows Hello, under
-//!   a random key kept in that computer's credential store. A vault in a synced
-//!   folder can have several.
+//! - `device`: one per computer that turned on Touch ID or Windows Hello. Its
+//!   key is random and kept in that computer's credential store (macOS), or
+//!   derived from a Windows Hello signature that only the user's PIN, face or
+//!   fingerprint can produce ([`bound_device_key`]). A vault in a synced folder
+//!   can have several.
 //!
 //! Losing this file loses no data: the recovery key opens the database alone.
 
@@ -16,11 +18,14 @@ use std::path::Path;
 use base64ct::{Base64, Encoding};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+use hkdf::Hkdf;
 use rand_core::{OsRng, RngCore};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
+use super::kdf;
 use crate::{Error, Result, fsutil};
 
 const FORMAT: &str = "sshkm-vault-keys";
@@ -81,15 +86,15 @@ impl KeySlots {
 
     /// Reads the file; `Ok(None)` when it does not exist.
     pub(crate) fn load(path: &Path) -> Result<Option<Self>> {
-        let meta = match std::fs::metadata(path) {
-            Ok(meta) => meta,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(Error::io(e, path)),
+        Ok(Self::read(path)?.map(|(slots, _)| slots))
+    }
+
+    /// Reads the file together with its SHA-256, which a later write checks
+    /// against ([`file_hash`]); `Ok(None)` when it does not exist.
+    pub(crate) fn read(path: &Path) -> Result<Option<(Self, [u8; 32])>> {
+        let Some(bytes) = read_file(path)? else {
+            return Ok(None);
         };
-        if meta.len() > MAX_SIZE {
-            return Err(Error::Parse(format!("{} is too large", path.display())));
-        }
-        let bytes = std::fs::read(path).map_err(|e| Error::io(e, path))?;
         let slots: Self = serde_json::from_slice(&bytes)
             .map_err(|e| Error::Parse(format!("{}: {e}", path.display())))?;
         if slots.format != FORMAT || slots.version != VERSION {
@@ -100,14 +105,16 @@ impl KeySlots {
                 slots.version
             )));
         }
-        Ok(Some(slots))
+        Ok(Some((slots, Sha256::digest(&bytes).into())))
     }
 
-    pub(crate) fn save(&self, path: &Path) -> Result<()> {
+    /// Writes the file and returns the SHA-256 of what was written.
+    pub(crate) fn save(&self, path: &Path) -> Result<[u8; 32]> {
         let mut json = serde_json::to_vec_pretty(self)
             .map_err(|e| Error::Parse(format!("serialising key slots: {e}")))?;
         json.push(b'\n');
-        fsutil::atomic_write(path, &json, 0o600)
+        fsutil::atomic_write(path, &json, 0o600)?;
+        Ok(Sha256::digest(&json).into())
     }
 
     pub(crate) fn has_password(&self) -> bool {
@@ -170,15 +177,26 @@ impl KeySlots {
         &mut self,
         secret: &SecretString,
     ) -> Result<(String, Zeroizing<[u8; 32]>)> {
-        let id = uuid::Uuid::new_v4().to_string();
         let mut key = Zeroizing::new([0u8; 32]);
         OsRng.fill_bytes(key.as_mut());
-        let sealed = seal(&key, secret, &device_purpose(&id))?;
+        let id = self.add_device_key(secret, &key)?;
+        Ok((id, key))
+    }
+
+    /// Adds a device slot that `key` opens, e.g. one from
+    /// [`bound_device_key`], and returns its id.
+    pub(crate) fn add_device_key(
+        &mut self,
+        secret: &SecretString,
+        key: &[u8; 32],
+    ) -> Result<String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let sealed = seal(key, secret, &device_purpose(&id))?;
         self.slots.push(Slot::Device {
             id: id.clone(),
             sealed,
         });
-        Ok((id, key))
+        Ok(id)
     }
 
     pub(crate) fn open_device(&self, id: &str, key: &[u8; 32]) -> Result<SecretString> {
@@ -203,6 +221,50 @@ impl KeySlots {
     }
 }
 
+/// SHA-256 of the key slots file as it is on disk now; `None` when there is
+/// none. Compared with what was last read or written before every write, so a
+/// change made elsewhere is never overwritten.
+pub(crate) fn file_hash(path: &Path) -> Result<Option<[u8; 32]>> {
+    Ok(read_file(path)?.map(|bytes| Sha256::digest(&bytes).into()))
+}
+
+fn read_file(path: &Path) -> Result<Option<Vec<u8>>> {
+    let meta = match std::fs::metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(Error::io(e, path)),
+    };
+    if meta.len() > MAX_SIZE {
+        return Err(Error::Parse(format!("{} is too large", path.display())));
+    }
+    std::fs::read(path)
+        .map(Some)
+        .map_err(|e| Error::io(e, path))
+}
+
+/// What Windows Hello signs to unlock a vault on this computer: fixed for a
+/// vault, so the same key gives the same signature every time (RSA PKCS #1
+/// v1.5 signatures are deterministic).
+pub(crate) fn device_challenge(vault_id: &str) -> Vec<u8> {
+    [
+        b"SSH Key Manager vault device unlock v2\0".as_slice(),
+        vault_id.as_bytes(),
+    ]
+    .concat()
+}
+
+/// The key of a device slot, derived from a Windows Hello signature of
+/// [`device_challenge`]. Nothing that opens the slot is stored anywhere: it
+/// takes the private key in Windows Hello, which signs only after the user's
+/// PIN, face or fingerprint.
+pub(crate) fn bound_device_key(signature: &[u8], vault_id: &str) -> Zeroizing<[u8; 32]> {
+    let hkdf = Hkdf::<Sha256>::new(Some(FORMAT.as_bytes()), signature);
+    let mut key = Zeroizing::new([0u8; 32]);
+    hkdf.expand(&device_challenge(vault_id), key.as_mut())
+        .expect("32 bytes is a valid HKDF-SHA256 output length");
+    key
+}
+
 fn derive(master: &SecretString, kdf: &Kdf) -> Result<Zeroizing<[u8; 32]>> {
     if kdf.algorithm != "argon2id" {
         return Err(Error::Unsupported(format!(
@@ -210,6 +272,13 @@ fn derive(master: &SecretString, kdf: &Kdf) -> Result<Zeroizing<[u8; 32]>> {
             kdf.algorithm
         )));
     }
+    // The file may come from anywhere (a synced folder): refuse a cost that
+    // would exhaust memory or never finish before deriving anything.
+    kdf::check_argon2(
+        kdf.memory_kib.into(),
+        kdf.iterations.into(),
+        kdf.parallelism.into(),
+    )?;
     let salt = decode(&kdf.salt)?;
     let config = argon2::Config {
         variant: argon2::Variant::Argon2id,
@@ -343,6 +412,38 @@ mod tests {
     }
 
     #[test]
+    fn a_planted_slot_with_a_huge_kdf_cost_is_refused() {
+        let mut slots = KeySlots::new();
+        slots
+            .set_password(&secret(), &SecretString::from("pw"))
+            .unwrap();
+        for slot in &mut slots.slots {
+            if let Slot::Password { kdf, .. } = slot {
+                kdf.memory_kib = u32::MAX;
+            }
+        }
+        assert!(matches!(
+            slots.open_password(&SecretString::from("pw")),
+            Err(Error::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn bound_device_keys_are_stable_per_signature_and_vault() {
+        let signature = [7u8; 256];
+        let key = bound_device_key(&signature, "vault-a");
+        assert_eq!(*key, *bound_device_key(&signature, "vault-a"));
+        assert_ne!(*key, *bound_device_key(&signature, "vault-b"));
+        assert_ne!(*key, *bound_device_key(&[8u8; 256], "vault-a"));
+        assert!(device_challenge("vault-a").ends_with(b"vault-a"));
+
+        let mut slots = KeySlots::new();
+        let id = slots.add_device_key(&secret(), &key).unwrap();
+        let opened = slots.open_device(&id, &key).unwrap();
+        assert_eq!(opened.expose_secret(), "ABCD-EFGH");
+    }
+
+    #[test]
     fn file_round_trips_and_keeps_one_password_slot() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("vault.keys");
@@ -354,8 +455,10 @@ mod tests {
         slots
             .set_password(&secret(), &SecretString::from("b"))
             .unwrap();
-        slots.save(&path).unwrap();
-        let loaded = KeySlots::load(&path).unwrap().unwrap();
+        let written = slots.save(&path).unwrap();
+        assert_eq!(file_hash(&path).unwrap(), Some(written));
+        let (loaded, read) = KeySlots::read(&path).unwrap().unwrap();
+        assert_eq!(read, written);
         assert_eq!(loaded.vault_id, slots.vault_id);
         assert!(loaded.has_password());
         assert_eq!(loaded.device_ids(), Vec::<String>::new());

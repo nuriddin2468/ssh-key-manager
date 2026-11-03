@@ -66,6 +66,7 @@ import {
   type GroupRow,
   LOOSE,
   moveEntry,
+  rebase,
   removeAdded,
   removeEntry,
   renameGroup,
@@ -108,7 +109,9 @@ type OpenDialog =
   | { kind: 'entry'; row: EntryRow | null; group: string | null }
   | { kind: 'rename'; name: string }
   | { kind: 'create'; move: EntryRow | null }
-  | { kind: 'review' }
+  // The draft and the file it was made on, kept while the password prompt is
+  // open, so the review stays put if the file changes meanwhile.
+  | { kind: 'review'; draft: Draft; view: HostsFileView; conflict: boolean }
   | { kind: 'backups' };
 
 /** What an entry row's address points at, also for entries not yet saved. */
@@ -649,7 +652,7 @@ export function HostsFilePage({ line }: { line?: number }) {
             <Button
               variant="primary"
               icon={<Lock className="size-4" strokeWidth={2} />}
-              onClick={() => setDialog({ kind: 'review' })}
+              onClick={() => setDialog({ kind: 'review', draft, view, conflict: false })}
             >
               {t('hostsFile.review')}
             </Button>
@@ -743,15 +746,24 @@ export function HostsFilePage({ line }: { line?: number }) {
           />
         ) : dialog?.kind === 'review' ? (
           <ReviewDialog
-            revision={draft.revision}
-            changes={toChanges(draft)}
+            revision={dialog.draft.revision}
+            changes={toChanges(dialog.draft)}
+            conflict={dialog.conflict}
             onApplied={() => {
               discard();
               setDialog(null);
             }}
-            onStale={() => {
-              discard();
-              setDialog(null);
+            onStale={(file) => {
+              // Changes that still fit the file are shown against it again.
+              const carried = rebase(dialog.draft, dialog.view, file.view, file.revision);
+              if (carried) {
+                setDraftState(carried);
+                setDialog({ kind: 'review', draft: carried, view: file.view, conflict: true });
+              } else {
+                toast.error(t('hostsFile.stale'));
+                discard();
+                setDialog(null);
+              }
             }}
             onDone={() => setDialog(null)}
           />

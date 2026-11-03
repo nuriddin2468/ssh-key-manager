@@ -14,15 +14,17 @@
 //! read one at a time with [`Vault::secret`].
 //!
 //! Every change is written at once (atomically, after a backup of the previous
-//! file). If another program or computer changed the database meanwhile — a
-//! vault in a synced folder — [`Vault::refresh`] picks the change up, and a
-//! write that would overwrite it fails with [`Error::Conflict`] instead.
+//! file). If another program or computer changed the database or the key slots
+//! meanwhile — a vault in a synced folder — [`Vault::refresh`] picks the change
+//! up, and a write that would overwrite it fails with [`Error::Conflict`]
+//! instead.
 
 mod audit;
 mod browsers;
 mod export;
 mod generator;
 mod import;
+mod kdf;
 mod location;
 mod recovery;
 mod slots;
@@ -41,7 +43,6 @@ use zeroize::Zeroizing;
 
 pub use self::audit::{VaultAuditInput, VaultFinding, VaultFindingKind};
 pub use self::browsers::PairedBrowser;
-pub use self::export::export_kdbx;
 pub use self::generator::{GenerateOptions, Strength, generate, strength};
 pub use self::import::{CsvFormat, ImportPreview, ImportRow};
 pub use self::location::{check_database, copy_files, remove_files};
@@ -58,6 +59,29 @@ const MAX_FIELD_LEN: usize = 64 * 1024;
 const KIND_FIELD: &str = "sshkm.kind";
 const HOST_FIELD: &str = "sshkm.host";
 const KEY_FIELD: &str = "sshkm.fingerprint";
+/// A 2FA secret an import could not read (`steam://`, HOTP, …): protected
+/// like a password, never shown in the app, and visible in KeePassXC's
+/// additional attributes.
+const UNREADABLE_OTP_FIELD: &str = "Unrecognized 2FA secret";
+
+/// What Windows Hello signs to unlock the vault `vault_id` on a computer; see
+/// [`bound_device_key`].
+pub fn device_challenge(vault_id: &str) -> Vec<u8> {
+    slots::device_challenge(vault_id)
+}
+
+/// The key of a device slot made from a Windows Hello signature of
+/// [`device_challenge`]: only that signature, which takes the user's PIN,
+/// face or fingerprint, opens the slot.
+pub fn bound_device_key(signature: &[u8], vault_id: &str) -> Zeroizing<[u8; 32]> {
+    slots::bound_device_key(signature, vault_id)
+}
+
+/// The canonical form of a recovery key (as [`Vault::create`] returns it),
+/// or `None` if `input` is not one.
+pub fn canonical_recovery_key(input: &SecretString) -> Option<SecretString> {
+    recovery::normalize(input)
+}
 
 /// A field name and its wanted value; `None` removes the field.
 type FieldChange = (&'static str, Option<Value<String>>);
@@ -245,6 +269,8 @@ pub struct Vault {
     slots: KeySlots,
     /// SHA-256 of the database file as last read or written here.
     disk_hash: [u8; 32],
+    /// The same for the key slots file; `None` while there is none.
+    keys_hash: Option<[u8; 32]>,
 }
 
 impl std::fmt::Debug for Vault {
@@ -273,7 +299,7 @@ impl Vault {
         let mut slots = KeySlots::new();
         slots.set_password(&secret, master)?;
         // The keys first: on a crash in between, a stray keys file is harmless.
-        slots.save(&paths.keys)?;
+        let keys_hash = slots.save(&paths.keys)?;
         fsutil::write_new(&paths.database, &bytes, 0o600)?;
 
         let vault = Self {
@@ -282,27 +308,28 @@ impl Vault {
             secret: duplicate(&secret),
             slots,
             disk_hash: sha256(&bytes),
+            keys_hash: Some(keys_hash),
         };
         Ok((vault, secret))
     }
 
     /// Unlocks with the master password.
     pub fn unlock(paths: &VaultPaths, master: &SecretString) -> Result<Self> {
-        let slots = load_slots(paths)?;
+        let (slots, keys_hash) = load_slots(paths)?;
         let secret = slots.open_password(master)?;
-        Self::open(paths, secret, slots)
+        Self::open(paths, secret, slots, keys_hash)
     }
 
-    /// Unlocks with this computer's device key, released by Touch ID /
-    /// Windows Hello.
+    /// Unlocks with this computer's device key, released by Touch ID or
+    /// derived from a Windows Hello signature ([`bound_device_key`]).
     pub fn unlock_with_device(
         paths: &VaultPaths,
         slot_id: &str,
         device_key: &[u8; 32],
     ) -> Result<Self> {
-        let slots = load_slots(paths)?;
+        let (slots, keys_hash) = load_slots(paths)?;
         let secret = slots.open_device(slot_id, device_key)?;
-        Self::open(paths, secret, slots)
+        Self::open(paths, secret, slots, keys_hash)
     }
 
     /// Unlocks with the recovery key — or, for a KeePass database brought from
@@ -314,6 +341,7 @@ impl Vault {
     ) -> Result<Self> {
         check_master(new_master)?;
         let bytes = read_database(&paths.database)?;
+        kdf::check_kdbx(&bytes)?;
         let candidates = [
             recovery::normalize(recovery_key),
             Some(duplicate(recovery_key)),
@@ -332,21 +360,32 @@ impl Vault {
             }
         }
         let (db, secret) = opened.ok_or(Error::WrongPassphrase)?;
-        let mut slots = KeySlots::load(&paths.keys)?.unwrap_or_else(KeySlots::new);
-        slots.set_password(&secret, new_master)?;
-        slots.save(&paths.keys)?;
-        Ok(Self {
+        let (slots, keys_hash) = match KeySlots::read(&paths.keys)? {
+            Some((slots, hash)) => (slots, Some(hash)),
+            None => (KeySlots::new(), None),
+        };
+        let mut vault = Self {
             paths: paths.clone(),
             db,
             secret,
             slots,
             disk_hash: sha256(&bytes),
-        })
+            keys_hash,
+        };
+        let mut slots = vault.slots.clone();
+        slots.set_password(&vault.secret, new_master)?;
+        vault.write_slots(slots)?;
+        Ok(vault)
     }
 
-    fn open(paths: &VaultPaths, secret: SecretString, slots: KeySlots) -> Result<Self> {
+    fn open(
+        paths: &VaultPaths,
+        secret: SecretString,
+        slots: KeySlots,
+        keys_hash: [u8; 32],
+    ) -> Result<Self> {
         let bytes = read_database(&paths.database)?;
-        let db = Database::parse(&bytes, key(&secret)).map_err(|e| match open_error(e) {
+        let db = parse_database(&bytes, &secret).map_err(|e| match e {
             // The slot opened, so the keys file belongs to another database.
             Error::WrongPassphrase => Error::Parse(format!(
                 "{} does not belong to {}; unlock with the recovery key",
@@ -361,6 +400,7 @@ impl Vault {
             secret,
             slots,
             disk_hash: sha256(&bytes),
+            keys_hash: Some(keys_hash),
         })
     }
 
@@ -378,20 +418,50 @@ impl Vault {
         self.slots.device_ids()
     }
 
-    /// Re-reads the files if another program or computer changed the
-    /// database. Returns whether anything was reloaded.
+    /// Re-reads the files that another program or computer changed. Returns
+    /// whether anything was reloaded.
     pub fn refresh(&mut self) -> Result<bool> {
+        // An unreadable keys file is not a reason to refuse reading entries:
+        // the slots in memory stay, and the next write of the slots fails.
+        let slots_changed = self.reload_slots().unwrap_or(false);
         let bytes = read_database(&self.paths.database)?;
         let hash = sha256(&bytes);
         if hash == self.disk_hash {
+            return Ok(slots_changed);
+        }
+        self.db = parse_database(&bytes, &self.secret)?;
+        self.disk_hash = hash;
+        Ok(true)
+    }
+
+    /// Re-reads the key slots file if it changed on disk. When it is gone,
+    /// the slots in memory stay and the next write puts it back.
+    fn reload_slots(&mut self) -> Result<bool> {
+        if slots::file_hash(&self.paths.keys)? == self.keys_hash {
             return Ok(false);
         }
-        self.db = Database::parse(&bytes, key(&self.secret)).map_err(open_error)?;
-        self.disk_hash = hash;
-        if let Some(slots) = KeySlots::load(&self.paths.keys)? {
-            self.slots = slots;
+        match KeySlots::read(&self.paths.keys)? {
+            Some((slots, hash)) => {
+                self.slots = slots;
+                self.keys_hash = Some(hash);
+            }
+            None => self.keys_hash = None,
         }
         Ok(true)
+    }
+
+    /// Writes the key slots file, unless it changed on disk since it was last
+    /// read or written here: then that version is loaded instead and the
+    /// write fails with [`Error::Conflict`], so a slot added or a master
+    /// password changed on another computer is never overwritten.
+    fn write_slots(&mut self, slots: KeySlots) -> Result<()> {
+        if slots::file_hash(&self.paths.keys)? != self.keys_hash {
+            self.reload_slots()?;
+            return Err(Error::Conflict(self.paths.keys.display().to_string()));
+        }
+        self.keys_hash = Some(slots.save(&self.paths.keys)?);
+        self.slots = slots;
+        Ok(())
     }
 
     /// Writes the database, keeping a backup of the previous file.
@@ -448,6 +518,11 @@ impl Vault {
     }
 
     /// Replaces the master password.
+    ///
+    /// The vault secret (the recovery key) stays the same, so an old copy of
+    /// the key slots file — a cloud version, a Time Machine backup — still
+    /// opens the database with the old password. If that password may have
+    /// leaked, make a new recovery key as well ([`Self::new_recovery_key`]).
     pub fn change_master_password(
         &mut self,
         current: &SecretString,
@@ -455,20 +530,26 @@ impl Vault {
     ) -> Result<()> {
         check_master(new)?;
         self.verify_master_password(current)?;
-        self.slots.set_password(&self.secret, new)?;
-        self.slots.save(&self.paths.keys)
+        let mut slots = self.slots.clone();
+        slots.set_password(&self.secret, new)?;
+        self.write_slots(slots)
     }
 
-    /// Replaces the recovery key and re-encrypts the database with it. Device
-    /// unlock is switched off on every computer, because those slots hold the
-    /// old key: turn it on again and delete the old credential store items.
+    /// Replaces the recovery key and re-encrypts the database with it, and
+    /// with it the backups and conflict copies in `backup_dir`, so the old key
+    /// opens none of the files this app keeps. Copies made elsewhere (exports,
+    /// cloud versions, Time Machine) are out of reach and still open with it.
+    ///
+    /// Device unlock is switched off on every computer, because those slots
+    /// hold the old key: turn it on again and delete the old credential store
+    /// items.
     pub fn new_recovery_key(
         &mut self,
         master: &SecretString,
         backup_dir: &Path,
     ) -> Result<SecretString> {
-        self.verify_master_password(master)?;
         self.refresh()?;
+        self.verify_master_password(master)?;
         let secret = recovery::generate();
         let bytes = serialize(&self.db, &secret)?;
         let mut slots = self.slots.clone();
@@ -476,24 +557,39 @@ impl Vault {
         slots.remove_all_devices();
         // The keys first: on a crash in between, the old recovery key still
         // opens the database and sets the master password again.
-        slots.save(&self.paths.keys)?;
-        self.slots = slots;
+        self.write_slots(slots)?;
         self.write_database(&bytes, backup_dir)?;
-        self.secret = duplicate(&secret);
+        let old = std::mem::replace(&mut self.secret, duplicate(&secret));
+        reencrypt_copies(&self.paths, backup_dir, &old, &secret);
         Ok(secret)
     }
 
-    /// Adds Touch ID / Windows Hello unlock for this computer.
+    /// Adds Touch ID unlock for this computer, with a random key to be kept
+    /// in its credential store.
     pub fn enable_device_unlock(&mut self) -> Result<DeviceKey> {
-        let (slot_id, key) = self.slots.add_device(&self.secret)?;
-        self.slots.save(&self.paths.keys)?;
+        let mut slots = self.slots.clone();
+        let (slot_id, key) = slots.add_device(&self.secret)?;
+        self.write_slots(slots)?;
         Ok(DeviceKey { slot_id, key })
+    }
+
+    /// Adds device unlock for this computer with a key that is never stored,
+    /// e.g. [`bound_device_key`] for Windows Hello. Returns the slot's id.
+    pub fn enable_device_unlock_with(&mut self, key: &[u8; 32]) -> Result<String> {
+        let mut slots = self.slots.clone();
+        let slot_id = slots.add_device_key(&self.secret, key)?;
+        self.write_slots(slots)?;
+        Ok(slot_id)
     }
 
     /// Removes one computer's device slot.
     pub fn disable_device_unlock(&mut self, slot_id: &str) -> Result<()> {
-        self.slots.remove_device(slot_id);
-        self.slots.save(&self.paths.keys)
+        if !self.slots.device_ids().iter().any(|id| id == slot_id) {
+            return Ok(());
+        }
+        let mut slots = self.slots.clone();
+        slots.remove_device(slot_id);
+        self.write_slots(slots)
     }
 
     /// All entries, sorted by title.
@@ -873,8 +969,74 @@ fn read_database(path: &Path) -> Result<Vec<u8>> {
     std::fs::read(path).map_err(|e| Error::io(e, path))
 }
 
-fn load_slots(paths: &VaultPaths) -> Result<KeySlots> {
-    KeySlots::load(&paths.keys)?.ok_or_else(|| Error::NotFound(paths.keys.display().to_string()))
+/// Decrypts a KeePass file, after checking that its key derivation settings
+/// ask for a sane amount of memory and time.
+fn parse_database(bytes: &[u8], secret: &SecretString) -> Result<Database> {
+    kdf::check_kdbx(bytes)?;
+    Database::parse(bytes, key(secret)).map_err(open_error)
+}
+
+fn load_slots(paths: &VaultPaths) -> Result<(KeySlots, [u8; 32])> {
+    KeySlots::read(&paths.keys)?.ok_or_else(|| Error::NotFound(paths.keys.display().to_string()))
+}
+
+/// Re-encrypts with `new` the database's backups and conflict copies in
+/// `backup_dir` that `old` opens. A backup that can't be rewritten is
+/// deleted; a conflict copy is kept, since it may hold the only copy of
+/// changes made elsewhere. Files the old secret doesn't open (another
+/// vault's with the same name) stay as they are. Returns how many files were
+/// rewritten or deleted.
+fn reencrypt_copies(
+    paths: &VaultPaths,
+    backup_dir: &Path,
+    old: &SecretString,
+    new: &SecretString,
+) -> usize {
+    let Some(name) = paths.database.file_name().and_then(|n| n.to_str()) else {
+        return 0;
+    };
+    let stem = paths
+        .database
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("vault");
+    let conflict_prefix = format!("{stem}-conflict-");
+    let mut copies: Vec<(PathBuf, bool)> = fsutil::list_backups(backup_dir, name)
+        .into_iter()
+        .map(|path| (path, false))
+        .collect();
+    if let Ok(entries) = std::fs::read_dir(backup_dir) {
+        // Named by `write_conflict_copy`.
+        copies.extend(entries.filter_map(std::result::Result::ok).filter_map(|e| {
+            let path = e.path();
+            let file = path.file_name()?.to_str()?;
+            let kdbx = path.extension().is_some_and(|ext| ext == "kdbx");
+            (kdbx && file.starts_with(&conflict_prefix)).then_some((path, true))
+        }));
+    }
+    let mut done = 0;
+    for (copy, conflict) in copies {
+        let Ok(bytes) = read_database(&copy) else {
+            continue;
+        };
+        let Ok(mut db) = parse_database(&bytes, old) else {
+            continue;
+        };
+        if !matches!(db.config.version, DatabaseVersion::KDB4(_)) {
+            db.config = new_config();
+        }
+        let written =
+            serialize(&db, new).and_then(|bytes| fsutil::atomic_write(&copy, &bytes, 0o600));
+        if written.is_err() {
+            if conflict {
+                continue;
+            }
+            // It must not stay readable with the old key.
+            let _ = std::fs::remove_file(&copy);
+        }
+        done += 1;
+    }
+    done
 }
 
 fn open_error(error: keepass::db::DatabaseOpenError) -> Error {

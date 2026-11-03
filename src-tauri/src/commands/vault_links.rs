@@ -155,7 +155,11 @@ pub async fn run_vault_audit(app: AppHandle, state: State<'_, Shared>) -> AppRes
             .map(|config| config.hosts())
             .unwrap_or_default();
         let input = VaultAuditInput::new(&keys, &hosts);
-        match state.vault.with(&app, |vault| Ok(vault.audit(&input))) {
+        // Quiet: the audit page refetches by itself.
+        match state
+            .vault
+            .with_quietly(&app, |vault| Ok(vault.audit(&input)))
+        {
             Ok(findings) => Ok(VaultAudit {
                 state: VaultState::Unlocked,
                 findings,

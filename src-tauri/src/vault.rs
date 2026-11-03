@@ -5,7 +5,14 @@
 //! on request, after a period without activity, after the computer slept,
 //! when the screen locks ([`crate::device_unlock`]) or when the window is
 //! minimised, as the settings say. Every lock emits
-//! [`LOCKED_EVENT`] so the UI can switch to its lock screen.
+//! [`LOCKED_EVENT`] so the UI can switch to its lock screen, and clears the
+//! clipboard if it still holds a secret copied from the vault.
+//!
+//! Activity is what the user does: the UI reports input ([`VaultRuntime::touch`])
+//! and commands the user starts count too. Reads the UI repeats on its own —
+//! the entry list, an entry, a 2FA code refreshing every 30 seconds — use
+//! [`VaultRuntime::with_quietly`], so an open window never keeps the vault
+//! unlocked by itself.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -95,6 +102,74 @@ struct ClipboardState {
     clipboard: Option<arboard::Clipboard>,
     /// Bumped on every copy, so a pending clear only clears its own copy.
     generation: u64,
+    /// SHA-256 of the secret copied last, cleared when the vault locks if
+    /// the clipboard still holds it.
+    secret: Option<[u8; 32]>,
+}
+
+/// How long a copied recovery key stays on the clipboard when the settings
+/// say never to clear it: it opens everything, so it is always cleared.
+const RECOVERY_KEY_SECONDS: u32 = 30;
+
+/// A settings change that leaves the vault less protected; it needs the
+/// user's confirmation in a native dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Weakening {
+    /// Auto-lock after `old` minutes becomes never (`None`) or later.
+    AutoLock {
+        old: u32,
+        new: Option<u32>,
+    },
+    /// Clearing the clipboard after `old` seconds becomes never (0) or later.
+    Clipboard {
+        old: u32,
+        new: u32,
+    },
+    LockOnSleep,
+    LockOnScreenLock,
+    LockOnMinimize,
+}
+
+impl VaultSettings {
+    /// What `next` weakens compared with these settings, in the order the
+    /// settings page shows them.
+    pub fn weakened_by(&self, next: &Self) -> Vec<Weakening> {
+        let mut weakened = Vec::new();
+        if let Some(old) = self.auto_lock_minutes
+            && next.auto_lock_minutes.is_none_or(|new| new > old)
+        {
+            weakened.push(Weakening::AutoLock {
+                old,
+                new: next.auto_lock_minutes,
+            });
+        }
+        let (old, new) = (self.clipboard_seconds, next.clipboard_seconds);
+        if old > 0 && (new == 0 || new > old) {
+            weakened.push(Weakening::Clipboard { old, new });
+        }
+        for (was, is, weakening) in [
+            (
+                self.lock_on_sleep,
+                next.lock_on_sleep,
+                Weakening::LockOnSleep,
+            ),
+            (
+                self.lock_on_screen_lock,
+                next.lock_on_screen_lock,
+                Weakening::LockOnScreenLock,
+            ),
+            (
+                self.lock_on_minimize,
+                next.lock_on_minimize,
+                Weakening::LockOnMinimize,
+            ),
+        ] {
+            if was && !is {
+                weakened.push(weakening);
+            }
+        }
+        weakened
+    }
 }
 
 impl VaultRuntime {
@@ -175,10 +250,20 @@ impl VaultRuntime {
 
     /// Locks the vault, telling the UI why. Does nothing if it is locked.
     pub fn lock(&self, app: &AppHandle, reason: LockReason) {
-        if lock(&self.unlocked).take().is_some() {
+        if self.lock_now() {
             log::info!("vault locked ({reason:?})");
             let _ = app.emit(LOCKED_EVENT, reason);
         }
+    }
+
+    /// Drops the unlocked vault and clears a secret it copied. Returns
+    /// whether it was unlocked.
+    fn lock_now(&self) -> bool {
+        let was_unlocked = lock(&self.unlocked).take().is_some();
+        if was_unlocked {
+            self.clear_copied_secret();
+        }
+        was_unlocked
     }
 
     /// Records activity, postponing the auto-lock.
@@ -187,7 +272,8 @@ impl VaultRuntime {
     }
 
     /// Runs `work` on the unlocked vault after picking up changes made
-    /// elsewhere. Fails with `vault_locked` when it is locked.
+    /// elsewhere, counting as activity: for what the user asked for. Fails
+    /// with `vault_locked` when it is locked.
     pub fn with<T>(
         &self,
         app: &AppHandle,
@@ -196,11 +282,36 @@ impl VaultRuntime {
         self.access(app, true, work)
     }
 
+    /// Like [`Self::with`], without counting as activity: for reads that
+    /// happen without the user doing anything — the browser extension's
+    /// lookups whenever a login field gets focus, the UI's refetches, a 2FA
+    /// code refreshing — which must not keep the vault open.
+    pub fn with_quietly<T>(
+        &self,
+        app: &AppHandle,
+        work: impl FnOnce(&mut Vault) -> AppResult<T>,
+    ) -> AppResult<T> {
+        self.access(app, false, work)
+    }
+
     fn access<T>(
         &self,
         app: &AppHandle,
         activity: bool,
         work: impl FnOnce(&mut Vault) -> AppResult<T>,
+    ) -> AppResult<T> {
+        self.access_then(activity, work, || {
+            let _ = app.emit(LOCKED_EVENT, LockReason::Changed);
+        })
+    }
+
+    /// [`Self::access`], calling `on_changed` instead of telling the UI when
+    /// the vault locks because it changed in a way this copy can't follow.
+    fn access_then<T>(
+        &self,
+        activity: bool,
+        work: impl FnOnce(&mut Vault) -> AppResult<T>,
+        on_changed: impl FnOnce(),
     ) -> AppResult<T> {
         let mut guard = lock(&self.unlocked);
         let vault = guard.as_mut().ok_or_else(locked)?;
@@ -208,7 +319,8 @@ impl VaultRuntime {
             if error.code() == ErrorCode::WrongPassphrase {
                 guard.take();
                 drop(guard);
-                let _ = app.emit(LOCKED_EVENT, LockReason::Changed);
+                self.clear_copied_secret();
+                on_changed();
                 return Err(locked());
             }
             return Err(error.into());
@@ -217,17 +329,6 @@ impl VaultRuntime {
             self.touch();
         }
         work(vault)
-    }
-
-    /// Like [`Self::with`], without counting as activity: for the browser
-    /// extension's lookups, which happen whenever a login field gets focus
-    /// and must not keep the vault open.
-    pub fn with_quietly<T>(
-        &self,
-        app: &AppHandle,
-        work: impl FnOnce(&mut Vault) -> AppResult<T>,
-    ) -> AppResult<T> {
-        self.access(app, false, work)
     }
 
     /// Like [`Self::with`], then writes the vault. On a conflict the change
@@ -259,6 +360,27 @@ impl VaultRuntime {
         } else {
             0
         };
+        self.copy_for(text, clear, seconds)
+    }
+
+    /// Copies a recovery key like a password, and clears it after the
+    /// configured time — or [`RECOVERY_KEY_SECONDS`] if the settings say
+    /// never: it opens the vault and every copy of it.
+    pub fn copy_recovery_key(self: &Arc<Self>, key: &SecretString) -> AppResult<Option<u32>> {
+        let seconds = match lock(&self.settings).clipboard_seconds {
+            0 => RECOVERY_KEY_SECONDS,
+            seconds => seconds,
+        };
+        self.copy_for(key, true, seconds)
+    }
+
+    fn copy_for(
+        self: &Arc<Self>,
+        text: &SecretString,
+        secret: bool,
+        seconds: u32,
+    ) -> AppResult<Option<u32>> {
+        let digest: [u8; 32] = Sha256::digest(text.expose_secret().as_bytes()).into();
         let generation = {
             let mut state = lock(&self.clipboard);
             let clipboard = match &mut state.clipboard {
@@ -269,29 +391,29 @@ impl VaultRuntime {
             };
             set_excluded(clipboard, text.expose_secret())?;
             state.generation += 1;
+            state.secret = secret.then_some(digest);
             state.generation
         };
         if seconds == 0 {
             return Ok(None);
         }
-        let digest = Sha256::digest(text.expose_secret().as_bytes());
         let runtime = Arc::clone(self);
         thread::spawn(move || {
             thread::sleep(Duration::from_secs(seconds.into()));
             let mut state = lock(&runtime.clipboard);
-            if state.generation != generation {
-                return;
-            }
-            if let Some(clipboard) = state.clipboard.as_mut() {
-                let still_ours = clipboard
-                    .get_text()
-                    .is_ok_and(|current| Sha256::digest(current.as_bytes()) == digest);
-                if still_ours {
-                    let _ = clipboard.clear();
-                }
+            if state.generation == generation {
+                clear_if_holding(&mut state, &digest);
             }
         });
         Ok(Some(seconds))
+    }
+
+    /// Clears the clipboard if it still holds the secret copied last.
+    fn clear_copied_secret(&self) {
+        let mut state = lock(&self.clipboard);
+        if let Some(digest) = state.secret {
+            clear_if_holding(&mut state, &digest);
+        }
     }
 
     /// Starts the thread that locks the vault after inactivity or sleep.
@@ -306,22 +428,42 @@ impl VaultRuntime {
                     .duration_since(last_tick)
                     .is_ok_and(|gap| gap > SLEEP_GAP);
                 last_tick = now;
-                if !runtime.is_unlocked() {
-                    continue;
-                }
-                let settings = runtime.settings();
-                if slept && settings.lock_on_sleep {
-                    runtime.lock(&app, LockReason::Sleep);
-                    continue;
-                }
-                if let Some(minutes) = settings.auto_lock_minutes {
-                    let idle = lock(&runtime.last_activity).elapsed();
-                    if idle >= Duration::from_secs(u64::from(minutes) * 60) {
-                        runtime.lock(&app, LockReason::Idle);
-                    }
+                if let Some(reason) = runtime.lock_due(slept) {
+                    runtime.lock(&app, reason);
                 }
             }
         });
+    }
+
+    /// Why the unlocked vault should lock now, if it should: after the
+    /// computer `slept`, or after the configured time without activity.
+    fn lock_due(&self, slept: bool) -> Option<LockReason> {
+        if !self.is_unlocked() {
+            return None;
+        }
+        let settings = self.settings();
+        if slept && settings.lock_on_sleep {
+            return Some(LockReason::Sleep);
+        }
+        let minutes = settings.auto_lock_minutes?;
+        let idle = lock(&self.last_activity).elapsed();
+        (idle >= Duration::from_secs(u64::from(minutes) * 60)).then_some(LockReason::Idle)
+    }
+}
+
+/// Clears the clipboard if it holds the text with SHA-256 `digest`, and
+/// forgets the secret either way.
+fn clear_if_holding(state: &mut ClipboardState, digest: &[u8; 32]) {
+    if state.secret.as_ref() == Some(digest) {
+        state.secret = None;
+    }
+    if let Some(clipboard) = state.clipboard.as_mut() {
+        let still_ours = clipboard
+            .get_text()
+            .is_ok_and(|current| Sha256::digest(current.as_bytes()).as_slice() == digest);
+        if still_ours {
+            let _ = clipboard.clear();
+        }
     }
 }
 
@@ -368,7 +510,132 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
+    use sshkm_core::vault;
+
     use super::*;
+
+    fn s(text: &str) -> SecretString {
+        SecretString::from(text.to_owned())
+    }
+
+    /// A runtime whose data folder is `data` and whose vault is `database`.
+    fn runtime(data: &Path, database: &Path) -> VaultRuntime {
+        std::fs::create_dir_all(data).unwrap();
+        let runtime = VaultRuntime::new(data.to_path_buf());
+        runtime.set_database(database).unwrap();
+        runtime
+    }
+
+    /// Runs `work` the way a command does, as user activity or quietly.
+    fn run<T>(
+        runtime: &VaultRuntime,
+        activity: bool,
+        work: impl FnOnce(&mut Vault) -> AppResult<T>,
+    ) -> T {
+        runtime.access_then(activity, work, || {}).unwrap()
+    }
+
+    #[test]
+    fn quiet_reads_never_postpone_the_idle_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = runtime(&dir.path().join("data"), &dir.path().join("vault.kdbx"));
+        let (vault, _) = Vault::create(&runtime.paths(), &s("master")).unwrap();
+        runtime.set_unlocked(vault);
+        assert_eq!(runtime.lock_due(false), None);
+        let Some(long_ago) = Instant::now().checked_sub(Duration::from_secs(6 * 60)) else {
+            return;
+        };
+        *lock(&runtime.last_activity) = long_ago;
+
+        // An entry with a 2FA code stays open: the list, the entry and the
+        // code are fetched again and again without the user doing anything.
+        for _ in 0..20 {
+            run(&runtime, false, |vault| Ok(vault.entries().len()));
+        }
+        assert_eq!(runtime.lock_due(false), Some(LockReason::Idle));
+
+        // Something the user did counts.
+        run(&runtime, true, |_| Ok(()));
+        assert_eq!(runtime.lock_due(false), None);
+        assert_eq!(runtime.lock_due(true), Some(LockReason::Sleep));
+        assert!(runtime.lock_now());
+        assert_eq!(runtime.lock_due(true), None);
+    }
+
+    #[test]
+    fn two_computers_on_one_synced_vault_keep_each_others_key_slots() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = dir.path().join("Dropbox/vault.kdbx");
+        std::fs::create_dir_all(shared.parent().unwrap()).unwrap();
+        let laptop = runtime(&dir.path().join("laptop"), &shared);
+        let desktop = runtime(&dir.path().join("desktop"), &shared);
+        let (vault, _) = Vault::create(&laptop.paths(), &s("old")).unwrap();
+        laptop.set_unlocked(vault);
+        desktop.set_unlocked(Vault::unlock(&desktop.paths(), &s("old")).unwrap());
+
+        // The laptop turns on device unlock and changes the master password.
+        let laptop_slot = run(&laptop, true, |vault| {
+            let key = vault.enable_device_unlock()?;
+            vault.change_master_password(&s("old"), &s("new"))?;
+            Ok(key.slot_id)
+        });
+        // The desktop, opened before that, turns device unlock on as well:
+        // the old password must not come back, nor the laptop's slot go.
+        let desktop_slot = run(&desktop, true, |vault| {
+            Ok(vault.enable_device_unlock()?.slot_id)
+        });
+        let files = vault::probe(&laptop.paths()).unwrap();
+        assert_eq!(files.device_slots, [laptop_slot, desktop_slot.clone()]);
+        assert!(Vault::unlock(&laptop.paths(), &s("old")).is_err());
+        assert!(Vault::unlock(&laptop.paths(), &s("new")).is_ok());
+
+        // And the laptop sees the desktop's slot without reopening.
+        let slots = run(&laptop, false, |vault| Ok(vault.device_slots()));
+        assert!(slots.contains(&desktop_slot));
+    }
+
+    #[test]
+    fn weakening_changes_are_recognised() {
+        let current = VaultSettings::default();
+        assert_eq!(current.weakened_by(&current), []);
+        let stronger = VaultSettings {
+            auto_lock_minutes: Some(1),
+            clipboard_seconds: 10,
+            lock_on_minimize: true,
+            ..VaultSettings::default()
+        };
+        assert_eq!(current.weakened_by(&stronger), []);
+        assert_eq!(
+            stronger.weakened_by(&current),
+            [
+                Weakening::AutoLock {
+                    old: 1,
+                    new: Some(5)
+                },
+                Weakening::Clipboard { old: 10, new: 30 },
+                Weakening::LockOnMinimize,
+            ]
+        );
+        let off = VaultSettings {
+            auto_lock_minutes: None,
+            clipboard_seconds: 0,
+            lock_on_sleep: false,
+            lock_on_screen_lock: false,
+            unlock_keys_on_open: true,
+            ..VaultSettings::default()
+        };
+        assert_eq!(
+            current.weakened_by(&off),
+            [
+                Weakening::AutoLock { old: 5, new: None },
+                Weakening::Clipboard { old: 30, new: 0 },
+                Weakening::LockOnSleep,
+                Weakening::LockOnScreenLock,
+            ]
+        );
+        // Turning protection back on needs no confirmation.
+        assert_eq!(off.weakened_by(&current), []);
+    }
 
     #[test]
     fn settings_default_and_survive_a_round_trip() {

@@ -10,7 +10,7 @@ import { TextField } from '@/components/ui/TextField';
 import { Tile } from '@/components/ui/Tile';
 import { AppError } from '@/lib/ipc';
 import { platform } from '@/lib/platform';
-import { DeviceIcon, deviceReason, METHOD_NAME } from './device';
+import { DeviceIcon, METHOD_NAME } from './device';
 import { MasterPasswordFields, masterReady } from './MasterPasswordFields';
 import { RecoveryKeyPanel } from './RecoveryKeyPanel';
 import { toastVaultError, useSecretCall, useVaultMutation } from './vault';
@@ -104,19 +104,16 @@ export function DeviceUnlockDialog({ kind, onDone }: { kind: BiometricKind; onDo
   const [master, setMaster] = useState('');
   const [wrong, setWrong] = useState(false);
 
-  const enable = useVaultMutation(
-    (master: string) => api.vaultEnableDevice(master, deviceReason(t, kind, 'enable')),
-    {
-      success: () => t('passwords.deviceOn', { method }),
-      onSuccess: onDone,
-      onError: (error) => {
-        if (error.code === 'cancelled') return true;
-        if (error.code !== 'wrong_passphrase') return false;
-        setWrong(true);
-        return true;
-      },
+  const enable = useVaultMutation((master: string) => api.vaultEnableDevice(master), {
+    success: () => t('passwords.deviceOn', { method }),
+    onSuccess: onDone,
+    onError: (error) => {
+      if (error.code === 'cancelled') return true;
+      if (error.code !== 'wrong_passphrase') return false;
+      setWrong(true);
+      return true;
     },
-  );
+  });
 
   const submit = (event: FormEvent) => {
     event.preventDefault();

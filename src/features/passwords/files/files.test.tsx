@@ -38,7 +38,6 @@ vi.mock('@/api/commands', () => ({ api }));
 const pickers = vi.hoisted(() => ({
   pickFile: vi.fn(),
   pickFolder: vi.fn(),
-  pickSaveTarget: vi.fn(),
 }));
 vi.mock('./pickers', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./pickers')>()),
@@ -95,6 +94,7 @@ const PREVIEW: ImportPreview = {
       group: 'Work',
       hasPassword: true,
       hasOtp: true,
+      hasUnreadableOtp: false,
       duplicateOf: null,
     },
     {
@@ -105,6 +105,7 @@ const PREVIEW: ImportPreview = {
       group: null,
       hasPassword: true,
       hasOtp: false,
+      hasUnreadableOtp: false,
       duplicateOf: '3f0c7a52-0d5e-4c1b-9a51-7b0f4e2a8c11',
     },
     {
@@ -115,6 +116,7 @@ const PREVIEW: ImportPreview = {
       group: null,
       hasPassword: false,
       hasOtp: false,
+      hasUnreadableOtp: true,
       duplicateOf: null,
     },
   ],
@@ -139,8 +141,8 @@ describe('ImportDialog', () => {
   it('previews a file, skips duplicates, imports and moves the file to the Trash', async () => {
     const user = userEvent.setup();
     const onDone = vi.fn();
-    pickers.pickFile.mockResolvedValue(CSV);
-    api.vaultImportPreview.mockResolvedValue(PREVIEW);
+    // The backend opens the file dialog and says which file was picked.
+    api.vaultImportPreview.mockResolvedValue({ path: CSV, preview: PREVIEW });
     api.vaultImport.mockResolvedValue(2);
     api.vaultTrashImportFile.mockResolvedValue(undefined);
     renderWithProviders(<ImportDialog onDone={onDone} />, { inDialog: true });
@@ -149,7 +151,8 @@ describe('ImportDialog', () => {
     await user.click(await screen.findByRole('button', { name: 'Choose CSV file…' }));
 
     expect(await screen.findByText('Format: Bitwarden')).toBeInTheDocument();
-    expect(api.vaultImportPreview).toHaveBeenCalledWith(CSV);
+    expect(api.vaultImportPreview).toHaveBeenCalledWith();
+    expect(pickers.pickFile).not.toHaveBeenCalled();
     expect(
       screen.getByText(
         '3 entries · 1 is already in the vault, so it isn’t selected. · 1 empty or unreadable row was skipped.',
@@ -158,6 +161,7 @@ describe('ImportDialog', () => {
     const table = screen.getByRole('table', { name: 'Entries in bitwarden_export.csv' });
     expect(within(table).getByText('Already in vault')).toBeInTheDocument();
     expect(within(table).getByText('Folder: Work')).toBeInTheDocument();
+    expect(within(table).getByText('2FA for KeePassXC')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Import GitHub' })).toBeChecked();
     expect(screen.getByRole('checkbox', { name: 'Import Router' })).not.toBeChecked();
     expect(screen.getByRole('checkbox', { name: 'Select all' })).toHaveAttribute(
@@ -172,18 +176,27 @@ describe('ImportDialog', () => {
     expect(screen.getByRole('checkbox', { name: 'Import Wi-Fi' })).toBeChecked();
 
     await user.click(screen.getByRole('button', { name: 'Import 2 entries' }));
-    expect(api.vaultImport).toHaveBeenCalledWith(CSV, [0, 3]);
+    expect(api.vaultImport).toHaveBeenCalledWith([0, 3]);
     expect(await screen.findByText('2 entries imported')).toBeInTheDocument();
     expect(screen.getByText(/bitwarden_export\.csv still holds these passwords/)).toBeVisible();
 
     await user.click(screen.getByRole('button', { name: 'Move to Trash' }));
     await waitFor(() => expect(onDone).toHaveBeenCalled());
-    expect(api.vaultTrashImportFile).toHaveBeenCalledWith(CSV);
+    expect(api.vaultTrashImportFile).toHaveBeenCalledWith();
+  });
+
+  it('stays on the first step when the file dialog is cancelled', async () => {
+    const user = userEvent.setup();
+    api.vaultImportPreview.mockResolvedValue(null);
+    renderWithProviders(<ImportDialog onDone={vi.fn()} />, { inDialog: true });
+    await user.click(await screen.findByRole('button', { name: 'Choose CSV file…' }));
+    await waitFor(() => expect(api.vaultImportPreview).toHaveBeenCalled());
+    expect(screen.getByRole('button', { name: 'Choose CSV file…' })).toBeEnabled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('says so when a file is not a password export', async () => {
     const user = userEvent.setup();
-    pickers.pickFile.mockResolvedValue('/Users/me/contacts.csv');
     api.vaultImportPreview.mockRejectedValue({ code: 'unsupported', message: 'no password' });
     renderWithProviders(<ImportDialog onDone={vi.fn()} />, { inDialog: true });
 
@@ -203,34 +216,46 @@ describe('ImportDialog', () => {
 });
 
 describe('ExportDialog', () => {
-  it('saves an encrypted KeePass copy by default', async () => {
+  it('saves an encrypted KeePass copy by default, after the master password', async () => {
     const user = userEvent.setup();
     const onDone = vi.fn();
-    pickers.pickSaveTarget.mockResolvedValue('/Users/me/Documents/vault-copy.kdbx');
-    api.vaultExportKdbx.mockResolvedValue(undefined);
+    api.vaultExportKdbx.mockResolvedValue({
+      path: '/Users/me/Documents/vault-copy.kdbx',
+      count: 3,
+    });
     renderWithProviders(<ExportDialog onDone={onDone} />, { inDialog: true });
 
     expect(screen.getByRole('radio', { name: /KeePass database/ })).toBeChecked();
-    expect(screen.queryByLabelText('Master password')).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Export…' }));
+    const submit = screen.getByRole('button', { name: 'Export…' });
+    expect(submit).toBeDisabled();
+    await waitFor(() => expect(screen.getByLabelText('Master password')).toBeEnabled());
+    await user.type(screen.getByLabelText('Master password'), 'master');
+    await user.click(submit);
 
     await waitFor(() => expect(onDone).toHaveBeenCalled());
-    expect(pickers.pickSaveTarget).toHaveBeenCalledWith(
-      'Save the exported passwords',
-      expect.stringMatching(/^vault-\d{4}-\d{2}-\d{2}\.kdbx$/),
-      { name: 'KeePass databases', extensions: ['kdbx'] },
-    );
-    expect(api.vaultExportKdbx).toHaveBeenCalledWith('/Users/me/Documents/vault-copy.kdbx');
+    // The backend asks where to save; the page names no file.
+    expect(api.vaultExportKdbx).toHaveBeenCalledWith('master');
+  });
+
+  it('stays open when the save dialog is cancelled', async () => {
+    const user = userEvent.setup();
+    const onDone = vi.fn();
+    api.vaultExportKdbx.mockResolvedValue(null);
+    renderWithProviders(<ExportDialog onDone={onDone} />, { inDialog: true });
+    await waitFor(() => expect(screen.getByLabelText('Master password')).toBeEnabled());
+    await user.type(screen.getByLabelText('Master password'), 'master');
+    await user.click(screen.getByRole('button', { name: 'Export…' }));
+    await waitFor(() => expect(api.vaultExportKdbx).toHaveBeenCalled());
+    expect(onDone).not.toHaveBeenCalled();
   });
 
   it('warns about plain text and needs the master password for CSV', async () => {
     const user = userEvent.setup();
     const onDone = vi.fn();
     const target = '/Users/me/Documents/passwords.csv';
-    pickers.pickSaveTarget.mockResolvedValue(target);
     api.vaultExportCsv
       .mockRejectedValueOnce({ code: 'wrong_passphrase', message: 'wrong passphrase' })
-      .mockResolvedValueOnce(12);
+      .mockResolvedValueOnce({ path: target, count: 12 });
     renderWithProviders(<ExportDialog onDone={onDone} />, { inDialog: true });
 
     await waitFor(() => expect(screen.getByRole('radio', { name: /CSV file/ })).toBeEnabled());
@@ -242,21 +267,23 @@ describe('ExportDialog', () => {
     await user.type(screen.getByLabelText('Master password'), 'nope');
     await user.click(submit);
     expect(await screen.findByText('Wrong master password.')).toBeInTheDocument();
-    expect(api.vaultExportCsv).toHaveBeenCalledWith(target, 'nope');
+    expect(api.vaultExportCsv).toHaveBeenCalledWith('nope');
     expect(onDone).not.toHaveBeenCalled();
 
     await user.clear(screen.getByLabelText('Master password'));
     await user.type(screen.getByLabelText('Master password'), 'master');
     await user.click(submit);
     await waitFor(() => expect(onDone).toHaveBeenCalled());
-    expect(api.vaultExportCsv).toHaveBeenLastCalledWith(target, 'master');
+    expect(api.vaultExportCsv).toHaveBeenLastCalledWith('master');
   });
 
-  it('offers CSV only while the vault is unlocked', async () => {
+  it('exports nothing while the vault is locked', async () => {
     api.vaultStatus.mockResolvedValue(status('locked'));
     renderWithProviders(<ExportDialog onDone={vi.fn()} />, { inDialog: true });
-    expect(await screen.findByText('Unlock the vault to export a CSV file.')).toBeInTheDocument();
+    expect(await screen.findByText('Unlock the vault to export it.')).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: /CSV file/ })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: /KeePass database/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Export…' })).toBeDisabled();
   });
 });
 

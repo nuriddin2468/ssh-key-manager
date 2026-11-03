@@ -286,6 +286,8 @@ describe('locking', () => {
       '/backups/vault-conflict-1.kdbx',
     );
     expect(conflictCopyPath('something else')).toBeNull();
+    // A conflict over the key slots has no copy.
+    expect(conflictCopyPath('changed on disk: /sync/vault.keys')).toBeNull();
   });
 
   it('counts days since a time', () => {

@@ -9,6 +9,20 @@ use super::{Shared, blocking};
 use crate::error::{AppError, AppResult};
 use crate::types::{AgentIdentityView, AgentView};
 
+/// Makes the agent client check who serves a Windows agent pipe before it
+/// sends anything (a key) over it: this user or the system, never another
+/// user ([`agent::set_pipe_check`]). Call once at startup, before any
+/// `AgentClient` is used; until then every Windows agent pipe is refused.
+/// Does nothing elsewhere.
+pub fn check_agent_pipes() {
+    #[cfg(windows)]
+    agent::set_pipe_check(|pipe| {
+        use std::os::windows::io::AsHandle;
+        sshkm_os::pipe::check_server(pipe.as_handle(), sshkm_os::pipe::Trusted::UserOrSystem)
+            .map_err(std::io::Error::other)
+    });
+}
+
 #[tauri::command]
 pub async fn agent_view(state: State<'_, Shared>) -> AppResult<AgentView> {
     blocking(&state, |state| {

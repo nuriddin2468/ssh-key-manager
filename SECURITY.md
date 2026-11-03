@@ -9,7 +9,13 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   passed straight to `ssh-agent`.
 - **Key passphrases are not stored**, unless you save them in the password vault. They
   travel from the form to the Rust process for one operation and are held in
-  `secrecy::SecretString`. They are never logged.
+  `secrecy::SecretString`. They are never logged. Adding a passphrase to a key that has
+  none, or removing one, is confirmed in a system dialog.
+- **Imported keys hold nothing but the key.** A file with anything after the key, or one
+  that isn't a well-formed key, is refused; the app writes the key and its public line
+  out again rather than copying the file. Names OpenSSH reserves (`authorized_keys`,
+  `rc`, `config`, …) are refused in any letter case. Keys that ask for more than 1024
+  bcrypt rounds are refused before decrypting.
 - **The password vault** (optional) is a standard KeePass file, `vault.kdbx`, in the
   app's data folder or a folder you choose.
   - Format: KDBX 4.1 with Argon2id key derivation and ChaCha20 encryption; password
@@ -21,26 +27,59 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     master password or the recovery key.
   - While unlocked, the decrypted database is held only by the Rust process and is
     dropped when the vault locks: on request, after inactivity, after sleep, and
-    optionally when the window is minimised. Lists and details sent to the interface
-    carry no passwords or 2FA secrets; a password reaches the interface only when you
-    choose to reveal it.
-  - Copying a password or 2FA code goes from Rust straight to the clipboard, marked so
-    clipboard history (and Windows' cloud clipboard) skip it, and is cleared after
-    30 seconds by default if nothing else was copied.
+    optionally when the window is minimised. Showing an entry or its 2FA code doesn't
+    count as activity, so it doesn't keep the vault open. Lists and details sent to the
+    interface carry no passwords or 2FA secrets; a password reaches the interface only
+    when you choose to reveal it.
+  - Copying a password, a 2FA code or the recovery key goes from Rust straight to the
+    clipboard, marked so clipboard history (and Windows' cloud clipboard) skip it, and
+    is cleared after 30 seconds by default if nothing else was copied. Locking the vault
+    clears it at once.
   - Changes are written atomically and the previous file is backed up (20 copies,
     still encrypted). A write over a change made elsewhere is refused and saved as a
-    separate copy.
+    separate copy; a write over key slots changed elsewhere is refused.
+  - Key derivation settings read from `vault.keys` or a `.kdbx` header are capped
+    before use, so a tampered file can't make unlocking run for hours.
+  - A new recovery key re-encrypts the app's backups and conflict copies, so the old key
+    stops opening them. Exports, cloud versions and Time Machine copies made before still
+    open with the old key. Changing the master password doesn't change the recovery
+    key: an old copy of `vault.keys` still opens with the old master password, so make a
+    new recovery key if the password may have leaked.
+  - Turning off or loosening auto-lock, lock on sleep, screen lock or minimise, or
+    clipboard clearing; turning off device unlock; and moving the vault or switching to
+    another file are each confirmed in a system dialog, which the page can't answer.
   - A saved key passphrase goes from the vault straight to `ssh-agent` or `ssh` inside
     the Rust process; the interface never receives it. To say "saved, but the vault is
     locked", the interface remembers the fingerprints (public) of keys with saved
     passphrases in its local storage.
-  - Touch ID / Windows Hello adds one slot per computer, opened by a random key in that
-    computer's Keychain or Credential Manager, used only after the system prompt
-    succeeds. A new recovery key removes every such slot.
-  - Exports: the KeePass copy stays encrypted (it opens with the recovery key). The CSV
-    export is plain text: it needs the master password, is written with mode 0600 and
-    never into `~/.ssh` or over the vault's own files. Imported CSV files can be moved
-    to the Trash right after import.
+  - Touch ID / Windows Hello adds one slot per computer to `vault.keys`; a new recovery
+    key removes every such slot.
+    - **Windows**: the slot's key is derived (HKDF-SHA256) from a Windows Hello signature
+      of a fixed per-vault challenge. The signing key is an RSA key Windows Hello keeps
+      (in the TPM when there is one) and uses only after your PIN, face or fingerprint.
+      Nothing that opens the slot is stored on disk or in the Credential Manager, so
+      another program running as you can't unlock the vault silently: it would have to
+      make Windows show the Hello prompt and get you to confirm it. Adding a fingerprint
+      or face keeps the key; resetting Windows Hello (removing the PIN) destroys it, and
+      device unlock must be turned on again. Slots made by earlier versions (a random key
+      in the Credential Manager) are upgraded the first time they are used, and the old
+      Credential Manager item is deleted.
+    - **macOS**: the slot's key is random and kept in the login keychain. Only this app,
+      as identified by its code signature, reads the item without macOS asking for the
+      login keychain password. Touch ID is a confirmation the app asks for before
+      reading it, not a lock on the item itself, so device unlock is as strong as your
+      macOS login password. Device unlock turns itself off when fingerprints are added or
+      removed. Binding the key to Touch ID itself needs the data-protection keychain,
+      which requires a provisioning profile the app doesn't have yet.
+    - **Linux**: not offered.
+  - Exports: the file is chosen in a system dialog the app opens itself, and both
+    exports need the master password. The KeePass copy stays encrypted (it opens with
+    the recovery key). The CSV export is plain text: it is readable only by you (mode
+    0600; on Windows by you, SYSTEM and Administrators), never written into `~/.ssh` or over the
+    vault's own files (compared by file identity, so links and firmlinks don't get
+    around it), and cells that a spreadsheet would run as a formula are defused, except
+    passwords. Files to import are also picked in a system dialog. Imported CSV files can
+    be moved to the Trash right after import.
 - **Answering `ssh` prompts.** To log in with a password or one-time code, the app acts
   as `ssh`'s askpass program.
   - The secret goes over a local socket only this user can reach (a private 0700
@@ -48,13 +87,27 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     `ssh` run holding that run's random token.
   - Host keys are never accepted this way, a rejected password is not retried, and a
     prompt that names another account, such as a `ProxyJump` host's, is refused.
+  - A prompt the server writes (keyboard-interactive, which OpenSSH 8.5 and later marks
+    with the account) can only ever get the host's password or one-time code: never a
+    key passphrase, and never an answer to a host-key or yes/no question, whatever its
+    text says. When only key passphrases are saved, a test or key install turns
+    keyboard-interactive off, so the server can't ask anything.
+  - Before OpenSSH 8.5 (Windows 10's built-in 8.1, Debian 11's 8.4) `ssh`'s own prompts
+    and a server's look alike, so saved secrets are not filled in through a
+    `ProxyJump` or `ProxyCommand`, and saved key passphrases are not filled in while
+    keyboard-interactive is on.
   - The in-app terminal uses the same channel with an interactive session. A saved
     secret is given once and only to prompts for the host's own account; everything else
     (a secret not saved, a rejected one, a jump host's password) is asked of you in a
-    dialog that names the host. A new host key is trusted only when you choose "Trust"
-    after seeing its fingerprint, which answers `ssh`'s own question; a changed host key
-    stops the connection. An answer you choose to save goes into the vault only after
-    the session has signed in. Terminal output and answers are never logged.
+    dialog that names the account the prompt is for. Text that comes from `ssh` or a
+    server is shown quoted and is never presented as the app's own question.
+  - A new host key is trusted only when you choose "Trust" after seeing its
+    fingerprint, which answers `ssh`'s own question. A changed host key stops the
+    connection, and so does a new key of another type for a host whose key is already
+    known. Anything else `ssh` adds to the question is shown as a warning.
+  - An answer you choose to save goes into the vault only after the session has signed
+    in. On Windows, where the app can't tell when that happens, the terminal never saves
+    answers. Terminal output and answers are never logged.
 - **Browser autofill** (optional, off by default) lets the SSH Key Manager extension for
   Chrome, Edge and Firefox fill and save logins from the vault. See
   [Browser autofill](#browser-autofill) below.
@@ -67,10 +120,22 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - a DNS lookup when you ask where a name leads.
 - **Signed updates.** An update is installed only if its signature matches the public key
   built into the app (`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`).
+  - The update check runs in Rust. The page can ask for a check or an install, but can't
+    change the server, proxy or headers.
+  - Release builds use GitHub Actions pinned to commit SHAs. The signing key is only in
+    the environment of the steps that bundle and sign, after everything has been
+    compiled without it.
 - **Standard files only.** The app edits the OpenSSH files in place.
   - Writes are atomic (temp file plus rename), keep the file's permissions, and follow
     symlinks.
-  - `config` and `known_hosts` are backed up before every write.
+  - `config` and `known_hosts` are backed up before every write. An edit is tied to the
+    version of the file it was made on and refused if the file changed meanwhile.
+  - A change that adds or alters a directive that runs a program, loads a library,
+    includes another file, or gives the server access (`ProxyCommand`, `LocalCommand`,
+    `KnownHostsCommand`, `Match exec`, `PKCS11Provider`, `SecurityKeyProvider`,
+    `Include`, `IdentityAgent`, `ForwardAgent`, `ForwardX11`, …), or a host name with
+    shell syntax, is confirmed in a system dialog that shows it. A script in the page
+    can't answer that dialog.
   - Private keys are deliberately not backed up, because a backup taken before adding a
     passphrase would leave an unencrypted copy behind.
 - **Deletions are recoverable.** Removed keys go to the system Trash.
@@ -81,22 +146,31 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     script with administrator rights: `osascript … with administrator privileges` on
     macOS, `pkexec` on Linux, a UAC prompt on Windows.
   - The script copies the text somewhere only an administrator can change, checks its
-    SHA-256 against the text you approved and only then puts it in place, so another
-    program cannot swap the temporary file in between. Nothing you type goes into the
-    script: it receives only two paths and the checksum, as arguments on macOS and
-    Linux (`quoted form of` on macOS) and as quoted strings on Windows.
+    length and SHA-256 against the text you approved and only then puts it in place, so
+    another program cannot swap the temporary file in between. It reads the temporary
+    file only if it is a regular file, and at most one byte more than the approved text.
+  - Right before replacing the hosts file it checks that the file is still the one your
+    changes were made on. If another program changed it while the password prompt was
+    open, nothing is written and the app shows the changes again over the new file.
+  - Nothing you type goes into the script: it receives only paths, the length and
+    checksums, as arguments on macOS and Linux (`quoted form of` on macOS) and as
+    Base64 text decoded inside the script on Windows.
   - A hosts file that is a symbolic link (managed by `NixOS`, a container runtime and
     the like) or not UTF-8 is never written.
   - The hosts file is backed up before every change, and any backup can be restored.
   - On Windows the elevated step runs Windows PowerShell, so the UAC prompt names
-    Microsoft as the publisher.
+    Microsoft as the publisher. PowerShell, `pkexec` and the other system tools the app
+    starts are run by their full path in the system folders, never looked up on `PATH`.
 - **Locked-down webview**
   - Strict Content Security Policy: only the app's own scripts run, and no `eval`.
   - Tauri's frozen JavaScript prototype (`freezePrototype`) is off: the terminal
     (xterm.js) assigns its own `toString` while loading, which a frozen prototype
     forbids, and the whole page then failed to start in 0.3.0.
   - Only the Tauri capabilities the UI needs are granted (`src-tauri/capabilities`).
-  - Permission fixes are limited to paths inside `~/.ssh`.
+  - The window only shows the app's own page: navigating elsewhere is refused and new
+    windows can't open. Links open in your browser, and only `http` and `https` links.
+  - Permission fixes apply only what the app's own audit found inside `~/.ssh`, and only
+    ever remove permissions.
 
 ## Browser autofill
 
@@ -107,7 +181,10 @@ extension ──native messaging──▶ host (the app's executable) ──sock
 Turning on **Settings → Browser autofill** writes a native messaging manifest for each
 installed browser. The manifest names the app's executable and only this extension
 (by its Chrome ids and its Firefox add-on id). Turning it off removes the manifests and
-stops the listener. Nothing listens while it is off.
+stops the listener. Nothing listens while it is off. A manifest never points into a
+temporary folder, where another user could later put a program of their own: an
+AppImage is registered by the AppImage file itself, and a copy running from a temporary
+folder isn't registered at all.
 
 **What the extension can get.**
 
@@ -116,6 +193,9 @@ stops the listener. Nothing listens while it is off.
   - the username and password of the one login the user picked there;
   - whether a login typed there is new, changed or already saved;
   - saving or updating that login.
+- One more question needs no pairing and carries nothing from the vault: whether two
+  origins are the same site, by the same rules as below. The extension asks it to tell
+  how much a save offer may show on the page.
 - Every lookup checks the login's address against the page's origin:
   - same registrable domain, compared exactly after IDNA normalisation, from the
     Public Suffix List with its private section (`github.io` users don't share
@@ -126,19 +206,35 @@ stops the listener. Nothing listens while it is off.
 - Look-alike and punycode domains get nothing. A login picked by its id is checked
   again, so a browser cannot ask for another site's password by naming its id.
 - Nothing is filled until the user picks a login in the menu with a real click or key
-  press. Pages get no automatic fill on load, so an invisible form, or a script
-  injected into a site, can't harvest passwords.
+  press. Pages get no automatic fill on load.
+  - The menu opens and moves only on events the browser marks as the user's own; events
+    a page script makes up are ignored.
+  - A pick counts only once the menu has been on screen for half a second, uncovered at
+    the point clicked, and only while the page hasn't restyled, moved or hidden it, so
+    a page can't slip it under a click or key press meant for something else. A layer
+    the page opens later over the menu sends the menu back to the front, and the wait
+    starts again.
+  - In Chrome and Edge the browser also confirms that nothing covers the menu, not even
+    a layer that lets clicks through. Firefox has no way to tell that, so there a
+    script on the site could still lay a see-through decoy over the menu.
+  - Fields that are nearly transparent, smaller than 8 pixels, or outside the window get
+    no menu.
 - Nothing else of the vault is reachable: not other entries, 2FA secrets, notes, key
   passphrases or the vault's settings.
 
 **Which page is asking.** The content script runs in each http(s) frame. The background
 script names the page by the origin the browser reports for the sending frame, never
 by what the page or the content script says. A frame from another site gets that
-site's logins only. Opaque origins (`null`, `data:`, sandboxed frames) get nothing.
-The menu and the save banner live in closed shadow roots, so page scripts can't read
-the logins listed. A password the user typed waits for the banner in the background's
-`storage.session` (memory only). It is offered for at most three minutes, dropped at
-the next page load after that or when the tab closes, and never goes back to a page.
+site's logins only. Opaque origins (`null`, `data:`, sandboxed frames) get nothing:
+the background falls back to the frame's address only when the browser reports no
+origin at all. The menu and the save banner live in closed shadow roots on a plain
+`div`, so page scripts can't read the logins listed. A password the user typed waits
+for the banner in the background's `storage.session` (memory only). It is offered for
+at most three minutes, dropped at the next page load after that or when the tab
+closes, and never goes back to a page. On a page of another site, for example after a
+sign-in that sends you on, the banner names only the site where it was typed, not the
+username or the saved login's title. A tab can send
+typed logins to check at most about once a second.
 
 **Pairing.**
 
@@ -166,7 +262,9 @@ the next page load after that or when the tab closes, and never goes back to a p
 - A request is refused if:
   - it opens with no paired browser's key;
   - it is more than two minutes old or new;
-  - its nonce was seen in the last five minutes.
+  - its nonce was seen in the last five minutes. When too many nonces are held, the
+    oldest makes room, and every request sent no later than it stays refused for as
+    long as it would have been remembered.
 - Each response is sealed with the response key and bound to the request's nonce.
 - The native host and the browser see only ciphertext. The one secret that leaves the
   app is the password of the login being filled, sealed for that browser and opened by
@@ -184,7 +282,12 @@ the next page load after that or when the tab closes, and never goes back to a p
   can write. Other users therefore can't point the host somewhere else, or squat a
   well-known name.
 - On macOS and Linux the host also checks that the socket's directory belongs to the
-  user and is private.
+  user and is private. On Windows it checks, before it sends anything, that the pipe
+  is owned and served by this user, so another user can't take over a pipe name left
+  behind by a crash.
+- The app checks the `ssh-agent` pipe on Windows the same way before it sends a key:
+  it must be served by this user or by the system, and it is opened with
+  identification-only impersonation.
 
 **Outside this model.**
 

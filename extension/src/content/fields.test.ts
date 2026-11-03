@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fill, loginFieldsFor, typedIn } from './fields';
 
 function page(html: string): void {
@@ -62,6 +62,79 @@ describe('login fields', () => {
     for (const id of ['#new', '#hidden', '#off', '#otp']) {
       expect(loginFieldsFor(input(id)), id).toBeNull();
     }
+  });
+});
+
+describe('visibility', () => {
+  // jsdom has no layout: give each element a box, as a browser would.
+  function box(selector: string, left: number, top: number, width: number, height: number) {
+    const element = document.querySelector<HTMLElement>(selector);
+    if (!element) throw new Error(`no ${selector}`);
+    const rect = { left, top, width, height, right: left + width, bottom: top + height };
+    element.getBoundingClientRect = () => ({ ...rect, x: left, y: top, toJSON: () => rect });
+  }
+
+  beforeEach(() => {
+    Object.defineProperty(Element.prototype, 'checkVisibility', {
+      configurable: true,
+      value: () => true,
+    });
+  });
+  afterEach(() => {
+    delete (Element.prototype as { checkVisibility?: unknown }).checkVisibility;
+  });
+
+  function login(passwordStyle = '', wrapperStyle = '') {
+    page(`<form><div id="wrap" style="${wrapperStyle}">
+      <input id="pass" type="password" style="${passwordStyle}">
+    </div></form>`);
+    box('#wrap', 0, 0, 300, 40);
+  }
+
+  it('offers fields big enough to see', () => {
+    login();
+    box('#pass', 10, 10, 200, 30);
+    expect(loginFieldsFor(input('#pass'))).not.toBeNull();
+    box('#pass', 10, 10, 8, 8);
+    expect(loginFieldsFor(input('#pass'))).not.toBeNull();
+  });
+
+  it('leaves tiny fields alone', () => {
+    login();
+    box('#pass', 10, 10, 6, 6);
+    expect(loginFieldsFor(input('#pass'))).toBeNull();
+    box('#pass', 10, 10, 200, 4);
+    expect(loginFieldsFor(input('#pass'))).toBeNull();
+  });
+
+  it('leaves nearly transparent fields alone, counting their ancestors', () => {
+    login('opacity: 0.05');
+    box('#pass', 10, 10, 200, 30);
+    expect(loginFieldsFor(input('#pass'))).toBeNull();
+    login('opacity: 0.3', 'opacity: 0.3');
+    box('#pass', 10, 10, 200, 30);
+    expect(loginFieldsFor(input('#pass'))).toBeNull();
+    login('opacity: 0.5');
+    box('#pass', 10, 10, 200, 30);
+    expect(loginFieldsFor(input('#pass'))).not.toBeNull();
+  });
+
+  it('leaves fields clipped to a sliver alone', () => {
+    login('', 'overflow-x: hidden; overflow-y: hidden');
+    box('#wrap', 0, 0, 300, 2);
+    box('#pass', 10, 10, 200, 30);
+    expect(loginFieldsFor(input('#pass'))).toBeNull();
+    // An absolutely placed field escapes a static box around it.
+    login('position: absolute', 'overflow-x: hidden; overflow-y: hidden; position: static');
+    box('#wrap', 0, 0, 300, 2);
+    box('#pass', 10, 10, 200, 30);
+    expect(loginFieldsFor(input('#pass'))).not.toBeNull();
+  });
+
+  it('leaves fields off the page alone', () => {
+    login();
+    box('#pass', -9999, 10, 200, 30);
+    expect(loginFieldsFor(input('#pass'))).toBeNull();
   });
 });
 

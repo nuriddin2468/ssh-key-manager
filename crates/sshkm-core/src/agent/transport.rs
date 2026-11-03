@@ -78,9 +78,35 @@ pub(crate) fn request(
     exchange_stream(&mut stream, request).map_err(|e| TransportError::from_io(&e))
 }
 
+/// Sends `request` over a pipe only once `check` says its server is trusted
+/// (see [`super::set_pipe_check`]); without a check, never. Not
+/// `cfg(windows)`, so its tests run everywhere.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn exchange_checked<S: Read + Write>(
+    pipe: &mut S,
+    check: Option<fn(&S) -> io::Result<()>>,
+    request: &[u8],
+) -> io::Result<Vec<u8>> {
+    let check = check.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "who serves the agent's pipe can't be checked",
+        )
+    })?;
+    check(pipe).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("refusing the agent's pipe: {e}"),
+        )
+    })?;
+    exchange_stream(pipe, request)
+}
+
 /// Windows: OpenSSH's agent listens on a named pipe. Pipes opened through
 /// `std::fs` have no timeouts, so the exchange runs on a helper thread and the
-/// caller stops waiting after `timeout` (a stuck thread is abandoned).
+/// caller stops waiting after `timeout` (a stuck thread is abandoned). The
+/// pipe is opened for identification only, so its server can't act as this
+/// user, and its server is checked before anything is sent.
 #[cfg(windows)]
 pub(crate) fn request(
     socket: &Path,
@@ -102,10 +128,11 @@ pub(crate) fn request(
     }
     let socket = socket.to_path_buf();
     let request = Zeroizing::new(request.to_vec());
+    let check = super::pipe_check();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let result =
-            open_pipe(&socket, timeout).and_then(|mut pipe| exchange_stream(&mut pipe, &request));
+        let result = open_pipe(&socket, timeout)
+            .and_then(|mut pipe| exchange_checked(&mut pipe, check, &request));
         let _ = tx.send(result);
     });
     match rx.recv_timeout(timeout) {
@@ -130,14 +157,19 @@ pub(crate) fn is_pipe_path(path: &Path) -> bool {
 
 #[cfg(windows)]
 fn open_pipe(path: &Path, timeout: Duration) -> io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
     use std::time::Instant;
     /// `ERROR_PIPE_BUSY`: all pipe instances are in use; retry shortly.
     const ERROR_PIPE_BUSY: i32 = 231;
+    /// `SecurityIdentification << 16`: the server may learn who the client
+    /// is but not act as it.
+    const SECURITY_IDENTIFICATION: u32 = 1 << 16;
     let deadline = Instant::now() + timeout;
     loop {
         match std::fs::OpenOptions::new()
             .read(true)
             .write(true)
+            .security_qos_flags(SECURITY_IDENTIFICATION)
             .open(path)
         {
             Ok(file) => return Ok(file),
@@ -198,6 +230,25 @@ mod tests {
         let mut s = duplex(&[0, 0, 0, 1, 6]);
         assert_eq!(exchange_stream(&mut s, &[11]).unwrap(), [6]);
         assert_eq!(s.output, [0, 0, 0, 1, 11]);
+    }
+
+    #[test]
+    fn sends_nothing_over_a_pipe_until_its_server_is_checked() {
+        type Check = fn(&Duplex) -> io::Result<()>;
+        let trusted: Check = |_| Ok(());
+        let untrusted: Check = |_| Err(io::Error::other("the pipe is served by another user"));
+        for check in [None, Some(untrusted)] {
+            let mut s = duplex(&[0, 0, 0, 1, 6]);
+            let err = exchange_checked(&mut s, check, &[17]).unwrap_err();
+            assert_eq!(
+                TransportError::from_io(&err).problem,
+                AgentProblem::PermissionDenied
+            );
+            assert!(s.output.is_empty(), "nothing was sent");
+        }
+        let mut s = duplex(&[0, 0, 0, 1, 6]);
+        assert_eq!(exchange_checked(&mut s, Some(trusted), &[17]).unwrap(), [6]);
+        assert_eq!(s.output, [0, 0, 0, 1, 17]);
     }
 
     #[test]

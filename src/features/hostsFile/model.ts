@@ -83,12 +83,18 @@ export function isSystemName(name: string): boolean {
   return SYSTEM_NAMES.has(normalizeName(name));
 }
 
-/** A valid IPv4 or IPv6 address; IPv6 may carry a scope (`fe80::1%lo0`). */
+/**
+ * A valid IPv4 or IPv6 address; IPv6 may carry a scope of up to 64 letters,
+ * digits, `_`, `.` and `-` (`fe80::1%lo0`). Same rule as `parse_address` in the core.
+ */
 export function isIpAddress(value: string): boolean {
   const v4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
   if (v4.test(value)) return true;
   const [address, scope, ...rest] = value.split('%');
-  if (!address?.includes(':') || rest.length > 0 || scope === '') return false;
+  if (!address?.includes(':') || rest.length > 0) return false;
+  if (scope !== undefined && !/^[A-Za-z0-9_.-]{1,64}$/.test(scope)) return false;
+  // The URL parser drops tabs and line breaks, so they are refused here.
+  if (/[\s\p{Cc}]/u.test(address)) return false;
   try {
     return new URL(`http://[${address}]/`).hostname.length > 2;
   } catch {

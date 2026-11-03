@@ -2,10 +2,10 @@
 //!
 //! The extension talks to the native messaging host, which passes each
 //! message on unchanged, wrapped as `{"caller": "<extension origin>",
-//! "message": …}` ([`Envelope`]). Only [`Message::Hello`], [`Message::Show`]
-//! and [`Message::Pair`] travel in the clear; everything else is a
-//! [`Message::Request`] sealed with the paired browser's keys ([`super::channel`]),
-//! whose opened payload is an [`Opened`] request.
+//! "message": …}` ([`Envelope`]). Only [`Message::Hello`], [`Message::Show`],
+//! [`Message::SameSite`] and [`Message::Pair`] travel in the clear; everything
+//! else is a [`Message::Request`] sealed with the paired browser's keys
+//! ([`super::channel`]), whose opened payload is an [`Opened`] request.
 //!
 //! Requests are externally tagged (`{"fill": {…}}`, or `"status"`), so serde
 //! reads a password straight into its [`SecretString`] without buffering the
@@ -36,6 +36,9 @@ pub enum Message {
     Hello,
     /// Bring the app's window forward on the vault, to unlock it.
     Show,
+    /// Does a page belong to another origin's site? Needs no pairing: the
+    /// answer depends on the two names alone.
+    SameSite(SameSite),
     /// Pair this browser. Waits until the user decides in the app.
     Pair(PairRequest),
     /// A sealed request of a paired browser.
@@ -54,6 +57,14 @@ pub struct PairRequest {
     /// The browser's name as the extension sees it, e.g. "Chrome".
     #[serde(default)]
     pub browser: String,
+}
+
+/// Would a login of `origin` be offered on `page`? The extension asks before
+/// it shows a save offer on a page other than the one the login was typed on.
+#[derive(Debug, Deserialize)]
+pub struct SameSite {
+    pub origin: String,
+    pub page: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,6 +132,10 @@ pub enum Reply {
         vault: VaultLock,
     },
     Shown,
+    /// Answers [`Message::SameSite`].
+    SameSite {
+        same: bool,
+    },
     /// The pairing was approved. `payload` is a sealed [`PairedInfo`]
     /// answering the request's nonce.
     Paired {
@@ -249,6 +264,17 @@ mod tests {
 
         let hello: Envelope = serde_json::from_str(r#"{"message":{"type":"hello"}}"#).unwrap();
         assert!(matches!(hello.message, Message::Hello));
+        let sites: Envelope = serde_json::from_str(
+            r#"{"message":{"type":"sameSite","origin":"https://a.com","page":"https://b.a.com"}}"#,
+        )
+        .unwrap();
+        let Message::SameSite(sites) = sites.message else {
+            panic!("not a site comparison");
+        };
+        assert_eq!(
+            (sites.origin.as_str(), sites.page.as_str()),
+            ("https://a.com", "https://b.a.com")
+        );
         assert!(serde_json::from_str::<Envelope>(r#"{"message":{"type":"dump"}}"#).is_err());
     }
 
@@ -289,6 +315,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&CheckReply::New).unwrap(),
             r#"{"status":"new"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Reply::SameSite { same: true }).unwrap(),
+            r#"{"type":"sameSite","same":true}"#
         );
     }
 }

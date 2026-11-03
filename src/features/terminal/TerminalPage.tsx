@@ -13,7 +13,9 @@ import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Dialog } from '@/components/ui/Dialog';
 import { Tile } from '@/components/ui/Tile';
+import { fileChangeError } from '@/features/hosts/fileErrors';
 import { CheckHostKeyDialog } from '@/features/known/CheckHostKeyDialog';
+import type { KnownHostsRemoval } from '@/features/known/removal';
 import { formatRelative } from '@/lib/format';
 import { HostPicker } from './HostPicker';
 import { hostIdOf, isConnectable, isLive, phaseLabel, type Tab } from './model';
@@ -35,11 +37,16 @@ export function TerminalPage({ connect, nonce }: { connect?: string; nonce?: num
   const [closing, setClosing] = useState<{ tab: Tab; keepTab: boolean } | null>(null);
   const [findOpen, setFindOpen] = useState(false);
   const [checking, setChecking] = useState<string | null>(null);
-  const [toRemove, setToRemove] = useState<number[] | null>(null);
+  const [toRemove, setToRemove] = useState<KnownHostsRemoval | null>(null);
 
   const remove = useAppMutation(api.removeKnownHosts, {
-    success: (_, lines) => t('known.removed', { line: lines.join(', ') }),
+    success: (_, { lines }) => t('known.removed', { line: lines.join(', ') }),
     onSuccess: () => setToRemove(null),
+    onError: (error) => {
+      if (!fileChangeError(error, t('known.changedOnDisk'))) return false;
+      setToRemove(null);
+      return true;
+    },
   });
 
   // Another screen asked for a session (useConnect): start it once.
@@ -219,7 +226,7 @@ export function TerminalPage({ connect, nonce }: { connect?: string; nonce?: num
         {checking !== null ? (
           <CheckHostKeyDialog
             initialHost={checking}
-            onRemove={(lines) => setToRemove(lines)}
+            onRemove={setToRemove}
             onDone={() => setChecking(null)}
           />
         ) : null}

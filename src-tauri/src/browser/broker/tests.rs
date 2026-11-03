@@ -260,6 +260,33 @@ fn hello_and_show_need_no_pairing() {
 }
 
 #[test]
+fn sites_are_compared_without_pairing_by_the_login_rules() {
+    let broker = Broker::default();
+    let env = Fake::new();
+    *lock(&env.vault) = None;
+    let same = |origin: &str, page: &str| {
+        send(
+            &broker,
+            &env,
+            &json!({ "type": "sameSite", "origin": origin, "page": page }),
+        )
+    };
+    let yes = json!({ "type": "sameSite", "same": true });
+    let no = json!({ "type": "sameSite", "same": false });
+    assert_eq!(same("https://bank.example", "https://bank.example"), yes);
+    assert_eq!(
+        same("https://accounts.bank.example", "https://www.bank.example"),
+        yes
+    );
+    assert_eq!(same("http://bank.example", "https://bank.example"), yes);
+    assert_eq!(same("https://bank.example", "https://evil.example"), no);
+    assert_eq!(same("https://bank.example", "http://bank.example"), no);
+    assert_eq!(same("https://alice.github.io", "https://bob.github.io"), no);
+    assert_eq!(same("https://bank.example", "null"), no);
+    assert_eq!(same("null", "https://bank.example"), no);
+}
+
+#[test]
 fn an_approved_pairing_is_stored_and_its_requests_answered() {
     let (broker, env, extension) = paired();
     let browsers = env
@@ -502,4 +529,47 @@ fn browser_names_are_short_and_printable() {
     assert_eq!(browser_name("  Firefox\u{7}  "), "Firefox");
     assert_eq!(browser_name(""), "Browser");
     assert_eq!(browser_name(&"x".repeat(100)).len(), 40);
+}
+
+fn nonce(n: u64) -> MessageNonce {
+    let mut nonce = [0; 12];
+    nonce[..8].copy_from_slice(&n.to_be_bytes());
+    nonce
+}
+
+#[test]
+fn nonces_are_refused_again_until_they_go_stale() {
+    let mut seen = Seen::default();
+    let start = Instant::now();
+    assert!(seen.admit(nonce(1), 1_000, start));
+    assert!(!seen.admit(nonce(1), 1_000, start + Duration::from_secs(1)));
+    assert!(seen.admit(nonce(2), 1_000, start + Duration::from_secs(1)));
+    // Long after any copy of it stopped being fresh.
+    assert!(seen.admit(nonce(1), 1_000, start + REMEMBER));
+}
+
+#[test]
+fn a_full_memory_forgets_the_oldest_but_still_refuses_their_replays() {
+    let mut seen = Seen::default();
+    let start = Instant::now();
+    let max = u64::try_from(MAX_REMEMBERED).unwrap();
+    let sent = |n: u64| 1_000_000 + n;
+    for n in 0..max {
+        assert!(seen.admit(nonce(n), sent(n), start));
+    }
+    // A flood doesn't shut every browser out: new requests still pass.
+    let later = start + Duration::from_secs(1);
+    for n in max..max + 10 {
+        assert!(seen.admit(nonce(n), sent(n), later), "{n}");
+    }
+    assert_eq!(seen.nonces.len(), MAX_REMEMBERED);
+    // The ten forgotten nonces stay refused, and so does one still kept.
+    for n in 0..=10 {
+        assert!(!seen.admit(nonce(n), sent(n), later), "{n}");
+    }
+    // So is anything sent before the forgotten ones, until they would have
+    // gone stale anyway.
+    assert!(!seen.admit(nonce(u64::MAX), sent(9), later));
+    assert!(seen.admit(nonce(u64::MAX - 1), sent(max + 10), later));
+    assert!(seen.admit(nonce(u64::MAX), sent(9), later + REMEMBER));
 }

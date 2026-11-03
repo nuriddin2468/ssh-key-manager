@@ -19,11 +19,17 @@ export function useHostsApply() {
   const { t } = useTranslation();
   const apply = useAppMutation(api.applyHostsChanges, {
     success: (result) => (result.outcome === 'applied' ? t('hostsFile.applied') : undefined),
-    onSuccess: (result) => reportUnapplied(t, result),
+    // A stale result is the caller's to explain: it may carry the changes over.
+    onSuccess: (result) => {
+      if (result.outcome === 'cancelled') reportUnapplied(t, result);
+    },
   });
   const restore = useAppMutation(api.restoreHostsBackup, {
     success: (result) => (result.outcome === 'applied' ? t('hostsFile.restored') : undefined),
-    onSuccess: (result) => reportUnapplied(t, result),
+    onSuccess: (result) => {
+      if (result.outcome === 'stale') toast.error(t('hostsFile.restoreStale'));
+      else reportUnapplied(t, result);
+    },
   });
   return { apply, restore, prompt: t('hostsFile.authPrompt') };
 }

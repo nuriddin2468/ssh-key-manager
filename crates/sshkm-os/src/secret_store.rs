@@ -3,15 +3,22 @@
 //! - **macOS**: the regular (file-based) login keychain, as a generic password
 //!   whose service and account are the ones given here. Not the data-protection
 //!   keychain: that needs entitlements, which an app without a Developer ID
-//!   signature cannot have.
+//!   signature cannot have. The item gets the default access list of an item
+//!   an app creates (`SecKeychainAddGenericPassword` without an access
+//!   object): only that app, as identified by its code signature, reads it
+//!   silently; any other program — or this app after an update that changed
+//!   its signature — makes macOS ask for the login keychain password first.
 //! - **Windows**: a generic credential in the Credential Manager named
 //!   `{account}.{service}`, persisted on this computer only
 //!   (`CRED_PERSIST_LOCAL_MACHINE`), so it never roams with a domain profile.
 //!   The secret is stored as UTF-16 and may be at most 2560 bytes in that
-//!   encoding (1280 UTF-16 code units).
+//!   encoding (1280 UTF-16 code units). Any program running as the user can
+//!   read it without a prompt, so keep nothing here that must need the user's
+//!   confirmation (see [`crate::biometrics::create_bound_key`]).
 //! - **Linux**: an item in the default collection of the Secret Service
 //!   (GNOME Keyring, KDE Wallet, KeePassXC, …) with the attributes `service` and
-//!   `username`, over D-Bus.
+//!   `username`, over D-Bus. Once the collection is unlocked (usually at
+//!   login), any program of the user's session can read it without a prompt.
 //!
 //! Every call may block on a system prompt: macOS asks before an app other
 //! than the one that created an item reads it (an app update with a different

@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
 import type { HostsChange } from '@/bindings/HostsChange';
 import type { HostsDiffLine } from '@/bindings/HostsDiffLine';
+import type { HostsFileInfo } from '@/bindings/HostsFileInfo';
 import { Button } from '@/components/ui/Button';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
 import { Spinner } from '@/components/ui/Spinner';
@@ -16,10 +17,12 @@ import { useHostsApply } from './useHostsApply';
 interface ReviewDialogProps {
   revision: string;
   changes: HostsChange[];
+  /** Saving found the file changed elsewhere; these are the changes carried over to it. */
+  conflict: boolean;
   /** The file was written. */
   onApplied: () => void;
-  /** The file changed elsewhere, so the changes no longer apply. */
-  onStale: () => void;
+  /** The file changed elsewhere (`file` is how it is now), so nothing was written. */
+  onStale: (file: HostsFileInfo) => void;
   onDone: () => void;
 }
 
@@ -31,7 +34,14 @@ const ROW_STYLE = {
 } as const;
 
 /** The diff of the drafted changes, applied with the administrator password. */
-export function ReviewDialog({ revision, changes, onApplied, onStale, onDone }: ReviewDialogProps) {
+export function ReviewDialog({
+  revision,
+  changes,
+  conflict,
+  onApplied,
+  onStale,
+  onDone,
+}: ReviewDialogProps) {
   const { t } = useTranslation();
   const [flushDns, setFlushDns] = useState(true);
   const { apply, prompt } = useHostsApply();
@@ -49,7 +59,7 @@ export function ReviewDialog({ revision, changes, onApplied, onStale, onDone }: 
       {
         onSuccess: (result) => {
           if (result.outcome === 'applied') onApplied();
-          else if (result.outcome === 'stale') onStale();
+          else if (result.outcome === 'stale') onStale(result.file);
         },
       },
     );
@@ -66,6 +76,14 @@ export function ReviewDialog({ revision, changes, onApplied, onStale, onDone }: 
         description={t('hostsFile.reviewDescription')}
       />
       <DialogBody>
+        {conflict && !stale ? (
+          <p
+            role="alert"
+            className="rounded-xl border border-warning-solid/30 bg-warning-solid/[0.09] px-3 py-2.5 text-[12.5px] text-warning"
+          >
+            {t('hostsFile.reviewConflict')}
+          </p>
+        ) : null}
         {preview.isPending ? (
           <div className="grid h-32 place-items-center text-subtle">
             <Spinner className="size-5" />

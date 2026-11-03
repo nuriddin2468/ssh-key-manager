@@ -96,13 +96,18 @@ export function ServerFields({ form, set, errors, aliasHint, autoFocus }: Server
 /**
  * The key a host file names, if it is one of the keys found: by the
  * `IdentityFile` value as written (`~/.ssh/id_work`) or by its expanded path.
- * `missing`: the file isn't there.
+ * `missing`: the file isn't there. `remote`: it is on a network share
+ * (Windows), which the app never opens.
  */
-export function useKeyForFile(file: string): { key: KeyView | undefined; missing: boolean } {
+export function useKeyForFile(file: string): {
+  key: KeyView | undefined;
+  missing: boolean;
+  remote: boolean;
+} {
   const keys = useKeys();
   const config = useConfig();
   const home = useEnvironment().data?.paths.home;
-  if (!file) return { key: undefined, missing: false };
+  if (!file) return { key: undefined, missing: false, remote: false };
   const usage = (config.data?.usage ?? []).find((u) => u.raw === file);
   const key = (keys.data?.keys ?? []).find(
     (k) =>
@@ -111,7 +116,11 @@ export function useKeyForFile(file: string): { key: KeyView | undefined; missing
         k.privatePath === file ||
         k.privatePath === usage?.path),
   );
-  return { key, missing: !key && Boolean(usage?.resolved && !usage.exists) };
+  return {
+    key,
+    missing: !key && Boolean(usage?.resolved && !usage.exists),
+    remote: Boolean(usage?.remote),
+  };
 }
 
 interface KeyPickerProps {

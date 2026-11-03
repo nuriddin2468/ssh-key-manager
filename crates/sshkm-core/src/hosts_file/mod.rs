@@ -45,6 +45,8 @@ use crate::{
 
 /// Largest hosts file that is loaded. Block lists reach a few megabytes.
 const MAX_HOSTS_FILE_SIZE: u64 = 64 * 1024 * 1024;
+/// Longest scope on an IPv6 address: an interface name or index.
+const MAX_SCOPE: usize = 64;
 
 /// Names the operating system itself relies on.
 const SYSTEM_NAMES: &[&str] = &[
@@ -74,13 +76,7 @@ const UNTIL: &str = "sshkm-until=";
 /// Where the operating system reads the hosts file from.
 pub fn system_path() -> PathBuf {
     if cfg!(windows) {
-        let root = std::env::var_os("SystemRoot")
-            .filter(|root| !root.is_empty())
-            .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
-        root.join("System32")
-            .join("drivers")
-            .join("etc")
-            .join("hosts")
+        crate::paths::system32("drivers").join("etc").join("hosts")
     } else {
         PathBuf::from("/etc/hosts")
     }
@@ -220,8 +216,15 @@ pub struct HostsFile {
 
 enum LineKind<'a> {
     Blank,
-    Entry { fields: Fields<'a>, enabled: bool },
-    Invalid(HostsLineProblem),
+    Entry {
+        fields: Fields<'a>,
+        enabled: bool,
+    },
+    /// Not an entry; `resolved` is what resolvers still read from it.
+    Invalid {
+        problem: HostsLineProblem,
+        resolved: Option<Fields<'a>>,
+    },
     GroupStart(&'a str),
     GroupEnd,
 }
@@ -288,28 +291,46 @@ impl HostsFile {
 
     /// All entries, turned off ones included.
     pub fn entries(&self) -> Vec<HostsFileEntry> {
+        self.collect_entries(false)
+    }
+
+    /// Turned-on lines as resolvers read them, in file order: the turned-on
+    /// entries, plus lines [`Self::invalid_lines`] reports that still give
+    /// names an address (a name with characters host names cannot have, an
+    /// unusual scope). The audit and lookups use these, since resolvers do.
+    pub fn resolver_entries(&self) -> Vec<HostsFileEntry> {
+        self.collect_entries(true)
+    }
+
+    fn collect_entries(&self, resolver: bool) -> Vec<HostsFileEntry> {
         let mut seen = HashSet::new();
-        self.scan()
-            .into_iter()
-            .enumerate()
-            .filter_map(|(i, line)| match line.kind {
-                LineKind::Entry { fields, enabled } => {
-                    let ipv6 = fields.ip.is_ipv6();
-                    let shadowed = if enabled {
-                        fields
-                            .names
-                            .iter()
-                            .filter(|name| !seen.insert((ipv6, normalize_name(name))))
-                            .map(|name| (*name).to_owned())
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
-                    Some(entry(i, &fields, enabled, shadowed, line.group))
-                }
-                _ => None,
-            })
-            .collect()
+        let mut out = Vec::new();
+        for (i, line) in self.scan().into_iter().enumerate() {
+            let (fields, enabled, listed) = match line.kind {
+                LineKind::Entry { fields, enabled } => (fields, enabled, enabled || !resolver),
+                // Resolvers use the line, so it shadows later ones either way.
+                LineKind::Invalid {
+                    resolved: Some(fields),
+                    ..
+                } => (fields, true, resolver),
+                _ => continue,
+            };
+            let ipv6 = fields.ip.is_ipv6();
+            let shadowed = if enabled {
+                fields
+                    .names
+                    .iter()
+                    .filter(|name| !seen.insert((ipv6, normalize_name(name))))
+                    .map(|name| (*name).to_owned())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            if listed {
+                out.push(entry(i, &fields, enabled, shadowed, line.group));
+            }
+        }
+        out
     }
 
     /// Lines that could not be parsed.
@@ -318,7 +339,7 @@ impl HostsFile {
             .into_iter()
             .enumerate()
             .filter_map(|(i, line)| match line.kind {
-                LineKind::Invalid(problem) => Some(HostsFileIssue {
+                LineKind::Invalid { problem, .. } => Some(HostsFileIssue {
                     line: line_number(i),
                     problem,
                 }),
@@ -363,13 +384,14 @@ impl HostsFile {
         }
     }
 
-    /// Turned-on entries that list `name`, in file order. For each address
-    /// family the first one is what resolvers use.
+    /// Turned-on lines that list `name`, in file order, as resolvers read
+    /// them ([`Self::resolver_entries`]). For each address family the first
+    /// one is what resolvers use.
     pub fn lookup(&self, name: &str) -> Vec<HostsFileEntry> {
         let name = normalize_name(name);
-        self.entries()
+        self.resolver_entries()
             .into_iter()
-            .filter(|e| e.enabled && e.names.iter().any(|n| normalize_name(n) == name))
+            .filter(|e| e.names.iter().any(|n| normalize_name(n) == name))
             .collect()
     }
 
@@ -497,7 +519,10 @@ fn parse_line(raw: &str) -> LineKind<'_> {
                 fields,
                 enabled: true,
             },
-            Err(problem) => LineKind::Invalid(problem),
+            Err(problem) => LineKind::Invalid {
+                problem,
+                resolved: resolver_fields(data),
+            },
         };
     }
     let Some(comment) = comment else {
@@ -552,13 +577,46 @@ fn parse_fields<'a>(
     })
 }
 
-/// An IP address, allowing a scope on IPv6 ones (`fe80::1%lo0`).
+/// What resolvers read from a line [`parse_fields`] rejects: an address with
+/// any scope but an empty one, and every word after it as a name. The comment
+/// is left out, as this app does not edit such a line.
+fn resolver_fields(data: &str) -> Option<Fields<'_>> {
+    let mut words = data.split_whitespace();
+    let address = words.next()?;
+    let ip = match address.split_once('%') {
+        Some((_, "")) => return None,
+        Some((ip, _)) => ip,
+        None => address,
+    }
+    .parse()
+    .ok()?;
+    let names: Vec<&str> = words.collect();
+    (!names.is_empty()).then_some(Fields {
+        address,
+        ip,
+        names,
+        comment: None,
+    })
+}
+
+/// An IP address, allowing a scope on IPv6 ones (`fe80::1%lo0`) of up to
+/// [`MAX_SCOPE`] letters, digits, `_`, `.` and `-`. Whitespace and control
+/// characters are never part of an address, so one cannot add a line.
 fn parse_address(field: &str) -> Option<IpAddr> {
     match field.split_once('%') {
-        Some((address, scope)) if !scope.is_empty() => address.parse().ok().filter(IpAddr::is_ipv6),
-        Some(_) => None,
+        Some((address, scope)) => address
+            .parse()
+            .ok()
+            .filter(|ip: &IpAddr| ip.is_ipv6() && is_scope(scope)),
         None => field.parse().ok(),
     }
+}
+
+fn is_scope(scope: &str) -> bool {
+    (1..=MAX_SCOPE).contains(&scope.len())
+        && scope
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
 }
 
 fn address_kind(ip: IpAddr) -> HostsAddressKind {

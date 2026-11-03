@@ -43,6 +43,10 @@ const DOMAIN = 'console.example.com';
 const site = port === 443 ? `https://${DOMAIN}` : `https://${DOMAIN}:${port}`;
 const exe = process.platform === 'win32' ? '.exe' : '';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** The autofill menu or save banner: a popover `div` on the page's root. */
+const SURFACE = 'html > div:popover-open';
+/** The menu and banner ignore clicks for 500 ms after they appear. */
+const SETTLE = 600;
 
 // The browser window in the screenshots, in CSS pixels. Pages inside it are
 // shown at 125% (and captured at twice that), so the extension's surfaces
@@ -451,16 +455,16 @@ async function captureLanguage(lang, assets) {
     const page = await browser.newPage();
     await page.goto(`${site}/`);
     await page.click('#email');
-    await page.waitForSelector('sshkm-autofill', { timeout: 10_000 });
+    await page.waitForSelector(SURFACE, { timeout: 10_000 });
     await page.keyboard.press('ArrowDown');
     await sleep(400);
     const below = await page.evaluate(() => {
-      const menu = document.querySelector('sshkm-autofill').getBoundingClientRect();
+      const menu = document.querySelector('html > div:popover-open').getBoundingClientRect();
       return menu.top >= document.querySelector('#email').getBoundingClientRect().bottom;
     });
     if (!below) throw new Error('the menu opened above the field: make the sign-in page shorter');
     const fillShot = await shot(page);
-    const menuRect = await page.$eval('sshkm-autofill', (el) => {
+    const menuRect = await page.$eval(SURFACE, (el) => {
       const r = el.getBoundingClientRect();
       return { x: r.x, y: r.y, width: r.width, height: r.height };
     });
@@ -489,9 +493,9 @@ async function captureLanguage(lang, assets) {
     await page.click('#password');
     await page.keyboard.type('new-login-42');
     await Promise.all([page.waitForNavigation(), page.click('#submit')]);
-    await page.waitForSelector('sshkm-autofill', { timeout: 10_000 });
+    await page.waitForSelector(SURFACE, { timeout: 10_000 });
     await page.mouse.move(10, 10);
-    await sleep(500);
+    await sleep(SETTLE);
     const saveShot = await shot(page);
     await render(
       browser,
@@ -511,7 +515,7 @@ async function captureLanguage(lang, assets) {
     );
 
     // Saved, as a user would; then the popup over the signed-in page.
-    const banner = await page.$eval('sshkm-autofill', (el) => {
+    const banner = await page.$eval(SURFACE, (el) => {
       const r = el.getBoundingClientRect();
       return { right: r.right, bottom: r.bottom };
     });

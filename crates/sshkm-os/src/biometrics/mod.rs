@@ -15,8 +15,19 @@
 //! - **Linux**: not supported; [`availability`] reports
 //!   [`Availability::Unavailable`].
 //!
-//! Both functions block (the check briefly, the prompt until the user answers),
-//! so call them from a worker thread.
+//! [`authenticate`] is a yes/no answer inside this process: it guards nothing
+//! by itself. To bind a secret to the user's confirmation:
+//!
+//! - **Windows**: a Windows Hello key ([`create_bound_key`],
+//!   [`sign_with_bound_key`]) signs a challenge only after the user's PIN,
+//!   face or fingerprint, and the signature is the same every time, so a key
+//!   derived from it exists nowhere at rest.
+//! - **macOS**: there is no equivalent without the data-protection keychain,
+//!   which needs a provisioning profile. [`enrollment`] at least tells when
+//!   fingerprints were added or removed.
+//!
+//! Every function blocks (the checks briefly, the prompts until the user
+//! answers), so call them from a worker thread.
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod prompt;
@@ -27,6 +38,8 @@ mod macos;
 use macos as sys;
 
 #[cfg(target_os = "windows")]
+mod hello;
+#[cfg(target_os = "windows")]
 mod win;
 #[cfg(target_os = "windows")]
 use win as sys;
@@ -36,7 +49,12 @@ mod unsupported;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 use unsupported as sys;
 
+use secrecy::zeroize::Zeroizing;
+
 use crate::{Error, Result};
+
+/// Whether this platform has [`create_bound_key`]: Windows only.
+pub const BOUND_KEYS: bool = cfg!(target_os = "windows");
 
 /// The biometric method the platform offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -98,6 +116,73 @@ pub fn authenticate(reason: &str) -> Result<()> {
     sys::authenticate(reason)
 }
 
+/// Creates the Windows Hello key `name` for this user, replacing one of that
+/// name, and returns its signature of `challenge`. The user confirms with
+/// Windows Hello (once for the new key, once for the signature).
+///
+/// The signature is deterministic: [`sign_with_bound_key`] with the same
+/// name and challenge returns the same bytes until the key is replaced or
+/// deleted, or Windows Hello is reset. Use it as key material (through a
+/// KDF), never store it.
+///
+/// Errors: [`Error::Cancelled`], [`Error::Failed`], and
+/// [`Error::Unsupported`] off Windows.
+pub fn create_bound_key(name: &str, challenge: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+    #[cfg(target_os = "windows")]
+    {
+        hello::create(name, challenge)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (name, challenge);
+        Err(Error::Unsupported)
+    }
+}
+
+/// Signs `challenge` with the Windows Hello key `name` after the user
+/// confirms with Windows Hello. [`Error::NotFound`] when the key is gone.
+pub fn sign_with_bound_key(name: &str, challenge: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+    #[cfg(target_os = "windows")]
+    {
+        hello::sign(name, challenge)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (name, challenge);
+        Err(Error::Unsupported)
+    }
+}
+
+/// Deletes the Windows Hello key `name`; a missing key, or another platform,
+/// is not an error.
+pub fn delete_bound_key(name: &str) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        hello::delete(name)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = name;
+        Ok(())
+    }
+}
+
+/// macOS: an opaque value that changes whenever fingerprints are added to or
+/// removed from Touch ID (Local Authentication's policy domain state). Store a
+/// hash of it with whatever Touch ID guards, and compare after each prompt.
+/// It may also change with a major macOS update. `None` when Touch ID can't
+/// be used now, and on other platforms.
+pub fn enrollment() -> Option<Vec<u8>> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::enrollment()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,6 +215,24 @@ mod tests {
     fn unsupported_platforms_report_unavailable() {
         assert!(!availability().is_available());
         assert!(matches!(authenticate("unlock"), Err(Error::Unavailable(_))));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn bound_keys_are_windows_only() {
+        const { assert!(!BOUND_KEYS) };
+        assert_eq!(create_bound_key("x", b"c").unwrap_err(), Error::Unsupported);
+        assert_eq!(
+            sign_with_bound_key("x", b"c").unwrap_err(),
+            Error::Unsupported
+        );
+        assert!(delete_bound_key("x").is_ok());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn enrollment_is_macos_only() {
+        assert!(enrollment().is_none());
     }
 
     /// Shows the real Touch ID / Windows Hello prompt. Run it at the machine

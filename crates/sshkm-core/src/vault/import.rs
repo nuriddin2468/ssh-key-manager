@@ -19,7 +19,9 @@ use secrecy::SecretString;
 use serde::Serialize;
 use zeroize::Zeroizing;
 
-use super::{EntryInput, EntrySummary, Vault, check_field, otp_uri, wanted_fields};
+use super::{
+    EntryInput, EntrySummary, UNREADABLE_OTP_FIELD, Vault, check_field, otp_uri, wanted_fields,
+};
 use crate::{Error, Result, fsutil};
 
 /// Largest CSV file that is read. Exports of thousands of entries stay far
@@ -63,9 +65,11 @@ pub struct ImportRow {
     /// Folder path, e.g. `Work/Servers`.
     pub group: Option<String>,
     pub has_password: bool,
-    /// A 2FA secret that will be stored as such. An unreadable one goes into
-    /// the notes instead.
+    /// A 2FA secret that will be stored as such.
     pub has_otp: bool,
+    /// A 2FA secret this app can't use (`steam://`, HOTP, …). It is kept in a
+    /// protected field that KeePassXC shows, and never sent to the UI.
+    pub has_unreadable_otp: bool,
     /// An existing entry for the same site (URL host) and user name, or with
     /// the same title and user name when the row has no URL.
     pub duplicate_of: Option<String>,
@@ -101,6 +105,7 @@ impl Vault {
                 group: record.group.clone(),
                 has_password: !record.password.is_empty(),
                 has_otp: record.otp.is_some(),
+                has_unreadable_otp: record.unreadable_otp.is_some(),
                 duplicate_of: duplicates.find(record).map(str::to_owned),
             })
             .collect();
@@ -167,6 +172,9 @@ impl Vault {
         if !entry.fields.contains_key(fields::PASSWORD) {
             entry.set_protected(fields::PASSWORD, "");
         }
+        if let Some(otp) = &record.unreadable_otp {
+            entry.set_protected(UNREADABLE_OTP_FIELD, otp.as_str());
+        }
         Ok(())
     }
 
@@ -223,6 +231,8 @@ struct Record {
     password: Zeroizing<String>,
     /// An `otpauth://` URI.
     otp: Option<Zeroizing<String>>,
+    /// A 2FA secret as the file had it, when it isn't one this app can use.
+    unreadable_otp: Option<Zeroizing<String>>,
 }
 
 fn read(path: &Path) -> Result<Parsed> {
@@ -532,13 +542,16 @@ impl Columns {
 
     /// The row as an entry, or `None` if it is empty or can't be stored.
     fn record(&self, row: &csv::StringRecord, index: u32) -> Option<Record> {
-        let first = |columns: &[usize]| -> &str {
+        let any = |columns: &[usize]| -> &str {
             columns
                 .iter()
                 .filter_map(|&i| row.get(i))
                 .find(|value| !value.trim().is_empty())
                 .unwrap_or_default()
         };
+        // This app's export puts a `'` before text a spreadsheet would run;
+        // passwords are written as they are.
+        let first = |columns: &[usize]| -> &str { without_formula_guard(any(columns)) };
         let mut url = first(&self.url).trim().to_owned();
         if self.format == Some(CsvFormat::Bitwarden) {
             // Bitwarden puts all of an item's URIs into one cell.
@@ -550,7 +563,7 @@ impl Columns {
                 .to_owned();
         }
         let username = first(&self.username).trim().to_owned();
-        let password = Zeroizing::new(first(&self.password).to_owned());
+        let password = Zeroizing::new(any(&self.password).to_owned());
         let mut notes = first(&self.notes).trim_end().to_owned();
         let extra = first(&self.extra).trim();
         if !extra.is_empty() {
@@ -572,14 +585,14 @@ impl Columns {
                 .find(|t| !t.is_empty())
                 .unwrap_or_else(|| UNTITLED.to_owned());
         }
-        let otp = if raw_otp.is_empty() {
-            None
+        let (otp, unreadable_otp) = if raw_otp.is_empty() {
+            (None, None)
         } else if let Ok(uri) = otp_uri(raw_otp, &title) {
-            Some(Zeroizing::new(uri))
+            (Some(Zeroizing::new(uri)), None)
         } else {
-            // Kept, so nothing is lost, but not as a working 2FA secret.
-            push_paragraph(&mut notes, &format!("TOTP: {raw_otp}"));
-            None
+            // Kept, so nothing is lost, but as protected as a password: not
+            // in the notes, which the UI shows.
+            (None, Some(Zeroizing::new(raw_otp.to_owned())))
         };
         let group = group_path(
             first(&self.group),
@@ -587,7 +600,10 @@ impl Columns {
         );
 
         let values = [&title, &username, &url, &notes, password.as_str()];
-        let otp_ok = otp.as_ref().is_none_or(|otp| check_field(otp).is_ok());
+        let otp_ok = [&otp, &unreadable_otp]
+            .into_iter()
+            .flatten()
+            .all(|otp| check_field(otp).is_ok());
         let group_ok = group.as_deref().is_none_or(|g| check_field(g).is_ok());
         if !otp_ok || !group_ok || values.iter().any(|v| check_field(v).is_err()) {
             return None;
@@ -601,6 +617,7 @@ impl Columns {
             group,
             password,
             otp,
+            unreadable_otp,
         })
     }
 }
@@ -684,6 +701,15 @@ impl<'a> Duplicates<'a> {
 
 fn csv_error(error: &csv::Error) -> Error {
     Error::Parse(format!("reading the CSV file: {error}"))
+}
+
+/// A cell without the `'` this app's CSV export puts before text that
+/// starts like a formula.
+fn without_formula_guard(cell: &str) -> &str {
+    match cell.strip_prefix('\'') {
+        Some(rest) if rest.starts_with(super::export::FORMULA_STARTS) => rest,
+        _ => cell,
+    }
 }
 
 #[cfg(test)]

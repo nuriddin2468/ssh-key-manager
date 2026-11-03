@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use ssh_key::{HashAlg, PublicKey};
+use sshkm_core::fsutil;
 use sshkm_core::known_hosts::{HostMarker, KnownHosts};
 use tauri::State;
 
@@ -34,19 +35,31 @@ pub async fn find_known_hosts(
     .await
 }
 
+/// Removes 1-based `lines` of the file at `revision` (its
+/// [`KnownHostsView::revision`]); fails with `conflict` if the file changed
+/// since, so the numbers may point at other lines now.
+///
+/// [`KnownHostsView::revision`]: sshkm_core::known_hosts::KnownHostsView::revision
 #[tauri::command]
 pub async fn remove_known_hosts(
     state: State<'_, Shared>,
     lines: Vec<u32>,
+    revision: String,
 ) -> AppResult<KnownHostsFile> {
     blocking(&state, move |state| {
-        let mut known = KnownHosts::load(&state.paths.known_hosts)?;
-        if known.remove_lines(&lines) > 0 {
-            known.save(&state.paths.known_hosts, &state.backup_dir)?;
-        }
+        remove_lines_at(state, &lines, &revision)?;
         known_hosts_file(state)
     })
     .await
+}
+
+fn remove_lines_at(state: &AppState, lines: &[u32], revision: &str) -> AppResult<()> {
+    let mut known = KnownHosts::load(&state.paths.known_hosts)?;
+    fsutil::ensure_revision(&state.paths.known_hosts, &known.revision(), revision)?;
+    if known.remove_lines(lines) > 0 {
+        known.save(&state.paths.known_hosts, &state.backup_dir)?;
+    }
+    Ok(())
 }
 
 /// Fetches the keys a server offers now (`ssh-keyscan`) and compares them with
@@ -129,4 +142,49 @@ fn known_hosts_file(state: &AppState) -> AppResult<KnownHostsFile> {
         exists: state.paths.known_hosts.exists(),
         view: known.view(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use sshkm_core::ErrorCode;
+    use sshkm_core::paths::SshPaths;
+
+    use super::*;
+
+    const KEY: &str =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBIZFNq0hlvHGZ/oas65Ba4jkcFEy3dX/aRZy70M73oL";
+
+    #[test]
+    fn removes_lines_of_the_revision_they_came_from() {
+        let home = tempfile::tempdir().unwrap();
+        let ssh = home.path().join(".ssh");
+        fs::create_dir(&ssh).unwrap();
+        let state = AppState::new(
+            SshPaths::with_home(home.path(), &ssh),
+            home.path().join("hosts"),
+            home.path().join("backups"),
+            home.path().join("data"),
+        );
+        let path = &state.paths.known_hosts;
+        let both = format!("old.example {KEY}\n@revoked bad.example {KEY}\n");
+        fs::write(path, &both).unwrap();
+        let read = known_hosts_file(&state).unwrap();
+
+        // Another program removes line 1: line 1 is the @revoked one now.
+        fs::write(path, format!("@revoked bad.example {KEY}\n")).unwrap();
+        let err = remove_lines_at(&state, &[1], &read.view.revision).unwrap_err();
+        assert_eq!(err.code(), ErrorCode::Conflict);
+        assert!(fs::read_to_string(path).unwrap().contains("@revoked"));
+
+        // Read again, ask again.
+        fs::write(path, &both).unwrap();
+        let read = known_hosts_file(&state).unwrap();
+        remove_lines_at(&state, &[1], &read.view.revision).unwrap();
+        assert_eq!(
+            fs::read_to_string(path).unwrap(),
+            format!("@revoked bad.example {KEY}\n")
+        );
+    }
 }

@@ -22,12 +22,15 @@
 //! - each secret is given at most once per session (a password asked again
 //!   means the first one was wrong; answering again would only loop);
 //! - prompts naming another account than the one expected (for example a
-//!   `ProxyJump` host's password) are refused.
+//!   `ProxyJump` host's password) are refused;
+//! - so are prompts the session cannot vouch for: with OpenSSH before 8.5 a
+//!   server's prompt looks like `ssh`'s own (see [`Connection`]).
 //!
 //! An interactive session is for a terminal the user watches. Its
 //! [`Interactive`] responder can ask the user, so it is also asked about host
-//! keys, secrets asked again and other accounts' prompts, and told which of
-//! these it is. Other yes/no questions are still answered "no".
+//! keys, secrets asked again, other accounts' prompts and prompts the session
+//! cannot vouch for, and told which of these it is. Other yes/no questions
+//! are still answered "no".
 //!
 //! Either way everything is recorded ([`Session::asked`]) so the caller can
 //! tell the user "password rejected", "a 2FA code was asked but none is saved"
@@ -122,17 +125,99 @@ pub struct Ask<'a> {
     /// The prompt names another account than the one the session expects
     /// (see [`Session::expect_account`]), such as a `ProxyJump` host's.
     pub foreign: bool,
+    /// The session cannot vouch for the prompt (see [`Connection`]): it may be
+    /// a server's text posing as `ssh`'s own, or another host's. It must not
+    /// get a saved secret, nor be shown as what its text claims to be.
+    pub unverified: bool,
     /// How many times this secret was already given in this session: more
     /// than zero means the server rejected it.
     pub given: u32,
 }
 
+/// How the `ssh` a session serves connects, as far as telling its own
+/// prompts from servers' goes (see [`Session::expect_connection`]).
+///
+/// OpenSSH 8.5 and later start every server's keyboard-interactive prompt
+/// with `(user@host) `, so a prompt without it is `ssh`'s own. Before 8.5 a
+/// server's prompt looks just like `ssh`'s: it can ask "Enter passphrase for
+/// key …", or name the target's account to get its password. So, before 8.5:
+///
+/// - if the host may use keyboard-interactive, a passphrase prompt may be
+///   the server's: the session does not vouch for it;
+/// - through a `ProxyJump` or `ProxyCommand`, any prompt may be the jump
+///   host's (its own `ssh` asks the same session, and the options of this
+///   run do not reach it): the session vouches for none.
+///
+/// Prompts it does not vouch for are [`Ask::unverified`]: refused by a batch
+/// session, left to the user by an interactive one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Connection {
+    /// `ssh` marks servers' prompts: OpenSSH 8.5 or later.
+    pub marks_server_prompts: bool,
+    /// The host may use keyboard-interactive authentication: it is not
+    /// switched off for this run.
+    pub keyboard_interactive: bool,
+    /// Through a `ProxyJump` or `ProxyCommand`.
+    pub proxied: bool,
+}
+
+impl Connection {
+    /// For the `ssh` that `ssh -V` calls `version` (`OpenSSH_9.9p1`,
+    /// `OpenSSH_for_Windows_8.1p1`). An unknown version counts as one that
+    /// does not mark servers' prompts.
+    pub fn new(version: Option<&str>, keyboard_interactive: bool, proxied: bool) -> Self {
+        Self {
+            marks_server_prompts: version
+                .and_then(openssh_release)
+                .is_some_and(|release| release >= (8, 5)),
+            keyboard_interactive,
+            proxied,
+        }
+    }
+
+    /// Whether a prompt like `prompt` can only be `ssh`'s own or the
+    /// expected host's. Yes/no questions are never answered "yes" for the
+    /// user, so they need no vouching.
+    fn vouches_for(self, prompt: &Prompt) -> bool {
+        if self.marks_server_prompts || prompt.kind.is_confirmation() {
+            true
+        } else if self.proxied {
+            false
+        } else {
+            !(self.keyboard_interactive && matches!(prompt.kind, PromptKind::Passphrase { .. }))
+        }
+    }
+}
+
+impl Default for Connection {
+    /// OpenSSH 8.5 or later with no proxy: every prompt is told apart by its
+    /// prefix and account.
+    fn default() -> Self {
+        Self {
+            marks_server_prompts: true,
+            keyboard_interactive: true,
+            proxied: false,
+        }
+    }
+}
+
+/// `OpenSSH_9.9p1` → (9, 9); `OpenSSH_for_Windows_8.1p1` → (8, 1).
+fn openssh_release(version: &str) -> Option<(u32, u32)> {
+    let number = version.strip_prefix("OpenSSH_")?.rsplit('_').next()?;
+    let (major, rest) = number.split_once('.')?;
+    let digits = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    Some((major.parse().ok()?, rest[..digits].parse().ok()?))
+}
+
 /// Answers an interactive session's prompts, usually by asking the user.
 ///
 /// Unlike a [`Responder`] it is asked about host-key questions, secrets given
-/// before and prompts naming another account, so it must not answer those
-/// with a saved secret by itself: only the user may trust a key, retry a
-/// rejected secret or sign in to another host.
+/// before, prompts naming another account and prompts the session cannot
+/// vouch for, so it must not answer those with a saved secret by itself: only
+/// the user may trust a key, retry a rejected secret, sign in to another host
+/// or answer a question whose sender is unknown.
 pub trait Interactive: Send + Sync + 'static {
     /// Runs on the askpass server's thread and may block while the user
     /// answers; the session's other prompts wait meanwhile.
@@ -238,7 +323,8 @@ pub enum PromptOutcome {
     /// The same secret was asked for again after it was given: the server
     /// rejected it.
     Repeated,
-    /// Not answered: an unrecognised prompt, or one naming another account.
+    /// Not answered: an unrecognised prompt, one naming another account, or
+    /// one the session cannot vouch for (see [`Connection`]).
     Refused,
     /// A host-key question the user answered "yes" (interactive sessions
     /// only).
@@ -332,9 +418,17 @@ impl Session {
     /// Refuses prompts that name an account other than `account` (the `User`
     /// and `HostName`, or `HostKeyAlias`, of the host being connected to).
     /// Prompts that name no account (passphrases; keyboard-interactive before
-    /// OpenSSH 8.5) are still answered.
+    /// OpenSSH 8.5) are still answered, as far as the
+    /// [connection](Self::expect_connection) lets the session vouch for them.
     pub fn expect_account(&self, account: PromptAccount) {
         self.state.log().account = Some(account);
+    }
+
+    /// Tells the session how `ssh` connects, which decides the prompts it can
+    /// vouch for (see [`Connection`]). Until then it assumes OpenSSH 8.5 or
+    /// later with no proxy.
+    pub fn expect_connection(&self, connection: Connection) {
+        self.state.log().connection = connection;
     }
 
     /// The environment `ssh` needs to use this session, as set by
@@ -489,6 +583,7 @@ enum Answerer {
 #[derive(Default)]
 struct Log {
     account: Option<PromptAccount>,
+    connection: Connection,
     /// How often each secret was given, by prompt kind (and key for
     /// passphrases, text for other prompts).
     given: HashMap<(PromptKind, String), u32>,
@@ -510,25 +605,29 @@ impl SessionState {
                 _ => String::new(),
             },
         );
-        let (foreign, given) = {
+        let (foreign, unverified, given) = {
             let log = self.log();
             let foreign = matches!(
                 (&log.account, &prompt.account),
                 (Some(expected), Some(named)) if !named.matches(expected)
             );
-            (foreign, log.given.get(&slot).copied().unwrap_or(0))
+            let unverified = !log.connection.vouches_for(&prompt);
+            (
+                foreign,
+                unverified,
+                log.given.get(&slot).copied().unwrap_or(0),
+            )
         };
 
+        let ask = Ask {
+            prompt: &prompt,
+            foreign,
+            unverified,
+            given,
+        };
         let (outcome, answer) = match &self.answerer {
-            Answerer::Batch(responder) => batch_rules(responder.as_ref(), &prompt, foreign, given),
-            Answerer::Interactive(responder) => interactive_rules(
-                responder.as_ref(),
-                &Ask {
-                    prompt: &prompt,
-                    foreign,
-                    given,
-                },
-            ),
+            Answerer::Batch(responder) => batch_rules(responder.as_ref(), &ask),
+            Answerer::Interactive(responder) => interactive_rules(responder.as_ref(), &ask),
         };
         let mut log = self.log();
         if outcome == PromptOutcome::Answered {
@@ -539,22 +638,18 @@ impl SessionState {
     }
 }
 
-/// A batch session: yes/no questions get "no", other accounts and repeated
-/// secrets get nothing, and the responder is asked only about the rest.
-fn batch_rules(
-    responder: &dyn Responder,
-    prompt: &Prompt,
-    foreign: bool,
-    given: u32,
-) -> (PromptOutcome, Answer) {
-    if prompt.kind.is_confirmation() {
+/// A batch session: yes/no questions get "no"; other accounts, prompts the
+/// session cannot vouch for and repeated secrets get nothing; the responder
+/// is asked only about the rest.
+fn batch_rules(responder: &dyn Responder, ask: &Ask<'_>) -> (PromptOutcome, Answer) {
+    if ask.prompt.kind.is_confirmation() {
         (PromptOutcome::Declined, Answer::Text("no".into()))
-    } else if foreign {
+    } else if ask.foreign || ask.unverified {
         (PromptOutcome::Refused, Answer::Refuse)
-    } else if given > 0 {
+    } else if ask.given > 0 {
         (PromptOutcome::Repeated, Answer::Refuse)
     } else {
-        reply_to(prompt, responder.respond(prompt))
+        reply_to(ask.prompt, responder.respond(ask.prompt))
     }
 }
 
@@ -850,6 +945,182 @@ mod tests {
         );
     }
 
+    const KEY: &str = "/Users/alice/.ssh/id_ed25519";
+
+    /// A session holding a password and a key's passphrase for
+    /// alice@target.example, over `connection`.
+    fn saved_session(server: &Server, connection: Connection) -> Session {
+        let session = server.session(
+            Secrets::new(Some("target-password".into()), Some("123456".into()))
+                .with_passphrase(KEY, "key-passphrase".into()),
+        );
+        session.expect_account(PromptAccount::new("alice", "target.example"));
+        session.expect_connection(connection);
+        session
+    }
+
+    #[test]
+    fn server_prompts_never_get_passphrases_or_questions_answered() {
+        let server = server();
+        let session = saved_session(&server, Connection::default());
+        for text in [
+            format!("(alice@target.example) Enter passphrase for key '{KEY}': "),
+            format!("(alice@target.example) Bad passphrase, try again for {KEY}: "),
+            "(alice@target.example) The authenticity of host 'target.example (10.0.0.1)' can't \
+             be established.\nED25519 key fingerprint is SHA256:abc.\nAre you sure you want to \
+             continue connecting (yes/no/[fingerprint])? "
+                .to_owned(),
+            "(alice@target.example) Accept updated hostkeys? (yes/no): ".to_owned(),
+        ] {
+            assert_eq!(ask_session(&server, &session, &text), None, "{text:?}");
+        }
+        assert!(
+            session
+                .asked()
+                .iter()
+                .all(|a| a.prompt.kind == PromptKind::Other && a.outcome == PromptOutcome::Refused)
+        );
+        // `ssh`'s own passphrase prompt still gets the saved one.
+        assert_eq!(
+            ask_session(
+                &server,
+                &session,
+                &format!("Enter passphrase for key '{KEY}': ")
+            )
+            .as_deref(),
+            Some("key-passphrase")
+        );
+    }
+
+    #[test]
+    fn old_openssh_without_keyboard_interactive_is_answered() {
+        let server = server();
+        let session = saved_session(
+            &server,
+            Connection::new(Some("OpenSSH_8.4p1"), false, false),
+        );
+        assert_eq!(
+            ask_session(
+                &server,
+                &session,
+                &format!("Enter passphrase for key '{KEY}': ")
+            )
+            .as_deref(),
+            Some("key-passphrase")
+        );
+        assert_eq!(
+            ask_session(&server, &session, "alice@target.example's password: ").as_deref(),
+            Some("target-password")
+        );
+    }
+
+    #[test]
+    fn old_openssh_keeps_passphrases_from_the_server() {
+        let server = server();
+        let session = saved_session(&server, Connection::new(Some("OpenSSH_8.4p1"), true, false));
+        // A server's keyboard-interactive prompt looks just like ssh's here.
+        assert_eq!(
+            ask_session(
+                &server,
+                &session,
+                &format!("Enter passphrase for key '{KEY}': ")
+            ),
+            None
+        );
+        // Only the host itself can ask: its password and code are its own.
+        assert_eq!(
+            ask_session(&server, &session, "Password: ").as_deref(),
+            Some("target-password")
+        );
+        assert_eq!(
+            ask_session(&server, &session, "Verification code: ").as_deref(),
+            Some("123456")
+        );
+        let outcomes: Vec<_> = session.asked().iter().map(|a| a.outcome).collect();
+        assert_eq!(
+            outcomes,
+            [
+                PromptOutcome::Refused,
+                PromptOutcome::Answered,
+                PromptOutcome::Answered
+            ]
+        );
+    }
+
+    #[test]
+    fn old_openssh_through_a_jump_host_answers_nothing() {
+        let server = server();
+        let session = saved_session(
+            &server,
+            Connection::new(Some("OpenSSH_for_Windows_8.1p1"), false, true),
+        );
+        // The jump host's own ssh asks the same session, and its server can
+        // send any of these, the target's account included.
+        for text in [
+            "Password: ".to_owned(),
+            "Verification code: ".to_owned(),
+            "alice@target.example's password: ".to_owned(),
+            "(alice@target.example) Password: ".to_owned(),
+            format!("Enter passphrase for key '{KEY}': "),
+        ] {
+            assert_eq!(ask_session(&server, &session, &text), None, "{text:?}");
+        }
+        assert!(
+            session
+                .asked()
+                .iter()
+                .all(|a| a.outcome == PromptOutcome::Refused)
+        );
+        // Yes/no questions are still answered "no".
+        assert_eq!(
+            ask_session(&server, &session, HOST_KEY).as_deref(),
+            Some("no")
+        );
+    }
+
+    #[test]
+    fn new_openssh_through_a_jump_host_tells_hosts_apart() {
+        let server = server();
+        let session = saved_session(&server, Connection::new(Some("OpenSSH_9.9p1"), true, true));
+        assert_eq!(
+            ask_session(&server, &session, "(bob@jump.example) Password: "),
+            None
+        );
+        assert_eq!(
+            ask_session(&server, &session, "(alice@target.example) Password: ").as_deref(),
+            Some("target-password")
+        );
+        assert_eq!(
+            ask_session(
+                &server,
+                &session,
+                &format!("Enter passphrase for key '{KEY}': ")
+            )
+            .as_deref(),
+            Some("key-passphrase")
+        );
+    }
+
+    #[test]
+    fn reads_openssh_versions() {
+        assert_eq!(openssh_release("OpenSSH_9.9p1"), Some((9, 9)));
+        assert_eq!(openssh_release("OpenSSH_10.0p2"), Some((10, 0)));
+        assert_eq!(openssh_release("OpenSSH_8.4p1"), Some((8, 4)));
+        assert_eq!(openssh_release("OpenSSH_for_Windows_8.1p1"), Some((8, 1)));
+        assert_eq!(openssh_release("OpenSSH_for_Windows_9.5p1"), Some((9, 5)));
+        assert_eq!(openssh_release("OpenSSH_7.4"), Some((7, 4)));
+        assert_eq!(openssh_release("Dropbear"), None);
+        let marks = |version| Connection::new(version, true, false).marks_server_prompts;
+        assert!(marks(Some("OpenSSH_8.5p1")));
+        assert!(marks(Some("OpenSSH_10.0p2")));
+        assert!(!marks(Some("OpenSSH_8.4p1")));
+        assert!(!marks(Some("OpenSSH_for_Windows_8.1p1")));
+        assert!(
+            !marks(None),
+            "an unknown ssh is not trusted to mark prompts"
+        );
+    }
+
     #[test]
     fn unknown_tokens_get_nothing() {
         let server = server();
@@ -1005,6 +1276,31 @@ mod tests {
                 PromptOutcome::Missing
             ]
         );
+    }
+
+    #[test]
+    fn interactive_sessions_say_what_they_cannot_vouch_for() {
+        let server = server();
+        let unverified = Arc::new(Mutex::new(Vec::new()));
+        let session = server.interactive_session(Recorder {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            reply: {
+                let unverified = Arc::clone(&unverified);
+                move |ask: &Ask<'_>| {
+                    unverified.lock().unwrap().push(ask.unverified);
+                    Reply::Refuse
+                }
+            },
+        });
+        session.expect_connection(Connection::new(Some("OpenSSH_8.4p1"), true, true));
+        ask_session(&server, &session, "Password: ");
+        ask_session(&server, &session, "Enter passphrase for key '/k': ");
+        ask_session(&server, &session, HOST_KEY);
+        assert_eq!(*unverified.lock().unwrap(), [true, true, false]);
+
+        session.expect_connection(Connection::default());
+        ask_session(&server, &session, "Enter passphrase for key '/k2': ");
+        assert_eq!(unverified.lock().unwrap().last(), Some(&false));
     }
 
     #[test]

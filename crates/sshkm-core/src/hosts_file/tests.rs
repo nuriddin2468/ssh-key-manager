@@ -132,6 +132,79 @@ fn lookup() {
 }
 
 #[test]
+fn resolvers_read_lines_the_app_rejects() {
+    let file = HostsFile::parse(
+        "203.0.113.66 github.com x/1 # sshkm-until=2020-01-01T00:00:00Z\n\
+         140.82.112.3 github.com\n\
+         fe80::1%en0/1 gitlab.com\n\
+         300.1.1.1 broken.example\n\
+         10.0.0.1\n\
+         # 10.0.0.9 a/b\n",
+    );
+    assert_eq!(lines(&file.entries()), [2]);
+    // Resolvers use line 1 for github.com.
+    assert_eq!(file.entries()[0].shadowed, ["github.com"]);
+    assert_eq!(
+        file.invalid_lines()
+            .iter()
+            .map(|i| i.line)
+            .collect::<Vec<_>>(),
+        [1, 3, 4, 5]
+    );
+
+    let resolved = file.resolver_entries();
+    assert_eq!(lines(&resolved), [1, 2, 3]);
+    assert_eq!(resolved[0].names, ["github.com", "x/1"]);
+    assert_eq!(resolved[0].kind, HostsAddressKind::Public);
+    assert_eq!(resolved[0].shadowed, Vec::<String>::new());
+    // The app does not edit the line, so nothing there is a reminder.
+    assert_eq!((&resolved[0].comment, &resolved[0].expires), (&None, &None));
+    assert_eq!(resolved[1].shadowed, ["github.com"]);
+    assert_eq!(resolved[2].address, "fe80::1%en0/1");
+    assert!(resolved[2].is_ipv6());
+    assert_eq!(lines(&file.lookup("GitHub.com")), [1, 2]);
+    assert_eq!(lines(&file.lookup("gitlab.com")), [3]);
+
+    assert_eq!(
+        file.edited(&[HostsChange::Remove { line: 1 }])
+            .unwrap_err()
+            .code(),
+        ErrorCode::NotFound
+    );
+}
+
+#[test]
+fn scopes_are_interface_names() {
+    let longest = format!("fe80::1%{}", "a".repeat(64));
+    for good in [
+        "fe80::1%lo0",
+        "fe80::1%eth0.100",
+        "fe80::1%12",
+        "fe80::1%wl_p-2",
+        longest.as_str(),
+    ] {
+        assert!(parse_address(good).is_some(), "{good}");
+    }
+    let long = format!("fe80::1%{}", "a".repeat(65));
+    for bad in [
+        "fe80::1%",
+        "10.0.0.1%lo0",
+        "fe80::1%lo0%1",
+        "fe80::1%a b",
+        "fe80::1%x\n203.0.113.66 www.bank.example",
+        "fe80::1%lo0\r",
+        "fe80::1%\u{1b}[2J",
+        "fe80::1%ünï",
+        "fe80::1%a/b",
+        " ::1",
+        "::1\n",
+        long.as_str(),
+    ] {
+        assert!(parse_address(bad).is_none(), "{bad:?}");
+    }
+}
+
+#[test]
 fn names() {
     let longest_label = "a".repeat(63);
     let long_label = "a".repeat(64);
@@ -537,6 +610,9 @@ fn bad_changes_change_nothing() {
     );
     for bad in [
         edit("10.0.0.300", &["x"]),
+        // A scope that would add a line of its own.
+        edit("fe80::1%x\n203.0.113.66 www.bank.example", &["x"]),
+        edit("fe80::1%a b", &["x"]),
         edit("10.0.0.1", &[]),
         edit("10.0.0.1", &["a b"]),
         edit("10.0.0.1", &["LocalHost"]),

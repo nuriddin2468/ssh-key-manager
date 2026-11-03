@@ -5,6 +5,7 @@ import type { HostEntry } from '@/bindings/HostEntry';
 import type { PromptRequest } from '@/bindings/PromptRequest';
 import type { TerminalEvent } from '@/bindings/TerminalEvent';
 import {
+  type AccountAsk,
   afterClose,
   announcement,
   applyEvent,
@@ -12,10 +13,12 @@ import {
   cycle,
   failureView,
   hostIdOf,
+  hostKeyHost,
   isConnectable,
   isLive,
   loadRecent,
   newTab,
+  promptAccount,
   rememberRecent,
   saveRecent,
   signInText,
@@ -197,6 +200,32 @@ describe('what the section says', () => {
         save: 'none',
       }),
     ).toBe('ssh needs the passphrase for id_rsa.');
+  });
+
+  it('names the account a prompt is for', () => {
+    expect(promptAccount(tab(), passwordPrompt.ask as AccountAsk)).toBe('ubuntu@prod-api');
+    const jump: AccountAsk = {
+      type: 'oneTimeCode',
+      question: 'Verification code:',
+      retry: false,
+      account: { user: 'bob', host: 'bastion.example.net' },
+      foreign: true,
+    };
+    expect(promptAccount(tab(), jump)).toBe('bob@bastion.example.net');
+    const unknown: AccountAsk = {
+      type: 'other',
+      text: 'Password:',
+      account: null,
+      foreign: false,
+      unverified: true,
+    };
+    expect(promptAccount(tab('solo', { info: null }), unknown)).toBe('solo');
+  });
+
+  it('names the host a key is for', () => {
+    expect(hostKeyHost('bastion.example.net (203.0.113.7)')).toBe('bastion.example.net');
+    expect(hostKeyHost('prod (<no hostip for proxy command>)')).toBe('prod');
+    expect(hostKeyHost('[10.0.0.5]:2222')).toBe('[10.0.0.5]:2222');
   });
 
   it('turns failure reasons into messages and fixes', () => {

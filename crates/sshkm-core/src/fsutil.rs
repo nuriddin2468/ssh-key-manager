@@ -7,11 +7,13 @@
 //! link and the repository file is updated.
 
 use std::{
+    fmt::Write as _,
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
 };
 
+use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::FormatItem, macros::format_description};
 
 use crate::{Error, Result};
@@ -135,9 +137,28 @@ pub(crate) fn read_limited(path: &Path, max: u64) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
+/// SHA-256 of a file's bytes, in hex: the revision an edit is made against.
+pub(crate) fn revision(bytes: &[u8]) -> String {
+    let mut hex = String::with_capacity(64);
+    for byte in Sha256::digest(bytes) {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
+/// Fails with [`Error::Conflict`] unless `current` (the revision of `path`
+/// as just read) is the `expected` one an edit was made against.
+pub fn ensure_revision(path: &Path, current: &str, expected: &str) -> Result<()> {
+    if current == expected {
+        Ok(())
+    } else {
+        Err(Error::Conflict(path.display().to_string()))
+    }
+}
+
 /// Creates `dir` (and parents) if it does not exist; a directory created here
 /// gets mode 0700 on Unix.
-pub(crate) fn ensure_private_dir(dir: &Path) -> Result<()> {
+pub fn ensure_private_dir(dir: &Path) -> Result<()> {
     match fs::metadata(dir) {
         Ok(meta) if meta.is_dir() => return Ok(()),
         Ok(_) => {
@@ -368,6 +389,42 @@ mod tests {
         );
         assert_eq!(parse_backup_name("config.bak", "config"), None);
         assert_eq!(parse_backup_name("known_hosts.x.bak", "known_hosts"), None);
+    }
+
+    #[test]
+    fn revisions() {
+        assert_eq!(
+            revision(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_ne!(revision(b"a"), revision(b"b"));
+        let path = Path::new("known_hosts");
+        ensure_revision(path, &revision(b"a"), &revision(b"a")).unwrap();
+        assert_eq!(
+            ensure_revision(path, &revision(b"b"), &revision(b"a"))
+                .unwrap_err()
+                .code(),
+            crate::ErrorCode::Conflict
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_dir_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let ssh = dir.path().join("home").join(".ssh");
+        ensure_private_dir(&ssh).unwrap();
+        assert_eq!(
+            fs::metadata(&ssh).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let file = dir.path().join("file");
+        fs::write(&file, "x").unwrap();
+        assert_eq!(
+            ensure_private_dir(&file).unwrap_err().code(),
+            crate::ErrorCode::InvalidInput
+        );
     }
 
     #[test]

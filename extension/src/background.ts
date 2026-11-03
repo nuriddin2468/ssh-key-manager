@@ -5,10 +5,18 @@
 //
 // A login typed into a form waits here (in `storage.session`, memory only)
 // until the user answers the banner or closes the tab. It is offered for at
-// most three minutes and dropped at the next look after that; its password
-// never goes back to a page.
+// most three minutes, only on pages of the site it was typed on, and dropped
+// at the next look after that or once the tab shows another site; its
+// password never goes back to a page.
 
-import { type CheckResult, type LoginOffer, type Result, request, showApp } from './shared/client';
+import {
+  type CheckResult,
+  type LoginOffer,
+  type Result,
+  request,
+  sameSite,
+  showApp,
+} from './shared/client';
 import { ext } from './shared/ext';
 import type {
   FillReply,
@@ -37,18 +45,57 @@ interface Pending {
 
 const logins = new Map<string, { at: number; reply: LoginsReply }>();
 
-/** The sending frame's web origin, or `null` for anything else. */
+/**
+ * The sending frame's web origin, or `null` for anything else. An opaque
+ * origin (`null`: a sandboxed frame, a `data:` page) gets nothing, even when
+ * the frame's URL is a site's. Only for a browser that doesn't report
+ * origins (older Firefox) is the frame named by its URL; the content script
+ * doesn't start in an opaque frame, so none asks that way.
+ */
 function originOf(sender: WebExt.MessageSender): string | null {
   let origin = sender.origin;
-  if (!origin || origin === 'null') {
+  if (origin === undefined) {
+    if (!sender.url) return null;
     try {
-      origin = sender.url ? new URL(sender.url).origin : undefined;
+      const url = new URL(sender.url);
+      if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+      origin = url.origin;
     } catch {
       return null;
     }
   }
-  return origin && /^https?:\/\/[^/]+$/.test(origin) ? origin : null;
+  return /^https?:\/\/[^/]+$/.test(origin) ? origin : null;
 }
+
+/**
+ * At most `burst` at once, then one per `interval` milliseconds, per tab: a
+ * page that sends its own form over and over, to learn from the banner
+ * whether a password is the saved one, learns little.
+ */
+class RateLimit {
+  private readonly tabs = new Map<number, { tokens: number; at: number }>();
+
+  constructor(
+    private readonly burst: number,
+    private readonly interval: number,
+  ) {}
+
+  take(tabId: number, now = Date.now()): boolean {
+    const last = this.tabs.get(tabId);
+    const tokens = last
+      ? Math.min(this.burst, last.tokens + (now - last.at) / this.interval)
+      : this.burst;
+    const allowed = tokens >= 1;
+    this.tabs.set(tabId, { tokens: allowed ? tokens - 1 : tokens, at: now });
+    return allowed;
+  }
+
+  forget(tabId: number): void {
+    this.tabs.delete(tabId);
+  }
+}
+
+const captures = new RateLimit(3, 1000);
 
 function isString(value: unknown, max = MAX_FIELD): value is string {
   return typeof value === 'string' && value.length <= max;
@@ -122,12 +169,26 @@ async function capture(tabId: number, origin: string, username: string, password
   await ext.tabs.sendMessage(tabId, offer, { frameId: 0 }).catch(() => undefined);
 }
 
-async function pendingFor(tabId: number): Promise<PendingSaveReply> {
+/**
+ * The save offer for the tab's top page at `origin`. One typed on another
+ * site (a sign-in that sent the tab on, or a sign-in frame) names only that
+ * site: its username and the saved login's title are not this page's
+ * business. Unless the app says the sites are the same, they count as
+ * different.
+ */
+async function pendingFor(tabId: number, origin: string): Promise<PendingSaveReply> {
   const pending = (await loadPending())[tabId];
   if (!pending) return null;
+  const site = new URL(pending.origin).host;
+  // The app knows the Public Suffix List, so it tells what a site is.
+  const same =
+    pending.origin === origin || (await sameSite(pending.origin, origin).catch(() => false));
+  if (!same) {
+    return { id: pending.id, site, username: '', mode: pending.mode, elsewhere: true };
+  }
   return {
     id: pending.id,
-    site: new URL(pending.origin).host,
+    site,
     username: pending.username,
     mode: pending.mode,
     title: pending.title,
@@ -179,12 +240,12 @@ async function handle(
       await showApp();
       return null;
     case 'capture':
-      if (isString(message.username) && isString(message.password)) {
+      if (isString(message.username) && isString(message.password) && captures.take(tabId)) {
         await capture(tabId, origin, message.username.trim(), message.password);
       }
       return null;
     case 'pendingSave':
-      return frameId === 0 ? pendingFor(tabId) : null;
+      return frameId === 0 ? pendingFor(tabId, origin) : null;
     case 'save':
       return isString(message.id, 64) ? save(tabId, message.id) : null;
     case 'dismissSave':
@@ -207,5 +268,6 @@ ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 ext.tabs.onRemoved.addListener((tabId) => {
+  captures.forget(tabId);
   void dropPending(tabId);
 });

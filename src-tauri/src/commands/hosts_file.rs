@@ -1,6 +1,6 @@
 use std::fs;
 use std::net::ToSocketAddrs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -66,7 +66,13 @@ pub async fn apply_hosts_changes(
             return apply_result(state, HostsApplyOutcome::Stale);
         }
         let edited = file.edited(&changes)?;
-        install(state, &edited.file.to_string(), flush_dns, &prompt)
+        install(
+            state,
+            &edited.file.to_string(),
+            file.revision(),
+            flush_dns,
+            &prompt,
+        )
     })
     .await
 }
@@ -108,10 +114,10 @@ pub async fn restore_hosts_backup(
         if !hosts_backups(state).contains(&path) {
             return Err(AppError::invalid("not a backup of the hosts file"));
         }
-        writable_hosts_file(state)?;
+        let file = writable_hosts_file(state)?;
         let text = String::from_utf8(fs::read(&path)?)
             .map_err(|_| AppError::invalid("the backup is not UTF-8"))?;
-        install(state, &text, flush_dns, &prompt)
+        install(state, &text, file.revision(), flush_dns, &prompt)
     })
     .await
 }
@@ -192,25 +198,40 @@ fn hosts_backups(state: &AppState) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-/// Backs up the current file, then installs `text`. A cancelled prompt
-/// leaves no backup behind.
+/// Backs up the current file, then installs `text` in place of `revision`
+/// of it. The file changing while the password prompt is open makes the
+/// outcome [`HostsApplyOutcome::Stale`].
 fn install(
     state: &AppState,
     text: &str,
+    revision: &str,
     flush_dns: bool,
     prompt: &str,
 ) -> AppResult<HostsApplyResult> {
+    install_with(state, |target| {
+        hosts_file::install(text, target, revision, flush_dns, prompt)
+    })
+}
+
+/// Backs up the current file, then lets `install` replace it. Only a file
+/// that was replaced keeps its backup.
+fn install_with(
+    state: &AppState,
+    install: impl FnOnce(&Path) -> sshkm_core::Result<InstallOutcome>,
+) -> AppResult<HostsApplyResult> {
     let backup = fsutil::backup(&state.hosts_file, &state.backup_dir)?;
-    let outcome = hosts_file::install(text, &state.hosts_file, flush_dns, prompt);
+    let outcome = install(&state.hosts_file);
     if !matches!(outcome, Ok(InstallOutcome::Installed))
         && let Some(backup) = backup
     {
         let _ = fs::remove_file(backup);
     }
-    match outcome? {
-        InstallOutcome::Installed => apply_result(state, HostsApplyOutcome::Applied),
-        InstallOutcome::Cancelled => apply_result(state, HostsApplyOutcome::Cancelled),
-    }
+    let outcome = match outcome? {
+        InstallOutcome::Installed => HostsApplyOutcome::Applied,
+        InstallOutcome::Cancelled => HostsApplyOutcome::Cancelled,
+        InstallOutcome::Stale => HostsApplyOutcome::Stale,
+    };
+    apply_result(state, outcome)
 }
 
 fn apply_result(state: &AppState, outcome: HostsApplyOutcome) -> AppResult<HostsApplyResult> {
@@ -218,4 +239,48 @@ fn apply_result(state: &AppState, outcome: HostsApplyOutcome) -> AppResult<Hosts
         outcome,
         file: hosts_file_info(state)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use sshkm_core::Error;
+    use sshkm_core::paths::SshPaths;
+
+    use super::*;
+
+    #[test]
+    fn only_a_replaced_file_keeps_its_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(
+            SshPaths::from_dir(dir.path().join(".ssh")),
+            dir.path().join("hosts"),
+            dir.path().join("backups"),
+            dir.path().join("data"),
+        );
+        fs::write(&state.hosts_file, "127.0.0.1 localhost\n").unwrap();
+        let revision = HostsFile::parse("127.0.0.1 localhost\n")
+            .revision()
+            .to_owned();
+
+        // The file changed while the password prompt was open.
+        let result = install_with(&state, |_| Ok(InstallOutcome::Stale)).unwrap();
+        assert_eq!(result.outcome, HostsApplyOutcome::Stale);
+        assert_eq!(result.file.revision, revision);
+        assert_eq!(hosts_backups(&state), Vec::<PathBuf>::new());
+        let result = install_with(&state, |_| Ok(InstallOutcome::Cancelled)).unwrap();
+        assert_eq!(result.outcome, HostsApplyOutcome::Cancelled);
+        assert!(install_with(&state, |_| Err(Error::Unsupported("no".into()))).is_err());
+        assert_eq!(hosts_backups(&state), Vec::<PathBuf>::new());
+
+        let result = install_with(&state, |target| {
+            fs::write(target, "10.0.0.1 box\n").unwrap();
+            Ok(InstallOutcome::Installed)
+        })
+        .unwrap();
+        assert_eq!(result.outcome, HostsApplyOutcome::Applied);
+        assert_eq!(result.file.view.entries[0].names, ["box"]);
+        let backups = hosts_backups(&state);
+        assert_eq!(backups.len(), 1);
+        assert_eq!(fs::read(&backups[0]).unwrap(), b"127.0.0.1 localhost\n");
+    }
 }

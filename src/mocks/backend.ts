@@ -244,14 +244,36 @@ function configFile(): ConfigFile {
         raw,
         resolved: true,
         exists: keys.some((k) => k.privatePath === path || k.publicPath === path),
+        remote: false,
       };
     }),
   );
   return {
     path: `${DIR}/config`,
     exists: true,
-    view: { globalOptions: [], hosts: entries, includes: [], issues: [] },
+    view: {
+      globalOptions: [],
+      hosts: entries,
+      includes: [],
+      issues: [],
+      revision: revisionOf(hostSpecs),
+    },
     usage,
+  };
+}
+
+/** Stands in for the SHA-256 of a file that edits name. */
+function revisionOf(data: unknown): string {
+  let hash = 0;
+  for (const char of JSON.stringify(data)) hash = (Math.imul(hash, 31) + char.charCodeAt(0)) | 0;
+  return (hash >>> 0).toString(16);
+}
+
+function knownHostsFile() {
+  return {
+    path: `${DIR}/known_hosts`,
+    exists: true,
+    view: { entries: known, invalid: [], revision: revisionOf(known) },
   };
 }
 
@@ -446,7 +468,8 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   },
   agent_remove_all: () => agentLoaded.clear(),
   read_config: configFile,
-  save_host: ({ edit }) => {
+  save_host: ({ edit, revision }) => {
+    if (revision !== revisionOf(hostSpecs)) return fail('conflict', 'config changed');
     const { id, patterns, options } = edit as HostEdit;
     if (id === null) {
       const star = hostSpecs.findIndex((h) => h.patterns.join() === '*');
@@ -457,11 +480,13 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     hostSpecs[id] = { patterns, options };
     return { file: configFile(), id };
   },
-  delete_host: ({ id }) => {
+  delete_host: ({ id, revision }) => {
+    if (revision !== revisionOf(hostSpecs)) return fail('conflict', 'config changed');
     hostSpecs = hostSpecs.filter((_, index) => index !== id);
     return configFile();
   },
-  remove_identity_file: ({ hostId, value }) => {
+  remove_identity_file: ({ hostId, value, revision }) => {
+    if (revision !== revisionOf(hostSpecs)) return fail('conflict', 'config changed');
     const spec = hostSpecs[hostId as number];
     if (spec)
       spec.options = spec.options.filter((o) => !(o.key === 'IdentityFile' && o.value === value));
@@ -502,15 +527,12 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     output: `deploy@${alias}: Permission denied (publickey,password).`,
     prompts: [],
   }),
-  read_known_hosts: () => ({
-    path: `${DIR}/known_hosts`,
-    exists: true,
-    view: { entries: known, invalid: [] },
-  }),
+  read_known_hosts: knownHostsFile,
   find_known_hosts: ({ host }) => (host === 'example.org' ? [14] : []),
-  remove_known_hosts: ({ lines }) => {
+  remove_known_hosts: ({ lines, revision }) => {
+    if (revision !== revisionOf(known)) return fail('conflict', 'known_hosts changed');
     known = known.filter((e) => !(lines as number[]).includes(e.line));
-    return { path: `${DIR}/known_hosts`, exists: true, view: { entries: known, invalid: [] } };
+    return knownHostsFile();
   },
   check_host_key: ({ host }) => {
     const saved = known.filter((e) => e.hosts.includes(host as string));

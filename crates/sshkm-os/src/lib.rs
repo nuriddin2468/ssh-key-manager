@@ -6,9 +6,11 @@
 //! - [`screen_lock`]: be told when the user's session or screen is locked, so
 //!   the vault can lock itself.
 //! - [`biometrics`]: confirm the user with Touch ID (macOS) or Windows Hello
-//!   (Windows) before unlocking.
+//!   (Windows) before unlocking, and on Windows derive a secret that only
+//!   Windows Hello can produce.
 //! - [`secret_store`]: keep a secret in the OS credential store (macOS
 //!   Keychain, Windows Credential Manager, Linux Secret Service).
+//! - `pipe` (Windows): check who serves a named pipe before sending to it.
 //!
 //! Every call that can wait for the user (a biometric prompt, a keychain
 //! access dialog, a locked Secret Service collection) blocks the calling
@@ -23,6 +25,8 @@
 
 pub mod biometrics;
 mod error;
+#[cfg(target_os = "windows")]
+pub mod pipe;
 pub mod screen_lock;
 pub mod secret_store;
 

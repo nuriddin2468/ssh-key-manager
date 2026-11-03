@@ -117,6 +117,22 @@ pub(crate) fn path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// The Windows folder: `%SystemRoot%` when it is an absolute path, otherwise
+/// `C:\Windows`.
+pub fn windows_dir() -> PathBuf {
+    std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .filter(|root| root.is_absolute())
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))
+}
+
+/// `<Windows folder>\System32\<program>`. Windows tools are started by this
+/// full path, so a program of the same name in the current directory or
+/// earlier on `PATH` is never run instead.
+pub fn system32(program: &str) -> PathBuf {
+    windows_dir().join("System32").join(program)
+}
+
 /// Rewrites `/` to the platform separator on Windows (no-op elsewhere), so paths
 /// built from `ssh_config` values compare equal to paths found by scanning.
 pub(crate) fn native_separators(s: &str) -> String {

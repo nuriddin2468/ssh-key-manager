@@ -24,9 +24,18 @@ retry: boolean, save: SaveOffer, } | { "type": "oneTimeCode",
 /**
  * The server's question, without the `(user@host)` prefix.
  */
-question: string, retry: boolean, } | { "type": "hostKey", 
+question: string, retry: boolean, 
 /**
- * The host as `ssh` names it in its question.
+ * The account the prompt names, if it does.
+ */
+account: PromptAccount | null, 
+/**
+ * The prompt is for another account than the host's.
+ */
+foreign: boolean, } | { "type": "hostKey", 
+/**
+ * The host as `ssh` names it in its question: the one whose key it
+ * is, which may be a `ProxyJump` host rather than the tab's.
  */
 host: string, 
 /**
@@ -36,4 +45,29 @@ keyType: string,
 /**
  * `SHA256:…`
  */
-fingerprint: string, } | { "type": "other", text: string, };
+fingerprint: string, 
+/**
+ * What `ssh` says besides the plain question (the other names this
+ * key is known by, what DNS says), line by line. Empty for a host
+ * seen for the first time.
+ */
+extra: Array<string>, } | { "type": "other", 
+/**
+ * The question, without the `(user@host)` prefix that `account`
+ * shows.
+ */
+text: string, 
+/**
+ * The account the prompt names, if it does.
+ */
+account: PromptAccount | null, 
+/**
+ * The prompt is for another account than the host's.
+ */
+foreign: boolean, 
+/**
+ * `ssh` cannot tell which host sent it (OpenSSH before 8.5): it may
+ * be a server's question posing as `ssh`'s own, or another host's.
+ * `text` is then all of it, any account it names included.
+ */
+unverified: boolean, };

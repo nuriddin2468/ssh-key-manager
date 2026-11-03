@@ -7,7 +7,7 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
-import { type ITheme, Terminal } from '@xterm/xterm';
+import { type ILinkHandler, type ITheme, Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { platform } from '@/lib/platform';
@@ -67,11 +67,22 @@ async function copy(text: string): Promise<void> {
   else await navigator.clipboard?.writeText(text);
 }
 
-function openLink(uri: string): void {
+/** Opens an http(s) link in the browser; anything else is ignored. */
+export function openLink(uri: string): void {
   if (!/^https?:\/\//i.test(uri)) return;
   if (isTauri()) void openUrl(uri);
   else window.open(uri, '_blank', 'noopener,noreferrer');
 }
+
+/**
+ * Hyperlinks the server prints (OSC 8), whose text need not show where they
+ * lead: they open the way plain URLs do, http and https only. Without this
+ * xterm would open them itself, in the webview.
+ */
+export const LINK_HANDLER: ILinkHandler = {
+  activate: (_event, uri) => openLink(uri),
+  allowNonHttpProtocols: false,
+};
 
 export class Screen {
   readonly term: Terminal;
@@ -94,6 +105,7 @@ export class Screen {
       cursorBlink: true,
       allowProposedApi: true,
       macOptionIsMeta: false,
+      linkHandler: LINK_HANDLER,
       // The terminal's text, not a screen reader's, by default; a setting
       // can turn this on later.
       screenReaderMode: false,

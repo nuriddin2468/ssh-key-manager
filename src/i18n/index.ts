@@ -1,3 +1,4 @@
+import { invoke, isTauri } from '@tauri-apps/api/core';
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import en from './locales/en';
@@ -53,9 +54,20 @@ void i18n.use(initReactI18next).init({
   returnNull: false,
 });
 
+/** Tells the app's native dialogs (drawn by Rust) which language to use. */
+function syncNativeLanguage(language: string): void {
+  try {
+    if (isTauri()) void invoke('set_ui_language', { language }).catch(() => undefined);
+  } catch {
+    // Tests may mock the Tauri API without `invoke`; the dialogs then stay English.
+  }
+}
+
 i18n.on('languageChanged', (language) => {
   document.documentElement.lang = language;
+  syncNativeLanguage(language);
 });
 document.documentElement.lang = i18n.language;
+syncNativeLanguage(i18n.language);
 
 export default i18n;

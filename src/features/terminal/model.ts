@@ -170,11 +170,26 @@ export function phaseLabel(t: TFunction, tab: Tab): string {
   return t(`terminal.status.${tab.state.phase}`);
 }
 
-/** The account a password dialog names: `ubuntu@prod-api`. */
-export function promptAccount(tab: Tab, ask: Extract<PromptAsk, { type: 'password' }>): string {
+/** A prompt that may name the account it is for. */
+export type AccountAsk = Extract<PromptAsk, { type: 'password' | 'oneTimeCode' | 'other' }>;
+
+/**
+ * The account a prompt's dialog names: `ubuntu@prod-api`, or another host's
+ * own account (`bob@bastion.example.net`) when the prompt is for that host.
+ */
+export function promptAccount(tab: Tab, ask: AccountAsk): string {
   if (ask.foreign && ask.account) return `${ask.account.user}@${ask.account.host}`;
   const user = ask.account?.user ?? tab.info?.user;
   return user ? `${user}@${tab.alias}` : tab.alias;
+}
+
+/**
+ * The host a host-key question is about, without the address in brackets:
+ * `bastion.example.net` for `bastion.example.net (203.0.113.7)`. It may be a
+ * jump host rather than the tab's.
+ */
+export function hostKeyHost(host: string): string {
+  return host.replace(/\s+\(.*\)$/, '') || host;
 }
 
 /** What "Waiting for your answer: …" goes on to say. */

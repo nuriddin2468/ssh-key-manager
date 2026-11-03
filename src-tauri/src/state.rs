@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use sshkm_core::paths::SshPaths;
 use time::OffsetDateTime;
 
-use crate::askpass::{self, Responder, Session};
+use crate::askpass::{self, Interactive, Responder, Session};
+use crate::terminal::Terminals;
 use crate::vault::VaultRuntime;
 
 /// Shared by all commands.
@@ -21,6 +22,8 @@ pub struct AppState {
     pub vault: Arc<VaultRuntime>,
     /// Answers `ssh`'s prompts; started on first use.
     askpass: Mutex<Option<askpass::Server>>,
+    /// The in-app terminal's sessions.
+    pub terminals: Arc<Terminals>,
 }
 
 impl AppState {
@@ -33,6 +36,7 @@ impl AppState {
             openssh_version: OnceLock::new(),
             vault: Arc::new(VaultRuntime::new(data_dir)),
             askpass: Mutex::new(None),
+            terminals: Arc::new(Terminals::default()),
         }
     }
 
@@ -80,17 +84,27 @@ impl AppState {
             .clone()
     }
 
-    /// A session of the askpass server whose prompts `responder` answers.
-    /// Starts the server if it is not running.
+    /// A batch session of the askpass server whose prompts `responder`
+    /// answers. Starts the server if it is not running.
     pub fn askpass_session(&self, responder: impl Responder) -> io::Result<Session> {
+        self.with_askpass(|server| server.session(responder))
+    }
+
+    /// An interactive askpass session, for the in-app terminal.
+    pub fn askpass_interactive_session(&self, responder: impl Interactive) -> io::Result<Session> {
+        self.with_askpass(|server| server.interactive_session(responder))
+    }
+
+    fn with_askpass(&self, open: impl FnOnce(&askpass::Server) -> Session) -> io::Result<Session> {
         let mut server = self.askpass.lock().unwrap_or_else(PoisonError::into_inner);
         if server.is_none() {
             *server = Some(askpass::Server::start()?);
         }
-        Ok(server
-            .as_ref()
-            .expect("the askpass server was just started")
-            .session(responder))
+        Ok(open(
+            server
+                .as_ref()
+                .expect("the askpass server was just started"),
+        ))
     }
 
     /// Stops the askpass server and removes its socket, when the app exits.

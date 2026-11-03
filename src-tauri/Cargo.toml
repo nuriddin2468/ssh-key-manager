@@ -37,6 +37,9 @@ zeroize = "1.9"
 
 [target.'cfg(unix)'.dependencies]
 tempfile = "3"
+# Reads the terminal's mode (raw = ssh's session started). The version
+# portable-pty uses, so this adds no crate to the build.
+nix = { version = "0.28", default-features = false, features = ["term"] }
 
 # Named pipes for the askpass server. Tauri already depends on tokio with these
 # features, so this adds no crate to the build.
@@ -45,6 +48,8 @@ tokio = { version = "1", features = ["net", "rt", "io-util", "time"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 arboard = { version = "3.7", features = ["wayland-data-control"] }
+# The in-app terminal: a PTY (ConPTY on Windows) per ssh session.
+portable-pty = "0.9"
 sshkm-os = { path = "../crates/sshkm-os" }
 tauri-plugin-process = "2"
 tauri-plugin-single-instance = "2"

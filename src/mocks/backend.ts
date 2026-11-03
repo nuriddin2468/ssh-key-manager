@@ -15,6 +15,7 @@ import type { KeysView } from '@/bindings/KeysView';
 import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostEntry } from '@/bindings/KnownHostEntry';
 import type { PermissionFix } from '@/bindings/PermissionFix';
+import { terminalHandlers } from './terminal';
 import { vaultHandlers } from './vault';
 import { vaultFilesHandlers } from './vaultFiles';
 import { vaultLinkHandlers } from './vaultLinks';
@@ -362,6 +363,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   ...vaultHandlers,
   ...vaultLinkHandlers({ keys: () => keys, hosts, agent: agentLoaded }),
   ...vaultFilesHandlers,
+  ...terminalHandlers(hosts),
   get_environment: (): Environment => ({
     paths: { home: HOME, dir: DIR, config: `${DIR}/config`, knownHosts: `${DIR}/known_hosts` },
     platform: 'macos',
@@ -538,11 +540,16 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   },
 };
 
+/** Keystrokes must keep their order, so they skip the simulated latency. */
+const INSTANT = new Set(['terminal_write', 'terminal_resize', 'terminal_answer']);
+
 export async function invoke(
   command: string,
   args: Record<string, unknown> = {},
 ): Promise<unknown> {
-  await new Promise((resolve) => setTimeout(resolve, 120 + Math.random() * 200));
+  if (!INSTANT.has(command)) {
+    await new Promise((resolve) => setTimeout(resolve, 120 + Math.random() * 200));
+  }
   const handler = handlers[command];
   if (!handler) throw { code: 'unsupported', message: `mock: no handler for ${command}` };
   return structuredClone(await handler(args));

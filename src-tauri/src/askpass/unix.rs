@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use tempfile::TempDir;
 
-use super::{Answer, IO_TIMEOUT, Registry, wire};
+use super::{Answer, HELPER_WAIT, IO_TIMEOUT, Registry, wire};
 
 pub struct Listener {
     path: PathBuf,
@@ -121,8 +121,8 @@ fn serve(mut stream: UnixStream, registry: &Registry) {
 pub fn connect(endpoint: &OsStr) -> io::Result<UnixStream> {
     let stream = UnixStream::connect(Path::new(endpoint))?;
     // `ssh` waits for the helper as long as it takes; the server answers in
-    // milliseconds unless it is gone.
-    stream.set_read_timeout(Some(Duration::from_secs(120)))?;
+    // milliseconds, or as soon as the user does in an interactive session.
+    stream.set_read_timeout(Some(HELPER_WAIT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
     Ok(stream)
 }

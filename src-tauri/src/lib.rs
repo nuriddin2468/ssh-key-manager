@@ -8,6 +8,7 @@ mod error;
 mod menu;
 mod process;
 mod state;
+pub mod terminal;
 mod types;
 mod vault;
 mod vault_watcher;
@@ -16,6 +17,7 @@ mod watcher;
 use std::sync::Arc;
 
 use sshkm_core::paths::SshPaths;
+use tauri::webview::PageLoadEvent;
 use tauri::{Manager, RunEvent, WindowEvent};
 
 use crate::commands::Shared;
@@ -50,6 +52,14 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(setup)
         .on_window_event(lock_on_minimize)
+        // A reloaded page has lost its terminals' channels: end the sessions.
+        .on_page_load(|webview, payload| {
+            if payload.event() == PageLoadEvent::Started
+                && let Some(state) = webview.try_state::<Shared>()
+            {
+                state.terminals.close_all();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::environment::get_environment,
             commands::keys::list_keys,
@@ -116,6 +126,13 @@ pub fn run() {
             commands::vault_files::vault_move,
             commands::vault_files::vault_use_file,
             commands::vault_files::vault_use_default,
+            commands::terminal::terminal_open,
+            commands::terminal::terminal_write,
+            commands::terminal::terminal_resize,
+            commands::terminal::terminal_answer,
+            commands::terminal::terminal_close,
+            commands::terminal::terminal_list,
+            commands::terminal::terminal_open_external,
         ])
         .build(tauri::generate_context!())
         .expect("failed to start SSH Key Manager")
@@ -123,6 +140,7 @@ pub fn run() {
             if let RunEvent::Exit = event
                 && let Some(state) = app.try_state::<Shared>()
             {
+                state.terminals.close_all();
                 state.stop_askpass();
             }
         });

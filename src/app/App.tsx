@@ -15,6 +15,8 @@ import { useVaultFileEvents } from '@/features/passwords/files';
 import { PasswordsPage } from '@/features/passwords/PasswordsPage';
 import { useVaultEvents } from '@/features/passwords/useVaultEvents';
 import { SettingsPage } from '@/features/settings/SettingsPage';
+import { TerminalPage } from '@/features/terminal/TerminalPage';
+import { TerminalProvider } from '@/features/terminal/TerminalProvider';
 import { platform } from '@/lib/platform';
 import { useSettings } from '@/lib/settings';
 import { useAutomaticUpdates } from '@/lib/updater';
@@ -28,7 +30,10 @@ export function App() {
       <TooltipProvider delayDuration={500}>
         <RouterProvider>
           <DialogsProvider>
-            <Shell />
+            {/* Above the pages: sessions keep running in other sections. */}
+            <TerminalProvider>
+              <Shell />
+            </TerminalProvider>
           </DialogsProvider>
         </RouterProvider>
       </TooltipProvider>
@@ -72,6 +77,9 @@ function Shell() {
         {route.page === 'known' ? <KnownHostsPage /> : null}
         {route.page === 'audit' ? <AuditPage /> : null}
         {route.page === 'passwords' ? <PasswordsPage entryId={route.entryId} /> : null}
+        {route.page === 'terminal' ? (
+          <TerminalPage connect={route.connect} nonce={route.nonce} />
+        ) : null}
         {route.page === 'settings' ? <SettingsPage /> : null}
       </main>
     </div>

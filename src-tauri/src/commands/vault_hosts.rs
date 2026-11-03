@@ -6,7 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 use sshkm_core::keys;
-use sshkm_core::vault::{EntryKind, SecretField, Vault};
+use sshkm_core::vault::{EntryKind, EntrySummary, SecretField, Vault};
 use sshkm_core::{ExposeSecret, SecretString};
 use tauri::{AppHandle, State};
 
@@ -102,8 +102,7 @@ fn saved_secrets(state: &AppState, app: &AppHandle, alias: &str) -> AppResult<Se
                 .iter()
                 .filter(move |e| !e.in_trash && e.kind == kind)
         };
-        let (password, otp) = match live(EntryKind::Host).find(|e| e.host.as_deref() == Some(alias))
-        {
+        let (password, otp) = match host_entry(&entries, alias) {
             Some(entry) => (
                 Some(vault.secret(&entry.id, SecretField::Password)?),
                 if entry.has_otp {
@@ -132,7 +131,17 @@ fn saved_secrets(state: &AppState, app: &AppHandle, alias: &str) -> AppResult<Se
     })
 }
 
-fn fresh_code(vault: &Vault, id: &str) -> AppResult<SecretString> {
+/// The entry for `alias`'s password: the first host entry outside the
+/// recycle bin that names it.
+pub(crate) fn host_entry<'a>(entries: &'a [EntrySummary], alias: &str) -> Option<&'a EntrySummary> {
+    entries
+        .iter()
+        .find(|e| !e.in_trash && e.kind == EntryKind::Host && e.host.as_deref() == Some(alias))
+}
+
+/// The entry's current 2FA code, waiting for the next one if this one is
+/// about to expire.
+pub(crate) fn fresh_code(vault: &Vault, id: &str) -> AppResult<SecretString> {
     let (code, valid_for) = vault.otp_code(id)?;
     if valid_for >= MIN_CODE_LIFE {
         return Ok(SecretString::from(code));

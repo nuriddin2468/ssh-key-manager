@@ -1,0 +1,87 @@
+//! The in-app terminal's commands (see [`crate::terminal`]). Input, resizing,
+//! answers and closing are synchronous commands: they only hand data to the
+//! session's threads, and run in the order the UI sends them.
+
+#![allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri passes command arguments by value"
+)]
+
+use std::sync::Arc;
+
+use tauri::ipc::{Channel, InvokeResponseBody};
+use tauri::{AppHandle, State};
+
+use super::{Shared, blocking};
+use crate::error::AppResult;
+use crate::terminal::types::{OpenOptions, PromptAnswer, TerminalInfo};
+use crate::terminal::{self, Sink};
+
+/// Starts `ssh` to `alias` in a `cols`×`rows` terminal. Output and events
+/// arrive on `events` (see [`crate::terminal::types`]) until the session
+/// ends.
+#[tauri::command]
+pub async fn terminal_open(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    alias: String,
+    cols: u16,
+    rows: u16,
+    options: Option<OpenOptions>,
+    events: Channel<InvokeResponseBody>,
+) -> AppResult<TerminalInfo> {
+    let shared = Arc::clone(&state);
+    blocking(&state, move |_| {
+        let sink: Arc<dyn Sink> = Arc::new(events);
+        shared.terminals.open(
+            &shared,
+            &app,
+            &alias,
+            (cols, rows),
+            &options.unwrap_or_default(),
+            sink,
+        )
+    })
+    .await
+}
+
+/// Sends keystrokes (or pasted text) to the session.
+#[tauri::command]
+pub fn terminal_write(state: State<'_, Shared>, id: u32, data: String) -> AppResult<()> {
+    state.terminals.write(id, data.into_bytes())
+}
+
+#[tauri::command]
+pub fn terminal_resize(state: State<'_, Shared>, id: u32, cols: u16, rows: u16) -> AppResult<()> {
+    state.terminals.resize(id, cols, rows)
+}
+
+/// Answers the session's waiting prompt `prompt`. Returns false if it no
+/// longer waits (it timed out, or the session ended).
+#[tauri::command]
+pub fn terminal_answer(
+    state: State<'_, Shared>,
+    id: u32,
+    prompt: u32,
+    answer: PromptAnswer,
+) -> AppResult<bool> {
+    state.terminals.answer(id, prompt, answer)
+}
+
+/// Ends the session; the remote shell gets a hang-up.
+#[tauri::command]
+pub fn terminal_close(state: State<'_, Shared>, id: u32) {
+    state.terminals.close(id);
+}
+
+/// The sessions still running.
+#[tauri::command]
+pub fn terminal_list(state: State<'_, Shared>) -> Vec<TerminalInfo> {
+    state.terminals.list()
+}
+
+/// Opens the system terminal with `ssh <alias>`.
+#[tauri::command]
+pub async fn terminal_open_external(state: State<'_, Shared>, alias: String) -> AppResult<()> {
+    blocking(&state, move |_| terminal::open_external(&alias)).await
+}

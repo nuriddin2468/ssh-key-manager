@@ -1,5 +1,6 @@
 // Typed wrappers for the Tauri commands in `src-tauri/src/commands`.
 
+import { Channel, isTauri } from '@tauri-apps/api/core';
 import type { AddFromVaultReport } from '@/bindings/AddFromVaultReport';
 import type { AgentView } from '@/bindings/AgentView';
 import type { AuditReport } from '@/bindings/AuditReport';
@@ -20,16 +21,23 @@ import type { KeyInstall } from '@/bindings/KeyInstall';
 import type { KeysView } from '@/bindings/KeysView';
 import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostsFile } from '@/bindings/KnownHostsFile';
+import type { OpenOptions } from '@/bindings/OpenOptions';
 import type { OtpCode } from '@/bindings/OtpCode';
 import type { PermissionFix } from '@/bindings/PermissionFix';
+import type { PromptAnswer } from '@/bindings/PromptAnswer';
 import type { SavedHost } from '@/bindings/SavedHost';
 import type { SecretField } from '@/bindings/SecretField';
 import type { Strength } from '@/bindings/Strength';
+import type { TerminalEvent } from '@/bindings/TerminalEvent';
+import type { TerminalInfo } from '@/bindings/TerminalInfo';
 import type { VaultAudit } from '@/bindings/VaultAudit';
 import type { VaultLocation } from '@/bindings/VaultLocation';
 import type { VaultSettings } from '@/bindings/VaultSettings';
 import type { VaultStatus } from '@/bindings/VaultStatus';
 import { call } from '@/lib/ipc';
+
+/** A terminal session's channel carries output bytes and events. */
+export type TerminalMessage = ArrayBuffer | TerminalEvent;
 
 export const api = {
   environment: () => call<Environment>('get_environment'),
@@ -121,6 +129,32 @@ export const api = {
 
   /** Opens the system terminal with `ssh <alias>`. */
   terminalOpenExternal: (alias: string) => call<void>('terminal_open_external', { alias }),
+  /**
+   * Starts `ssh <alias>` in a terminal. Output arrives as `ArrayBuffer`s and
+   * everything else as `TerminalEvent`s, in order, on `onMessage`.
+   */
+  terminalOpen: (
+    alias: string,
+    size: { cols: number; rows: number },
+    options: OpenOptions,
+    onMessage: (message: TerminalMessage) => void,
+  ) =>
+    call<TerminalInfo>('terminal_open', {
+      alias,
+      cols: size.cols,
+      rows: size.rows,
+      options,
+      // The in-browser mock backend takes the callback itself.
+      events: isTauri() ? new Channel<TerminalMessage>(onMessage) : onMessage,
+    }),
+  terminalWrite: (id: number, data: string) => call<void>('terminal_write', { id, data }),
+  terminalResize: (id: number, cols: number, rows: number) =>
+    call<void>('terminal_resize', { id, cols, rows }),
+  /** Returns false if the prompt no longer waits. */
+  terminalAnswer: (id: number, prompt: number, answer: PromptAnswer) =>
+    call<boolean>('terminal_answer', { id, prompt, answer }),
+  terminalClose: (id: number) => call<void>('terminal_close', { id }),
+  terminalList: () => call<TerminalInfo[]>('terminal_list'),
 
   // The vault's files (src-tauri/src/commands/vault_files.rs).
   /** Rows of a CSV export, without passwords; duplicates name the existing entry. */

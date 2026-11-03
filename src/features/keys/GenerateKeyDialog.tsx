@@ -13,6 +13,7 @@ import type { GenerateKeyRequest } from '@/bindings/GenerateKeyRequest';
 import type { KeyView } from '@/bindings/KeyView';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { ChoiceCards } from '@/components/ui/ChoiceCards';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
 import { PassphraseFields } from '@/components/ui/PassphraseFields';
 import { SwitchGroup, SwitchRow } from '@/components/ui/Switch';
@@ -163,45 +164,30 @@ export function GenerateKeyDialog({ onDone, onCreated }: GenerateKeyDialogProps)
           description={t('generate.description')}
         />
         <DialogBody>
-          <fieldset className="flex flex-col">
-            <legend className="mb-2.5 text-[12px] font-semibold tracking-[0.02em] text-subtle">
-              {t('generate.keyType')}
-            </legend>
-            <RadioGroup.Root
+          <div className="flex flex-col">
+            <ChoiceCards
+              legend={t('generate.keyType')}
               value={algo}
-              onValueChange={(value) => setAlgo(value as Algo)}
-              className="grid grid-cols-3 gap-2.5"
-            >
-              {ALGOS.map((option) => (
-                <RadioGroup.Item
-                  key={option.id}
-                  value={option.id}
-                  className={cn(
-                    'pressable-soft flex flex-col items-start gap-2.5 rounded-[14px] border p-[13px] text-left',
-                    algo === option.id
-                      ? 'border-[rgb(45_212_191/0.6)] bg-[rgb(45_212_191/0.08)] shadow-[0_0_0_3px_rgb(45_212_191/0.14),0_14px_30px_-18px_rgb(45_212_191/0.8)]'
-                      : 'border-white/[0.09] bg-white/[0.03] hover:bg-white/[0.05]',
-                  )}
-                >
-                  <Tile tone={option.tone} size={36}>
-                    <KeyRound className="size-[18px]" strokeWidth={2} />
-                  </Tile>
-                  <span className="flex flex-col gap-0.5">
-                    <span className="flex flex-wrap items-center gap-1.5 font-semibold">
-                      {t(`generate.${option.id}`)}
-                      {option.id === 'ed25519' ? (
-                        <Badge tone="accent" pill>
-                          {t('generate.recommended')}
-                        </Badge>
-                      ) : null}
-                    </span>
-                    <span className="text-[12px] leading-[17px] text-muted">
-                      {t(`generate.${option.id}Hint`)}
-                    </span>
+              onValueChange={setAlgo}
+              layout="stack"
+              glow
+              options={ALGOS.map((option) => ({
+                value: option.id,
+                tone: option.tone,
+                icon: KeyRound,
+                title: (
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    {t(`generate.${option.id}`)}
+                    {option.id === 'ed25519' ? (
+                      <Badge tone="accent" pill>
+                        {t('generate.recommended')}
+                      </Badge>
+                    ) : null}
                   </span>
-                </RadioGroup.Item>
-              ))}
-            </RadioGroup.Root>
+                ),
+                hint: t(`generate.${option.id}Hint`),
+              }))}
+            />
 
             {algo === 'rsa' ? (
               <SizePicker
@@ -225,7 +211,7 @@ export function GenerateKeyDialog({ onDone, onCreated }: GenerateKeyDialogProps)
                 onChange={(value) => setCurve(value as EcdsaCurve)}
               />
             ) : null}
-          </fieldset>
+          </div>
 
           <div className="grid grid-cols-2 gap-3.5">
             <TextField

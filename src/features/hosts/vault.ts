@@ -11,6 +11,7 @@ import type { EntryInput } from '@/bindings/EntryInput';
 import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { HostEntry } from '@/bindings/HostEntry';
 import { AppError } from '@/lib/ipc';
+import type { HostForm } from './model';
 
 /** The names `ssh` can be run with for this block: none for patterns and `Match`. */
 export function hostAliases(host: HostEntry): string[] {
@@ -84,6 +85,47 @@ export function hostEntryInput(
     kind: 'host',
     host: alias,
     keyFingerprint: null,
+  };
+}
+
+/** What saving a host does to its saved password. */
+export type EntryFollowUp =
+  | { kind: 'none' }
+  /** The host now signs in with a key alone: the password goes to the recycle bin. */
+  | { kind: 'trash'; entryId: string }
+  /** The entry follows the host: its `User`, and its alias when that was renamed. */
+  | { kind: 'update'; entryId: string; username: string; alias: string };
+
+/**
+ * The host's `User` is the user everywhere, so the saved password follows
+ * the host when it is saved: a changed `User` becomes the entry's user name,
+ * a renamed alias the entry's host. Saved with the Key method, the host
+ * keeps no password: it goes to the vault's recycle bin (Key and password is
+ * how a host keeps one).
+ *
+ * `saved` is the block on disk, `found` the password for it (see
+ * `findHostEntry`) while the vault is unlocked.
+ */
+export function entryFollowUp(
+  form: HostForm,
+  saved: HostEntry,
+  found: { alias: string; entry: EntrySummary } | undefined,
+): EntryFollowUp {
+  if (!found || form.method === null) return { kind: 'none' };
+  const { alias, entry } = found;
+  if (form.method === 'key') return { kind: 'trash', entryId: entry.id };
+  const user = form.user.trim();
+  const userChanged = user !== (saved.user ?? '') && user !== entry.username;
+  const aliases = form.patterns
+    .split(/\s+/)
+    .filter((p) => p && !p.startsWith('!') && !/[*?]/.test(p));
+  const nextAlias = aliases.includes(alias) ? alias : (aliases[0] ?? alias);
+  if (!userChanged && nextAlias === alias) return { kind: 'none' };
+  return {
+    kind: 'update',
+    entryId: entry.id,
+    username: userChanged ? user : entry.username,
+    alias: nextAlias,
   };
 }
 

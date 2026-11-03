@@ -1,161 +1,147 @@
-import { KeyRound, Lock, Plus } from 'lucide-react';
-import { type ReactNode, type Ref, useId } from 'react';
+import { Check } from 'lucide-react';
+import { type ReactNode, useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from '@/app/router';
 import { Button } from '@/components/ui/Button';
-import { VaultIcon } from '@/features/keys/VaultControls';
-import { cn } from '@/lib/cn';
+import { Spinner } from '@/components/ui/Spinner';
 import type { HostVault } from './vault';
 
-interface HostPasswordProps {
-  vault: HostVault;
-  /** The form has unsaved changes, which the switch to a key would lose. */
-  dirty: boolean;
-  /** Opens the dialog that saves or edits the password. */
-  onEdit: () => void;
-  onSwitch: () => void;
-  ref?: Ref<HTMLElement>;
-}
-
-/** Whether the vault holds this host's password, and what can be done with it. */
-export function HostPassword({ vault, dirty, onEdit, onSwitch, ref }: HostPasswordProps) {
-  const { t } = useTranslation();
-  const { navigate } = useRouter();
-  const titleId = useId();
-  const switchHintId = useId();
-
-  if (vault.vault === 'unknown') return null;
-  if (vault.vault === 'missing') {
-    return (
-      <p className="flex items-start gap-2 text-[12px] leading-[18px] text-subtle">
-        <VaultIcon className="mt-0.5 size-3.5 shrink-0" />
-        <span>
-          {t('hosts.vault.missing')}{' '}
-          <button
-            type="button"
-            onClick={() => navigate({ page: 'passwords' })}
-            className="rounded-sm text-[var(--accent-text)] underline-offset-2 hover:underline"
-          >
-            {t('hosts.vault.setUp')}
-          </button>
-        </span>
-      </p>
-    );
-  }
-
-  const entry = vault.vault === 'unlocked' ? vault.entry : undefined;
+/** A card of the sign-in answer (the key, the password): a title over its controls. */
+export function MethodCard({
+  title,
+  children,
+  ...rest
+}: {
+  title: string;
+  children: ReactNode;
+  'data-card'?: string;
+}) {
+  const id = useId();
   return (
-    <section ref={ref} aria-labelledby={titleId} className="flex flex-col gap-2">
-      <h3 id={titleId} className="text-[12px] font-semibold tracking-[0.02em] text-subtle">
-        {t('hosts.vault.title')}
-      </h3>
-      <div className="glass flex flex-col gap-1 rounded-[14px] p-1.5">
-        {vault.vault === 'locked' ? (
-          <Row
-            icon={<Lock aria-hidden="true" className="size-3.5 text-subtle" strokeWidth={2} />}
-            label={t('hosts.vault.lockedLabel')}
-            hint={t('hosts.vault.lockedHint')}
-          >
-            <Button size="sm" onClick={() => navigate({ page: 'passwords' })}>
-              {t('hosts.vault.unlock')}
-            </Button>
-          </Row>
-        ) : (
-          <>
-            {/* One row for both states, so the button that opened the dialog
-                is still there to take focus back once the password is saved. */}
-            <Row
-              icon={
-                <VaultIcon
-                  className={cn('size-3.5', entry ? 'text-[var(--accent-text)]' : 'text-subtle')}
-                />
-              }
-              label={entry ? t('hosts.vault.savedLabel') : t('hosts.vault.noneLabel')}
-              hint={
-                entry
-                  ? [entry.username, entry.hasOtp ? t('hosts.vault.otpSaved') : '']
-                      .filter(Boolean)
-                      .join(' · ') || t('hosts.vault.savedHint')
-                  : t('hosts.vault.noneHint')
-              }
-            >
-              <Button
-                size="sm"
-                variant={entry ? 'secondary' : 'soft'}
-                aria-label={entry ? t('hosts.vault.editLabel') : undefined}
-                icon={
-                  entry ? undefined : (
-                    <Plus aria-hidden="true" className="size-3.5" strokeWidth={2.25} />
-                  )
-                }
-                onClick={onEdit}
-              >
-                {entry ? t('hosts.vault.edit') : t('hosts.vault.save')}
-              </Button>
-              {entry ? (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => navigate({ page: 'passwords', entryId: entry.id })}
-                >
-                  {t('hosts.vault.openInPasswords')}
-                </Button>
-              ) : null}
-            </Row>
-            {entry ? (
-              <Row
-                icon={
-                  <KeyRound aria-hidden="true" className="size-3.5 text-subtle" strokeWidth={2} />
-                }
-                label={t('hosts.vault.switchLabel')}
-                hint={dirty ? t('hosts.vault.switchDirty') : t('hosts.vault.switchHint')}
-                hintId={switchHintId}
-                warning={dirty}
-              >
-                <Button
-                  size="sm"
-                  variant="soft"
-                  disabled={dirty}
-                  aria-describedby={switchHintId}
-                  onClick={onSwitch}
-                >
-                  {t('hosts.vault.switchAction')}
-                </Button>
-              </Row>
-            ) : null}
-          </>
-        )}
+    // biome-ignore lint/a11y/useSemanticElements: a fieldset's legend would sit in the card's border
+    <div
+      role="group"
+      aria-labelledby={id}
+      className="flex min-w-0 flex-col gap-2.5 rounded-[14px] border border-white/[0.08] bg-white/[0.03] px-3.5 py-3"
+      {...rest}
+    >
+      <div id={id} className="font-semibold">
+        {title}
       </div>
-    </section>
+      {children}
+    </div>
   );
 }
 
-interface RowProps {
-  icon: ReactNode;
-  label: string;
-  hint: string;
-  hintId?: string;
-  warning?: boolean;
-  children: ReactNode;
+interface PasswordCardProps {
+  vault: HostVault;
+  /** The host's `User`, the user the password is for. */
+  user: string;
+  /** Opens the dialog that saves the password (or edits it, `otp`: at its 2FA field). */
+  onEdit: (focus: 'edit' | 'otp') => void;
 }
 
-/** Laid out like a `SwitchRow`, with buttons where the switch would be. */
-function Row({ icon, label, hint, hintId, warning, children }: RowProps) {
+/** The host's password in the vault: saved, not saved, the vault locked, or no vault yet. */
+export function PasswordCard({ vault, user, onEdit }: PasswordCardProps) {
+  const { t } = useTranslation();
+  const { navigate } = useRouter();
+  const openPasswords = () => navigate({ page: 'passwords' });
+
+  let body: ReactNode;
+  switch (vault.vault) {
+    case 'unknown':
+      body = (
+        <div className="grid place-items-center py-2 text-subtle">
+          <Spinner className="size-4" />
+        </div>
+      );
+      break;
+    case 'missing':
+      body = (
+        <State text={t('hosts.signIn.missing')} hint={t('hosts.signIn.missingHint')}>
+          <Button size="sm" className="self-start text-fg" onClick={openPasswords}>
+            {t('hosts.signIn.createVault')}
+          </Button>
+        </State>
+      );
+      break;
+    case 'locked':
+      body = (
+        <State text={t('hosts.signIn.locked')} hint={t('hosts.signIn.lockedHint')}>
+          {/* The vault's own accent, as on the Passwords page it leads to. */}
+          <div data-section="passwords" className="self-start">
+            <Button size="sm" variant="primary" onClick={openPasswords}>
+              {t('hosts.signIn.unlock')}
+            </Button>
+          </div>
+        </State>
+      );
+      break;
+    case 'unlocked': {
+      const { entry } = vault;
+      if (!entry) {
+        body = (
+          <State
+            text={user ? t('hosts.signIn.notSaved', { user }) : t('hosts.signIn.notSavedNoUser')}
+            hint={t('hosts.signIn.notSavedHint')}
+          >
+            <Button size="sm" className="self-start text-fg" onClick={() => onEdit('edit')}>
+              {t('hosts.signIn.savePassword')}
+            </Button>
+          </State>
+        );
+        break;
+      }
+      const otp = entry.hasOtp ? t('hosts.signIn.otpOn') : t('hosts.signIn.otpOff');
+      body = (
+        <>
+          <div className="flex h-[34px] items-center gap-2 rounded-[10px] border border-ok/25 bg-ok/[0.08] px-2.5 text-teal-200">
+            <Check aria-hidden="true" className="size-[15px] text-ok" strokeWidth={2.4} />
+            {t('hosts.signIn.saved')}
+          </div>
+          <p className="text-[12px] text-muted">
+            {user ? `${t('hosts.signIn.savedFor', { user })} · ${otp}` : otp}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              aria-label={t('hosts.vault.editLabel')}
+              onClick={() => onEdit('edit')}
+            >
+              {t('hosts.vault.edit')}
+            </Button>
+            {entry.hasOtp ? null : (
+              <Button size="sm" variant="ghost" onClick={() => onEdit('otp')}>
+                {t('hosts.signIn.addOtp')}
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => navigate({ page: 'passwords', entryId: entry.id })}
+            >
+              {t('hosts.vault.openInPasswords')}
+            </Button>
+          </div>
+        </>
+      );
+      break;
+    }
+  }
+
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[10px] px-2.5 py-[9px]">
-      <div className="flex min-w-[180px] flex-1 flex-col">
-        <span className="flex items-center gap-1.5 font-medium text-fg">
-          {icon}
-          {label}
-        </span>
-        <span
-          id={hintId}
-          className={warning ? 'text-[12px] text-warning' : 'text-[12px] text-subtle'}
-        >
-          {hint}
-        </span>
-      </div>
-      <div className="flex flex-wrap items-center gap-1.5">{children}</div>
-    </div>
+    <MethodCard title={t('hosts.signIn.passwordTitle')} data-card="password">
+      {body}
+    </MethodCard>
+  );
+}
+
+function State({ text, hint, children }: { text: string; hint: string; children: ReactNode }) {
+  return (
+    <>
+      <p className="text-fg-2">{text}</p>
+      <p className="text-[12px] text-muted">{hint}</p>
+      {children}
+    </>
   );
 }

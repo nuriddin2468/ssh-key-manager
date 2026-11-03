@@ -60,7 +60,6 @@ export function AddHostDialog({ onDone }: { onDone: () => void }) {
             form={form}
             set={set}
             hosts={hosts}
-            hostId={null}
             // Don't shout "required" at an empty form the user has not touched yet.
             errors={touched ? errors : { port: errors.port }}
             autoFocus

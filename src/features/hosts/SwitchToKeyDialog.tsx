@@ -13,6 +13,7 @@ import type { KeyInstall } from '@/bindings/KeyInstall';
 import type { KeyView } from '@/bindings/KeyView';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { ChoiceCards } from '@/components/ui/ChoiceCards';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
 import { Spinner } from '@/components/ui/Spinner';
 import { SwitchGroup, SwitchRow } from '@/components/ui/Switch';
@@ -40,6 +41,10 @@ interface SwitchToKeyDialogProps {
   entryId: string;
   /** Fixes the editor offers for a login result (checking the host key, editing the password). */
   onAction: Partial<Record<MessageAction, () => void>>;
+  /** The key file (as the config spells it) to choose first, e.g. the one picked in the editor. */
+  initialKeyPath?: string;
+  /** Step 3 wrote the host block. */
+  onConfigSaved?: () => void;
   onDone: () => void;
 }
 
@@ -54,6 +59,8 @@ export function SwitchToKeyDialog({
   alias,
   entryId,
   onAction,
+  initialKeyPath,
+  onConfigSaved,
   onDone,
 }: SwitchToKeyDialogProps) {
   const { t, i18n } = useTranslation();
@@ -77,9 +84,16 @@ export function SwitchToKeyDialog({
 
   const all = keys.data?.keys ?? [];
   const usable = usableKeys(all);
+  const picked = initialKeyPath
+    ? usable.find(
+        (candidate) =>
+          candidate.privatePath === initialKeyPath ||
+          displayPath(candidate.privatePath ?? '', home) === initialKeyPath,
+      )
+    : undefined;
   const key =
     chosenId === null
-      ? preselectKey(all, host.id)
+      ? (picked ?? preselectKey(all, host.id))
       : (usable.find((candidate) => candidate.id === chosenId) ?? null);
 
   const file = key?.privatePath ? displayPath(key.privatePath, home) : '';
@@ -153,6 +167,7 @@ export function SwitchToKeyDialog({
   const saveConfig = useAppMutation(() => api.saveHost(pointed.edit), {
     onSuccess: () => {
       setConfigSaved(true);
+      onConfigSaved?.();
       focusPrimary();
     },
     onError: failed('config'),
@@ -407,23 +422,25 @@ export function SwitchToKeyDialog({
         {step === 'finish' ? (
           <>
             <OkBox>{t('hosts.vault.switch.finishText', { alias, key: keyName })}</OkBox>
-            <RadioGroup.Root
-              aria-label={titles.finish}
+            <ChoiceCards
+              legend={titles.finish}
+              legendHidden
               value={keep ? 'keep' : 'trash'}
               onValueChange={(value) => setKeep(value === 'keep')}
-              className="flex flex-col gap-2"
-            >
-              <Choice
-                value="keep"
-                label={t('hosts.vault.switch.keep')}
-                hint={t('hosts.vault.switch.keepHint')}
-              />
-              <Choice
-                value="trash"
-                label={t('hosts.vault.switch.trash')}
-                hint={t('hosts.vault.switch.trashHint')}
-              />
-            </RadioGroup.Root>
+              columns={1}
+              options={[
+                {
+                  value: 'keep',
+                  title: t('hosts.vault.switch.keep'),
+                  hint: t('hosts.vault.switch.keepHint'),
+                },
+                {
+                  value: 'trash',
+                  title: t('hosts.vault.switch.trash'),
+                  hint: t('hosts.vault.switch.trashHint'),
+                },
+              ]}
+            />
             <Live>{error?.step === 'finish' ? <ErrorBox>{error.message}</ErrorBox> : null}</Live>
           </>
         ) : null}
@@ -592,30 +609,6 @@ function KeyStep({
         {t('hosts.vault.switch.newKey')}
       </Button>
     </>
-  );
-}
-
-function Choice({ value, label, hint }: { value: string; label: string; hint: string }) {
-  const id = useId();
-  return (
-    <RadioGroup.Item
-      value={value}
-      aria-labelledby={`${id}-label`}
-      aria-describedby={`${id}-hint`}
-      className="pressable-soft flex items-start gap-3 rounded-[14px] border border-white/[0.09] bg-white/[0.03] p-3 text-left hover:bg-white/[0.05] data-[state=checked]:border-[rgb(var(--accent-rgb)/0.55)] data-[state=checked]:bg-[rgb(var(--accent-rgb)/0.08)]"
-    >
-      <span className="mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border border-white/25">
-        <RadioGroup.Indicator className="size-2 rounded-full bg-[var(--accent-text)]" />
-      </span>
-      <span className="flex min-w-0 flex-col gap-0.5">
-        <span id={`${id}-label`} className="font-medium">
-          {label}
-        </span>
-        <span id={`${id}-hint`} className="text-[12px] text-subtle">
-          {hint}
-        </span>
-      </span>
-    </RadioGroup.Item>
   );
 }
 

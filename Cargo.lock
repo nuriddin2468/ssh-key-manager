@@ -5062,6 +5062,7 @@ name = "sshkm-app"
 version = "0.2.2"
 dependencies = [
  "arboard",
+ "dirs",
  "gethostname",
  "log",
  "nix 0.28.0",

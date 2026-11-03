@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod audit;
+pub mod browser;
 pub mod config;
 pub mod environment;
 pub mod hosts_file;

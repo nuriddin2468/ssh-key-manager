@@ -193,6 +193,15 @@ impl VaultRuntime {
         app: &AppHandle,
         work: impl FnOnce(&mut Vault) -> AppResult<T>,
     ) -> AppResult<T> {
+        self.access(app, true, work)
+    }
+
+    fn access<T>(
+        &self,
+        app: &AppHandle,
+        activity: bool,
+        work: impl FnOnce(&mut Vault) -> AppResult<T>,
+    ) -> AppResult<T> {
         let mut guard = lock(&self.unlocked);
         let vault = guard.as_mut().ok_or_else(locked)?;
         if let Err(error) = vault.refresh() {
@@ -204,8 +213,21 @@ impl VaultRuntime {
             }
             return Err(error.into());
         }
-        self.touch();
+        if activity {
+            self.touch();
+        }
         work(vault)
+    }
+
+    /// Like [`Self::with`], without counting as activity: for the browser
+    /// extension's lookups, which happen whenever a login field gets focus
+    /// and must not keep the vault open.
+    pub fn with_quietly<T>(
+        &self,
+        app: &AppHandle,
+        work: impl FnOnce(&mut Vault) -> AppResult<T>,
+    ) -> AppResult<T> {
+        self.access(app, false, work)
     }
 
     /// Like [`Self::with`], then writes the vault. On a conflict the change

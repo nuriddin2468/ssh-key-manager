@@ -121,6 +121,48 @@ fn accept_pairing_with(
     Ok(Pairing { app_public, keys })
 }
 
+/// The extension's side of pairing, in Rust: for tests, and as the reference
+/// for `extension/src/shared/channel.ts`.
+pub struct ClientPairing {
+    secret: SecretKey,
+    public: Vec<u8>,
+}
+
+impl ClientPairing {
+    pub fn new() -> Self {
+        let secret = SecretKey::random(&mut OsRng);
+        let public = secret
+            .public_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec();
+        Self { secret, public }
+    }
+
+    /// Uncompressed SEC1, as sent in the pairing request.
+    pub fn public_key(&self) -> &[u8] {
+        &self.public
+    }
+
+    /// The channel keys, once the app replied with its public key.
+    pub fn complete(&self, client_id: &str, app_public: &[u8]) -> Result<ChannelKeys> {
+        let app = parse_public_key(app_public)?;
+        let shared = p256::ecdh::diffie_hellman(self.secret.to_nonzero_scalar(), app.as_affine());
+        ChannelKeys::derive(
+            shared.raw_secret_bytes(),
+            client_id,
+            &self.public,
+            app_public,
+        )
+    }
+}
+
+impl Default for ClientPairing {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn parse_public_key(bytes: &[u8]) -> Result<PublicKey> {
     if bytes.len() != PUBLIC_KEY_LEN {
         return Err(Error::invalid("not an uncompressed P-256 public key"));
@@ -364,18 +406,11 @@ mod tests {
 
     #[test]
     fn both_sides_derive_the_same_keys() {
-        let client = SecretKey::random(&mut OsRng);
-        let client_public = client.public_key().to_encoded_point(false);
-        let pairing = accept_pairing("client-id-0123456789", client_public.as_bytes()).unwrap();
-        let app = PublicKey::from_sec1_bytes(&pairing.app_public).unwrap();
-        let shared = p256::ecdh::diffie_hellman(client.to_nonzero_scalar(), app.as_affine());
-        let keys = ChannelKeys::derive(
-            shared.raw_secret_bytes(),
-            "client-id-0123456789",
-            client_public.as_bytes(),
-            &pairing.app_public,
-        )
-        .unwrap();
+        let client = ClientPairing::new();
+        let pairing = accept_pairing("client-id-0123456789", client.public_key()).unwrap();
+        let keys = client
+            .complete("client-id-0123456789", &pairing.app_public)
+            .unwrap();
         let (nonce, sealed) = keys
             .seal_request("client-id-0123456789", b"{\"hi\":1}")
             .unwrap();

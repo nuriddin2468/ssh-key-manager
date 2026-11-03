@@ -2,7 +2,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { Toaster } from 'sonner';
 import { queryClient } from '@/api/queries';
-import { Sidebar } from '@/components/layout/Sidebar';
+import { SIDEBAR_INSET, Sidebar } from '@/components/layout/Sidebar';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 import { AgentPage } from '@/features/agent/AgentPage';
 import { useKeysFromVault } from '@/features/agent/useKeysFromVault';
@@ -32,9 +32,12 @@ export function App() {
           </DialogsProvider>
         </RouterProvider>
       </TooltipProvider>
+      {/* Toasts start in the empty foot of the sidebar and run on over the page's
+          left edge: action buttons sit on the right, so they stay clear. */}
       <Toaster
         theme="dark"
-        position="bottom-right"
+        position="bottom-left"
+        offset={SIDEBAR_INSET}
         toastOptions={{
           className: '!bg-popover !border-white/10 !text-fg !rounded-xl !shadow-2xl',
           descriptionClassName: '!text-muted',

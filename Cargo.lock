@@ -952,6 +952,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
  "generic-array",
+ "rand_core 0.6.4",
  "typenum",
 ]
 
@@ -3987,6 +3988,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "psl"
+version = "2.1.246"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27d58bd13c235442118460335daf360f0fefaa9035ec4ad957f851d738e7b7d6"
+dependencies = [
+ "psl-types",
+]
+
+[[package]]
+name = "psl-types"
+version = "2.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33cb294fe86a74cbcf50d4445b37da762029549ebeea341421c7c70370f86cac"
+
+[[package]]
 name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5081,6 +5097,7 @@ dependencies = [
 name = "sshkm-core"
 version = "0.2.2"
 dependencies = [
+ "aes-gcm",
  "base64ct",
  "chacha20poly1305",
  "chrono",
@@ -5088,11 +5105,13 @@ dependencies = [
  "diceware_wordlists",
  "dirs",
  "ed25519-dalek",
+ "hkdf 0.12.4",
  "hmac 0.12.1",
  "keepass",
  "p256",
  "p384",
  "p521",
+ "psl",
  "rand_core 0.6.4",
  "rsa",
  "rust-argon2",
@@ -5108,6 +5127,7 @@ dependencies = [
  "time",
  "trash",
  "ts-rs",
+ "url",
  "uuid",
  "zeroize",
  "zxcvbn",

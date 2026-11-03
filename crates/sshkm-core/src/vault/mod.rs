@@ -19,6 +19,7 @@
 //! write that would overwrite it fails with [`Error::Conflict`] instead.
 
 mod audit;
+mod browsers;
 mod export;
 mod generator;
 mod import;
@@ -39,6 +40,7 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 pub use self::audit::{VaultAuditInput, VaultFinding, VaultFindingKind};
+pub use self::browsers::PairedBrowser;
 pub use self::export::export_kdbx;
 pub use self::generator::{GenerateOptions, Strength, generate, strength};
 pub use self::import::{CsvFormat, ImportPreview, ImportRow};

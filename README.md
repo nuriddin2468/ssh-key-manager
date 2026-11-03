@@ -19,7 +19,7 @@
 <p align="center">
   <a href="https://github.com/nuriddin2468/ssh-key-manager/actions/workflows/ci.yml"><img src="https://github.com/nuriddin2468/ssh-key-manager/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <a href="https://github.com/nuriddin2468/ssh-key-manager/releases/latest"><img src="https://img.shields.io/github/v/release/nuriddin2468/ssh-key-manager?include_prereleases&label=release" alt="Latest release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="AGPL-3.0 license"></a>
 </p>
 
 <p align="center">
@@ -171,4 +171,6 @@ SSH Key Manager is open source. To build it yourself or help out, see [CONTRIBUT
 
 ## License
 
-[MIT](LICENSE)
+[GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`).
+
+Versions up to and including 0.4.0 were released under the MIT license, and those releases stay available under it.

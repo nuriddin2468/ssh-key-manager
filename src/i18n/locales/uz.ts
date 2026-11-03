@@ -1265,7 +1265,7 @@ const uz = {
     version: 'Versiya {{version}}',
     openssh: 'OpenSSH',
     opensshMissing: 'Topilmadi',
-    license: 'MIT litsenziyasi ostidagi ochiq manbali dastur.',
+    license: 'GNU AGPL v3 litsenziyasi ostidagi ochiq manbali dastur.',
   },
   terminal: {
     title: 'Terminal',

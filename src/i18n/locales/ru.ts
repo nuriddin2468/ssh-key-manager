@@ -1340,7 +1340,7 @@ const ru = {
     version: 'Версия {{version}}',
     openssh: 'OpenSSH',
     opensshMissing: 'Не найден',
-    license: 'Открытый исходный код под лицензией MIT.',
+    license: 'Открытый исходный код под лицензией GNU AGPL v3.',
   },
   terminal: {
     title: 'Терминал',

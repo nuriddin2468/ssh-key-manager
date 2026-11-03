@@ -1248,7 +1248,7 @@ const en = {
     version: 'Version {{version}}',
     openssh: 'OpenSSH',
     opensshMissing: 'Not found',
-    license: 'Open source under the MIT license.',
+    license: 'Open source under the GNU AGPL v3 license.',
   },
   terminal: {
     title: 'Terminal',

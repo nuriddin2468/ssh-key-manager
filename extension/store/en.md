@@ -44,7 +44,7 @@ What you need
 • The free SSH Key Manager app, version 0.4.0 or later, for macOS, Windows or Linux: https://github.com/nuriddin2468/ssh-key-manager
 • In the app, open Settings and turn on Browser autofill. Then click the extension's button and choose Connect.
 
-SSH Key Manager is open source (MIT license).
+SSH Key Manager is open source (AGPL-3.0 license).
 Privacy policy: https://github.com/nuriddin2468/ssh-key-manager/blob/main/PRIVACY.md
 ```
 

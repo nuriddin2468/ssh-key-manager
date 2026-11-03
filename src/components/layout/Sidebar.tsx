@@ -9,6 +9,7 @@ import {
   Settings as SettingsIcon,
   ShieldCheck,
   Sparkle,
+  SquareTerminal,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -24,6 +25,7 @@ import {
 import { type Page, type Route, useRouter } from '@/app/router';
 import { Logo } from '@/components/Logo';
 import { Tile, type Tone } from '@/components/ui/Tile';
+import { useSessionCounts } from '@/features/terminal/TerminalProvider';
 import { cn } from '@/lib/cn';
 import { platform } from '@/lib/platform';
 import { useUpdateState } from '@/lib/updater';
@@ -44,6 +46,7 @@ export function Sidebar() {
   const audit = useAudit();
   const vault = useVaultStatus();
   const vaultEntries = useVaultEntries();
+  const sessions = useSessionCounts();
 
   const findings = audit.data ? audit.data.counts.critical + audit.data.counts.warning : 0;
   const unlocked = agent.data?.identities.length ?? 0;
@@ -113,6 +116,28 @@ export function Sidebar() {
               ) : undefined
             }
             onClick={() => navigate({ page: 'passwords' })}
+          />
+        </NavGroup>
+        <NavGroup label={t('nav.groupSessions')}>
+          <NavItem
+            label={t('nav.terminal')}
+            tone="green"
+            icon={SquareTerminal}
+            active={route.page === 'terminal'}
+            trailing={
+              sessions.tabs > 0 ? (
+                <span className="ml-auto inline-flex items-center gap-[5px] text-[12px] text-subtle tabular-nums">
+                  {sessions.connected > 0 ? (
+                    <span aria-hidden="true" className="size-1.5 rounded-full bg-online" />
+                  ) : null}
+                  <span aria-hidden="true">{sessions.tabs}</span>
+                  <span className="sr-only">
+                    {t('nav.sessions', { count: sessions.tabs, connected: sessions.connected })}
+                  </span>
+                </span>
+              ) : undefined
+            }
+            onClick={() => navigate({ page: 'terminal' })}
           />
         </NavGroup>
         <NavGroup label={t('nav.groupHealth')}>

@@ -8,6 +8,7 @@ pub mod environment;
 pub mod keys;
 pub mod known_hosts;
 pub mod remote;
+pub mod terminal;
 pub mod vault;
 pub mod vault_files;
 pub mod vault_hosts;

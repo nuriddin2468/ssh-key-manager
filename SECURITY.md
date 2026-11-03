@@ -48,11 +48,19 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     `ssh` run holding that run's random token.
   - Host keys are never accepted this way, a rejected password is not retried, and a
     prompt that names another account, such as a `ProxyJump` host's, is refused.
+  - The in-app terminal uses the same channel with an interactive session. A saved
+    secret is given once and only to prompts for the host's own account; everything else
+    (a secret not saved, a rejected one, a jump host's password) is asked of you in a
+    dialog that names the host. A new host key is trusted only when you choose "Trust"
+    after seeing its fingerprint, which answers `ssh`'s own question; a changed host key
+    stops the connection. An answer you choose to save goes into the vault only after
+    the session has signed in. Terminal output and answers are never logged.
 - **Minimal network access.** The app sends none of your data anywhere. Its only
   requests are:
   - the update check, which downloads `latest.json` from this repository's GitHub
     Releases at startup and every six hours (can be turned off in Settings);
-  - `ssh-keyscan` and `ssh` when you explicitly check a host key or test a connection.
+  - `ssh-keyscan` and `ssh` when you explicitly check a host key, test a connection or
+    open a terminal session.
 - **Signed updates.** An update is installed only if its signature matches the public key
   built into the app (`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`).
 - **Standard files only.** The app edits the OpenSSH files in place.

@@ -3,4 +3,4 @@
 /**
  * What became of a prompt.
  */
-export type PromptOutcome = "answered" | "declined" | "missing" | "repeated" | "refused";
+export type PromptOutcome = "answered" | "declined" | "missing" | "repeated" | "refused" | "accepted";

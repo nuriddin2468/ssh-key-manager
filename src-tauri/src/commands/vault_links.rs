@@ -203,7 +203,11 @@ fn saved_passphrases<'a>(
     Ok(saved)
 }
 
-fn key_entry<'a>(entries: &'a [EntrySummary], fingerprint: &str) -> Option<&'a EntrySummary> {
+/// The key entry holding the passphrase of the key with this fingerprint.
+pub(crate) fn key_entry<'a>(
+    entries: &'a [EntrySummary],
+    fingerprint: &str,
+) -> Option<&'a EntrySummary> {
     entries
         .iter()
         .filter(|e| {

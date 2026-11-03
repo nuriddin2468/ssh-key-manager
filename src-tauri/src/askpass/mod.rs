@@ -13,17 +13,25 @@
 //!   variables, sends the session's token and the prompt to the server, prints
 //!   the reply for `ssh` and exits, before Tauri starts.
 //!
-//! The session decides what is answered, whatever the responder says:
+//! A session is batch ([`Server::session`]) or interactive
+//! ([`Server::interactive_session`]). A batch session is for an `ssh` run
+//! nobody watches, and decides what is answered, whatever the responder says:
 //!
 //! - host-key and other yes/no questions are always answered "no", so a host
 //!   key is never trusted behind the user's back;
 //! - each secret is given at most once per session (a password asked again
 //!   means the first one was wrong; answering again would only loop);
 //! - prompts naming another account than the one expected (for example a
-//!   `ProxyJump` host's password) are refused;
-//! - everything is recorded ([`Session::asked`]) so the caller can tell the
-//!   user "password rejected", "a 2FA code was asked but none is saved" or
-//!   "the host key is not trusted yet".
+//!   `ProxyJump` host's password) are refused.
+//!
+//! An interactive session is for a terminal the user watches. Its
+//! [`Interactive`] responder can ask the user, so it is also asked about host
+//! keys, secrets asked again and other accounts' prompts, and told which of
+//! these it is. Other yes/no questions are still answered "no".
+//!
+//! Either way everything is recorded ([`Session::asked`]) so the caller can
+//! tell the user "password rejected", "a 2FA code was asked but none is saved"
+//! or "the host key is not trusted yet".
 //!
 //! Secrets are [`SecretString`]s, zeroized when dropped and never logged.
 //! Tokens are 256-bit random values compared in constant time; a session's
@@ -37,7 +45,7 @@ mod unix;
 mod windows;
 mod wire;
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io;
@@ -67,14 +75,25 @@ pub const TOKEN_VAR: &str = "SSHKM_ASKPASS_TOKEN";
 /// How long the server waits for a helper to send its request or read the
 /// answer.
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a helper waits for the answer. A batch session answers in
+/// milliseconds; an interactive one may wait up to five minutes for the user,
+/// so this is a little longer. (On Windows the helper's pipe read has no
+/// timeout.)
+#[cfg(unix)]
+const HELPER_WAIT: Duration = Duration::from_secs(330);
 
 /// What a responder says to a prompt.
 pub enum Reply {
     /// Answer with this secret.
     Secret(SecretString),
+    /// Answer "yes" to a host-key question. Only an interactive session sends
+    /// it, and only to [`PromptKind::HostKeyConfirm`]; anywhere else it counts
+    /// as [`Reply::Refuse`].
+    Yes,
     /// Answer "no". Only ever sent to a question of kind
-    /// [`PromptKind::Other`]; to a secret prompt it counts as [`Reply::Refuse`],
-    /// so the word "no" is never sent as a password.
+    /// [`PromptKind::Other`] (and, in an interactive session, to a host-key
+    /// question); to a secret prompt it counts as [`Reply::Refuse`], so the
+    /// word "no" is never sent as a password.
     No,
     /// Do not answer: the helper exits with status 1 and `ssh` treats the
     /// prompt as cancelled (an empty password, or the next key).
@@ -95,6 +114,29 @@ where
     fn respond(&self, prompt: &Prompt) -> Reply {
         self(prompt)
     }
+}
+
+/// A prompt of an interactive session and what the session knows about it.
+pub struct Ask<'a> {
+    pub prompt: &'a Prompt,
+    /// The prompt names another account than the one the session expects
+    /// (see [`Session::expect_account`]), such as a `ProxyJump` host's.
+    pub foreign: bool,
+    /// How many times this secret was already given in this session: more
+    /// than zero means the server rejected it.
+    pub given: u32,
+}
+
+/// Answers an interactive session's prompts, usually by asking the user.
+///
+/// Unlike a [`Responder`] it is asked about host-key questions, secrets given
+/// before and prompts naming another account, so it must not answer those
+/// with a saved secret by itself: only the user may trust a key, retry a
+/// rejected secret or sign in to another host.
+pub trait Interactive: Send + Sync + 'static {
+    /// Runs on the askpass server's thread and may block while the user
+    /// answers; the session's other prompts wait meanwhile.
+    fn respond(&self, ask: &Ask<'_>) -> Reply;
 }
 
 /// A ready-made responder: secrets the caller (such as the vault) has for one
@@ -176,7 +218,7 @@ fn non_empty(secret: &SecretString) -> bool {
 
 /// Whether `ssh`'s `Enter passphrase for key '…'` names `path`; `ssh` prints at
 /// most 100 bytes of it.
-fn names_key(shown: &str, path: &Path) -> bool {
+pub(crate) fn names_key(shown: &str, path: &Path) -> bool {
     let path = path.to_string_lossy();
     shown == path || (shown.len() == 100 && path.as_bytes().get(..100) == Some(shown.as_bytes()))
 }
@@ -198,6 +240,9 @@ pub enum PromptOutcome {
     Repeated,
     /// Not answered: an unrecognised prompt, or one naming another account.
     Refused,
+    /// A host-key question the user answered "yes" (interactive sessions
+    /// only).
+    Accepted,
 }
 
 /// A prompt `ssh` showed during a session and what became of it.
@@ -242,11 +287,24 @@ impl Server {
         self.listener.endpoint()
     }
 
-    /// Opens a session whose prompts `responder` answers.
+    /// Opens a batch session whose prompts `responder` answers within the
+    /// batch rules (see the [module docs](self)).
     pub fn session(&self, responder: impl Responder) -> Session {
+        self.open(Answerer::Batch(Box::new(responder)))
+    }
+
+    /// Opens an interactive session, for a terminal the user watches:
+    /// host-key questions, secrets asked again and other accounts' prompts go
+    /// to `responder` too.
+    pub fn interactive_session(&self, responder: impl Interactive) -> Session {
+        self.open(Answerer::Interactive(Box::new(responder)))
+    }
+
+    fn open(&self, answerer: Answerer) -> Session {
         let token = Token::random();
         let state = Arc::new(SessionState {
-            responder: Box::new(responder),
+            answerer,
+            turn: Mutex::new(()),
             log: Mutex::new(Log::default()),
         });
         self.registry.insert(token.clone(), Arc::clone(&state));
@@ -416,16 +474,24 @@ impl Registry {
 }
 
 struct SessionState {
-    responder: Box<dyn Responder>,
+    answerer: Answerer,
+    /// Held while a prompt is answered, so prompts of one session are
+    /// answered one at a time while the log stays readable.
+    turn: Mutex<()>,
     log: Mutex<Log>,
+}
+
+enum Answerer {
+    Batch(Box<dyn Responder>),
+    Interactive(Box<dyn Interactive>),
 }
 
 #[derive(Default)]
 struct Log {
     account: Option<PromptAccount>,
-    /// Secrets already given: the prompt kind (by key for passphrases, by
-    /// text for other prompts).
-    given: HashSet<(PromptKind, String)>,
+    /// How often each secret was given, by prompt kind (and key for
+    /// passphrases, text for other prompts).
+    given: HashMap<(PromptKind, String), u32>,
     asked: Vec<AskedPrompt>,
 }
 
@@ -434,11 +500,9 @@ impl SessionState {
         self.log.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Applies the session's rules, asking the responder when they allow. The
-    /// log stays locked meanwhile, so prompts of one session are answered one
-    /// at a time.
+    /// Applies the session's rules, asking the responder when they allow.
     fn answer(&self, prompt: Prompt) -> Answer {
-        let mut log = self.log();
+        let _turn = self.turn.lock().unwrap_or_else(PoisonError::into_inner);
         let slot = (
             prompt.kind.clone(),
             match prompt.kind {
@@ -446,32 +510,78 @@ impl SessionState {
                 _ => String::new(),
             },
         );
-        let foreign = matches!(
-            (&log.account, &prompt.account),
-            (Some(expected), Some(named)) if !named.matches(expected)
-        );
-
-        let (outcome, answer) = if prompt.kind.is_confirmation() {
-            (PromptOutcome::Declined, Answer::Text("no".into()))
-        } else if foreign {
-            (PromptOutcome::Refused, Answer::Refuse)
-        } else if log.given.contains(&slot) {
-            (PromptOutcome::Repeated, Answer::Refuse)
-        } else {
-            match self.responder.respond(&prompt) {
-                Reply::Secret(secret) if non_empty(&secret) => {
-                    log.given.insert(slot);
-                    (PromptOutcome::Answered, Answer::Text(secret))
-                }
-                Reply::No if prompt.kind == PromptKind::Other => {
-                    (PromptOutcome::Declined, Answer::Text("no".into()))
-                }
-                _ if prompt.kind.is_secret() => (PromptOutcome::Missing, Answer::Refuse),
-                _ => (PromptOutcome::Refused, Answer::Refuse),
-            }
+        let (foreign, given) = {
+            let log = self.log();
+            let foreign = matches!(
+                (&log.account, &prompt.account),
+                (Some(expected), Some(named)) if !named.matches(expected)
+            );
+            (foreign, log.given.get(&slot).copied().unwrap_or(0))
         };
+
+        let (outcome, answer) = match &self.answerer {
+            Answerer::Batch(responder) => batch_rules(responder.as_ref(), &prompt, foreign, given),
+            Answerer::Interactive(responder) => interactive_rules(
+                responder.as_ref(),
+                &Ask {
+                    prompt: &prompt,
+                    foreign,
+                    given,
+                },
+            ),
+        };
+        let mut log = self.log();
+        if outcome == PromptOutcome::Answered {
+            *log.given.entry(slot).or_default() += 1;
+        }
         log.asked.push(AskedPrompt { prompt, outcome });
         answer
+    }
+}
+
+/// A batch session: yes/no questions get "no", other accounts and repeated
+/// secrets get nothing, and the responder is asked only about the rest.
+fn batch_rules(
+    responder: &dyn Responder,
+    prompt: &Prompt,
+    foreign: bool,
+    given: u32,
+) -> (PromptOutcome, Answer) {
+    if prompt.kind.is_confirmation() {
+        (PromptOutcome::Declined, Answer::Text("no".into()))
+    } else if foreign {
+        (PromptOutcome::Refused, Answer::Refuse)
+    } else if given > 0 {
+        (PromptOutcome::Repeated, Answer::Refuse)
+    } else {
+        reply_to(prompt, responder.respond(prompt))
+    }
+}
+
+/// An interactive session: the responder is asked about everything except
+/// yes/no questions other than host keys, which still get "no".
+fn interactive_rules(responder: &dyn Interactive, ask: &Ask<'_>) -> (PromptOutcome, Answer) {
+    match ask.prompt.kind {
+        PromptKind::Confirm => (PromptOutcome::Declined, Answer::Text("no".into())),
+        PromptKind::HostKeyConfirm => match responder.respond(ask) {
+            Reply::Yes => (PromptOutcome::Accepted, Answer::Text("yes".into())),
+            _ => (PromptOutcome::Declined, Answer::Text("no".into())),
+        },
+        _ => reply_to(ask.prompt, responder.respond(ask)),
+    }
+}
+
+/// What a reply to anything but a yes/no question comes to.
+fn reply_to(prompt: &Prompt, reply: Reply) -> (PromptOutcome, Answer) {
+    match reply {
+        Reply::Secret(secret) if non_empty(&secret) => {
+            (PromptOutcome::Answered, Answer::Text(secret))
+        }
+        Reply::No if prompt.kind == PromptKind::Other => {
+            (PromptOutcome::Declined, Answer::Text("no".into()))
+        }
+        _ if prompt.kind.is_secret() => (PromptOutcome::Missing, Answer::Refuse),
+        _ => (PromptOutcome::Refused, Answer::Refuse),
     }
 }
 
@@ -773,6 +883,198 @@ mod tests {
         assert!(!format!("{secrets:?}").contains("SecretBox"));
         let debug = format!("{:?}", Secrets::new(Some("hunter2".into()), None));
         assert!(!debug.contains("hunter2"));
+    }
+
+    /// Records what an interactive session asked: (prompt kind, foreign,
+    /// given), and replies with `reply`.
+    struct Recorder<F> {
+        seen: Arc<Mutex<Vec<(PromptKind, bool, u32)>>>,
+        reply: F,
+    }
+
+    impl<F: Fn(&Ask<'_>) -> Reply + Send + Sync + 'static> Interactive for Recorder<F> {
+        fn respond(&self, ask: &Ask<'_>) -> Reply {
+            self.seen
+                .lock()
+                .unwrap()
+                .push((ask.prompt.kind.clone(), ask.foreign, ask.given));
+            (self.reply)(ask)
+        }
+    }
+
+    const HOST_KEY: &str = "The authenticity of host 'h (10.0.0.1)' can't be established.\n\
+                            ED25519 key fingerprint is SHA256:abc.\nAre you sure you want to \
+                            continue connecting (yes/no/[fingerprint])? ";
+
+    #[test]
+    fn interactive_sessions_ask_about_host_keys() {
+        let server = server();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let trust = Arc::new(Mutex::new(true));
+        let session = server.interactive_session(Recorder {
+            seen: Arc::clone(&seen),
+            reply: {
+                let trust = Arc::clone(&trust);
+                move |_: &Ask<'_>| {
+                    if *trust.lock().unwrap() {
+                        Reply::Yes
+                    } else {
+                        Reply::No
+                    }
+                }
+            },
+        });
+        assert_eq!(
+            ask_session(&server, &session, HOST_KEY).as_deref(),
+            Some("yes")
+        );
+        *trust.lock().unwrap() = false;
+        assert_eq!(
+            ask_session(&server, &session, HOST_KEY).as_deref(),
+            Some("no")
+        );
+        // Other yes/no questions are not asked about: still "no".
+        assert_eq!(
+            ask_session(&server, &session, "Accept updated hostkeys? (yes/no): ").as_deref(),
+            Some("no")
+        );
+        let outcomes: Vec<_> = session.asked().iter().map(|a| a.outcome).collect();
+        assert_eq!(
+            outcomes,
+            [
+                PromptOutcome::Accepted,
+                PromptOutcome::Declined,
+                PromptOutcome::Declined
+            ]
+        );
+        assert_eq!(seen.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn interactive_sessions_ask_again_and_for_other_accounts() {
+        let server = server();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let session = server.interactive_session(Recorder {
+            seen: Arc::clone(&seen),
+            reply: |ask: &Ask<'_>| {
+                if ask.prompt.kind == PromptKind::OneTimeCode {
+                    Reply::Refuse
+                } else {
+                    Reply::Secret(format!("try-{}", ask.given).into())
+                }
+            },
+        });
+        session.expect_account(PromptAccount::new("alice", "target.example"));
+        assert_eq!(
+            ask_session(&server, &session, "alice@target.example's password: ").as_deref(),
+            Some("try-0")
+        );
+        assert_eq!(
+            ask_session(&server, &session, "(alice@target.example) Password: ").as_deref(),
+            Some("try-1")
+        );
+        assert_eq!(
+            ask_session(&server, &session, "bob@jump.example's password: ").as_deref(),
+            Some("try-2"),
+            "another account's prompt is the responder's to answer"
+        );
+        assert_eq!(
+            ask_session(
+                &server,
+                &session,
+                "(alice@target.example) Verification code: "
+            ),
+            None
+        );
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [
+                (PromptKind::Password, false, 0),
+                (PromptKind::Password, false, 1),
+                (PromptKind::Password, true, 2),
+                (PromptKind::OneTimeCode, false, 0),
+            ]
+        );
+        let outcomes: Vec<_> = session.asked().iter().map(|a| a.outcome).collect();
+        assert_eq!(
+            outcomes,
+            [
+                PromptOutcome::Answered,
+                PromptOutcome::Answered,
+                PromptOutcome::Answered,
+                PromptOutcome::Missing
+            ]
+        );
+    }
+
+    #[test]
+    fn interactive_replies_follow_the_same_rules() {
+        let server = server();
+        let session = server.interactive_session(Recorder {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            reply: |ask: &Ask<'_>| match ask.prompt.kind {
+                PromptKind::Password => Reply::No,
+                PromptKind::Passphrase { .. } => Reply::Yes,
+                _ => Reply::Secret(String::new().into()),
+            },
+        });
+        // "no" and "yes" are never sent as secrets; an empty one is none.
+        assert_eq!(ask_session(&server, &session, "Password: "), None);
+        assert_eq!(
+            ask_session(&server, &session, "Enter passphrase for key '/k': "),
+            None
+        );
+        assert_eq!(ask_session(&server, &session, "Verification code: "), None);
+        assert!(
+            session
+                .asked()
+                .iter()
+                .all(|a| a.outcome == PromptOutcome::Missing)
+        );
+    }
+
+    #[test]
+    fn batch_sessions_never_say_yes() {
+        let server = server();
+        let session = server.session(|_: &Prompt| Reply::Yes);
+        assert_eq!(
+            ask_session(&server, &session, HOST_KEY).as_deref(),
+            Some("no")
+        );
+        assert_eq!(ask_session(&server, &session, "Password: "), None);
+        assert_eq!(ask_session(&server, &session, "Proceed? "), None);
+        let outcomes: Vec<_> = session.asked().iter().map(|a| a.outcome).collect();
+        assert_eq!(
+            outcomes,
+            [
+                PromptOutcome::Declined,
+                PromptOutcome::Missing,
+                PromptOutcome::Refused
+            ]
+        );
+    }
+
+    #[test]
+    fn the_log_stays_readable_while_the_user_answers() {
+        let server = server();
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let wait = Mutex::new(wait);
+        let session = server.interactive_session(Recorder {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            reply: move |_: &Ask<'_>| {
+                let _ = wait.lock().unwrap().recv();
+                Reply::Secret("late".into())
+            },
+        });
+        std::thread::scope(|scope| {
+            let asking = scope.spawn(|| ask_session(&server, &session, "Password: "));
+            std::thread::sleep(Duration::from_millis(100));
+            // The responder is still waiting; the log can be read meanwhile.
+            assert_eq!(session.asked(), []);
+            release.send(()).unwrap();
+            assert_eq!(asking.join().unwrap().as_deref(), Some("late"));
+        });
+        assert_eq!(session.asked()[0].outcome, PromptOutcome::Answered);
     }
 
     #[test]

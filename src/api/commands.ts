@@ -119,6 +119,9 @@ export const api = {
   /** Tests that the host lets the user in with a key alone (no password). */
   vaultTestKeyLogin: (alias: string) => call<ConnectionTest>('vault_test_key_login', { alias }),
 
+  /** Opens the system terminal with `ssh <alias>`. */
+  terminalOpenExternal: (alias: string) => call<void>('terminal_open_external', { alias }),
+
   // The vault's files (src-tauri/src/commands/vault_files.rs).
   /** Rows of a CSV export, without passwords; duplicates name the existing entry. */
   vaultImportPreview: (path: string) => call<ImportPreview>('vault_import_preview', { path }),

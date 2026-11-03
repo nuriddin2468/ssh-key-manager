@@ -46,7 +46,11 @@ const STYLE = `
 .user { font-size: 12px; color: #a7b0c0; }
 .user.none { font-style: italic; color: #8892a6; }
 .icon { flex: none; width: 16px; height: 16px; color: #c7d2fe; }
-.banner { width: 340px; padding: 14px 14px 12px; }
+.banner { width: min(340px, calc(100vw - 32px)); padding: 14px 14px 12px; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
 .banner .row { display: flex; align-items: flex-start; gap: 10px; }
 .banner .logo { width: 28px; height: 28px; border-radius: 8px; }
 .banner .logo svg { width: 15px; height: 15px; }
@@ -254,7 +258,13 @@ export class LoginMenu extends Surface {
       list.append(li);
     }
     list.addEventListener('keydown', (event) => this.onKey(event));
-    panel.append(head, list);
+    // The field is the page's, so it can't point at the menu: say it's there.
+    const hint = element('p', 'sr-only');
+    hint.setAttribute('role', 'status');
+    panel.append(head, list, hint);
+    setTimeout(() => {
+      hint.textContent = t('menuHint');
+    }, 50);
     this.root.append(panel);
     this.anchor = anchor;
     this.position();
@@ -366,7 +376,13 @@ export class SaveBanner extends Surface {
     );
     save.type = 'button';
     actions.append(later, save);
-    panel.append(row, status, actions);
+    // Shown without taking focus: announce it.
+    const announce = element('p', 'sr-only');
+    announce.setAttribute('role', 'status');
+    panel.append(row, status, actions, announce);
+    setTimeout(() => {
+      announce.textContent = title;
+    }, 50);
     this.root.append(panel);
 
     const dismiss = (event: Event) => {

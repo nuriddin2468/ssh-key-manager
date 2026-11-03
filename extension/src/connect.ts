@@ -29,7 +29,11 @@ function brand(): HTMLElement {
 }
 
 function show(...card: (Node | string | null)[]): void {
-  app.replaceChildren(brand(), h('section', { className: 'card' }, ...card));
+  // The button just pressed goes away: keep keyboard focus in the card.
+  const hadFocus = app.contains(document.activeElement);
+  const section = h('section', { className: 'card', tabindex: '-1' }, ...card);
+  app.replaceChildren(brand(), section);
+  if (hadFocus) section.focus({ preventScroll: true });
 }
 
 function heading(key: Key = 'connectTitle'): HTMLElement {

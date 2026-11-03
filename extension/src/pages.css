@@ -79,6 +79,9 @@ p {
   font-size: 12.5px;
   line-height: 18px;
 }
+.card:focus {
+  outline: none;
+}
 .dot {
   width: 8px;
   height: 8px;

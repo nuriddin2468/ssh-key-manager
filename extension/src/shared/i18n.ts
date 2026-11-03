@@ -46,6 +46,7 @@ const en = {
 
   menuLabel: 'Saved logins',
   menuLocked: 'Unlock SSH Key Manager to fill',
+  menuHint: 'SSH Key Manager can fill this field. Press Down Arrow to choose.',
   noUsername: 'No username',
 
   saveTitle: 'Save login for {site}?',
@@ -108,6 +109,7 @@ const ru: Strings = {
 
   menuLabel: 'Сохранённые логины',
   menuLocked: 'Разблокируйте SSH Key Manager, чтобы заполнить',
+  menuHint: 'SSH Key Manager может заполнить это поле. Нажмите стрелку вниз, чтобы выбрать.',
   noUsername: 'Без имени пользователя',
 
   saveTitle: 'Сохранить логин для {site}?',
@@ -167,6 +169,7 @@ const uz: Strings = {
 
   menuLabel: 'Saqlangan loginlar',
   menuLocked: 'Toʻldirish uchun SSH Key Managerni oching',
+  menuHint: 'SSH Key Manager bu maydonni toʻldira oladi. Tanlash uchun pastga strelkasini bosing.',
   noUsername: 'Foydalanuvchi nomi yoʻq',
 
   saveTitle: '{site} uchun login saqlansinmi?',

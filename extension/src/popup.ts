@@ -150,7 +150,11 @@ function render(state: State): void {
     );
   }
   const actions = h('div', { className: 'actions' }, ...actionsFor(state));
+  const hadFocus = app.contains(document.activeElement);
+  card.tabIndex = -1;
   app.replaceChildren(brand, card, actions);
+  // The button just pressed goes away: keep keyboard focus here.
+  if (hadFocus) card.focus({ preventScroll: true });
 }
 
 async function refresh(): Promise<void> {

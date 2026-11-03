@@ -53,6 +53,14 @@ real `~/.ssh`. Its modules:
     vault re-reads a database changed elsewhere (a synced folder); a write over such
     a change fails with `conflict` and is kept as a separate copy.
 
+- `browser`: what the browser extension may see of the vault.
+  - `origin` matches a login's address to a page: the same registrable domain (Public
+    Suffix List), exactly; `https` logins stay off `http` pages; ports must agree.
+  - `channel` pairs a browser (P-256 ECDH, HKDF-SHA-256) and seals every later message
+    with AES-256-GCM, using only what WebCrypto offers. `channel-vectors.json` is shared
+    with the extension's tests so both sides compute the same bytes.
+  - `protocol` is the JSON. Paired browsers live in the vault's custom data.
+
 Errors have a stable `code` (`wrong_passphrase`, `agent_unavailable`, …) that the UI
 translates.
 
@@ -88,6 +96,18 @@ translates.
     before that is a failure with a reason read from the prompts and `ssh`'s output.
   - Sessions end when the app quits or the page reloads; locking the vault doesn't end
     them.
+- **Browser autofill.** `src-tauri/src/browser/`.
+  - The app executable doubles as the extension's native messaging host: `main` runs
+    it when a browser starts the executable with the extension's origin. It relays
+    JSON to the app and never sees a secret in the clear.
+  - While autofill is on, the app listens on a private socket or pipe, writes where to
+    `browser-endpoint` in its local data folder, and keeps the browsers' host manifests
+    pointing at itself.
+  - The broker pairs a browser after the user's yes in a dialog, then answers sealed
+    requests: logins for a page, the one picked, and saving or updating a typed login.
+    It reaches the app through a small `Env` trait, so its tests run against a real
+    vault without Tauri, and `examples/autofill_bridge.rs` serves a throwaway vault
+    to the extension's end-to-end test.
 - **Watcher.** Watches `~/.ssh` and the hosts file so changes made in a terminal appear
   immediately.
 - **Vault runtime.** The unlocked vault lives only in the Rust process. A timer locks
@@ -110,3 +130,16 @@ translates.
   placeholders in sync.
 - `pnpm dev` in a browser uses `src/mocks/backend.ts` instead of Tauri, so the UI can be
   built and reviewed without the native shell. Production builds never include it.
+
+## Browser extension
+
+`extension/`: Manifest V3, plain TypeScript, built by `extension/build.mjs` into
+`extension/dist/chromium` and `extension/dist/firefox`.
+
+- The background script is the only part that talks to the app for pages, and names each
+  page by the origin the browser reports for the sending frame.
+- The content script finds login fields, shows the saved logins in a menu in a closed
+  shadow root, fills the one picked and passes sent login forms to the background, which
+  offers to save them in a banner on the next page.
+- The popup shows the connection state; the connect page pairs the browser. Keys stay in
+  IndexedDB as non-extractable WebCrypto keys.

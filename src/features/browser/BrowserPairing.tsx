@@ -101,7 +101,7 @@ export function BrowserPairing() {
           <DialogHeader
             closable={false}
             icon={
-              <Tile tone="indigo" size={44} glow>
+              <Tile tone="pink" size={44} glow>
                 <Globe className="size-5" strokeWidth={2} />
               </Tile>
             }

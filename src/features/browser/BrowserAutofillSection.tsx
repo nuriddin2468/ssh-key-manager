@@ -126,7 +126,7 @@ export function BrowserAutofillSection() {
                 <ul className="flex flex-col gap-1">
                   {status.paired.map((browser) => (
                     <li key={browser.id} className="flex items-center gap-3 py-1">
-                      <Tile tone="indigo" size={30}>
+                      <Tile tone="pink" size={30}>
                         <Globe className="size-4" strokeWidth={2} />
                       </Tile>
                       <span className="flex min-w-0 flex-col">

@@ -2,7 +2,7 @@
 // field, and the "Save login?" banner. Each lives in a closed shadow root on
 // an element of its own, so the page's styles can't reach in and its scripts
 // can't read the logins listed. The look follows the app: its dark popover
-// surface, the Passwords section's indigo accent and its type sizes.
+// surface, the Passwords section's pink accent and its type sizes.
 
 import type { LoginOffer } from '../shared/client';
 import { t } from '../shared/i18n';
@@ -28,7 +28,7 @@ const STYLE = `
 .logo {
   display: grid; place-items: center; flex: none;
   width: 16px; height: 16px; border-radius: 5px;
-  background: linear-gradient(140deg, #a5b4fc, #4f46e5);
+  background: linear-gradient(140deg, #f9a8d4, #db2777);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.32);
 }
 .logo svg { width: 10px; height: 10px; }
@@ -39,13 +39,14 @@ const STYLE = `
   width: 100%; padding: 7px 8px; border-radius: 8px; cursor: pointer;
 }
 .item:hover { background: rgb(255 255 255 / 0.06); }
-.item:focus-visible { background: rgb(129 140 248 / 0.16); outline: 2px solid #a5b4fc; outline-offset: -2px; }
+.item:focus-visible { background: rgb(244 114 182 / 0.16); outline: 2px solid #f9a8d4; outline-offset: -2px; }
 .lines { display: flex; flex-direction: column; min-width: 0; }
 .title, .user { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .title { font-weight: 600; color: #f2f4f8; }
 .user { font-size: 12px; color: #a7b0c0; }
 .user.none { font-style: italic; color: #8892a6; }
-.icon { flex: none; width: 16px; height: 16px; color: #c7d2fe; }
+.item:hover .user.none, .item:focus-visible .user.none { color: #a7b0c0; }
+.icon { flex: none; width: 16px; height: 16px; color: #fbcfe8; }
 .banner { width: min(340px, calc(100vw - 32px)); padding: 14px 14px 12px; }
 .sr-only {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
@@ -69,11 +70,11 @@ const STYLE = `
 }
 .btn:hover { background: rgb(255 255 255 / 0.06); color: #f2f4f8; }
 .btn.primary {
-  background: linear-gradient(135deg, #a5b4fc, #818cf8); color: #0e1240; font-weight: 600;
-  box-shadow: 0 8px 20px -8px rgb(129 140 248 / 0.75), inset 0 1px 0 rgb(255 255 255 / 0.5);
+  background: linear-gradient(135deg, #f9a8d4, #ec4899); color: #3f0a24; font-weight: 600;
+  box-shadow: 0 8px 20px -8px rgb(244 114 182 / 0.75), inset 0 1px 0 rgb(255 255 255 / 0.5);
 }
 .btn.primary:hover { filter: brightness(1.1); }
-.btn:focus-visible { outline: 2px solid #a5b4fc; outline-offset: 2px; }
+.btn:focus-visible { outline: 2px solid #f9a8d4; outline-offset: 2px; }
 .btn[aria-busy="true"] { opacity: 0.6; pointer-events: none; }
 .close {
   all: unset; box-sizing: border-box; flex: none;
@@ -81,7 +82,7 @@ const STYLE = `
   color: #8892a6; cursor: pointer;
 }
 .close:hover { background: rgb(255 255 255 / 0.06); color: #f2f4f8; }
-.close:focus-visible { outline: 2px solid #a5b4fc; }
+.close:focus-visible { outline: 2px solid #f9a8d4; }
 .close svg { width: 14px; height: 14px; }
 
 `;

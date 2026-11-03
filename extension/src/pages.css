@@ -10,10 +10,11 @@
   --warning: #ffc266;
   --critical: #ff9b9b;
   --ok: #5eead4;
-  --accent-1: #a5b4fc;
-  --accent-2: #818cf8;
-  --accent-ink: #0e1240;
-  --accent-rgb: 129 140 248;
+  --accent-1: #f9a8d4;
+  --accent-2: #ec4899;
+  --accent-ink: #3f0a24;
+  --accent-rgb: 244 114 182;
+  --glow-a: rgb(219 39 119 / 0.22);
   color-scheme: dark;
   font:
     13px / 1.45 -apple-system,
@@ -41,7 +42,7 @@ p {
 }
 .glow {
   background:
-    radial-gradient(420px 220px at 50% -60px, rgb(79 70 229 / 0.28), transparent 70%), var(--canvas);
+    radial-gradient(420px 220px at 50% -60px, var(--glow-a), transparent 70%), var(--canvas);
 }
 .brand {
   display: flex;

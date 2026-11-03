@@ -3,7 +3,7 @@
   "name": "__MSG_extensionName__",
   "short_name": "SSH Key Manager",
   "description": "__MSG_extensionDescription__",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "default_locale": "en",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArjVFV8GdjJFBSQdFOHHSf6vP8Buyc9zKT9QO9cFwzbuJ0mXMAQfednufWeaA9hsTA5OM55Q5hMi7mCqnQ2Nd4YOrCCZ8UTkfXlTBT6jIpKJXccLTnlL+ZTie2L0ZOZbA70MquhTblUf8WE51Rnc+VdjSKfh2j6mqccJM1v3+Ia4iZ4WHB+dEXRf1xhMI4Um7LEnff1TvhxXCy9xJGiSapTPIbcey3umj//SsWJOYe3dPrn3c3hq4Om3Uxt80nC9gWqk3j2e/7kc1jr0wAZ2zIwILNeYkdjSO1PmQG4eRiNWQYbz1GOssaNJrI0AllzEIYf8/aoF+1bMMvOUwOr9N4QIDAQAB",
   "icons": {

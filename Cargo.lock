@@ -5043,7 +5043,7 @@ dependencies = [
 
 [[package]]
 name = "sshkm-app"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "arboard",
  "gethostname",
@@ -5079,7 +5079,7 @@ dependencies = [
 
 [[package]]
 name = "sshkm-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64ct",
  "chacha20poly1305",
@@ -5115,7 +5115,7 @@ dependencies = [
 
 [[package]]
 name = "sshkm-os"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "apple-native-keyring-store",
  "block2",

@@ -59,101 +59,104 @@ export function SettingsPage() {
   return (
     <>
       <Toolbar title={t('settings.title')} />
-      <PageBody className="max-w-[760px] gap-5">
-        <Group title={t('settings.language')}>
-          <Row label={t('settings.language')}>
-            <Select
-              aria-label={t('settings.language')}
-              size="sm"
-              className="w-[220px]"
-              value={storedLanguage() ?? 'system'}
-              onValueChange={(next) => setLanguage(next === 'system' ? null : (next as Language))}
-              options={[
-                { value: 'system', label: t('settings.languageSystem') },
-                ...LANGUAGES.map((language) => ({
-                  value: language,
-                  label: LANGUAGE_NAMES[language],
-                  hint: language.toUpperCase(),
-                })),
-              ]}
-            />
-          </Row>
-        </Group>
-
-        <Group title={t('settings.defaults')}>
-          <Row label={t('settings.defaultAlgorithm')}>
-            <Select
-              aria-label={t('settings.defaultAlgorithm')}
-              size="sm"
-              className="w-[220px]"
-              value={settings.defaultAlgorithm}
-              onValueChange={(next) =>
-                updateSettings({ defaultAlgorithm: next as Settings['defaultAlgorithm'] })
-              }
-              options={[
-                { value: 'ed25519', label: 'Ed25519', icon: algorithmTile('teal') },
-                { value: 'rsa', label: 'RSA', icon: algorithmTile('amber') },
-                { value: 'ecdsa', label: 'ECDSA', icon: algorithmTile('blue') },
-              ]}
-            />
-          </Row>
-          <Row label={t('settings.defaultLifetime')}>
-            <div className="w-[220px]">
-              <LifetimeSelect
+      <PageBody>
+        {/* The width cap sits inside the scroll area, so the scrollbar stays at the window's edge. */}
+        <div className="flex w-full max-w-[760px] flex-col gap-5">
+          <Group title={t('settings.language')}>
+            <Row label={t('settings.language')}>
+              <Select
+                aria-label={t('settings.language')}
                 size="sm"
-                value={settings.defaultLifetime}
-                onChange={(value) => updateSettings({ defaultLifetime: value })}
+                className="w-[220px]"
+                value={storedLanguage() ?? 'system'}
+                onValueChange={(next) => setLanguage(next === 'system' ? null : (next as Language))}
+                options={[
+                  { value: 'system', label: t('settings.languageSystem') },
+                  ...LANGUAGES.map((language) => ({
+                    value: language,
+                    label: LANGUAGE_NAMES[language],
+                    hint: language.toUpperCase(),
+                  })),
+                ]}
               />
-            </div>
-          </Row>
-        </Group>
-
-        <PasswordsGroup />
-        <VaultLocationSection />
-
-        <Group title={t('settings.folders')}>
-          {files.map((file) => (
-            <Row key={file.label} label={file.label}>
-              <span className="selectable min-w-0 flex-1 truncate text-right font-mono text-[12px] text-muted">
-                {displayPath(file.path, home)}
-              </span>
-              <Button
-                size="sm"
-                variant="ghost"
-                icon={<FolderOpen className="size-[15px]" strokeWidth={1.75} />}
-                onClick={() => void reveal(file.path)}
-              >
-                {t('keys.showIn', { app: fileManagerName })}
-              </Button>
             </Row>
-          ))}
-        </Group>
+          </Group>
 
-        <Group title={t('updates.title')}>
-          <Row label={t('updates.automatic')}>
-            <Switch
-              aria-label={t('updates.automatic')}
-              checked={settings.autoUpdate}
-              onCheckedChange={(autoUpdate) => updateSettings({ autoUpdate })}
-            />
-          </Row>
-          <UpdateRow />
-        </Group>
+          <Group title={t('settings.defaults')}>
+            <Row label={t('settings.defaultAlgorithm')}>
+              <Select
+                aria-label={t('settings.defaultAlgorithm')}
+                size="sm"
+                className="w-[220px]"
+                value={settings.defaultAlgorithm}
+                onValueChange={(next) =>
+                  updateSettings({ defaultAlgorithm: next as Settings['defaultAlgorithm'] })
+                }
+                options={[
+                  { value: 'ed25519', label: 'Ed25519', icon: algorithmTile('teal') },
+                  { value: 'rsa', label: 'RSA', icon: algorithmTile('amber') },
+                  { value: 'ecdsa', label: 'ECDSA', icon: algorithmTile('blue') },
+                ]}
+              />
+            </Row>
+            <Row label={t('settings.defaultLifetime')}>
+              <div className="w-[220px]">
+                <LifetimeSelect
+                  size="sm"
+                  value={settings.defaultLifetime}
+                  onChange={(value) => updateSettings({ defaultLifetime: value })}
+                />
+              </div>
+            </Row>
+          </Group>
 
-        <Group title={t('settings.about')}>
-          <div className="flex items-center gap-4 px-4 py-4">
-            <Logo size={52} />
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[15px] font-semibold">{t('app.name')}</span>
-              <span className="text-[12.5px] text-muted">
-                {env ? t('settings.version', { version: env.appVersion }) : ''}
-                {' · '}
-                {t('settings.openssh')}: {env?.opensshVersion ?? t('settings.opensshMissing')}
-              </span>
-              <span className="text-[12px] text-subtle">{t('settings.license')}</span>
+          <PasswordsGroup />
+          <VaultLocationSection />
+
+          <Group title={t('settings.folders')}>
+            {files.map((file) => (
+              <Row key={file.label} label={file.label}>
+                <span className="selectable min-w-0 flex-1 truncate text-right font-mono text-[12px] text-muted">
+                  {displayPath(file.path, home)}
+                </span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  icon={<FolderOpen className="size-[15px]" strokeWidth={1.75} />}
+                  onClick={() => void reveal(file.path)}
+                >
+                  {t('keys.showIn', { app: fileManagerName })}
+                </Button>
+              </Row>
+            ))}
+          </Group>
+
+          <Group title={t('updates.title')}>
+            <Row label={t('updates.automatic')}>
+              <Switch
+                aria-label={t('updates.automatic')}
+                checked={settings.autoUpdate}
+                onCheckedChange={(autoUpdate) => updateSettings({ autoUpdate })}
+              />
+            </Row>
+            <UpdateRow />
+          </Group>
+
+          <Group title={t('settings.about')}>
+            <div className="flex items-center gap-4 px-4 py-4">
+              <Logo size={52} />
+              <div className="flex flex-col gap-0.5">
+                <span className="text-[15px] font-semibold">{t('app.name')}</span>
+                <span className="text-[12.5px] text-muted">
+                  {env ? t('settings.version', { version: env.appVersion }) : ''}
+                  {' · '}
+                  {t('settings.openssh')}: {env?.opensshVersion ?? t('settings.opensshMissing')}
+                </span>
+                <span className="text-[12px] text-subtle">{t('settings.license')}</span>
+              </div>
             </div>
-          </div>
-        </Group>
+          </Group>
+        </div>
       </PageBody>
     </>
   );

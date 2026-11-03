@@ -4,6 +4,7 @@ import { Channel, isTauri } from '@tauri-apps/api/core';
 import type { AddFromVaultReport } from '@/bindings/AddFromVaultReport';
 import type { AgentView } from '@/bindings/AgentView';
 import type { AuditReport } from '@/bindings/AuditReport';
+import type { BrowserStatus } from '@/bindings/BrowserStatus';
 import type { ConfigFile } from '@/bindings/ConfigFile';
 import type { ConnectionTest } from '@/bindings/ConnectionTest';
 import type { CopyField } from '@/bindings/CopyField';
@@ -195,4 +196,13 @@ export const api = {
   vaultUseFile: (path: string) => call<VaultLocation>('vault_use_file', { path }),
   /** Back to the app's folder: move the files there, or switch to the vault there. */
   vaultUseDefault: (moveFiles: boolean) => call<VaultLocation>('vault_use_default', { moveFiles }),
+
+  // Browser autofill (src-tauri/src/commands/browser.rs).
+  browserStatus: () => call<BrowserStatus>('browser_status'),
+  /** On: registers with the installed browsers and listens. Off: undoes both. */
+  browserSetEnabled: (enabled: boolean) => call<BrowserStatus>('browser_set_enabled', { enabled }),
+  /** Fails with `not_found` if the request no longer waits. */
+  browserAnswerPairing: (id: string, approve: boolean) =>
+    call<void>('browser_answer_pairing', { id, approve }),
+  browserRevoke: (id: string) => call<void>('browser_revoke', { id }),
 };

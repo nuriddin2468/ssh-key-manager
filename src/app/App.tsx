@@ -7,6 +7,7 @@ import { TooltipProvider } from '@/components/ui/Tooltip';
 import { AgentPage } from '@/features/agent/AgentPage';
 import { useKeysFromVault } from '@/features/agent/useKeysFromVault';
 import { AuditPage } from '@/features/audit/AuditPage';
+import { BrowserPairing } from '@/features/browser/BrowserPairing';
 import { HostsPage } from '@/features/hosts/HostsPage';
 import { HostsFilePage } from '@/features/hostsFile/HostsFilePage';
 import { KeysPage } from '@/features/keys/KeysPage';
@@ -87,6 +88,7 @@ function Shell() {
         ) : null}
         {route.page === 'settings' ? <SettingsPage /> : null}
       </main>
+      <BrowserPairing />
     </div>
   );
 }

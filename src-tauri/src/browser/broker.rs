@@ -271,7 +271,7 @@ impl Broker {
         if !fresh(opened.sent_at) {
             return Err(ReplyError::Expired);
         }
-        let answer = act(env, opened.action)?;
+        let answer = act(env, &request.client_id, opened.action)?;
         seal(&keys, &request.client_id, &nonce, &answer)
     }
 
@@ -288,11 +288,19 @@ impl Broker {
 }
 
 /// Carries out a request; returns the JSON to seal.
-fn act(env: &impl Env, action: Action) -> Result<Zeroizing<Vec<u8>>, ReplyError> {
+fn act(env: &impl Env, client_id: &str, action: Action) -> Result<Zeroizing<Vec<u8>>, ReplyError> {
     match action {
         Action::Status => Ok(to_json(&StatusReply {
             vault: VaultLock::Unlocked,
         })),
+        Action::Disconnect => {
+            env.write(|vault| Ok(vault.remove_browser(client_id)))
+                .map_err(|e| reply_error(&e))?;
+            env.changed(Changed::Browsers);
+            Ok(to_json(&StatusReply {
+                vault: VaultLock::Unlocked,
+            }))
+        }
         Action::Logins { origin } => {
             let page = page(&origin)?;
             let logins = env

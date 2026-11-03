@@ -99,6 +99,8 @@ pub enum Action {
         username: String,
         password: SecretString,
     },
+    /// Forgets this browser's pairing: the extension's "Disconnect".
+    Disconnect,
     /// Sets a new password on a login of the page.
     Update {
         origin: String,

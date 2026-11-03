@@ -88,7 +88,10 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - On Windows the elevated step runs Windows PowerShell, so the UAC prompt names
     Microsoft as the publisher.
 - **Locked-down webview**
-  - Strict Content Security Policy and a frozen JavaScript prototype.
+  - Strict Content Security Policy: only the app's own scripts run, and no `eval`.
+  - Tauri's frozen JavaScript prototype (`freezePrototype`) is off: the terminal
+    (xterm.js) assigns its own `toString` while loading, which a frozen prototype
+    forbids, and the whole page then failed to start in 0.3.0.
   - Only the Tauri capabilities the UI needs are granted (`src-tauri/capabilities`).
   - Permission fixes are limited to paths inside `~/.ssh`.
 

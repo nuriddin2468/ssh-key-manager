@@ -368,6 +368,7 @@ const ru = {
       password: 'Пароль',
       passwordHint: 'Из хранилища, с 2FA',
       both: 'Ключ и пароль',
+      listLabel: 'Вход: {{method}}',
       bothHint: 'Сначала ключ, потом пароль',
       labelKey: 'ключ',
       labelPassword: 'пароль',

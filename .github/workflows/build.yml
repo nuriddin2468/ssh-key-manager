@@ -1,7 +1,8 @@
 name: Build
 
 # Installers for every push to main, kept as workflow artifacts for 30 days.
-# These are development builds; tagged releases come from release.yml.
+# These are development builds; tagged releases come from release.yml, which
+# also builds the release commit itself, so that commit is skipped here.
 
 on:
   push:
@@ -16,6 +17,7 @@ concurrency:
 jobs:
   build:
     name: ${{ matrix.name }}
+    if: ${{ !startsWith(github.event.head_commit.message, 'Release ') }}
     strategy:
       fail-fast: false
       matrix:

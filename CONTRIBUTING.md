@@ -73,7 +73,9 @@ There are three workflows:
 
 To publish a release:
 
-1. Bump the version in `package.json`, `Cargo.toml` and `src-tauri/tauri.conf.json`.
+1. Bump the version in `package.json`, `Cargo.toml` and `src-tauri/tauri.conf.json`, and
+   commit it to `main` as `Release 0.2.0`. `ci.yml` and `build.yml` skip a commit whose
+   message starts with `Release `, since `release.yml` builds it from the tag.
 2. Push a tag:
 
    ```bash

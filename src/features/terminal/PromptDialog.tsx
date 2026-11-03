@@ -120,7 +120,7 @@ function useSecretCopy(tab: Tab, ask: SecretAsk) {
         rejected: t('terminal.prompt.passwordRejected'),
       };
       return {
-        tone: 'indigo' as const,
+        tone: 'pink' as const,
         icon: <VaultIcon className="size-5" />,
         title: t('terminal.prompt.passwordTitle', { account: promptAccount(tab, ask) }),
         description: ask.foreign
@@ -157,7 +157,7 @@ function useSecretCopy(tab: Tab, ask: SecretAsk) {
       };
     case 'oneTimeCode':
       return {
-        tone: 'indigo' as const,
+        tone: 'pink' as const,
         icon: <LockKeyhole className="size-5" strokeWidth={2} />,
         title: t('terminal.prompt.codeTitle', { alias: tab.alias }),
         description: ask.retry

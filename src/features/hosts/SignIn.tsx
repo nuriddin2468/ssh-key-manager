@@ -89,7 +89,7 @@ export function SignInSection({
     },
     {
       value: 'password',
-      tone: 'indigo',
+      tone: 'pink',
       icon: LockKeyhole,
       title: t('hosts.signIn.password'),
       hint: t('hosts.signIn.passwordHint'),

@@ -90,7 +90,7 @@ export function ExportDialog({ onDone }: ExportDialogProps) {
       <form onSubmit={(event) => void submit(event)} className="flex min-h-0 flex-col">
         <DialogHeader
           icon={
-            <Tile tone="indigo" size={44} glow>
+            <Tile tone="pink" size={44} glow>
               <FileDown className="size-[22px]" strokeWidth={2} />
             </Tile>
           }

@@ -344,6 +344,7 @@ const uz = {
       password: 'Parol',
       passwordHint: 'Ombordan, 2FA bilan',
       both: 'Kalit va parol',
+      listLabel: 'Kirish: {{method}}',
       bothHint: 'Avval kalit, keyin parol',
       labelKey: 'kalit',
       labelPassword: 'parol',

@@ -428,13 +428,13 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
 
       <div className="relative flex min-h-0 flex-1 flex-wrap content-start gap-[18px] overflow-y-auto px-5 pt-0.5 pb-[18px]">
         {readOnly ? (
-          <div className="flex min-w-0 flex-[999_1_420px] flex-col gap-3">
+          <div className="flex min-w-0 flex-[999_1_400px] flex-col gap-3">
             <p className="rounded-xl border border-info-solid/30 bg-info-solid/[0.09] px-3 py-2.5 text-[12.5px] text-info">
               {t('hosts.matchReadOnly')}
             </p>
           </div>
         ) : (
-          <div className="flex min-w-0 flex-[999_1_420px] flex-col gap-[18px]">
+          <div className="flex min-w-0 flex-[999_1_400px] flex-col gap-[18px]">
             <Section legend={t('hosts.editor.server')}>
               <ServerFields
                 form={form}
@@ -477,7 +477,7 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
 
         <aside
           aria-labelledby="host-preview-title"
-          className="flex min-w-[260px] flex-[1_1_260px] flex-col gap-2"
+          className="flex min-w-[220px] flex-[1_1_220px] flex-col gap-2"
         >
           <h3
             id="host-preview-title"

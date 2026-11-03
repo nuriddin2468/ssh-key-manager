@@ -336,9 +336,14 @@ export function ConfigPreview({ lines, changed, className }: ConfigPreviewProps)
             {line.key} {line.value}
           </>
         );
+        // Long values (a key path) wrap inside their indent instead of scrolling away.
+        const lineClass = cn(
+          'relative whitespace-pre-wrap [overflow-wrap:anywhere]',
+          !line.header && 'pl-[18px]',
+        );
         return (
           // biome-ignore lint/suspicious/noArrayIndexKey: preview lines are positional
-          <div key={index} className={cn('relative whitespace-pre', !line.header && 'pl-[18px]')}>
+          <div key={index} className={lineClass}>
             {changed?.[index] ? (
               // A bar beside the line, so the change doesn't rest on colour alone.
               <ins

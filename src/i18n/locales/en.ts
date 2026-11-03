@@ -339,6 +339,7 @@ const en = {
       password: 'Password',
       passwordHint: 'From the vault, with 2FA',
       both: 'Key and password',
+      listLabel: 'Signs in with: {{method}}',
       bothHint: 'Key first, then password',
       labelKey: 'key',
       labelPassword: 'password',

@@ -48,7 +48,7 @@ export function ChangeMasterDialog({ onDone }: { onDone: () => void }) {
       <form onSubmit={submit} className="flex min-h-0 flex-col">
         <DialogHeader
           icon={
-            <Tile tone="indigo" size={44} glow>
+            <Tile tone="pink" size={44} glow>
               <LockKeyhole className="size-5" strokeWidth={2} />
             </Tile>
           }
@@ -129,7 +129,7 @@ export function DeviceUnlockDialog({ kind, onDone }: { kind: BiometricKind; onDo
       <form onSubmit={submit} className="flex min-h-0 flex-col">
         <DialogHeader
           icon={
-            <Tile tone="indigo" size={44} glow>
+            <Tile tone="pink" size={44} glow>
               <DeviceIcon kind={kind} className="size-5" />
             </Tile>
           }
@@ -206,7 +206,7 @@ export function NewRecoveryKeyDialog({ onDone }: { onDone: () => void }) {
         <DialogHeader
           closable={false}
           icon={
-            <Tile tone="indigo" size={44} glow>
+            <Tile tone="pink" size={44} glow>
               <FileKey className="size-5" strokeWidth={2} />
             </Tile>
           }
@@ -230,7 +230,7 @@ export function NewRecoveryKeyDialog({ onDone }: { onDone: () => void }) {
       <form onSubmit={submit} className="flex min-h-0 flex-col">
         <DialogHeader
           icon={
-            <Tile tone="indigo" size={44} glow>
+            <Tile tone="pink" size={44} glow>
               <FileKey className="size-5" strokeWidth={2} />
             </Tile>
           }

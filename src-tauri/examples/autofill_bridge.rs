@@ -121,11 +121,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let master = SecretString::from("master");
     let (mut vault, _) = Vault::create(&paths, &master)?;
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let logins = args.iter().enumerate().filter_map(|(at, arg)| match arg.as_str() {
-        "--login" => args.get(at + 1..at + 4).map(|w| (&w[0], &w[0], &w[1], &w[2])),
-        "--entry" => args.get(at + 1..at + 5).map(|w| (&w[0], &w[1], &w[2], &w[3])),
-        _ => None,
-    });
+    let logins = args
+        .iter()
+        .enumerate()
+        .filter_map(|(at, arg)| match arg.as_str() {
+            "--login" => args
+                .get(at + 1..at + 4)
+                .map(|w| (&w[0], &w[0], &w[1], &w[2])),
+            "--entry" => args
+                .get(at + 1..at + 5)
+                .map(|w| (&w[0], &w[1], &w[2], &w[3])),
+            _ => None,
+        });
     let approve_after = args
         .iter()
         .position(|arg| arg == "--approve-after")

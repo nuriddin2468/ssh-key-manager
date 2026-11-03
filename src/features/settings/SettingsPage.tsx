@@ -52,6 +52,7 @@ export function SettingsPage() {
         { label: t('settings.sshDir'), path: env.paths.dir },
         { label: t('settings.config'), path: env.paths.config },
         { label: t('settings.knownHosts'), path: env.paths.knownHosts },
+        { label: t('settings.hostsFile'), path: env.hostsFile },
         { label: t('settings.backups'), path: env.backupDir },
       ]
     : [];

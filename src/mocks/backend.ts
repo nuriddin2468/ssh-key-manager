@@ -15,6 +15,7 @@ import type { KeysView } from '@/bindings/KeysView';
 import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostEntry } from '@/bindings/KnownHostEntry';
 import type { PermissionFix } from '@/bindings/PermissionFix';
+import { hostsFileFindings, hostsFileHandlers } from './hostsFile';
 import { terminalHandlers } from './terminal';
 import { vaultHandlers } from './vault';
 import { vaultFilesHandlers } from './vaultFiles';
@@ -321,6 +322,7 @@ function audit(): AuditReport {
       fix: { kind: 'removeIdentityFile', hostId: usage.hostId, path: usage.raw },
     });
   }
+  findings.push(...hostsFileFindings());
   const order = { critical: 0, warning: 1, info: 2 };
   findings.sort((a, b) => order[a.severity] - order[b.severity]);
   const count = (s: Finding['severity']) => findings.filter((f) => f.severity === s).length;
@@ -373,6 +375,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     appVersion: '0.1.0',
     defaultComment: 'dev@macbook-pro',
     backupDir: `${HOME}/Library/Application Support/dev.sshkeymanager.desktop/backups`,
+    hostsFile: '/etc/hosts',
   }),
   list_keys: keysView,
   generate_key: ({ request }) => {
@@ -532,6 +535,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     }
     return { status: saved.length ? 'match' : 'unknown', offered, saved, error: null };
   },
+  ...hostsFileHandlers,
   run_audit: audit,
   fix_permissions: ({ items }) => {
     for (const item of items as PermissionFix[]) {

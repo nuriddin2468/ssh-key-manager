@@ -10,6 +10,7 @@ import { type Page, type Route, useRouter } from './router';
 
 /** ⌘F / ⌘K: the page's search, or the terminal's find bar. */
 export const FIND_EVENT = 'sshkm:find';
+// ⌘1–⌘9, in the order they were added so existing shortcuts never move.
 const PAGES: Page[] = [
   'overview',
   'keys',
@@ -17,6 +18,7 @@ const PAGES: Page[] = [
   'agent',
   'known',
   'audit',
+  'hostsFile',
   'passwords',
   'terminal',
 ];

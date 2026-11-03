@@ -17,6 +17,7 @@
 //! - [`keys`]: scanning, inspecting, generating, importing and re-encrypting keys.
 //! - [`config`]: a lossless, editable model of `ssh_config`.
 //! - [`known_hosts`]: a lossless model of `known_hosts`, including hashed entries.
+//! - [`hosts_file`]: a lossless, read-only model of the system hosts file.
 //! - [`agent`]: a small synchronous client for the system `ssh-agent`.
 //! - [`perms`]: permission checks and fixes (Unix modes, Windows ACLs).
 //! - [`audit`]: security findings computed from all of the above.
@@ -38,6 +39,7 @@ pub mod audit;
 pub mod config;
 mod error;
 pub mod fsutil;
+pub mod hosts_file;
 pub mod keys;
 pub mod known_hosts;
 pub mod paths;

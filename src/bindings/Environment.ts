@@ -17,4 +17,8 @@ defaultComment: string,
 /**
  * Where backups of edited files are kept.
  */
-backupDir: string, };
+backupDir: string, 
+/**
+ * The system hosts file.
+ */
+hostsFile: string, };

@@ -54,7 +54,7 @@ export function DialogContent({
         >
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute -top-[120px] left-1/2 h-[240px] w-[420px] -translate-x-1/2 rounded-full bg-[var(--accent-2)] opacity-30 blur-[70px]"
+            className="soft-glow absolute -top-[225px] left-1/2 h-[450px] w-[630px] -translate-x-1/2 [--glow-color:color-mix(in_srgb,var(--accent-2)_27%,transparent)]"
           />
           {children}
         </RDialog.Content>

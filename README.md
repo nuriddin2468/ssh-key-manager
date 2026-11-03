@@ -121,7 +121,7 @@ Builds are not code-signed yet (it's on the [roadmap](#roadmap)), so your system
 - Passwords, 2FA codes and key passphrases come from the vault. Anything missing is asked in a dialog, with an option to save it once you're signed in.
 - A server you've never connected to shows its key fingerprint first, and you decide whether to trust it. A server whose key changed is stopped, with a way to compare the keys.
 
-**Feels native.** Menu bar and keyboard shortcuts on macOS (⌘1–8, ⌘N, ⌘T, ⌘,), and changes you make in a terminal show up instantly.
+**Feels native.** Menu bar and keyboard shortcuts on macOS (⌘1–9, ⌘N, ⌘T, ⌘,), and changes you make in a terminal show up instantly.
 
 ## Privacy and safety
 
@@ -130,6 +130,7 @@ Builds are not code-signed yet (it's on the [roadmap](#roadmap)), so your system
 - **Your passwords stay encrypted.** The vault is decrypted only in memory while it's unlocked, and the interface sees a password only when you choose to reveal it. There is no way in without the master password or the recovery key, so keep the recovery key somewhere safe.
 - **Your files stay standard.** Everything is plain OpenSSH, and you can stop using the app at any time.
 - **Mistakes can be undone.** Config files are backed up before every edit, and keys go to the Trash, not into oblivion.
+- **Administrator rights only when you save the hosts file.** The app never keeps them: it shows you the diff, asks for your password once, and backs up the file first.
 
 Details in [SECURITY.md](SECURITY.md).
 

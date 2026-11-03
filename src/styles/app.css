@@ -185,6 +185,15 @@
   --glow-a: rgb(217 119 6 / 0.22);
   --glow-b: rgb(37 99 235 / 0.1);
 }
+[data-section="hostsFile"] {
+  --accent-1: #a5b4fc;
+  --accent-2: #6366f1;
+  --accent-ink: #110f3d;
+  --accent-text: #c7d2fe;
+  --accent-rgb: 129 140 248;
+  --glow-a: rgb(79 70 229 / 0.24);
+  --glow-b: rgb(20 184 166 / 0.08);
+}
 [data-section="audit"] {
   --accent-1: #fda4af;
   --accent-2: #f43f5e;
@@ -249,6 +258,23 @@
   background: rgb(var(--accent-rgb) / 0.12);
   border: 1px solid rgb(var(--accent-rgb) / 0.4);
   color: var(--accent-text);
+}
+/*
+ * Soft light behind a panel's header, shaped like a blurred circle. Drawn as
+ * a gradient, not with `filter: blur()`: without a GPU, WebKitGTK repaints a
+ * blur on every hover and keystroke, which made the UI lag on Linux. Set the
+ * colour with `--glow-color` and size the element to the light's full extent.
+ */
+@utility soft-glow {
+  pointer-events: none;
+  background: radial-gradient(
+    closest-side,
+    var(--glow-color),
+    color-mix(in srgb, var(--glow-color) 90%, transparent) 25%,
+    color-mix(in srgb, var(--glow-color) 55%, transparent) 50%,
+    color-mix(in srgb, var(--glow-color) 18%, transparent) 75%,
+    transparent
+  );
 }
 @utility selected-row {
   background: rgb(var(--accent-rgb) / 0.1);

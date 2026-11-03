@@ -1,6 +1,7 @@
-//! Tells the UI when anything in `~/.ssh` changes, so edits made in a terminal
-//! or another app show up without a manual refresh.
+//! Tells the UI when anything in `~/.ssh` or the system hosts file changes, so
+//! edits made in a terminal or another app show up without a manual refresh.
 
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -14,29 +15,45 @@ pub const EVENT: &str = "ssh-files-changed";
 /// A burst of changes closer together than this is reported once.
 pub(crate) const QUIET: Duration = Duration::from_millis(400);
 
-/// Keeps the watcher alive for the lifetime of the app.
-struct WatcherHandle(#[allow(dead_code)] RecommendedWatcher);
+/// Keeps the watchers alive for the lifetime of the app.
+struct WatcherHandle(#[allow(dead_code)] Vec<RecommendedWatcher>);
 
-pub fn start(app: &AppHandle, dir: &Path) {
-    if !dir.is_dir() {
-        return;
-    }
-    let emitter = app.clone();
-    match watch(dir, move || {
-        let _ = emitter.emit(EVENT, ());
-    }) {
-        Ok(watcher) => {
-            app.manage(WatcherHandle(watcher));
+pub fn start(app: &AppHandle, ssh_dir: &Path, hosts_file: &Path) {
+    let notify_ui = || {
+        let emitter = app.clone();
+        move || {
+            let _ = emitter.emit(EVENT, ());
         }
-        Err(error) => log::warn!("not watching {}: {error}", dir.display()),
+    };
+    let mut watchers = Vec::new();
+    // Editors and `sed -i` replace the hosts file instead of writing it, so
+    // its folder is watched for changes to that one name.
+    let targets = [
+        (Some(ssh_dir), None),
+        (hosts_file.parent(), hosts_file.file_name()),
+    ];
+    for (dir, only) in targets {
+        let Some(dir) = dir.filter(|dir| dir.is_dir()) else {
+            continue;
+        };
+        match watch(dir, only.map(OsStr::to_owned), notify_ui()) {
+            Ok(watcher) => watchers.push(watcher),
+            Err(error) => log::warn!("not watching {}: {error}", dir.display()),
+        }
     }
+    app.manage(WatcherHandle(watchers));
 }
 
-/// Calls `on_change` once each burst of changes to the files in `dir` settles.
-fn watch(dir: &Path, on_change: impl Fn() + Send + 'static) -> notify::Result<RecommendedWatcher> {
+/// Calls `on_change` once each burst of changes to the files in `dir` (or
+/// only to the file named `only`) settles.
+fn watch(
+    dir: &Path,
+    only: Option<OsString>,
+    on_change: impl Fn() + Send + 'static,
+) -> notify::Result<RecommendedWatcher> {
     let (signal, signals) = mpsc::channel();
     let mut watcher = notify::recommended_watcher(move |result: notify::Result<Event>| {
-        if result.is_ok_and(|event| is_change(&event)) {
+        if result.is_ok_and(|event| is_change(&event) && concerns(&event, only.as_deref())) {
             let _ = signal.send(());
         }
     })?;
@@ -49,6 +66,16 @@ fn watch(dir: &Path, on_change: impl Fn() + Send + 'static) -> notify::Result<Re
 /// app's own reads while it refreshes, so passing them on would refresh forever.
 pub(crate) fn is_change(event: &Event) -> bool {
     !matches!(event.kind, EventKind::Access(_))
+}
+
+/// Whether the event touches a file named `only` (any file when `None`).
+fn concerns(event: &Event, only: Option<&OsStr>) -> bool {
+    only.is_none_or(|name| {
+        event
+            .paths
+            .iter()
+            .any(|path| path.file_name() == Some(name))
+    })
 }
 
 /// Calls `on_change` after each burst of signals, once `quiet` has passed
@@ -89,6 +116,16 @@ mod tests {
     }
 
     #[test]
+    fn a_named_file_ignores_its_neighbours() {
+        let event = |path: &str| Event::new(EventKind::Any).add_path(path.into());
+        let hosts = Some(OsStr::new("hosts"));
+        assert!(concerns(&event("/private/etc/hosts"), hosts));
+        assert!(!concerns(&event("/etc/hosts.allow"), hosts));
+        assert!(!concerns(&event("/etc/resolv.conf"), hosts));
+        assert!(concerns(&event("/etc/resolv.conf"), None));
+    }
+
+    #[test]
     fn each_burst_is_reported_once() {
         let (signal, signals) = mpsc::channel();
         let calls = Arc::new(AtomicUsize::new(0));
@@ -118,7 +155,7 @@ mod tests {
         let file = dir.path().join("config");
         std::fs::write(&file, "Host a\n").unwrap();
         let (signal, changes) = mpsc::channel();
-        let _watcher = watch(dir.path(), move || {
+        let _watcher = watch(dir.path(), None, move || {
             let _ = signal.send(());
         })
         .unwrap();

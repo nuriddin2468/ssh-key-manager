@@ -4,6 +4,8 @@ pub mod askpass;
 mod commands;
 mod device_unlock;
 mod error;
+#[cfg(target_os = "linux")]
+mod gpu;
 #[cfg(target_os = "macos")]
 mod menu;
 mod process;
@@ -16,6 +18,7 @@ mod watcher;
 
 use std::sync::Arc;
 
+use sshkm_core::hosts_file;
 use sshkm_core::paths::SshPaths;
 use tauri::webview::PageLoadEvent;
 use tauri::{Manager, RunEvent, WindowEvent};
@@ -26,6 +29,9 @@ use crate::vault::LockReason;
 
 #[allow(clippy::too_many_lines, reason = "mostly the list of commands")]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    gpu::prefer_mesa_egl();
+
     let builder = tauri::Builder::default();
 
     #[cfg(desktop)]
@@ -84,6 +90,12 @@ pub fn run() {
             commands::known_hosts::find_known_hosts,
             commands::known_hosts::remove_known_hosts,
             commands::known_hosts::check_host_key,
+            commands::hosts_file::read_hosts_file,
+            commands::hosts_file::lookup_host,
+            commands::hosts_file::preview_hosts_changes,
+            commands::hosts_file::apply_hosts_changes,
+            commands::hosts_file::list_hosts_backups,
+            commands::hosts_file::restore_hosts_backup,
             commands::audit::run_audit,
             commands::audit::fix_permissions,
             commands::vault::vault_status,
@@ -160,10 +172,11 @@ fn lock_on_minimize(window: &tauri::Window, event: &WindowEvent) {
 /// Shared state, background watchers and the macOS menu.
 fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let paths = SshPaths::detect()?;
+    let hosts_file = hosts_file::system_path();
     let data_dir = app.path().app_data_dir()?;
     let backup_dir = data_dir.join("backups");
-    watcher::start(app.handle(), &paths.dir);
-    let state = Arc::new(AppState::new(paths, backup_dir, data_dir));
+    watcher::start(app.handle(), &paths.dir, &hosts_file);
+    let state = Arc::new(AppState::new(paths, hosts_file, backup_dir, data_dir));
     state.vault.start_timer(app.handle().clone());
     device_unlock::watch_screen_lock(Arc::clone(&state.vault), app.handle().clone());
     vault_watcher::start(app.handle(), &state.vault.paths());

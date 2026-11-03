@@ -34,6 +34,7 @@ import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '@/compo
 import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
 import { Tooltip } from '@/components/ui/Tooltip';
+import { HostResolution } from '@/features/hostsFile/HostResolution';
 import { CheckHostKeyDialog } from '@/features/known/CheckHostKeyDialog';
 import { useConnect } from '@/features/terminal/connect';
 import { copyText } from '@/lib/clipboard';
@@ -316,7 +317,7 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
     >
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute -top-[110px] -right-[60px] h-[220px] w-[320px] rounded-full bg-[#2563EB] opacity-35 blur-[60px]"
+        className="soft-glow absolute -top-[215px] -right-[165px] h-[430px] w-[530px] [--glow-color:rgb(37_99_235/0.32)]"
       />
       <div
         ref={header}
@@ -443,6 +444,8 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
                 aliasHint={concrete ? t('hosts.editor.aliasHint') : t('hosts.aliasHint')}
               />
             </Section>
+
+            <HostResolution form={form} />
 
             {concrete && form.method !== null ? (
               <SignInSection

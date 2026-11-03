@@ -13,6 +13,8 @@ use crate::vault::VaultRuntime;
 /// Shared by all commands.
 pub struct AppState {
     pub paths: SshPaths,
+    /// The system hosts file.
+    pub hosts_file: PathBuf,
     /// Backups of `config` and `known_hosts` are written here before edits.
     pub backup_dir: PathBuf,
     /// Expiry of keys this app added with a lifetime, by fingerprint. The
@@ -27,10 +29,17 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// `data_dir` is the app's own data folder, home of the vault by default.
-    pub fn new(paths: SshPaths, backup_dir: PathBuf, data_dir: PathBuf) -> Self {
+    /// `hosts_file` is the system hosts file; `data_dir` is the app's own data
+    /// folder, home of the vault by default.
+    pub fn new(
+        paths: SshPaths,
+        hosts_file: PathBuf,
+        backup_dir: PathBuf,
+        data_dir: PathBuf,
+    ) -> Self {
         Self {
             paths,
+            hosts_file,
             backup_dir,
             lifetimes: Mutex::new(HashMap::new()),
             openssh_version: OnceLock::new(),

@@ -20,12 +20,13 @@ export const keys = {
   agent: ['agent'] as const,
   config: ['config'] as const,
   knownHosts: ['known-hosts'] as const,
+  hostsFile: ['hosts-file'] as const,
   audit: ['audit'] as const,
   vaultStatus: ['vault', 'status'] as const,
   vaultEntries: ['vault', 'entries'] as const,
 };
 
-/** Everything derived from files in `~/.ssh` or from the agent. */
+/** Everything derived from files in `~/.ssh`, the hosts file or the agent. */
 export function invalidateAll(): Promise<void> {
   return queryClient.invalidateQueries({
     predicate: (query) => query.queryKey[0] !== 'environment',
@@ -43,6 +44,8 @@ export const useAgent = () =>
 export const useConfig = () => useQuery({ queryKey: keys.config, queryFn: api.config });
 
 export const useKnownHosts = () => useQuery({ queryKey: keys.knownHosts, queryFn: api.knownHosts });
+
+export const useHostsFile = () => useQuery({ queryKey: keys.hostsFile, queryFn: api.hostsFile });
 
 export const useAudit = () => useQuery({ queryKey: keys.audit, queryFn: api.audit });
 

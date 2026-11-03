@@ -141,21 +141,23 @@ let hostSpecs: { patterns: string[]; options: HostOption[] }[] = [
       opt('ServerAliveInterval', '60'),
     ],
   },
+  // Signs in with a password alone, and none is saved.
   {
     patterns: ['staging-api'],
     options: [
       opt('HostName', '10.0.8.20'),
       opt('User', 'ubuntu'),
-      opt('IdentityFile', '~/.ssh/id_ed25519_work'),
-      opt('ProxyJump', 'bastion'),
+      opt('PubkeyAuthentication', 'no'),
     ],
   },
+  // A password host with a key left over from before (and its password saved).
   {
     patterns: ['legacy-nas'],
     options: [
       opt('HostName', '192.168.1.20'),
       opt('User', 'admin'),
       opt('IdentityFile', '~/.ssh/id_rsa'),
+      opt('PubkeyAuthentication', 'no'),
     ],
   },
   {

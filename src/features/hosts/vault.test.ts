@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { EntryDetail } from '@/bindings/EntryDetail';
 import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { HostEntry } from '@/bindings/HostEntry';
-import { findHostEntry, hostAliases, hostEntryInput, isOtpSecret } from './vault';
+import { formFromHost, type HostForm } from './model';
+import { entryFollowUp, findHostEntry, hostAliases, hostEntryInput, isOtpSecret } from './vault';
 
 function entry(partial: Partial<EntrySummary>): EntrySummary {
   return {
@@ -120,5 +121,61 @@ describe('isOtpSecret', () => {
     ['not a secret at all', false],
   ])('%s → %s', (value, valid) => {
     expect(isOtpSecret(value)).toBe(valid);
+  });
+});
+
+describe('entryFollowUp', () => {
+  const saved = host({
+    patterns: ['prod'],
+    user: 'ubuntu',
+    options: [{ key: 'User', value: 'ubuntu' }],
+  });
+  const found = { alias: 'prod', entry: entry({ id: 'e1', username: 'ubuntu' }) };
+  const form = (patch: Partial<HostForm>): HostForm => ({
+    ...formFromHost(saved, { passwordSaved: true }),
+    ...patch,
+  });
+
+  it('does nothing without a saved password, for patterns, or when nothing it holds changed', () => {
+    expect(entryFollowUp(form({ user: 'root' }), saved, undefined)).toEqual({ kind: 'none' });
+    expect(entryFollowUp(form({ method: null }), saved, found)).toEqual({ kind: 'none' });
+    expect(entryFollowUp(form({ port: '2222' }), saved, found)).toEqual({ kind: 'none' });
+  });
+
+  it('gives the entry the host’s new User, keeping the password', () => {
+    expect(entryFollowUp(form({ user: ' root ' }), saved, found)).toEqual({
+      kind: 'update',
+      entryId: 'e1',
+      username: 'root',
+      alias: 'prod',
+    });
+    expect(entryFollowUp(form({ user: '', method: 'password' }), saved, found)).toMatchObject({
+      kind: 'update',
+      username: '',
+    });
+  });
+
+  it('leaves an entry with another user name alone until the User changes', () => {
+    const other = { alias: 'prod', entry: entry({ id: 'e1', username: 'deploy' }) };
+    expect(entryFollowUp(form({ port: '2222' }), saved, other)).toEqual({ kind: 'none' });
+    // Already the new user: nothing to write.
+    expect(entryFollowUp(form({ user: 'deploy' }), saved, other)).toEqual({ kind: 'none' });
+  });
+
+  it('follows a renamed alias', () => {
+    expect(entryFollowUp(form({ patterns: 'prod-1 *.prod' }), saved, found)).toEqual({
+      kind: 'update',
+      entryId: 'e1',
+      username: 'ubuntu',
+      alias: 'prod-1',
+    });
+    expect(entryFollowUp(form({ patterns: 'api prod' }), saved, found)).toEqual({ kind: 'none' });
+  });
+
+  it('moves the password to the recycle bin when the host signs in with a key alone', () => {
+    expect(entryFollowUp(form({ method: 'key', user: 'root' }), saved, found)).toEqual({
+      kind: 'trash',
+      entryId: 'e1',
+    });
   });
 });

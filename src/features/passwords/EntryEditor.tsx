@@ -1,5 +1,4 @@
 import { Eye, EyeOff, KeyRound, LogIn, type LucideIcon, Server, ShieldCheck } from 'lucide-react';
-import { RadioGroup } from 'radix-ui';
 import { type FormEvent, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
@@ -7,12 +6,12 @@ import { useConfig, useKeys } from '@/api/queries';
 import type { EntryDetail } from '@/bindings/EntryDetail';
 import type { EntryKind } from '@/bindings/EntryKind';
 import { Button } from '@/components/ui/Button';
+import { ChoiceCards } from '@/components/ui/ChoiceCards';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
 import { IconButton } from '@/components/ui/IconButton';
 import { Select, type SelectOption } from '@/components/ui/Select';
 import { TextField } from '@/components/ui/TextField';
 import { Tile, type Tone } from '@/components/ui/Tile';
-import { cn } from '@/lib/cn';
 import { shortFingerprint } from '@/lib/format';
 import {
   EMPTY_FORM,
@@ -191,41 +190,18 @@ export function EntryEditor({ entry, onDone }: EntryEditorProps) {
           description={t('passwords.editorDescription')}
         />
         <DialogBody>
-          <fieldset className="flex flex-col">
-            <legend className="mb-2.5 text-[12px] font-semibold tracking-[0.02em] text-subtle">
-              {t('passwords.kind')}
-            </legend>
-            <RadioGroup.Root
-              value={form.kind}
-              onValueChange={(kind) => set({ kind: kind as EntryKind })}
-              className="grid grid-cols-3 gap-2.5"
-            >
-              {KINDS.map(({ kind, tone, icon: Icon }) => (
-                <RadioGroup.Item
-                  key={kind}
-                  value={kind}
-                  className={cn(
-                    'pressable-soft flex items-start gap-2.5 rounded-[14px] border p-2.5 text-left',
-                    form.kind === kind
-                      ? 'border-[rgb(var(--accent-rgb)/0.6)] bg-[rgb(var(--accent-rgb)/0.08)] shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.14)]'
-                      : 'border-white/[0.09] bg-white/[0.03] hover:bg-white/[0.05]',
-                  )}
-                >
-                  <Tile tone={tone} size={30}>
-                    <Icon className="size-[15px]" strokeWidth={2} />
-                  </Tile>
-                  <span className="flex min-w-0 flex-col">
-                    <span className="truncate font-semibold">
-                      {t(`passwords.${KIND_LABEL[kind]}`)}
-                    </span>
-                    <span className="text-[11.5px] leading-4 text-muted">
-                      {t(`passwords.${KIND_HINT[kind]}`)}
-                    </span>
-                  </span>
-                </RadioGroup.Item>
-              ))}
-            </RadioGroup.Root>
-          </fieldset>
+          <ChoiceCards
+            legend={t('passwords.kind')}
+            value={form.kind}
+            onValueChange={(kind) => set({ kind })}
+            options={KINDS.map(({ kind, tone, icon }) => ({
+              value: kind,
+              tone,
+              icon,
+              title: t(`passwords.${KIND_LABEL[kind]}`),
+              hint: t(`passwords.${KIND_HINT[kind]}`),
+            }))}
+          />
 
           {form.kind === 'host' ? (
             hostOptions.length > 0 ? (

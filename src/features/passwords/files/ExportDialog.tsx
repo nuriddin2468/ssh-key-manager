@@ -1,15 +1,14 @@
 import { Database, FileDown, FileSpreadsheet, ShieldAlert } from 'lucide-react';
-import { RadioGroup } from 'radix-ui';
-import { type FormEvent, useId, useRef, useState } from 'react';
+import { type FormEvent, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
 import { useVaultStatus } from '@/api/queries';
 import { toastError, useAppMutation } from '@/api/useAppMutation';
 import { Button } from '@/components/ui/Button';
+import { ChoiceCards } from '@/components/ui/ChoiceCards';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
 import { TextField } from '@/components/ui/TextField';
 import { Tile, type Tone } from '@/components/ui/Tile';
-import { cn } from '@/lib/cn';
 import { Callout } from './Callout';
 import { showFileError } from './errors';
 import { baseName, pickSaveTarget, today } from './pickers';
@@ -32,7 +31,6 @@ const FORMATS: { id: Format; tone: Tone; Icon: typeof Database }[] = [
  */
 export function ExportDialog({ onDone }: ExportDialogProps) {
   const { t } = useTranslation();
-  const id = useId();
   const unlocked = useVaultStatus().data?.state === 'unlocked';
   const [format, setFormat] = useState<Format>('kdbx');
   const [master, setMaster] = useState('');
@@ -100,57 +98,35 @@ export function ExportDialog({ onDone }: ExportDialogProps) {
           description={t('vaultFiles.export.description')}
         />
         <DialogBody>
-          <fieldset className="flex flex-col">
-            <legend className="mb-2.5 text-[12px] font-semibold tracking-[0.02em] text-subtle">
-              {t('vaultFiles.export.format')}
-            </legend>
-            <RadioGroup.Root
-              value={format}
-              onValueChange={(value) => {
-                setFormat(value as Format);
-                setMasterError(undefined);
-              }}
-              className="grid grid-cols-2 gap-2.5"
-            >
-              {FORMATS.map((option) => {
-                const disabled = option.id === 'csv' && !unlocked;
-                return (
-                  <RadioGroup.Item
-                    key={option.id}
-                    value={option.id}
-                    disabled={disabled}
-                    aria-describedby={`${id}-${option.id}-hint`}
-                    className={cn(
-                      'pressable-soft flex flex-col items-start gap-2.5 rounded-[14px] border p-[13px] text-left disabled:opacity-50',
-                      format === option.id
-                        ? 'border-[rgb(var(--accent-rgb)/0.6)] bg-[rgb(var(--accent-rgb)/0.08)] shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.14)]'
-                        : 'border-white/[0.09] bg-white/[0.03] hover:bg-white/[0.05]',
-                    )}
-                  >
-                    <Tile tone={option.tone} size={36}>
-                      <option.Icon className="size-[18px]" strokeWidth={2} />
-                    </Tile>
-                    <span className="flex flex-col gap-0.5">
-                      <span className="font-semibold">
-                        {t(`vaultFiles.export.${option.id}`)}
-                        <span className="ml-1.5 font-mono text-[11.5px] font-normal text-subtle">
-                          .{option.id}
-                        </span>
-                      </span>
-                      <span
-                        id={`${id}-${option.id}-hint`}
-                        className="text-[12px] leading-[17px] text-muted"
-                      >
-                        {disabled
-                          ? t('vaultFiles.export.unlockFirst')
-                          : t(`vaultFiles.export.${option.id}Hint`)}
-                      </span>
+          <ChoiceCards
+            legend={t('vaultFiles.export.format')}
+            value={format}
+            onValueChange={(value) => {
+              setFormat(value);
+              setMasterError(undefined);
+            }}
+            layout="stack"
+            options={FORMATS.map((option) => {
+              const disabled = option.id === 'csv' && !unlocked;
+              return {
+                value: option.id,
+                tone: option.tone,
+                icon: option.Icon,
+                disabled,
+                title: (
+                  <>
+                    {t(`vaultFiles.export.${option.id}`)}
+                    <span className="ml-1.5 font-mono text-[11.5px] font-normal text-subtle">
+                      .{option.id}
                     </span>
-                  </RadioGroup.Item>
-                );
-              })}
-            </RadioGroup.Root>
-          </fieldset>
+                  </>
+                ),
+                hint: disabled
+                  ? t('vaultFiles.export.unlockFirst')
+                  : t(`vaultFiles.export.${option.id}Hint`),
+              };
+            })}
+          />
 
           {csv ? (
             <>

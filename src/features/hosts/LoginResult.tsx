@@ -14,6 +14,8 @@ interface LoginResultProps {
   /** Fixes offered as a button when the result calls for one. */
   onAction?: Partial<Record<MessageAction, () => void>>;
   onClose?: () => void;
+  /** The title of a success, in place of the usual one (a git service's greeting, say). */
+  okTitle?: string;
   /** `status` announces the result; leave it out inside a live region of your own. */
   role?: 'status';
   className?: string;
@@ -27,6 +29,7 @@ export function LoginResult({
   vaultLocked,
   onAction,
   onClose,
+  okTitle,
   role,
   className,
 }: LoginResultProps) {
@@ -38,11 +41,13 @@ export function LoginResult({
   const fix = message.action ? onAction?.[message.action] : undefined;
   const Icon = ok ? CheckCircle2 : XCircle;
   const title =
-    message.title === 'signedIn'
-      ? t('hosts.testOk')
-      : message.title === 'failed'
-        ? t('hosts.testFailed')
-        : t(`hosts.vault.result.${message.title}`, values);
+    ok && okTitle
+      ? okTitle
+      : message.title === 'signedIn'
+        ? t('hosts.testOk')
+        : message.title === 'failed'
+          ? t('hosts.testFailed')
+          : t(`hosts.vault.result.${message.title}`, values);
 
   return (
     <div

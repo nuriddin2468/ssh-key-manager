@@ -32,8 +32,11 @@ const SEGMENT_COLORS = ['#FF6B6B', '#FF6B6B', '#FFB547', '#5EEAD4', '#14B8A6'];
 
 interface HostPasswordDialogProps {
   alias: string;
-  /** The host's `User`, which a new entry starts with. */
-  user: string | null;
+  /**
+   * The host's `User`. It is the user everywhere, so the entry takes it (and
+   * follows it when the host is saved with another one).
+   */
+  user: string;
   /** The entry to edit; without it a new one is made. */
   entry?: EntrySummary;
   /** Start in the 2FA field (opened to add a 2FA secret). */
@@ -52,7 +55,7 @@ export function HostPasswordDialog({
   onDone,
 }: HostPasswordDialogProps) {
   const { t } = useTranslation();
-  const [username, setUsername] = useState(entry?.username ?? user ?? '');
+  const username = user;
   const [password, setPassword] = useState('');
   const [visible, setVisible] = useState(false);
   const [generated, setGenerated] = useState(false);
@@ -171,15 +174,6 @@ export function HostPasswordDialog({
           description={t('hosts.vault.dialog.description')}
         />
         <DialogBody>
-          <TextField
-            label={t('hosts.vault.dialog.user')}
-            mono
-            value={username}
-            onChange={(event) => setUsername(event.target.value)}
-            autoComplete="username"
-            placeholder="ubuntu"
-          />
-
           <div className="flex min-w-0 flex-col gap-1.5">
             <label htmlFor={passwordId} className="text-[12px] font-semibold text-fg-2">
               {t('hosts.vault.dialog.password')}

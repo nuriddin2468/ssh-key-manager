@@ -94,6 +94,11 @@ const entries: MockEntry[] = [
   entry(
     { title: 'prod-api', username: 'deploy', kind: 'host', host: 'prod-api' },
     'correct-horse-battery-staple',
+    { otp: 'otpauth://totp/prod-api?secret=KRSXG5CTMVRXEZLU' },
+  ),
+  entry(
+    { title: 'legacy-nas', username: 'admin', kind: 'host', host: 'legacy-nas' },
+    'nas-admin-2019',
   ),
   entry(
     {

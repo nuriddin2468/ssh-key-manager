@@ -4,8 +4,9 @@
 // the content script says.
 //
 // A login typed into a form waits here (in `storage.session`, memory only)
-// until the user answers the banner, for at most three minutes; its
-// password never goes back to a page.
+// until the user answers the banner or closes the tab. It is offered for at
+// most three minutes and dropped at the next look after that; its password
+// never goes back to a page.
 
 import { type CheckResult, type LoginOffer, type Result, request, showApp } from './shared/client';
 import { ext } from './shared/ext';
@@ -70,9 +71,14 @@ async function loadPending(): Promise<Record<string, Pending>> {
   const stored = await ext.storage.session.get('pending');
   const all = (stored.pending ?? {}) as Record<string, Pending>;
   const now = Date.now();
+  let expired = false;
   for (const [tab, pending] of Object.entries(all)) {
-    if (now - pending.at > PENDING_TTL) delete all[tab];
+    if (now - pending.at > PENDING_TTL) {
+      delete all[tab];
+      expired = true;
+    }
   }
+  if (expired) await storePending(all);
   return all;
 }
 

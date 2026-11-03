@@ -133,7 +133,7 @@ Builds are not code-signed yet (it's on the [roadmap](#roadmap)), so your system
 - **Mistakes can be undone.** Config files are backed up before every edit, and keys go to the Trash, not into oblivion.
 - **Administrator rights only when you save the hosts file.** The app never keeps them: it shows you the diff, asks for your password once, and backs up the file first.
 
-Details in [SECURITY.md](SECURITY.md).
+Details in [SECURITY.md](SECURITY.md); the privacy policy for the app and the browser extension is in [PRIVACY.md](PRIVACY.md).
 
 ## FAQ
 

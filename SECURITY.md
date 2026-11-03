@@ -137,8 +137,8 @@ by what the page or the content script says. A frame from another site gets that
 site's logins only. Opaque origins (`null`, `data:`, sandboxed frames) get nothing.
 The menu and the save banner live in closed shadow roots, so page scripts can't read
 the logins listed. A password the user typed waits for the banner in the background's
-`storage.session` (memory only) for at most three minutes, and never goes back to a
-page.
+`storage.session` (memory only). It is offered for at most three minutes, dropped at
+the next page load after that or when the tab closes, and never goes back to a page.
 
 **Pairing.**
 

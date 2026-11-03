@@ -6,7 +6,7 @@ declare namespace WebExt {
     id?: string;
     /** The frame's URL. */
     url?: string;
-    /** The frame's origin (Chrome only). */
+    /** The frame's origin, `'null'` if opaque (absent in older Firefox). */
     origin?: string;
     tab?: { id?: number };
     frameId?: number;

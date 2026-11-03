@@ -17,7 +17,7 @@ use std::process::{Command, ExitCode, Stdio};
 
 use sshkm_core::browser::protocol::MAX_MESSAGE;
 
-use super::{MANIFEST_FILE, endpoint_file, frame, platform};
+use super::{HostProgram, MANIFEST_FILE, endpoint_file, frame, host_program, platform};
 
 /// What the host itself replies when the app can't be reached.
 const NOT_RUNNING: &[u8] = br#"{"type":"error","code":"notRunning"}"#;
@@ -95,9 +95,16 @@ fn is_launch(message: &[u8]) -> bool {
     serde_json::from_slice::<Kind>(message).is_ok_and(|m| m.kind == "launch")
 }
 
-/// Starts the app, detached from the browser so it outlives the host.
+/// Starts the app, detached from the browser so it outlives the host. An
+/// `AppImage` is started from its file: the mount this host runs from goes
+/// away when the host exits.
 fn launch() -> io::Result<()> {
-    let exe = std::env::current_exe()?;
+    let HostProgram::At(exe) = host_program()? else {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the app is in a temporary folder",
+        ));
+    };
     #[cfg(target_os = "macos")]
     if let Some(bundle) = exe
         .ancestors()

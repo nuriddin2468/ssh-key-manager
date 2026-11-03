@@ -61,6 +61,13 @@ cargo test --workspace --all-features
 - **Commits and pull requests.** Keep them small and focused, and describe the user-visible
   change.
 
+## License of contributions
+
+SSH Key Manager is licensed under the [GNU AGPL v3](LICENSE) (`AGPL-3.0-only`). So that the
+project can also be offered under other terms, for example in app stores, an outside
+contribution is merged only after you agree to a contributor license agreement; the pull
+request links to it.
+
 ## Builds and releases
 
 There are three workflows:

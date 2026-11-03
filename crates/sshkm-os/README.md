@@ -1,8 +1,9 @@
 # sshkm-os
 
 OS integration for SSH Key Manager's password vault: a small, synchronous API
-over screen-lock events, biometrics and the system credential store. It does
-not depend on Tauri or on `sshkm-core`.
+over screen-lock events, biometrics, the system credential store and, on
+Windows, named-pipe server checks. It does not depend on Tauri or on
+`sshkm-core`.
 
 ```rust
 use sshkm_os::{biometrics, screen_lock, secret_store, SecretString};
@@ -27,8 +28,9 @@ contain secrets.
 | | macOS | Windows | Linux |
 |---|---|---|---|
 | `screen_lock` | `com.apple.screenIsLocked` distributed notification | `WTS_SESSION_LOCK` on a hidden message-only window of its own thread | logind `Lock` signal and `LockedHint`; fallback: `org.freedesktop.ScreenSaver` / `org.gnome.ScreenSaver` `ActiveChanged` |
-| `biometrics` | Touch ID only (no password, no Apple Watch) | Windows Hello (face, fingerprint or PIN) | unavailable |
+| `biometrics` | Touch ID only (no password, no Apple Watch); `enrollment()` tells when fingerprints change | Windows Hello (face, fingerprint or PIN); a Windows Hello key (`create_bound_key`, `sign_with_bound_key`) signs a challenge, so a secret can depend on Windows Hello itself | unavailable |
 | `secret_store` | regular login keychain (not the data-protection keychain) | Credential Manager, persisted on this computer only | Secret Service (GNOME Keyring, KDE Wallet, KeePassXC, …) |
+| `pipe` | — | `check_server`: the pipe's owner and its server process's user must be this user (or SYSTEM where allowed) | — |
 
 Notes:
 

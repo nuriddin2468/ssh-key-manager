@@ -22,4 +22,9 @@ includes: Array<string>,
 /**
  * Syntax problems.
  */
-issues: Array<ConfigIssue>, };
+issues: Array<ConfigIssue>, 
+/**
+ * SHA-256 of the file's bytes, in hex. Edits name the revision they were
+ * made against, so a block that moved in the meantime is not changed.
+ */
+revision: string, };

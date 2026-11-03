@@ -3,7 +3,13 @@
 //! iCloud Drive folder so other computers see it.
 //!
 //! Import previews carry no passwords: the CSV file is read again when the
-//! chosen rows are imported. Paths come from the system file dialogs.
+//! chosen rows are imported.
+//!
+//! The files read and written here are chosen in system file dialogs that
+//! this side opens, never named by the page: the import's CSV file and the
+//! export's target. Moving the vault or switching to another file — whose
+//! paths the page picks — needs the user's confirmation in a native dialog
+//! that shows the path.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
@@ -13,16 +19,39 @@ use sshkm_core::SecretString;
 use sshkm_core::keys::move_to_trash;
 use sshkm_core::vault::{self, ImportPreview, Vault, VaultPaths};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
 use super::{Shared, blocking};
+use crate::confirm::{self, Localized};
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 use crate::vault::{LOCKED_EVENT, LockReason, VaultRuntime};
 use crate::vault_watcher::VaultWatcher;
 
+/// The CSV file picked in the import's file dialog: the only one
+/// [`vault_import`] reads.
+static PICKED_IMPORT: Mutex<Option<PathBuf>> = Mutex::new(None);
 /// The CSV file imported last: the only one [`vault_trash_import_file`]
 /// moves to the Trash.
 static LAST_IMPORT: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// A CSV file picked for import, and its rows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = crate::types::BINDINGS))]
+pub struct ImportPick {
+    pub path: PathBuf,
+    pub preview: ImportPreview,
+}
+
+/// Where an export went, and how many entries it holds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = crate::types::BINDINGS))]
+pub struct Exported {
+    pub path: PathBuf,
+    pub count: usize,
+}
 
 /// Where the vault is, and whether that is the default place.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -40,40 +69,48 @@ pub struct VaultLocation {
     pub default_exists: bool,
 }
 
-/// Reads a CSV export and lists its rows, without passwords, marking those
-/// already in the vault.
+/// Asks for a CSV export in a system file dialog and lists its rows, without
+/// passwords, marking those already in the vault. `None` when the dialog
+/// was cancelled.
 #[tauri::command]
 pub async fn vault_import_preview(
     app: AppHandle,
     state: State<'_, Shared>,
-    path: String,
-) -> AppResult<ImportPreview> {
-    let path = absolute(&path)?;
+) -> AppResult<Option<ImportPick>> {
     blocking(&state, move |state| {
-        state
+        // No dialog while the vault is locked.
+        state.vault.with(&app, |_| Ok(()))?;
+        let Some(path) = pick_csv(&app)? else {
+            return Ok(None);
+        };
+        let preview = state
             .vault
-            .with(&app, |vault| Ok(vault.import_preview(&path)?))
+            .with(&app, |vault| Ok(vault.import_preview(&path)?))?;
+        *picked_import() = Some(path.clone());
+        Ok(Some(ImportPick { path, preview }))
     })
     .await
 }
 
-/// Imports the rows at `indices` (from the preview) and returns how many
-/// entries were added.
+/// Imports the rows at `indices` (from the preview) of the file picked for
+/// it, and returns how many entries were added.
 #[tauri::command]
 pub async fn vault_import(
     app: AppHandle,
     state: State<'_, Shared>,
-    path: String,
     indices: Vec<u32>,
 ) -> AppResult<usize> {
-    let path = absolute(&path)?;
     if indices.is_empty() {
         return Err(AppError::invalid("choose at least one row to import"));
     }
     blocking(&state, move |state| {
+        let path = picked_import()
+            .clone()
+            .ok_or_else(|| AppError::invalid("choose the file to import again"))?;
         let count = state.vault.change(&app, &state.backup_dir, |vault| {
             Ok(vault.import_csv(&path, &indices)?)
         })?;
+        *picked_import() = None;
         *last_import() = Some(path);
         Ok(count)
     })
@@ -83,15 +120,12 @@ pub async fn vault_import(
 /// Moves the CSV file just imported to the system Trash, since it holds
 /// every password in plain text. No other file can be moved this way.
 #[tauri::command]
-pub async fn vault_trash_import_file(state: State<'_, Shared>, path: String) -> AppResult<()> {
-    let path = absolute(&path)?;
+pub async fn vault_trash_import_file(state: State<'_, Shared>) -> AppResult<()> {
     blocking(&state, move |_| {
         let mut last = last_import();
-        if last.as_deref() != Some(path.as_path()) {
-            return Err(AppError::invalid(
-                "only the CSV file just imported can be moved to the Trash",
-            ));
-        }
+        let path = last.clone().ok_or_else(|| {
+            AppError::invalid("only the CSV file just imported can be moved to the Trash")
+        })?;
         move_to_trash(std::slice::from_ref(&path))?;
         *last = None;
         Ok(())
@@ -99,39 +133,131 @@ pub async fn vault_trash_import_file(state: State<'_, Shared>, path: String) -> 
     .await
 }
 
-/// Writes the vault as a KeePassXC-style CSV file, in plain text, after
-/// checking the master password. Returns how many entries were written.
+/// Checks the master password, asks where to save in a system file dialog,
+/// and writes the vault there as a KeePassXC-style CSV file, in plain text.
+/// `None` when the dialog was cancelled.
 #[tauri::command]
 pub async fn vault_export_csv(
     app: AppHandle,
     state: State<'_, Shared>,
-    path: String,
     master: SecretString,
-) -> AppResult<usize> {
-    let path = absolute(&path)?;
+) -> AppResult<Option<Exported>> {
     blocking(&state, move |state| {
-        state.vault.with(&app, |vault| {
+        // A wrong password shows no dialog.
+        state
+            .vault
+            .with(&app, |vault| Ok(vault.verify_master_password(&master)?))?;
+        let Some(path) = pick_export_target(&app, ExportFormat::Csv)? else {
+            return Ok(None);
+        };
+        let count = state.vault.with(&app, |vault| {
             Ok(vault.export_csv(&master, &path, &state.paths.dir)?)
-        })
+        })?;
+        Ok(Some(Exported { path, count }))
     })
     .await
 }
 
-/// Copies the KeePass database, which opens with the recovery key. Works
-/// while the vault is locked, too. Never into `~/.ssh`.
+/// Like [`vault_export_csv`], for a copy of the KeePass database, which
+/// opens with the recovery key. Needs the vault unlocked and the master
+/// password, too. Never into `~/.ssh`, never over the vault's own files.
 #[tauri::command]
-pub async fn vault_export_kdbx(state: State<'_, Shared>, path: String) -> AppResult<()> {
-    let path = absolute(&path)?;
+pub async fn vault_export_kdbx(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    master: SecretString,
+) -> AppResult<Option<Exported>> {
     blocking(&state, move |state| {
-        state.vault.exclusive(|_| {
-            Ok(vault::export_kdbx(
-                &state.vault.paths(),
-                &path,
-                &state.paths.dir,
-            )?)
-        })
+        state
+            .vault
+            .with(&app, |vault| Ok(vault.verify_master_password(&master)?))?;
+        let Some(path) = pick_export_target(&app, ExportFormat::Kdbx)? else {
+            return Ok(None);
+        };
+        let count = state.vault.with(&app, |vault| {
+            vault.export_kdbx(&master, &path, &state.paths.dir)?;
+            Ok(vault.entries().iter().filter(|e| !e.in_trash).count())
+        })?;
+        Ok(Some(Exported { path, count }))
     })
     .await
+}
+
+#[derive(Clone, Copy)]
+enum ExportFormat {
+    Csv,
+    Kdbx,
+}
+
+/// The import's file dialog: one CSV file.
+fn pick_csv(app: &AppHandle) -> AppResult<Option<PathBuf>> {
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title(
+            Localized::new(
+                "Choose a password export",
+                "Выберите выгрузку паролей",
+                "Parollar eksportini tanlang",
+            )
+            .pick(),
+        )
+        .add_filter(
+            Localized::new("CSV files", "Файлы CSV", "CSV fayllar").pick(),
+            &["csv"],
+        );
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&window);
+    }
+    dialog.blocking_pick_file().map(into_path).transpose()
+}
+
+/// The export's save dialog, suggesting a dated file name.
+fn pick_export_target(app: &AppHandle, format: ExportFormat) -> AppResult<Option<PathBuf>> {
+    let today = time::OffsetDateTime::now_utc().date();
+    let (name, filter, extension) = match format {
+        ExportFormat::Csv => (
+            format!("passwords-{today}.csv"),
+            Localized::new("CSV files", "Файлы CSV", "CSV fayllar"),
+            "csv",
+        ),
+        ExportFormat::Kdbx => (
+            format!("vault-{today}.kdbx"),
+            Localized::new("KeePass databases", "Базы KeePass", "KeePass bazalari"),
+            "kdbx",
+        ),
+    };
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title(
+            Localized::new(
+                "Save the exported passwords",
+                "Сохранить выгруженные пароли",
+                "Eksport qilingan parollarni saqlash",
+            )
+            .pick(),
+        )
+        .set_file_name(name)
+        .add_filter(filter.pick(), &[extension]);
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&window);
+    }
+    dialog.blocking_save_file().map(into_path).transpose()
+}
+
+fn into_path(picked: tauri_plugin_dialog::FilePath) -> AppResult<PathBuf> {
+    let path = picked
+        .into_path()
+        .map_err(|e| AppError::invalid(format!("not a file path: {e}")))?;
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Err(AppError::invalid(format!(
+            "not an absolute path: {}",
+            path.display()
+        )))
+    }
 }
 
 #[tauri::command]
@@ -139,8 +265,9 @@ pub async fn vault_location(state: State<'_, Shared>) -> AppResult<VaultLocation
     blocking(&state, |state| Ok(location(&state.vault))).await
 }
 
-/// Moves both files into `folder`, locked or unlocked. Refuses if the
-/// folder already has files of those names.
+/// Moves both files into `folder`, locked or unlocked, once the user
+/// confirms in a native dialog. Refuses if the folder already has files of
+/// those names.
 #[tauri::command]
 pub async fn vault_move(
     app: AppHandle,
@@ -149,6 +276,7 @@ pub async fn vault_move(
 ) -> AppResult<VaultLocation> {
     let folder = absolute(&folder)?;
     blocking(&state, move |state| {
+        confirm_move(&app, &folder)?;
         move_to_folder(&state.vault, &folder)?;
         Ok(after_change(&app, state))
     })
@@ -156,9 +284,10 @@ pub async fn vault_move(
 }
 
 /// Switches to an existing KeePass file — this vault on another computer,
-/// or a KeePassXC database. The current vault locks and stays where it is;
-/// the new one opens with its master password, or, without a keys file,
-/// with its recovery key or KeePass password.
+/// or a KeePassXC database — once the user confirms in a native dialog. The
+/// current vault locks and stays where it is; the new one opens with its
+/// master password, or, without a keys file, with its recovery key or
+/// KeePass password.
 #[tauri::command]
 pub async fn vault_use_file(
     app: AppHandle,
@@ -167,6 +296,10 @@ pub async fn vault_use_file(
 ) -> AppResult<VaultLocation> {
     let path = absolute(&path)?;
     blocking(&state, move |state| {
+        vault::check_database(&path)?;
+        if !same_file(&state.vault.paths().database, &path) {
+            confirm_switch(&app, &path)?;
+        }
         if use_file(&state.vault, &path)? {
             let _ = app.emit(LOCKED_EVENT, LockReason::Manual);
         }
@@ -175,9 +308,10 @@ pub async fn vault_use_file(
     .await
 }
 
-/// Goes back to the default place: with `move_files`, the vault's files
-/// move there (refused if a vault is there already); otherwise the vault
-/// there is used and the current one locks and stays where it is.
+/// Goes back to the default place, once the user confirms in a native
+/// dialog: with `move_files`, the vault's files move there (refused if a
+/// vault is there already); otherwise the vault there is used and the
+/// current one locks and stays where it is.
 #[tauri::command]
 pub async fn vault_use_default(
     app: AppHandle,
@@ -185,12 +319,78 @@ pub async fn vault_use_default(
     move_files: bool,
 ) -> AppResult<VaultLocation> {
     blocking(&state, move |state| {
+        let default = state.vault.default_paths();
+        if state.vault.paths() != default {
+            match default.database.parent() {
+                Some(folder) if move_files => confirm_move(&app, folder)?,
+                _ => confirm_switch(&app, &default.database)?,
+            }
+        }
         if use_default(&state.vault, move_files)? {
             let _ = app.emit(LOCKED_EVENT, LockReason::Manual);
         }
         Ok(after_change(&app, state))
     })
     .await
+}
+
+fn confirm_move(app: &AppHandle, folder: &Path) -> AppResult<()> {
+    let folder = folder.display();
+    confirm::require(
+        app,
+        &Localized::new(
+            "Move the vault?",
+            "Переместить хранилище?",
+            "Ombor koʻchirilsinmi?",
+        ),
+        &Localized::new(
+            format!(
+                "The vault’s files will move to:\n{folder}\n\n\
+                 Anyone who can read this folder gets the encrypted vault. \
+                 Continue only if you chose this folder yourself."
+            ),
+            format!(
+                "Файлы хранилища переместятся в папку:\n{folder}\n\n\
+                 Любой, кто может читать эту папку, получит зашифрованное хранилище. \
+                 Продолжайте, только если эту папку выбрали вы."
+            ),
+            format!(
+                "Ombor fayllari bu papkaga koʻchadi:\n{folder}\n\n\
+                 Bu papkani oʻqiy oladigan har kim shifrlangan omborni oladi. \
+                 Bu papkani oʻzingiz tanlagan boʻlsangizgina davom eting."
+            ),
+        ),
+        &Localized::new("Move", "Переместить", "Koʻchirish"),
+    )
+}
+
+fn confirm_switch(app: &AppHandle, database: &Path) -> AppResult<()> {
+    let database = database.display();
+    confirm::require(
+        app,
+        &Localized::new(
+            "Use another vault file?",
+            "Открыть другой файл хранилища?",
+            "Boshqa ombor fayli ishlatilsinmi?",
+        ),
+        &Localized::new(
+            format!(
+                "The current vault locks, and passwords will be read from and saved to:\n\
+                 {database}\n\nContinue only if you chose this file yourself."
+            ),
+            format!(
+                "Текущее хранилище заблокируется, а пароли будут читаться из этого файла \
+                 и сохраняться в него:\n{database}\n\n\
+                 Продолжайте, только если этот файл выбрали вы."
+            ),
+            format!(
+                "Joriy ombor qulflanadi, parollar esa shu fayldan oʻqiladi va unga \
+                 saqlanadi:\n{database}\n\n\
+                 Bu faylni oʻzingiz tanlagan boʻlsangizgina davom eting."
+            ),
+        ),
+        &Localized::new("Use this file", "Открыть файл", "Shu faylni ishlatish"),
+    )
 }
 
 fn location(runtime: &VaultRuntime) -> VaultLocation {
@@ -307,6 +507,10 @@ fn absolute(path: &str) -> AppResult<PathBuf> {
 
 fn last_import() -> std::sync::MutexGuard<'static, Option<PathBuf>> {
     LAST_IMPORT.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn picked_import() -> std::sync::MutexGuard<'static, Option<PathBuf>> {
+    PICKED_IMPORT.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

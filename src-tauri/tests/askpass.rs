@@ -7,7 +7,7 @@
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use sshkm_app_lib::askpass::{PromptOutcome, Secrets, Server, Session};
+use sshkm_app_lib::askpass::{Connection, PromptAccount, PromptOutcome, Secrets, Server, Session};
 
 const APP: &str = env!("CARGO_BIN_EXE_sshkm-app");
 
@@ -74,6 +74,56 @@ fn the_app_answers_as_askpass_helper() {
             PromptOutcome::Declined,
         ]
     );
+}
+
+#[test]
+fn servers_get_no_passphrase_through_the_helper() {
+    const KEY: &str = "/home/alice/.ssh/id_ed25519";
+    let server = Server::start_with_program(APP).unwrap();
+    let session = server.session(
+        Secrets::new(Some("hunter2".into()), None).with_passphrase(KEY, "key passphrase".into()),
+    );
+    session.expect_account(PromptAccount::new("alice", "example.com"));
+
+    // keyboard-interactive prompts, written by the server.
+    for prompt in [
+        format!("(alice@example.com) Enter passphrase for key '{KEY}': "),
+        "(alice@example.com) The authenticity of host 'example.com (10.0.0.1)' can't be \
+         established.\nED25519 key fingerprint is SHA256:abc.\nAre you sure you want to \
+         continue connecting (yes/no/[fingerprint])? "
+            .to_owned(),
+    ] {
+        let refused = helper(&session, &prompt);
+        assert_eq!(refused.status.code(), Some(1), "{prompt:?}");
+        assert_eq!(refused.stdout, b"");
+    }
+
+    // ssh's own question still gets it.
+    let answered = helper(&session, &format!("Enter passphrase for key '{KEY}': "));
+    assert!(answered.status.success(), "{answered:?}");
+    assert_eq!(answered.stdout, b"key passphrase\n");
+
+    // Before OpenSSH 8.5, through a jump host, nothing is told apart.
+    let old = server.session(Secrets::new(Some("hunter2".into()), None));
+    old.expect_account(PromptAccount::new("alice", "example.com"));
+    old.expect_connection(Connection::new(
+        Some("OpenSSH_for_Windows_8.1p1"),
+        false,
+        true,
+    ));
+    let refused = helper(&old, "alice@example.com's password: ");
+    assert_eq!(refused.status.code(), Some(1));
+
+    let outcomes: Vec<_> = session.asked().iter().map(|a| a.outcome).collect();
+    assert_eq!(
+        outcomes,
+        [
+            PromptOutcome::Refused,
+            PromptOutcome::Refused,
+            PromptOutcome::Answered
+        ]
+    );
+    assert_eq!(old.asked()[0].outcome, PromptOutcome::Refused);
 }
 
 #[test]

@@ -7,9 +7,16 @@
 //!   rights to nobody except the current user, `SYSTEM` (`S-1-5-18`) and
 //!   `Administrators` (`S-1-5-32-544`). ACLs are read with one PowerShell call
 //!   per batch of paths and compared by SID, which is independent of the
-//!   display language. Fixes use `icacls`.
+//!   display language. Fixes use `icacls`. PowerShell, `icacls` and `whoami`
+//!   are started from the system directory, never looked up on `PATH`.
+//!
+//! Fixes only ever take permissions away: on Unix the new mode is the current
+//! one with the bits the rule forbids cleared.
 
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Component, Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +38,7 @@ pub enum PermKind {
 }
 
 impl PermKind {
-    /// The mode [`fix`] applies on Unix.
+    /// The most [`fix`] leaves on Unix: it clears every other bit.
     pub const fn recommended_mode(self) -> u32 {
         match self {
             Self::PrivateKey | Self::Config => 0o600,
@@ -145,14 +152,64 @@ pub fn check_many(items: &[(PathBuf, PermKind)]) -> Vec<PermissionReport> {
     imp::check_many(items)
 }
 
-/// Restricts `path` to the permissions recommended for `kind`
-/// ([`PermKind::recommended_mode`] on Unix; owner, `SYSTEM` and
-/// `Administrators` on Windows).
+/// Restricts `path` to the permissions recommended for `kind`: on Unix the
+/// bits outside [`PermKind::recommended_mode`] are cleared (none is added, so
+/// a 0400 key stays 0400); on Windows only the owner, `SYSTEM` and
+/// `Administrators` keep access.
 pub fn fix(path: &Path, kind: PermKind) -> Result<()> {
-    if std::fs::symlink_metadata(path).is_err() {
+    if fs::symlink_metadata(path).is_err() {
         return Err(Error::NotFound(path.display().to_string()));
     }
     imp::fix(path, kind)
+}
+
+/// [`fix`] for a path in the `.ssh` directory `ssh_dir`, as the audit
+/// reports them: `ssh_dir` itself for [`PermKind::SshDir`], a file below it
+/// for the other kinds. Anything else is refused: a path with `.` or `..`, a
+/// path outside `ssh_dir`, and a symbolic link whose target is outside it
+/// (the fix is applied to the resolved target, which is checked).
+pub fn fix_inside(ssh_dir: &Path, path: &Path, kind: PermKind) -> Result<()> {
+    let refuse = || {
+        Error::invalid(format!(
+            "{} is not a {kind:?} path in {}",
+            path.display(),
+            ssh_dir.display()
+        ))
+    };
+    let rest = path.strip_prefix(ssh_dir).map_err(|_| refuse())?;
+    if !rest.components().all(|c| matches!(c, Component::Normal(_)))
+        || rest.as_os_str().is_empty() != (kind == PermKind::SshDir)
+    {
+        return Err(refuse());
+    }
+    let root = fs::canonicalize(ssh_dir).map_err(|e| Error::io(e, ssh_dir))?;
+    let target = fs::canonicalize(path).map_err(|e| Error::io(e, path))?;
+    let inside = if kind == PermKind::SshDir {
+        target == root
+    } else {
+        target != root
+            && target.starts_with(&root)
+            && fs::metadata(&target).is_ok_and(|meta| meta.is_file())
+    };
+    if !inside {
+        return Err(refuse());
+    }
+    fix(&without_verbatim_prefix(target), kind)
+}
+
+/// `C:\…` for `\\?\C:\…`, which [`fs::canonicalize`] returns on Windows and
+/// not every tool takes; other paths are returned unchanged.
+fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest)
+            if rest.as_bytes().get(1) == Some(&b':')
+                && rest.as_bytes().first().is_some_and(u8::is_ascii_alphabetic) =>
+        {
+            PathBuf::from(rest)
+        }
+        _ => path,
+    }
 }
 
 #[cfg(unix)]
@@ -176,7 +233,11 @@ mod imp {
     }
 
     pub(super) fn fix(path: &std::path::Path, kind: PermKind) -> Result<()> {
-        fsutil::set_mode(path, kind.recommended_mode())
+        let current = fs::metadata(path)
+            .map_err(|e| crate::Error::io(e, path))?
+            .permissions()
+            .mode();
+        fsutil::set_mode(path, current & kind.recommended_mode())
     }
 }
 
@@ -192,7 +253,7 @@ mod imp {
     use base64ct::{Base64, Encoding};
 
     use super::{PermKind, PermissionProblem, PermissionReport, windows_acl};
-    use crate::{Error, Result};
+    use crate::{Error, Result, paths::system32};
 
     /// `CREATE_NO_WINDOW`: do not flash a console window from the GUI app.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -232,7 +293,7 @@ mod imp {
         } else {
             "F"
         };
-        let mut cmd = Command::new("icacls");
+        let mut cmd = Command::new(system32("icacls.exe"));
         cmd.arg(path)
             .arg("/inheritance:r")
             .arg("/grant:r")
@@ -246,7 +307,7 @@ mod imp {
         if let Some(Some(acl)) = query_acls(&[path]).pop() {
             let extra = windows_acl::extra_principals(&acl, user);
             if !extra.is_empty() {
-                let mut cmd = Command::new("icacls");
+                let mut cmd = Command::new(system32("icacls.exe"));
                 cmd.arg(path).arg("/remove:g");
                 for sid in extra {
                     cmd.arg(format!("*{sid}"));
@@ -277,7 +338,7 @@ mod imp {
     fn current_user_sid() -> Option<&'static str> {
         static SID: OnceLock<Option<String>> = OnceLock::new();
         SID.get_or_init(|| {
-            let output = Command::new("whoami")
+            let output = Command::new(system32("whoami.exe"))
                 .args(["/user", "/fo", "csv", "/nh"])
                 .stdin(Stdio::null())
                 .creation_flags(CREATE_NO_WINDOW)
@@ -296,7 +357,7 @@ mod imp {
         let script = windows_acl::script(paths);
         let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let encoded = Base64::encode_string(&utf16);
-        let output = Command::new("powershell.exe")
+        let output = Command::new(system32(r"WindowsPowerShell\v1.0\powershell.exe"))
             // Started from a PowerShell 7 session (directly or through other
             // processes), `PSModulePath` lists PowerShell 7's modules first, and
             // Windows PowerShell then fails to load `Get-Acl` and `Sort-Object`.
@@ -476,8 +537,8 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let key = dir.path().join("id");
-        std::fs::write(&key, "x").unwrap();
-        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();
+        fs::write(&key, "x").unwrap();
+        fs::set_permissions(&key, fs::Permissions::from_mode(0o644)).unwrap();
         let missing = dir.path().join("missing");
         let reports = check_many(&[
             (key.clone(), PermKind::PrivateKey),
@@ -499,14 +560,115 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn fixes_only_take_bits_away() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("f");
+        fs::write(&file, "x").unwrap();
+        let mode = || fs::metadata(&file).unwrap().permissions().mode() & 0o7777;
+        for (before, kind, after) in [
+            (0o644, PermKind::PrivateKey, 0o600),
+            (0o400, PermKind::PrivateKey, 0o400),
+            (0o4755, PermKind::PrivateKey, 0o600),
+            (0o040, PermKind::PrivateKey, 0o000),
+            (0o664, PermKind::PublicKey, 0o644),
+            (0o640, PermKind::PublicKey, 0o640),
+            (0o444, PermKind::PublicKey, 0o444),
+            (0o666, PermKind::Config, 0o600),
+            (0o755, PermKind::SshDir, 0o700),
+            (0o500, PermKind::SshDir, 0o500),
+        ] {
+            fs::set_permissions(&file, fs::Permissions::from_mode(before)).unwrap();
+            fix(&file, kind).unwrap();
+            assert_eq!(mode(), after, "{before:o} {kind:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fix_inside_stays_in_the_ssh_dir() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let home = tempfile::tempdir().unwrap();
+        let ssh = home.path().join(".ssh");
+        fs::create_dir(&ssh).unwrap();
+        let outside = home.path().join("credentials");
+        let key = ssh.join("id");
+        let sub = ssh.join("sockets");
+        fs::create_dir(&sub).unwrap();
+        for file in [&outside, &key] {
+            fs::write(file, "x").unwrap();
+            fs::set_permissions(file, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        symlink(&outside, ssh.join("link")).unwrap();
+        symlink(&key, ssh.join("inner")).unwrap();
+        fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).unwrap();
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let home_mode = mode(home.path());
+
+        for (path, kind) in [
+            (ssh.join("../credentials"), PermKind::PrivateKey),
+            (ssh.join("sockets/../../credentials"), PermKind::PrivateKey),
+            (ssh.join("link"), PermKind::PrivateKey),
+            (outside.clone(), PermKind::PrivateKey),
+            (home.path().to_path_buf(), PermKind::SshDir),
+            (ssh.join(".."), PermKind::SshDir),
+            (ssh.clone(), PermKind::PrivateKey),
+            (key.clone(), PermKind::SshDir),
+            (sub.clone(), PermKind::PrivateKey),
+            (PathBuf::from("id"), PermKind::PrivateKey),
+        ] {
+            assert_eq!(
+                fix_inside(&ssh, &path, kind).unwrap_err().code(),
+                crate::ErrorCode::InvalidInput,
+                "{} {kind:?}",
+                path.display()
+            );
+        }
+        assert_eq!(mode(&outside), 0o644);
+        assert_eq!(mode(home.path()), home_mode);
+        assert_eq!(mode(&ssh), 0o755);
+
+        // A link to a key in the directory fixes the key.
+        fix_inside(&ssh, &ssh.join("inner"), PermKind::PrivateKey).unwrap();
+        assert_eq!(mode(&key), 0o600);
+        fix_inside(&ssh, &ssh, PermKind::SshDir).unwrap();
+        assert_eq!(mode(&ssh), 0o700);
+        assert_eq!(
+            fix_inside(&ssh, &ssh.join("missing"), PermKind::PrivateKey)
+                .unwrap_err()
+                .code(),
+            crate::ErrorCode::NotFound
+        );
+    }
+
+    #[test]
+    fn verbatim_prefix_is_dropped_for_drive_paths_only() {
+        assert_eq!(
+            without_verbatim_prefix(PathBuf::from(r"\\?\C:\Users\me\.ssh\id")),
+            PathBuf::from(r"C:\Users\me\.ssh\id")
+        );
+        for kept in [
+            r"\\?\UNC\server\share\id",
+            r"\\?\GLOBALROOT\x",
+            "/home/me/.ssh/id",
+        ] {
+            assert_eq!(
+                without_verbatim_prefix(PathBuf::from(kept)),
+                PathBuf::from(kept)
+            );
+        }
+    }
+
     #[cfg(windows)]
     #[test]
     fn check_and_fix_acl_on_disk() {
         let dir = tempfile::tempdir().unwrap();
         let key = dir.path().join("id");
-        std::fs::write(&key, "x").unwrap();
+        fs::write(&key, "x").unwrap();
         // Let the local Users group read the key.
-        let granted = std::process::Command::new("icacls")
+        let granted = std::process::Command::new(crate::paths::system32("icacls.exe"))
             .arg(&key)
             .args(["/grant", "*S-1-5-32-545:R"])
             .output()

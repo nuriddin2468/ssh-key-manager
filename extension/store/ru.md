@@ -42,7 +42,7 @@ SSH Key Manager подставляет сохранённые логины в ф
 • Бесплатное приложение SSH Key Manager версии 0.4.0 или новее для macOS, Windows или Linux: https://github.com/nuriddin2468/ssh-key-manager
 • В приложении откройте «Настройки» и включите «Автозаполнение в браузере». Затем нажмите кнопку расширения и выберите «Подключить».
 
-SSH Key Manager — программа с открытым исходным кодом (лицензия MIT).
+SSH Key Manager — программа с открытым исходным кодом (лицензия AGPL-3.0).
 Политика конфиденциальности (на английском): https://github.com/nuriddin2468/ssh-key-manager/blob/main/PRIVACY.md
 ```
 

@@ -8,14 +8,11 @@
     "core:window:allow-start-dragging",
     "core:window:allow-toggle-maximize",
     "opener:allow-reveal-item-in-dir",
-    "opener:allow-open-url",
-    "opener:allow-default-urls",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "http://*" }, { "url": "https://*" }]
+    },
     "clipboard-manager:allow-write-text",
-    "dialog:allow-open",
-    "dialog:allow-save",
-    "window-state:default",
-    "log:default",
-    "updater:default",
-    "process:allow-restart"
+    "dialog:allow-open"
   ]
 }

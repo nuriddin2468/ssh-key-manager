@@ -3,11 +3,12 @@
 //! The prompt itself comes from `robius-authentication`; this module asks
 //! `UserConsentVerifier` whether Windows Hello is set up, which that crate does
 //! not expose. Checking first also stops that crate from falling back to a
-//! username/password dialog when Windows Hello is missing.
+//! username/password dialog when Windows Hello is missing. Windows Hello
+//! counts as available only if it can also keep keys ([`super::hello`]).
 
 use windows::Security::Credentials::UI::{UserConsentVerifier, UserConsentVerifierAvailability};
 
-use super::{Availability, Kind, prompt};
+use super::{Availability, Kind, hello, prompt};
 use crate::{Error, Result};
 
 pub(super) fn availability() -> Availability {
@@ -34,7 +35,12 @@ pub(super) fn authenticate(reason: &str) -> Result<()> {
 
 fn check_availability() -> Availability {
     match UserConsentVerifier::CheckAvailabilityAsync().and_then(|op| op.join()) {
-        Ok(status) => from_status(status),
+        Ok(status) => match from_status(status) {
+            Availability::Available(_) if !hello::is_supported() => {
+                Availability::Unavailable("Windows Hello can't keep keys on this computer".into())
+            }
+            availability => availability,
+        },
         Err(err) => Availability::Unavailable(format!("cannot check Windows Hello: {err}")),
     }
 }

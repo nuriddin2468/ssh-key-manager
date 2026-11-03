@@ -1,6 +1,11 @@
 //! The password vault. Secrets leave the Rust process only when the user asks
 //! to see one ([`vault_reveal`]) or for a recovery key that must be shown;
 //! copying goes straight from here to the clipboard ([`vault_copy`]).
+//!
+//! Reads the UI repeats by itself (the list, an entry, a 2FA code) don't
+//! count as activity, so they never keep the vault unlocked. Changes that
+//! weaken its protection need the user's confirmation in a native dialog,
+//! whose text is built here.
 
 use std::sync::Arc;
 
@@ -11,10 +16,11 @@ use sshkm_core::{ExposeSecret, SecretString};
 use tauri::{AppHandle, State};
 
 use super::{Shared, blocking};
-use crate::device_unlock::{self, DeviceLink};
+use crate::confirm::{self, Localized};
+use crate::device_unlock;
 use crate::error::{AppError, AppResult};
 use crate::types::{CopyField, CopyResult, OtpCode, VaultState, VaultStatus};
-use crate::vault::{LockReason, VaultSettings};
+use crate::vault::{LockReason, VaultSettings, Weakening};
 
 #[tauri::command]
 pub async fn vault_status(state: State<'_, Shared>) -> AppResult<VaultStatus> {
@@ -64,46 +70,19 @@ pub async fn vault_create(state: State<'_, Shared>, master: SecretString) -> App
 #[tauri::command]
 pub async fn vault_unlock(state: State<'_, Shared>, master: SecretString) -> AppResult<()> {
     blocking(&state, move |state| {
-        let vault = Vault::unlock(&state.vault.paths(), &master)?;
+        let mut vault = Vault::unlock(&state.vault.paths(), &master)?;
+        device_unlock::retire_stored_key(state.vault.data_dir(), &mut vault);
         state.vault.set_unlocked(vault);
         Ok(())
     })
     .await
 }
 
-/// Unlocks with Touch ID / Windows Hello. `reason` is the localised prompt
-/// text ("unlock the password vault").
+/// Unlocks with Touch ID / Windows Hello. The prompt's text is the app's own.
 #[tauri::command]
-pub async fn vault_unlock_device(state: State<'_, Shared>, reason: String) -> AppResult<()> {
+pub async fn vault_unlock_device(state: State<'_, Shared>) -> AppResult<()> {
     blocking(&state, move |state| {
-        let data_dir = state.vault.data_dir();
-        let paths = state.vault.paths();
-        let files = vault::probe(&paths)?;
-        let link = device_unlock::load_link(data_dir)
-            .filter(|link| files.vault_id.as_deref() == Some(link.vault_id.as_str()))
-            .ok_or_else(|| AppError::not_found("device unlock is not set up here"))?;
-        device_unlock::authenticate(&reason)?;
-        let forget = |message: &str| {
-            let _ = device_unlock::delete_key(&link);
-            let _ = device_unlock::save_link(data_dir, None);
-            AppError::not_found(message)
-        };
-        let Some(key) = device_unlock::load_key(&link)? else {
-            return Err(forget("the device key is gone from the credential store"));
-        };
-        let vault = match Vault::unlock_with_device(&paths, &link.slot_id, &key) {
-            Ok(vault) => vault,
-            // The slot was removed elsewhere, e.g. a new recovery key.
-            Err(e)
-                if matches!(
-                    e.code(),
-                    sshkm_core::ErrorCode::NotFound | sshkm_core::ErrorCode::WrongPassphrase
-                ) =>
-            {
-                return Err(forget("device unlock was turned off for this vault"));
-            }
-            Err(e) => return Err(e.into()),
-        };
+        let vault = device_unlock::unlock(state.vault.data_dir(), &state.vault.paths())?;
         state.vault.set_unlocked(vault);
         Ok(())
     })
@@ -117,38 +96,19 @@ pub async fn vault_enable_device(
     app: AppHandle,
     state: State<'_, Shared>,
     master: SecretString,
-    reason: String,
 ) -> AppResult<()> {
     blocking(&state, move |state| {
         let data_dir = state.vault.data_dir().to_path_buf();
         state.vault.with(&app, |vault| {
             vault.verify_master_password(&master)?;
-            device_unlock::authenticate(&reason)?;
-            if let Some(old) = device_unlock::load_link(&data_dir) {
-                if old.vault_id == vault.vault_id() {
-                    vault.disable_device_unlock(&old.slot_id)?;
-                }
-                let _ = device_unlock::delete_key(&old);
-            }
-            let device_key = vault.enable_device_unlock()?;
-            let link = DeviceLink {
-                vault_id: vault.vault_id().to_owned(),
-                slot_id: device_key.slot_id.clone(),
-            };
-            if let Err(error) = device_unlock::store_key(&link, &device_key.key)
-                .and_then(|()| device_unlock::save_link(&data_dir, Some(&link)))
-            {
-                let _ = device_unlock::delete_key(&link);
-                vault.disable_device_unlock(&link.slot_id)?;
-                return Err(error);
-            }
-            Ok(())
+            device_unlock::enable(&data_dir, vault)
         })
     })
     .await
 }
 
-/// Turns off Touch ID / Windows Hello for this vault on this computer.
+/// Turns off Touch ID / Windows Hello for this vault on this computer, once
+/// the user confirms in a native dialog.
 #[tauri::command]
 pub async fn vault_disable_device(app: AppHandle, state: State<'_, Shared>) -> AppResult<()> {
     blocking(&state, move |state| {
@@ -156,16 +116,48 @@ pub async fn vault_disable_device(app: AppHandle, state: State<'_, Shared>) -> A
         let Some(link) = device_unlock::load_link(&data_dir) else {
             return Ok(());
         };
+        let method = device_method();
+        confirm::require(
+            &app,
+            &Localized::new(
+                format!("Turn off {method}?"),
+                format!("Выключить {method}?"),
+                format!("{method} oʻchirilsinmi?"),
+            ),
+            &Localized::new(
+                format!(
+                    "This computer will no longer open the password vault with {method}. \
+                     You can turn it on again with the master password."
+                ),
+                format!(
+                    "Этот компьютер больше не будет открывать хранилище паролей с помощью \
+                     {method}. Его можно снова включить, введя мастер-пароль."
+                ),
+                format!(
+                    "Bu kompyuter parollar omborini endi {method} orqali ochmaydi. \
+                     Uni asosiy parol bilan qayta yoqish mumkin."
+                ),
+            ),
+            &Localized::new("Turn off", "Выключить", "Oʻchirish"),
+        )?;
         state.vault.with(&app, |vault| {
             if link.vault_id == vault.vault_id() {
                 vault.disable_device_unlock(&link.slot_id)?;
             }
             Ok(())
         })?;
-        device_unlock::delete_key(&link)?;
-        device_unlock::save_link(&data_dir, None)
+        device_unlock::disable(&data_dir, &link)
     })
     .await
+}
+
+/// The name of this system's device unlock, the same in every language.
+fn device_method() -> &'static str {
+    if cfg!(windows) {
+        "Windows Hello"
+    } else {
+        "Touch ID"
+    }
 }
 
 /// Unlocks with the recovery key (or a brought KeePass file's password) and
@@ -177,7 +169,8 @@ pub async fn vault_recover(
     new_master: SecretString,
 ) -> AppResult<()> {
     blocking(&state, move |state| {
-        let vault = Vault::recover(&state.vault.paths(), &recovery_key, &new_master)?;
+        let mut vault = Vault::recover(&state.vault.paths(), &recovery_key, &new_master)?;
+        device_unlock::retire_stored_key(state.vault.data_dir(), &mut vault);
         state.vault.set_unlocked(vault);
         Ok(())
     })
@@ -199,17 +192,19 @@ pub async fn vault_activity(state: State<'_, Shared>) -> AppResult<()> {
     Ok(())
 }
 
+/// The entries. Quiet: the UI refetches the list by itself.
 #[tauri::command]
 pub async fn vault_entries(
     app: AppHandle,
     state: State<'_, Shared>,
 ) -> AppResult<Vec<EntrySummary>> {
     blocking(&state, move |state| {
-        state.vault.with(&app, |vault| Ok(vault.entries()))
+        state.vault.with_quietly(&app, |vault| Ok(vault.entries()))
     })
     .await
 }
 
+/// One entry's details. Quiet, like [`vault_entries`].
 #[tauri::command]
 pub async fn vault_entry(
     app: AppHandle,
@@ -217,7 +212,9 @@ pub async fn vault_entry(
     id: String,
 ) -> AppResult<EntryDetail> {
     blocking(&state, move |state| {
-        state.vault.with(&app, |vault| Ok(vault.entry(&id)?))
+        state
+            .vault
+            .with_quietly(&app, |vault| Ok(vault.entry(&id)?))
     })
     .await
 }
@@ -268,11 +265,30 @@ pub async fn vault_copy(
     .await
 }
 
-/// The current 2FA code of an entry.
+/// Copies a recovery key the UI is showing — once, right after it was made —
+/// like a password: kept out of clipboard history and cloud clipboards, and
+/// cleared after a while even if the settings say never. Only a recovery key
+/// is accepted.
+#[tauri::command]
+pub async fn vault_copy_recovery_key(
+    state: State<'_, Shared>,
+    key: SecretString,
+) -> AppResult<CopyResult> {
+    blocking(&state, move |state| {
+        let key = vault::canonical_recovery_key(&key)
+            .ok_or_else(|| AppError::invalid("not a recovery key"))?;
+        let clears_in_secs = Arc::clone(&state.vault).copy_recovery_key(&key)?;
+        Ok(CopyResult { clears_in_secs })
+    })
+    .await
+}
+
+/// The current 2FA code of an entry. Quiet: the code refreshes by itself
+/// every 30 seconds while the entry is open.
 #[tauri::command]
 pub async fn vault_otp(app: AppHandle, state: State<'_, Shared>, id: String) -> AppResult<OtpCode> {
     blocking(&state, move |state| {
-        state.vault.with(&app, |vault| {
+        state.vault.with_quietly(&app, |vault| {
             let (code, valid_for) = vault.otp_code(&id)?;
             Ok(OtpCode {
                 code,
@@ -399,23 +415,135 @@ pub async fn vault_new_recovery_key(
         })?;
         // Every device slot went with the old key.
         if let Some(link) = device_unlock::load_link(state.vault.data_dir()) {
-            let _ = device_unlock::delete_key(&link);
-            device_unlock::save_link(state.vault.data_dir(), None)?;
+            device_unlock::disable(state.vault.data_dir(), &link)?;
         }
         Ok(key.expose_secret().to_owned())
     })
     .await
 }
 
+/// Saves the vault's preferences. A change that weakens its protection
+/// (later or no auto-lock, no clipboard clearing, not locking with sleep,
+/// the screen or the window) needs the user's confirmation in a native
+/// dialog first.
 #[tauri::command]
 pub async fn vault_set_settings(
+    app: AppHandle,
     state: State<'_, Shared>,
     mut settings: VaultSettings,
 ) -> AppResult<VaultSettings> {
     blocking(&state, move |state| {
+        let current = state.vault.settings();
         // Moving or switching the database has its own commands.
-        settings.database = state.vault.settings().database;
+        settings.database.clone_from(&current.database);
+        let weakened = current.weakened_by(&settings);
+        if !weakened.is_empty() {
+            confirm::require(
+                &app,
+                &Localized::new(
+                    "Weaken the vault’s protection?",
+                    "Ослабить защиту хранилища?",
+                    "Ombor himoyasi zaiflashtirilsinmi?",
+                ),
+                &weakening_text(&weakened),
+                &Localized::new("Change", "Изменить", "Oʻzgartirish"),
+            )?;
+        }
         state.vault.set_settings(settings)
     })
     .await
+}
+
+/// The body of the confirmation for weakened settings: one line per change.
+fn weakening_text(weakened: &[Weakening]) -> Localized {
+    let lines: Vec<Localized> = weakened.iter().map(|w| weakening_line(*w)).collect();
+    let list = |pick: fn(&Localized) -> &String| {
+        lines
+            .iter()
+            .map(|line| format!("• {}", pick(line)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    Localized::new(
+        format!(
+            "SSH Key Manager will change these settings:\n\n{}\n\n\
+             Continue only if you made this change yourself.",
+            list(|l| &l.en)
+        ),
+        format!(
+            "SSH Key Manager изменит эти настройки:\n\n{}\n\n\
+             Продолжайте, только если это изменение сделали вы.",
+            list(|l| &l.ru)
+        ),
+        format!(
+            "SSH Key Manager quyidagi sozlamalarni oʻzgartiradi:\n\n{}\n\n\
+             Bu oʻzgarishni oʻzingiz qilgan boʻlsangizgina davom eting.",
+            list(|l| &l.uz)
+        ),
+    )
+}
+
+fn weakening_line(weakening: Weakening) -> Localized {
+    match weakening {
+        Weakening::AutoLock { old, new: None } => Localized::new(
+            format!("Lock when idle: never (was {old} min)"),
+            format!("Блокировать при бездействии: никогда (было {old} мин)"),
+            format!("Faoliyat boʻlmasa qulflash: hech qachon (avval {old} daqiqa)"),
+        ),
+        Weakening::AutoLock {
+            old,
+            new: Some(new),
+        } => Localized::new(
+            format!("Lock when idle: after {new} min (was {old} min)"),
+            format!("Блокировать при бездействии: через {new} мин (было {old} мин)"),
+            format!("Faoliyat boʻlmasa qulflash: {new} daqiqadan keyin (avval {old} daqiqa)"),
+        ),
+        Weakening::Clipboard { old, new: 0 } => Localized::new(
+            format!("Clear copied passwords: never (was {old} s)"),
+            format!("Очищать скопированные пароли: никогда (было {old} с)"),
+            format!("Nusxalangan parollarni tozalash: hech qachon (avval {old} soniya)"),
+        ),
+        Weakening::Clipboard { old, new } => Localized::new(
+            format!("Clear copied passwords: after {new} s (was {old} s)"),
+            format!("Очищать скопированные пароли: через {new} с (было {old} с)"),
+            format!("Nusxalangan parollarni tozalash: {new} soniyadan keyin (avval {old} soniya)"),
+        ),
+        Weakening::LockOnSleep => Localized::new(
+            "Don’t lock when the computer sleeps",
+            "Не блокировать при переходе в сон",
+            "Kompyuter uyqu rejimiga oʻtganda qulflamaslik",
+        ),
+        Weakening::LockOnScreenLock => Localized::new(
+            "Don’t lock when the screen locks",
+            "Не блокировать вместе с экраном",
+            "Ekran qulflanganda qulflamaslik",
+        ),
+        Weakening::LockOnMinimize => Localized::new(
+            "Don’t lock when the window is minimized",
+            "Не блокировать при сворачивании окна",
+            "Oyna yigʻilganda qulflamaslik",
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn weakened_settings_are_listed_in_every_language() {
+        let text = weakening_text(&[
+            Weakening::AutoLock { old: 5, new: None },
+            Weakening::Clipboard { old: 30, new: 90 },
+            Weakening::LockOnScreenLock,
+        ]);
+        assert!(text.en.contains("• Lock when idle: never (was 5 min)\n"));
+        assert!(
+            text.en
+                .contains("• Clear copied passwords: after 90 s (was 30 s)\n")
+        );
+        assert!(text.en.contains("• Don’t lock when the screen locks\n\n"));
+        assert!(text.ru.contains("никогда (было 5 мин)"));
+        assert!(text.uz.contains("90 soniyadan keyin"));
+    }
 }

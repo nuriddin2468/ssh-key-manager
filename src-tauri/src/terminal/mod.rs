@@ -2,9 +2,10 @@
 //! (`ConPTY` on Windows), running `ssh -o ConnectTimeout=10 -- <alias>` with
 //! `TERM=xterm-256color`.
 //!
-//! - Output goes to the UI over the session's channel as raw bytes; state
-//!   changes and prompts go over the same channel as [`TerminalEvent`]s.
-//!   Input, resizing, answers and closing are commands.
+//! - Output goes to the UI over the session's channel as raw bytes, at most
+//!   [`OUTPUT_RATE`] a second; state changes and prompts go over the same
+//!   channel as [`TerminalEvent`]s. Input, resizing, answers and closing are
+//!   commands.
 //! - `ssh` asks for secrets through an interactive askpass session whose
 //!   [`Bridge`] answers from the vault or asks the user (see [`bridge`]).
 //! - A session is *connecting* until the remote session starts, then
@@ -12,7 +13,9 @@
 //!   a reason. On macOS and Linux the start is when `ssh` puts the terminal in
 //!   raw mode, which it does only once signed in; where the terminal's mode
 //!   cannot be read (Windows) it is the first output after the last prompt
-//!   that is not one of `ssh`'s own messages.
+//!   that is not one of `ssh`'s own messages. That output may come before
+//!   signing in (a server's banner), so there the bridge keeps answering
+//!   prompts and answers are never saved in the vault.
 //! - Sessions outlive page changes in the UI. They end when the app quits or
 //!   the page reloads (their channels die with it); locking the vault does not
 //!   end them.
@@ -48,7 +51,7 @@ pub use self::external::open_external;
 use self::store::VaultStore;
 use self::text::Resolved;
 use self::types::{OpenOptions, Phase, PromptAnswer, SessionState, TerminalEvent, TerminalInfo};
-use crate::askpass::{PromptAccount, Session};
+use crate::askpass::{Connection, PromptAccount, Session};
 use crate::commands::remote::check_alias;
 use crate::error::{AppError, AppResult};
 use crate::process;
@@ -58,6 +61,16 @@ use crate::state::AppState;
 const TAIL: usize = 16 * 1024;
 /// How often the terminal's mode is checked while connecting.
 const POLL: Duration = Duration::from_millis(100);
+/// The terminal's mode can be read here (see [`is_raw`]), so raw mode tells
+/// when the session signed in.
+const READS_MODE: bool = cfg!(unix);
+/// The most output a session passes to the UI per second, after a burst of
+/// [`OUTPUT_BURST`]. The channel to the webview queues whatever it is sent,
+/// so a server flooding the terminal would otherwise fill the app's memory
+/// faster than xterm draws it; past this rate the session stops reading, and
+/// `ssh` and then the server wait.
+const OUTPUT_RATE: u64 = 4 * 1024 * 1024;
+const OUTPUT_BURST: u64 = 1024 * 1024;
 
 /// Where a session's output and events go: the UI's channel, or a test.
 pub trait Sink: Send + Sync + 'static {
@@ -121,6 +134,8 @@ impl Terminals {
             bridge::Options {
                 key_offered,
                 ask_password: options.ask_password,
+                // Only raw mode tells for sure that the session signed in.
+                can_save: READS_MODE,
                 timeout: bridge::ANSWER_TIMEOUT,
             },
         ));
@@ -128,6 +143,12 @@ impl Terminals {
         if let Some(account) = resolved.as_ref().and_then(account) {
             askpass.expect_account(account);
         }
+        // Without `ssh -G` nothing is known about the way: assume the worst.
+        askpass.expect_connection(Connection::new(
+            state.openssh_version().as_deref(),
+            resolved.as_ref().is_none_or(|r| r.keyboard_interactive),
+            resolved.as_ref().is_none_or(Resolved::proxied),
+        ));
 
         let info = TerminalInfo {
             id,
@@ -389,13 +410,19 @@ impl Terminal {
         let _ = lock(&self.killer).kill();
     }
 
-    /// Passes output to the UI until the terminal closes.
+    /// Passes output to the UI until the terminal closes, at most
+    /// [`OUTPUT_RATE`] bytes a second.
     fn read(&self, mut reader: Box<dyn Read + Send>) {
         let mut buffer = vec![0; 32 * 1024];
+        let mut throttle = Throttle::new(OUTPUT_RATE, OUTPUT_BURST);
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) => break,
-                Ok(n) => self.output(&buffer[..n]),
+                Ok(n) => {
+                    self.output(&buffer[..n]);
+                    let sent = u64::try_from(n).unwrap_or(u64::MAX);
+                    thread::sleep(throttle.take(sent, Instant::now()));
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(_) => break,
             }
@@ -417,14 +444,17 @@ impl Terminal {
             }
         };
         if starts_session {
-            self.connected();
+            self.connected(false);
         }
         self.sink.output(chunk);
     }
 
     /// The remote session started: tell the UI what signing in used, then
-    /// save the answers the user chose to save.
-    fn connected(&self) {
+    /// save the answers the user chose to save. `signed_in` is false when
+    /// only output says so (where the terminal's mode cannot be read): that
+    /// may be the server's banner before a password it refuses, so prompts
+    /// are still answered and nothing is saved.
+    fn connected(&self, signed_in: bool) {
         {
             let mut progress = lock(&self.progress);
             if progress.phase != Phase::Connecting {
@@ -435,10 +465,17 @@ impl Terminal {
             progress.tail = Vec::new();
         }
         lock(&self.info).phase = Phase::Connected;
-        let sign_in = self.bridge.signed_in();
+        let sign_in = if signed_in {
+            self.bridge.signed_in()
+        } else {
+            self.bridge.output_started()
+        };
         self.sink.event(&TerminalEvent::State {
             state: SessionState::Connected { sign_in },
         });
+        if !signed_in {
+            return;
+        }
         // Writing the vault takes a moment (key derivation); keep it off the
         // output's way.
         let bridge = Arc::clone(&self.bridge);
@@ -462,7 +499,7 @@ impl Terminal {
                 .as_ref()
                 .and_then(|master| is_raw(master.as_ref()));
             if raw == Some(true) {
-                self.connected();
+                self.connected(true);
             } else {
                 thread::sleep(POLL);
             }
@@ -507,6 +544,50 @@ impl Terminal {
         lock(&self.progress).phase = state.phase();
         lock(&self.info).phase = state.phase();
         self.sink.event(&TerminalEvent::State { state });
+    }
+}
+
+/// A token bucket: `rate` bytes a second after a burst of `burst`.
+struct Throttle {
+    rate: u64,
+    burst: u64,
+    /// Bytes that may go out without waiting.
+    budget: u64,
+    /// Until when the budget is counted; in the future while paying off a
+    /// wait.
+    since: Instant,
+}
+
+impl Throttle {
+    fn new(rate: u64, burst: u64) -> Self {
+        Self {
+            rate,
+            burst,
+            budget: burst,
+            since: Instant::now(),
+        }
+    }
+
+    /// Spends `bytes` sent at `now`; returns how long to wait before sending
+    /// more.
+    fn take(&mut self, bytes: u64, now: Instant) -> Duration {
+        let earned = now.saturating_duration_since(self.since).as_nanos() * u128::from(self.rate)
+            / 1_000_000_000;
+        self.since = self.since.max(now);
+        self.budget = u64::try_from(u128::from(self.budget) + earned)
+            .unwrap_or(u64::MAX)
+            .min(self.burst);
+        if bytes <= self.budget {
+            self.budget -= bytes;
+            return Duration::ZERO;
+        }
+        let owed = u128::from(bytes - self.budget);
+        self.budget = 0;
+        let wait = Duration::from_nanos(
+            u64::try_from(owed * 1_000_000_000 / u128::from(self.rate)).unwrap_or(u64::MAX),
+        );
+        self.since += wait;
+        wait
     }
 }
 
@@ -574,12 +655,31 @@ fn spawn_error(error: &impl std::fmt::Display, missing: bool) -> AppError {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn output_is_throttled_after_a_burst() {
+        let start = Instant::now();
+        let ms = Duration::from_millis;
+        let mut throttle = Throttle::new(1000, 100);
+        throttle.since = start;
+        // The burst goes out at once; then 1000 bytes a second.
+        assert_eq!(throttle.take(100, start), Duration::ZERO);
+        assert_eq!(throttle.take(50, start), ms(50));
+        // A wait already served is not earned again.
+        assert_eq!(throttle.take(10, start + ms(50)), ms(10));
+        // 20 ms later 20 bytes are earned.
+        assert_eq!(throttle.take(30, start + ms(80)), ms(10));
+        // An idle second refills the burst, no more.
+        assert_eq!(throttle.take(100, start + ms(2000)), Duration::ZERO);
+        assert_eq!(throttle.take(1, start + ms(2000)), ms(1));
+    }
+
     /// The raw-mode check sees what `stty` does to the terminal, as `ssh`
     /// does when the session starts.
+    #[cfg(unix)]
     #[test]
     fn sees_raw_mode() {
         let pair = native_pty_system().openpty(size(80, 24)).unwrap();

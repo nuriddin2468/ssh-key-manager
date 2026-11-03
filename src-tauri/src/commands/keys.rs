@@ -1,16 +1,18 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use sshkm_core::SecretString;
 use sshkm_core::agent::AgentClient;
 use sshkm_core::config::{HostEdit, HostOption, IdentityUsage, SshConfig};
 use sshkm_core::keys::{self, KeyInfo};
-use tauri::State;
+use sshkm_core::paths::display_path;
+use sshkm_core::{ExposeSecret, SecretString};
+use tauri::{AppHandle, State};
 
 use super::{Shared, blocking};
+use crate::confirm::{self, Localized};
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
-use crate::types::{GenerateKeyRequest, KeyUsage, KeyView, KeysView};
+use crate::types::{GenerateKeyRequest, KeyUsage, KeyView, KeysView, NewHost};
 
 #[tauri::command]
 pub async fn list_keys(state: State<'_, Shared>) -> AppResult<KeysView> {
@@ -19,10 +21,19 @@ pub async fn list_keys(state: State<'_, Shared>) -> AppResult<KeysView> {
 
 #[tauri::command]
 pub async fn generate_key(
+    app: AppHandle,
     state: State<'_, Shared>,
     request: GenerateKeyRequest,
 ) -> AppResult<KeyView> {
     blocking(&state, move |state| {
+        // A host name with shell syntax would run through a `ProxyCommand`
+        // already in the file: ask before making anything.
+        if let Some(host) = &request.host {
+            let before = SshConfig::load(&state.paths.config)?;
+            let mut after = before.clone();
+            after.upsert_host(&host_edit(host, None))?;
+            super::config::confirm_added(&app, state, &after, &before)?;
+        }
         let info = keys::generate(&state.paths.dir, &request.key)?;
         let private = private_path(&info)?;
 
@@ -38,25 +49,12 @@ pub async fn generate_key(
             state.record_lifetime(&unlocked.fingerprint(), request.agent_lifetime_secs);
         }
 
-        if let Some(host) = request.host {
-            let mut options = Vec::new();
-            if let Some(name) = host.host_name.filter(|v| !v.trim().is_empty()) {
-                options.push(HostOption::new("HostName", name.trim()));
-            }
-            if let Some(user) = host.user.filter(|v| !v.trim().is_empty()) {
-                options.push(HostOption::new("User", user.trim()));
-            }
-            options.push(HostOption::new(
-                "IdentityFile",
-                identity_file_value(state, &private),
-            ));
-            options.push(HostOption::new("IdentitiesOnly", "yes"));
+        if let Some(host) = &request.host {
             let mut config = SshConfig::load(&state.paths.config)?;
-            config.upsert_host(&HostEdit {
-                id: None,
-                patterns: host.alias.split_whitespace().map(str::to_owned).collect(),
-                options,
-            })?;
+            config.upsert_host(&host_edit(
+                host,
+                Some(&identity_file_value(state, &private)),
+            ))?;
             config.save(&state.paths.config, &state.backup_dir)?;
         }
 
@@ -65,8 +63,45 @@ pub async fn generate_key(
     .await
 }
 
+/// The host block made with a new key, signing in with `identity_file`
+/// (`None` to check the block before the key exists).
+fn host_edit(host: &NewHost, identity_file: Option<&str>) -> HostEdit {
+    let mut options = Vec::new();
+    if let Some(name) = host
+        .host_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        options.push(HostOption::new("HostName", name));
+    }
+    if let Some(user) = host
+        .user
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        options.push(HostOption::new("User", user));
+    }
+    if let Some(file) = identity_file {
+        options.push(HostOption::new("IdentityFile", file));
+        options.push(HostOption::new("IdentitiesOnly", "yes"));
+    }
+    HostEdit {
+        id: None,
+        patterns: host.alias.split_whitespace().map(str::to_owned).collect(),
+        options,
+    }
+}
+
+/// Changes, adds (`old` empty) or removes (`new` empty) a key's passphrase.
+/// Adding one to an unencrypted key or removing it needs no secret, so the
+/// user approves either in a native dialog naming the key file: a passphrase
+/// nobody knows would lock the key for good (there is no copy of it), and
+/// removing one leaves the key readable by anything that reads the file.
 #[tauri::command]
 pub async fn change_passphrase(
+    app: AppHandle,
     state: State<'_, Shared>,
     key_id: String,
     old: Option<SecretString>,
@@ -74,10 +109,86 @@ pub async fn change_passphrase(
 ) -> AppResult<KeyView> {
     blocking(&state, move |state| {
         let info = find_key(state, &key_id)?;
-        let updated = keys::change_passphrase(&private_path(&info)?, old.as_ref(), new.as_ref())?;
+        let path = private_path(&info)?;
+        let new_empty = new.as_ref().is_none_or(|s| s.expose_secret().is_empty());
+        let file = display_path(&path);
+        let change = passphrase_change(info.encrypted, new_empty);
+        if change == PassphraseChange::Add {
+            confirm::require(
+                &app,
+                &Localized::new(
+                    "Add a passphrase to this key?",
+                    "Добавить парольную фразу к ключу?",
+                    "Kalitga parol iborasi qoʻshilsinmi?",
+                ),
+                &Localized::new(
+                    format!(
+                        "The private key {file} will be encrypted with the new passphrase. \
+                         Without it the key can't be used again: no unencrypted copy is kept."
+                    ),
+                    format!(
+                        "Закрытый ключ {file} будет зашифрован новой парольной фразой. \
+                         Без неё ключом больше нельзя будет пользоваться: \
+                         незашифрованная копия не сохраняется."
+                    ),
+                    format!(
+                        "{file} yopiq kaliti yangi parol iborasi bilan shifrlanadi. \
+                         Usiz kalitdan boshqa foydalanib boʻlmaydi: shifrlanmagan nusxasi \
+                         saqlanmaydi."
+                    ),
+                ),
+                &Localized::new("Add passphrase", "Добавить фразу", "Iborani qoʻshish"),
+            )?;
+        } else if change == PassphraseChange::Remove {
+            // A wrong passphrase is reported before anything is asked.
+            keys::load_private(&path, old.as_ref())?;
+            confirm::require(
+                &app,
+                &Localized::new(
+                    "Remove the passphrase from this key?",
+                    "Убрать парольную фразу с ключа?",
+                    "Kalitdan parol iborasi olib tashlansinmi?",
+                ),
+                &Localized::new(
+                    format!(
+                        "The private key {file} will be stored unencrypted. Anyone who can \
+                         read the file can use the key."
+                    ),
+                    format!(
+                        "Закрытый ключ {file} будет храниться незашифрованным. \
+                         Любой, кто может прочитать файл, сможет воспользоваться ключом."
+                    ),
+                    format!(
+                        "{file} yopiq kaliti shifrlanmagan holda saqlanadi. Faylni oʻqiy \
+                         oladigan har kim kalitdan foydalana oladi."
+                    ),
+                ),
+                &Localized::new("Remove passphrase", "Убрать фразу", "Iborani olib tashlash"),
+            )?;
+        }
+        let updated = keys::change_passphrase(&path, old.as_ref(), new.as_ref())?;
         find_view(state, &updated.id)
     })
     .await
+}
+
+/// What [`change_passphrase`] does to a key's protection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PassphraseChange {
+    /// An unencrypted (or unknown) key gets one.
+    Add,
+    /// An encrypted (or unknown) key loses it.
+    Remove,
+    /// One passphrase for another, or nothing for nothing.
+    Keep,
+}
+
+fn passphrase_change(encrypted: Option<bool>, new_empty: bool) -> PassphraseChange {
+    match (encrypted, new_empty) {
+        (Some(true), false) | (Some(false), true) => PassphraseChange::Keep,
+        (_, false) => PassphraseChange::Add,
+        (_, true) => PassphraseChange::Remove,
+    }
 }
 
 #[tauri::command]
@@ -226,5 +337,23 @@ fn identity_file_value(state: &AppState, private: &Path) -> String {
     match private.strip_prefix(&state.paths.home) {
         Ok(rest) => format!("~/{}", rest.to_string_lossy().replace('\\', "/")),
         Err(_) => private.to_string_lossy().into_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adding_or_removing_a_passphrase_is_confirmed() {
+        use PassphraseChange::{Add, Keep, Remove};
+        // (encrypted, new passphrase empty)
+        assert_eq!(passphrase_change(Some(false), false), Add);
+        assert_eq!(passphrase_change(None, false), Add);
+        assert_eq!(passphrase_change(Some(true), true), Remove);
+        assert_eq!(passphrase_change(None, true), Remove);
+        // Changing one needs the old passphrase; nothing for nothing is no change.
+        assert_eq!(passphrase_change(Some(true), false), Keep);
+        assert_eq!(passphrase_change(Some(false), true), Keep);
     }
 }

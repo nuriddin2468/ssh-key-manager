@@ -13,6 +13,7 @@ import type { EntryDetail } from '@/bindings/EntryDetail';
 import type { EntryInput } from '@/bindings/EntryInput';
 import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { Environment } from '@/bindings/Environment';
+import type { Exported } from '@/bindings/Exported';
 import type { GenerateKeyRequest } from '@/bindings/GenerateKeyRequest';
 import type { GenerateOptions } from '@/bindings/GenerateOptions';
 import type { HostEdit } from '@/bindings/HostEdit';
@@ -22,7 +23,7 @@ import type { HostsBackup } from '@/bindings/HostsBackup';
 import type { HostsChange } from '@/bindings/HostsChange';
 import type { HostsFileInfo } from '@/bindings/HostsFileInfo';
 import type { HostsPreview } from '@/bindings/HostsPreview';
-import type { ImportPreview } from '@/bindings/ImportPreview';
+import type { ImportPick } from '@/bindings/ImportPick';
 import type { KeyInstall } from '@/bindings/KeyInstall';
 import type { KeysView } from '@/bindings/KeysView';
 import type { KeyView } from '@/bindings/KeyView';
@@ -71,10 +72,15 @@ export const api = {
     call<AddFromVaultReport>('agent_add_all_from_vault', { lifetimeSecs }),
 
   config: () => call<ConfigFile>('read_config'),
-  saveHost: (edit: HostEdit) => call<SavedHost>('save_host', { edit }),
-  deleteHost: (id: number) => call<ConfigFile>('delete_host', { id }),
-  removeIdentityFile: (hostId: number | null, value: string) =>
-    call<ConfigFile>('remove_identity_file', { hostId, value }),
+  /**
+   * `revision`: the config's `view.revision` the edit was made against; fails
+   * with `conflict` if the file changed since, or `cancelled` if the user
+   * declined adding a directive that runs code.
+   */
+  saveHost: (edit: HostEdit, revision: string) => call<SavedHost>('save_host', { edit, revision }),
+  deleteHost: (id: number, revision: string) => call<ConfigFile>('delete_host', { id, revision }),
+  removeIdentityFile: (hostId: number | null, value: string, revision: string) =>
+    call<ConfigFile>('remove_identity_file', { hostId, value, revision }),
   configRaw: () => call<string>('read_config_raw'),
   writeConfigRaw: (text: string) => call<ConfigFile>('write_config_raw', { text }),
   testConnection: (alias: string) => call<ConnectionTest>('test_connection', { alias }),
@@ -84,7 +90,9 @@ export const api = {
   knownHosts: () => call<KnownHostsFile>('read_known_hosts'),
   findKnownHosts: (host: string, port: number | null) =>
     call<number[]>('find_known_hosts', { host, port }),
-  removeKnownHosts: (lines: number[]) => call<KnownHostsFile>('remove_known_hosts', { lines }),
+  /** Lines of the file at `revision`; fails with `conflict` if it changed since. */
+  removeKnownHosts: (removal: { lines: number[]; revision: string }) =>
+    call<KnownHostsFile>('remove_known_hosts', removal),
   checkHostKey: (host: string, port: number | null) =>
     call<HostKeyCheck>('check_host_key', { host, port }),
 
@@ -112,10 +120,10 @@ export const api = {
   vaultUnlock: (master: string) => call<void>('vault_unlock', { master }),
   vaultRecover: (recoveryKey: string, newMaster: string) =>
     call<void>('vault_recover', { recoveryKey, newMaster }),
-  /** `reason` completes "<app> is trying to …" in the Touch ID prompt. */
-  vaultUnlockDevice: (reason: string) => call<void>('vault_unlock_device', { reason }),
-  vaultEnableDevice: (master: string, reason: string) =>
-    call<void>('vault_enable_device', { master, reason }),
+  /** The system prompt's text is the backend's own. */
+  vaultUnlockDevice: () => call<void>('vault_unlock_device'),
+  vaultEnableDevice: (master: string) => call<void>('vault_enable_device', { master }),
+  /** Asks in a native dialog first; `cancelled` if the user says no. */
   vaultDisableDevice: () => call<void>('vault_disable_device'),
   vaultLock: () => call<void>('vault_lock'),
   /** Postpones the auto-lock; call on user activity, throttled. */
@@ -124,6 +132,8 @@ export const api = {
   vaultEntry: (id: string) => call<EntryDetail>('vault_entry', { id }),
   vaultReveal: (id: string, field: SecretField) => call<string>('vault_reveal', { id, field }),
   vaultCopy: (id: string, field: CopyField) => call<CopyResult>('vault_copy', { id, field }),
+  /** Copies a recovery key being shown like a password: out of clipboard history, cleared. */
+  vaultCopyRecoveryKey: (key: string) => call<CopyResult>('vault_copy_recovery_key', { key }),
   vaultOtp: (id: string) => call<OtpCode>('vault_otp', { id }),
   vaultAdd: (input: EntryInput) => call<EntryDetail>('vault_add', { input }),
   vaultUpdate: (id: string, input: EntryInput) => call<EntryDetail>('vault_update', { id, input }),
@@ -138,6 +148,7 @@ export const api = {
     call<void>('vault_change_master', { current, new: next }),
   /** Returns the new recovery key, to be shown once. */
   vaultNewRecoveryKey: (master: string) => call<string>('vault_new_recovery_key', { master }),
+  /** A change that weakens the vault's protection is confirmed in a native dialog first. */
   vaultSetSettings: (settings: VaultSettings) =>
     call<VaultSettings>('vault_set_settings', { settings }),
   /** Tests a host with its password, 2FA code and key passphrases from the vault. */
@@ -178,21 +189,26 @@ export const api = {
   terminalList: () => call<TerminalInfo[]>('terminal_list'),
 
   // The vault's files (src-tauri/src/commands/vault_files.rs).
-  /** Rows of a CSV export, without passwords; duplicates name the existing entry. */
-  vaultImportPreview: (path: string) => call<ImportPreview>('vault_import_preview', { path }),
-  /** Reads the file again and adds the rows at `indices`; returns how many were added. */
-  vaultImport: (path: string, indices: number[]) => call<number>('vault_import', { path, indices }),
-  /** Moves the CSV file just imported to the Trash; refuses any other file. */
-  vaultTrashImportFile: (path: string) => call<void>('vault_trash_import_file', { path }),
-  /** Plain-text KeePassXC-style CSV; returns how many entries were written. */
-  vaultExportCsv: (path: string, master: string) =>
-    call<number>('vault_export_csv', { path, master }),
-  /** A copy of the database, which opens with the recovery key. Works locked. */
-  vaultExportKdbx: (path: string) => call<void>('vault_export_kdbx', { path }),
+  /**
+   * Asks for a CSV export in a system file dialog (`null` if cancelled) and returns its rows,
+   * without passwords; duplicates name the existing entry.
+   */
+  vaultImportPreview: () => call<ImportPick | null>('vault_import_preview'),
+  /** Reads the picked file again and adds the rows at `indices`; returns how many were added. */
+  vaultImport: (indices: number[]) => call<number>('vault_import', { indices }),
+  /** Moves the CSV file just imported to the Trash; no other file. */
+  vaultTrashImportFile: () => call<void>('vault_trash_import_file'),
+  /**
+   * Checks the master password, asks where to save in a system dialog (`null` if cancelled)
+   * and writes a plain-text KeePassXC-style CSV file there.
+   */
+  vaultExportCsv: (master: string) => call<Exported | null>('vault_export_csv', { master }),
+  /** Like `vaultExportCsv`, for a copy of the database, which opens with the recovery key. */
+  vaultExportKdbx: (master: string) => call<Exported | null>('vault_export_kdbx', { master }),
   vaultLocation: () => call<VaultLocation>('vault_location'),
-  /** Moves both vault files into `folder`, locked or unlocked. */
+  /** Moves both vault files into `folder`, locked or unlocked, after a native confirmation. */
   vaultMove: (folder: string) => call<VaultLocation>('vault_move', { folder }),
-  /** Locks the vault and switches to another `.kdbx` file. */
+  /** Locks the vault and switches to another `.kdbx` file, after a native confirmation. */
   vaultUseFile: (path: string) => call<VaultLocation>('vault_use_file', { path }),
   /** Back to the app's folder: move the files there, or switch to the vault there. */
   vaultUseDefault: (moveFiles: boolean) => call<VaultLocation>('vault_use_default', { moveFiles }),

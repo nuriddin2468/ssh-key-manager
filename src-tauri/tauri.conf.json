@@ -39,7 +39,7 @@
     "shortDescription": "Manage SSH keys, hosts and ssh-agent",
     "longDescription": "A desktop front-end for OpenSSH: keys in ~/.ssh, ~/.ssh/config, known_hosts and ssh-agent, with a security audit. Everything stays compatible with ssh, git and your IDE.",
     "copyright": "© 2026 SSH Key Manager contributors",
-    "license": "MIT",
+    "license": "AGPL-3.0-only",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

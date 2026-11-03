@@ -14,10 +14,14 @@ index: number, title: string, username: string, url: string,
  */
 group: string | null, hasPassword: boolean, 
 /**
- * A 2FA secret that will be stored as such. An unreadable one goes into
- * the notes instead.
+ * A 2FA secret that will be stored as such.
  */
 hasOtp: boolean, 
+/**
+ * A 2FA secret this app can't use (`steam://`, HOTP, …). It is kept in a
+ * protected field that KeePassXC shows, and never sent to the UI.
+ */
+hasUnreadableOtp: boolean, 
 /**
  * An existing entry for the same site (URL host) and user name, or with
  * the same title and user name when the row has no URL.

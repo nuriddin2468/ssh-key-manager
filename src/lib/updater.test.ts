@@ -4,8 +4,7 @@ import type { ReactElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UpdateState } from './updater';
 
-const check = vi.fn();
-const relaunch = vi.fn();
+const call = vi.fn();
 const toast = {
   success: vi.fn(),
   error: vi.fn(),
@@ -14,24 +13,30 @@ const toast = {
   dismiss: vi.fn(),
 };
 
-vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }));
-vi.mock('@tauri-apps/plugin-updater', () => ({ check }));
-vi.mock('@tauri-apps/plugin-process', () => ({ relaunch }));
+/** Stands in for the channel `update_install` reports its progress on. */
+class FakeChannel<T> {
+  constructor(readonly onmessage: (message: T) => void) {}
+}
+
+vi.mock('@tauri-apps/api/core', () => ({
+  isTauri: () => true,
+  invoke: vi.fn(async () => undefined),
+  Channel: FakeChannel,
+}));
+vi.mock('@/lib/ipc', () => ({ call }));
 vi.mock('sonner', () => ({ toast }));
 
-type DownloadEvent =
-  | { event: 'Started'; data: { contentLength?: number } }
-  | { event: 'Progress'; data: { chunkLength: number } }
-  | { event: 'Finished' };
-
-function fakeUpdate(version: string, events: DownloadEvent[] = []) {
-  return {
-    version,
-    close: vi.fn(),
-    downloadAndInstall: vi.fn(async (onEvent: (event: DownloadEvent) => void) => {
-      for (const event of events) onEvent(event);
-    }),
-  };
+/** The backend: `update_check` finds `version`; `update_install` reports `progress`. */
+function backend(version: string | null, progress: number[] = []) {
+  const install = vi.fn(async (args: { progress: FakeChannel<number> }) => {
+    for (const percent of progress) args.progress.onmessage(percent);
+  });
+  call.mockImplementation(async (command: string, args?: unknown) => {
+    if (command === 'update_check') return version;
+    if (command === 'update_install') return install(args as { progress: FakeChannel<number> });
+    throw new Error(`unexpected command ${command}`);
+  });
+  return { install };
 }
 
 // The store lives at module level, so each test starts from a fresh copy.
@@ -51,7 +56,7 @@ beforeEach(() => {
 
 describe('checkForUpdates', () => {
   it('stays silent when an automatic check finds nothing', async () => {
-    check.mockResolvedValue(null);
+    backend(null);
     const { checkForUpdates, useUpdateState } = await load();
     await checkForUpdates({ quiet: true });
     expect(currentStatus(useUpdateState)).toEqual({ status: 'upToDate' });
@@ -59,14 +64,14 @@ describe('checkForUpdates', () => {
   });
 
   it('confirms the latest version when asked', async () => {
-    check.mockResolvedValue(null);
+    backend(null);
     const { checkForUpdates } = await load();
     await checkForUpdates();
     expect(toast.success).toHaveBeenCalledOnce();
   });
 
   it('offers a new version once, however often the automatic check runs', async () => {
-    check.mockImplementation(async () => fakeUpdate('0.2.0'));
+    backend('0.2.0');
     const { checkForUpdates, useUpdateState } = await load();
     await checkForUpdates({ quiet: true });
     await checkForUpdates({ quiet: true });
@@ -78,7 +83,7 @@ describe('checkForUpdates', () => {
   });
 
   it('reports a failed check only when asked', async () => {
-    check.mockRejectedValue(new Error('offline'));
+    call.mockRejectedValue(new Error('offline'));
     const { checkForUpdates, useUpdateState } = await load();
     await checkForUpdates({ quiet: true });
     expect(currentStatus(useUpdateState)).toEqual({ status: 'error' });
@@ -93,32 +98,24 @@ describe('checkForUpdates', () => {
 });
 
 describe('installUpdate', () => {
-  it('downloads with progress and restarts', async () => {
-    const update = fakeUpdate('0.2.0', [
-      { event: 'Started', data: { contentLength: 200 } },
-      { event: 'Progress', data: { chunkLength: 100 } },
-      { event: 'Progress', data: { chunkLength: 100 } },
-      { event: 'Finished' },
-    ]);
-    check.mockResolvedValue(update);
+  it('installs the version found, with progress', async () => {
+    const { install } = backend('0.2.0', [50, 50, 100]);
     const { checkForUpdates, installUpdate } = await load();
     await checkForUpdates();
     await installUpdate();
 
     const progress = toast.loading.mock.calls.map(([, options]) => options.description);
     expect(progress).toEqual([undefined, '50%', '100%']);
-    expect(relaunch).toHaveBeenCalledOnce();
+    expect(install).toHaveBeenCalledOnce();
   });
 
   it('lets the user retry after a failed install', async () => {
-    const update = fakeUpdate('0.2.0');
-    update.downloadAndInstall.mockRejectedValue(new Error('bad signature'));
-    check.mockResolvedValue(update);
+    const { install } = backend('0.2.0');
+    install.mockRejectedValue(new Error('bad signature'));
     const { checkForUpdates, installUpdate, useUpdateState } = await load();
     await checkForUpdates();
     await installUpdate();
 
-    expect(relaunch).not.toHaveBeenCalled();
     expect(currentStatus(useUpdateState)).toEqual({ status: 'available', version: '0.2.0' });
     expect(toast.error).toHaveBeenCalledWith(
       expect.any(String),
@@ -127,9 +124,13 @@ describe('installUpdate', () => {
   });
 
   it('does nothing before a check has found an update', async () => {
-    const { installUpdate } = await load();
+    const { install } = backend(null);
+    const { checkForUpdates, installUpdate } = await load();
+    await installUpdate();
+    await checkForUpdates();
     await installUpdate();
     expect(toast.loading).not.toHaveBeenCalled();
+    expect(install).not.toHaveBeenCalled();
   });
 });
 
@@ -140,8 +141,8 @@ describe('the update offer', () => {
     render(content());
   }
 
-  it('installs and restarts from its button', async () => {
-    check.mockResolvedValue(fakeUpdate('0.2.0'));
+  it('installs from its button', async () => {
+    const { install } = backend('0.2.0');
     const { checkForUpdates } = await load();
     await checkForUpdates();
     renderOffer();
@@ -149,18 +150,17 @@ describe('the update offer', () => {
     expect(screen.getByText('Version 0.2.0 is available')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Update and restart' }));
     expect(toast.dismiss).toHaveBeenCalledWith('update-offer');
-    await vi.waitFor(() => expect(relaunch).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(install).toHaveBeenCalledOnce());
   });
 
   it('can be put off', async () => {
-    const update = fakeUpdate('0.2.0');
-    check.mockResolvedValue(update);
+    const { install } = backend('0.2.0');
     const { checkForUpdates } = await load();
     await checkForUpdates();
     renderOffer();
 
     await userEvent.click(screen.getByRole('button', { name: 'Later' }));
     expect(toast.dismiss).toHaveBeenCalledWith('update-offer');
-    expect(update.downloadAndInstall).not.toHaveBeenCalled();
+    expect(install).not.toHaveBeenCalled();
   });
 });

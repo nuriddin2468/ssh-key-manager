@@ -1,10 +1,21 @@
-import { isTauri } from '@tauri-apps/api/core';
-import { relaunch } from '@tauri-apps/plugin-process';
-import { check, type Update } from '@tauri-apps/plugin-updater';
+import { Channel, isTauri } from '@tauri-apps/api/core';
 import { createElement, useEffect, useSyncExternalStore } from 'react';
 import { toast } from 'sonner';
 import { UpdateToast } from '@/components/UpdateToast';
 import i18n from '@/i18n';
+import { call } from '@/lib/ipc';
+
+/**
+ * The updater runs in Rust (`src-tauri/src/commands/updates.rs`), with the
+ * release server and key from `tauri.conf.json`; the page can only ask.
+ */
+const updates = {
+  /** The newer version the release server offers, or `null`. */
+  check: () => call<string | null>('update_check'),
+  /** Installs the version the last check found and restarts into it. */
+  install: (onProgress: (percent: number) => void) =>
+    call<void>('update_install', { progress: new Channel<number>(onProgress) }),
+};
 
 /** Where the app is in finding, downloading and installing a newer release. */
 export type UpdateState =
@@ -24,7 +35,6 @@ const OFFER_ID = 'update-offer';
 const CHECK_INTERVAL = 6 * 60 * 60 * 1000;
 
 let state: UpdateState = { status: 'idle' };
-let pending: Update | null = null;
 /** The version the automatic check last told the user about, so it asks only once. */
 let announced: string | null = null;
 const listeners = new Set<() => void>();
@@ -53,17 +63,14 @@ export async function checkForUpdates({ quiet = false } = {}): Promise<void> {
   set({ status: 'checking' });
   try {
     // `pnpm dev` in a browser has nothing to update.
-    const update = isTauri() ? await check() : null;
-    const previous = pending;
-    pending = update;
-    await previous?.close();
-    if (!update) {
+    const version = isTauri() ? await updates.check() : null;
+    if (!version) {
       set({ status: 'upToDate' });
       if (!quiet) toast.success(i18n.t('updates.upToDate'), { id: TOAST_ID });
       return;
     }
-    set({ status: 'available', version: update.version });
-    if (!quiet || announced !== update.version) offer(update.version);
+    set({ status: 'available', version });
+    if (!quiet || announced !== version) offer(version);
   } catch (error) {
     set({ status: 'error' });
     if (!quiet) toast.error(i18n.t('updates.error'), { id: TOAST_ID, description: reason(error) });
@@ -72,9 +79,8 @@ export async function checkForUpdates({ quiet = false } = {}): Promise<void> {
 
 /** Downloads and installs the update found by the last check, then restarts into it. */
 export async function installUpdate(): Promise<void> {
-  const update = pending;
-  if (!update || state.status !== 'available') return;
-  const { version } = update;
+  if (state.status !== 'available') return;
+  const { version } = state;
   const progress = (percent: number | null) => {
     set({ status: 'downloading', version, percent });
     toast.loading(i18n.t('updates.downloading', { version }), {
@@ -83,19 +89,12 @@ export async function installUpdate(): Promise<void> {
     });
   };
 
-  let total = 0;
-  let received = 0;
   progress(null);
   try {
-    await update.downloadAndInstall((event) => {
-      if (event.event === 'Started') total = event.data.contentLength ?? 0;
-      if (event.event !== 'Progress' || !total) return;
-      received += event.data.chunkLength;
-      const percent = Math.min(100, Math.floor((received / total) * 100));
+    // Windows quits into the installer; macOS and Linux restart once it is installed.
+    await updates.install((percent) => {
       if (state.status === 'downloading' && state.percent !== percent) progress(percent);
     });
-    // Windows has already quit into the installer; macOS and Linux restart here.
-    await relaunch();
   } catch (error) {
     set({ status: 'available', version });
     toast.error(i18n.t('updates.installFailed'), { id: TOAST_ID, description: reason(error) });

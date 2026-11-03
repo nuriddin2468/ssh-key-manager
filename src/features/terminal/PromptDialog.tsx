@@ -18,7 +18,7 @@ import { IconButton } from '@/components/ui/IconButton';
 import { TextField } from '@/components/ui/TextField';
 import { Tile } from '@/components/ui/Tile';
 import { VaultIcon } from '@/features/keys/VaultControls';
-import { fileName, promptAccount, type Tab } from './model';
+import { fileName, hostKeyHost, promptAccount, type Tab } from './model';
 
 interface PromptDialogProps {
   tab: Tab;
@@ -33,49 +33,69 @@ interface PromptDialogProps {
 export function PromptDialog({ tab, ask, onAnswer }: PromptDialogProps) {
   switch (ask.type) {
     case 'hostKey':
-      return <HostKeyDialog tab={tab} ask={ask} onAnswer={onAnswer} />;
+      return <HostKeyDialog ask={ask} onAnswer={onAnswer} />;
     default:
       return <SecretDialog tab={tab} ask={ask} onAnswer={onAnswer} />;
   }
 }
 
+/**
+ * "Trust this key?", titled with the host the key is for (a jump host's key
+ * names the jump host). Anything ssh says besides the plain question shows
+ * as a warning, and "Don't connect" becomes the main button.
+ */
 function HostKeyDialog({
-  tab,
   ask,
   onAnswer,
 }: {
-  tab: Tab;
   ask: Extract<PromptAsk, { type: 'hostKey' }>;
   onAnswer: (answer: PromptAnswer) => void;
 }) {
   const { t } = useTranslation();
+  const warning = ask.extra.length > 0;
   return (
     <DialogContent section="terminal" className="max-w-[480px]" dismissible={false}>
       <EscapeIs onEscape={() => onAnswer({ type: 'trust', trust: false })} />
       <DialogHeader
         icon={
-          <Tile tone="amber" size={40} glow>
+          <Tile tone={warning ? 'rose' : 'amber'} size={40} glow>
             <ShieldQuestion className="size-5" strokeWidth={2} />
           </Tile>
         }
-        title={t('terminal.prompt.hostKeyTitle', { alias: tab.alias })}
-        description={t('terminal.prompt.hostKeyText')}
+        title={t('terminal.prompt.hostKeyTitle', { host: hostKeyHost(ask.host) })}
+        description={warning ? t('terminal.prompt.hostKeyExtra') : t('terminal.prompt.hostKeyText')}
         closable={false}
       />
       <DialogBody>
         <div className="selectable rounded-[11px] border border-white/[0.07] bg-terminal px-3 py-2.5 font-mono text-[12px] leading-[1.6] break-all">
+          <span className="text-subtle">{ask.host}</span>
+          <br />
           <span className="text-subtle">{ask.keyType}</span>
           <br />
           <span className="text-fg">{ask.fingerprint}</span>
         </div>
+        {warning ? (
+          <figure className="flex flex-col gap-1.5">
+            <figcaption className="text-[12px] font-medium text-critical">
+              {t('terminal.prompt.hostKeyExtraLabel')}
+            </figcaption>
+            <pre className="selectable max-h-[180px] overflow-auto rounded-[11px] border border-critical-solid/30 bg-critical-solid/10 px-3 py-2.5 font-mono text-[12px] leading-[1.6] break-all whitespace-pre-wrap text-fg">
+              {ask.extra.join('\n')}
+            </pre>
+          </figure>
+        ) : null}
         <p className="text-[12px] text-muted">{t('terminal.prompt.hostKeyNote')}</p>
       </DialogBody>
       <DialogFooter>
-        <Button size="lg" onClick={() => onAnswer({ type: 'trust', trust: false })}>
+        <Button
+          variant={warning ? 'primary' : 'secondary'}
+          size="lg"
+          onClick={() => onAnswer({ type: 'trust', trust: false })}
+        >
           {t('terminal.prompt.dontConnect')}
         </Button>
         <Button
-          variant="primary"
+          variant={warning ? 'danger' : 'primary'}
           size="lg"
           onClick={() => onAnswer({ type: 'trust', trust: true })}
         >
@@ -135,6 +155,8 @@ function useSecretCopy(tab: Tab, ask: SecretAsk) {
             : t('terminal.prompt.saveNew', { alias: tab.alias }),
         hint: undefined,
         code: false,
+        quote: undefined,
+        warning: undefined,
       };
     }
     case 'passphrase':
@@ -154,34 +176,49 @@ function useSecretCopy(tab: Tab, ask: SecretAsk) {
             : t('terminal.prompt.savePassphrase'),
         hint: undefined,
         code: false,
+        quote: undefined,
+        warning: undefined,
       };
     case 'oneTimeCode':
       return {
         tone: 'pink' as const,
         icon: <LockKeyhole className="size-5" strokeWidth={2} />,
-        title: t('terminal.prompt.codeTitle', { alias: tab.alias }),
+        title: t('terminal.prompt.codeTitle', { account: promptAccount(tab, ask) }),
         description: ask.retry
           ? t('terminal.prompt.codeRetry')
-          : t('terminal.prompt.codeAsked', { question: ask.question }),
+          : ask.foreign
+            ? t('terminal.prompt.codeForeign', { alias: tab.alias, question: ask.question })
+            : t('terminal.prompt.codeAsked', { question: ask.question }),
         label: t('terminal.prompt.code'),
         submit: t('terminal.prompt.send'),
         save: 'none' as SaveOffer,
         saveLabel: '',
-        hint: t('terminal.prompt.codeHint'),
+        hint: ask.foreign ? undefined : t('terminal.prompt.codeHint'),
         code: true,
+        quote: undefined,
+        warning: undefined,
       };
     case 'other':
+      // The text is the sender's, shown as a quote: never in the app's voice.
       return {
         tone: 'slate' as const,
         icon: <MessageSquareText className="size-5" strokeWidth={2} />,
-        title: t('terminal.prompt.otherTitle', { alias: tab.alias }),
-        description: ask.text,
+        title: ask.unverified
+          ? t('terminal.prompt.otherUnverifiedTitle')
+          : t('terminal.prompt.otherTitle', { account: promptAccount(tab, ask) }),
+        description: ask.foreign
+          ? t('terminal.prompt.otherFromForeign', { alias: tab.alias })
+          : t('terminal.prompt.otherFromServer'),
         label: t('terminal.prompt.otherAnswer'),
         submit: t('terminal.prompt.send'),
         save: 'none' as SaveOffer,
         saveLabel: '',
         hint: undefined,
         code: false,
+        quote: ask.text,
+        warning: ask.unverified
+          ? t('terminal.prompt.otherUnverified', { alias: tab.alias })
+          : undefined,
       };
   }
 }
@@ -222,6 +259,17 @@ function SecretDialog({
           description={copy.description}
         />
         <DialogBody>
+          {copy.quote !== undefined ? (
+            <figure className="flex flex-col gap-1.5">
+              <figcaption className="text-[12px] text-muted">
+                {t('terminal.prompt.otherQuote')}
+              </figcaption>
+              <blockquote className="selectable max-h-[200px] overflow-auto rounded-[11px] border border-white/[0.07] border-l-2 border-l-white/25 bg-terminal px-3 py-2.5 font-mono text-[12px] leading-[1.6] break-words whitespace-pre-wrap text-fg">
+                {copy.quote}
+              </blockquote>
+            </figure>
+          ) : null}
+          {copy.warning ? <p className="text-[12px] text-critical">{copy.warning}</p> : null}
           <TextField
             label={copy.label}
             type={copy.code || visible ? 'text' : 'password'}

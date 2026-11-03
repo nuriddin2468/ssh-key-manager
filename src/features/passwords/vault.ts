@@ -36,8 +36,10 @@ export function useVaultEntry(id: string | undefined) {
 
 /**
  * Switches the UI to the lock screen at once, before the status is fetched
- * again: entries and details leave the cache, and anything that shows a
- * revealed secret unmounts with the unlocked view.
+ * again: entries and details leave the cache, finished commands leave
+ * TanStack's mutation cache (their variables may hold a master password or a
+ * passphrase), and anything that shows a revealed secret unmounts with the
+ * unlocked view.
  */
 export function markLocked(): void {
   queryClient.setQueryData<VaultStatus>(keys.vaultStatus, (status) =>
@@ -49,6 +51,7 @@ export function markLocked(): void {
     queryKey: ['vault'],
     predicate: (query) => query.queryKey[1] !== 'status',
   });
+  queryClient.getMutationCache().clear();
   void queryClient.invalidateQueries({ queryKey: keys.vaultStatus });
 }
 
@@ -56,11 +59,14 @@ export const isVaultLocked = (error: unknown) => AppError.from(error).code === '
 
 /**
  * Toasts vault-specific failures and returns true if it handled them:
- * `vault_locked` (shows the lock screen) and `conflict` (the vault changed on
- * another computer; the backend kept a copy of this change).
+ * `vault_locked` (shows the lock screen), `conflict` (the vault changed on
+ * another computer; for the database the backend kept a copy of this change,
+ * for the key slots it loaded the other version) and `cancelled` (the user
+ * said no in a native confirmation, which needs no toast).
  */
 export function handleVaultError(t: TFunction, error: unknown): boolean {
   const appError = AppError.from(error);
+  if (appError.code === 'cancelled') return true;
   if (appError.code === 'vault_locked') {
     markLocked();
     toast.error(t('errors.vault_locked'));
@@ -69,7 +75,7 @@ export function handleVaultError(t: TFunction, error: unknown): boolean {
   if (appError.code === 'conflict') {
     const path = conflictCopyPath(appError.message);
     const home = queryClient.getQueryData<Environment>(keys.environment)?.paths.home;
-    toast.error(t('errors.conflict'), {
+    toast.error(path ? t('errors.conflict') : t('passwords.keysConflict'), {
       description: path
         ? t('passwords.conflictCopy', { path: displayPath(path, home) })
         : undefined,

@@ -14,6 +14,7 @@
 //! literally.
 
 mod lexer;
+mod risky;
 
 use std::{
     collections::HashSet,
@@ -24,6 +25,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use self::lexer::{Directive, LineKind, lex, render_value, split_args};
+pub use self::risky::RiskyDirective;
 use crate::{
     Error, Result, fsutil,
     paths::{SshPaths, native_separators, path_string},
@@ -133,11 +135,17 @@ pub struct IdentityUsage {
     pub path: String,
     /// The value as written in the file.
     pub raw: String,
-    /// True if `path` is absolute and fully expanded (no unknown tokens).
+    /// True if `path` is absolute and fully expanded (no unknown tokens), and
+    /// not `remote`.
     pub resolved: bool,
     /// True if `path` or `path.pub` exists (`ssh` uses the `.pub` to pick the
     /// key from the agent). Always false when not `resolved`.
     pub exists: bool,
+    /// Windows: the path names a network share or a device (`\\server\share\…`,
+    /// `//server/…`, `\\?\UNC\…`, `\\.\…`). It is never looked at: that would
+    /// connect to the server and offer it the user's Windows credentials,
+    /// as `ssh` itself does when it reads the key.
+    pub remote: bool,
 }
 
 /// Kind of a syntax problem in the file. The line is kept unchanged.
@@ -177,6 +185,9 @@ pub struct ConfigView {
     pub includes: Vec<String>,
     /// Syntax problems.
     pub issues: Vec<ConfigIssue>,
+    /// SHA-256 of the file's bytes, in hex. Edits name the revision they were
+    /// made against, so a block that moved in the meantime is not changed.
+    pub revision: String,
 }
 
 /// The parsed file. Cheap to clone; edits are applied in memory and written
@@ -224,6 +235,11 @@ impl SshConfig {
         let backup = fsutil::backup(path, backup_dir)?;
         fsutil::atomic_write(path, self.to_string().as_bytes(), 0o600)?;
         Ok(backup)
+    }
+
+    /// SHA-256 of the file's bytes (see [`ConfigView::revision`]).
+    pub fn revision(&self) -> String {
+        fsutil::revision(self.to_string().as_bytes())
     }
 
     /// True if the file has no lines.
@@ -290,6 +306,7 @@ impl SshConfig {
             hosts: self.hosts(),
             includes: self.includes(),
             issues: self.issues(),
+            revision: self.revision(),
         }
     }
 
@@ -743,15 +760,34 @@ fn resolve_identity(
     ctx: &TokenContext<'_>,
 ) -> IdentityUsage {
     let (path, resolved) = expand_identity(raw, ctx);
-    let exists = resolved && (path.exists() || crate::keys::sibling_pub(&path).exists());
+    let path = path_string(&path);
+    let remote = cfg!(windows) && is_remote_path(&path);
+    let resolved = resolved && !remote;
+    let exists = resolved && {
+        let path = Path::new(&path);
+        path.exists() || crate::keys::sibling_pub(path).exists()
+    };
     IdentityUsage {
         host_id,
         patterns,
-        path: path_string(&path),
+        path,
         raw: raw.to_owned(),
         resolved,
         exists,
+        remote,
     }
+}
+
+/// True for a Windows path that starts with two separators: a share
+/// (`\\server\share`, `//server/share`) or a device or verbatim path
+/// (`\\.\pipe\…`, `\\?\UNC\…`, `\\?\GLOBALROOT\…`), any of which may reach
+/// another computer. Pure, so it is tested on every platform.
+fn is_remote_path(path: &str) -> bool {
+    let mut chars = path.chars();
+    matches!(
+        (chars.next(), chars.next()),
+        (Some('\\' | '/'), Some('\\' | '/'))
+    )
 }
 
 /// Expands `~` and the `ssh_config` tokens that are known without connecting.

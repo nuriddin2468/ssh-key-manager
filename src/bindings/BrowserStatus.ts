@@ -20,6 +20,11 @@ problem: string | null,
  */
 browsers: Array<BrowserInstall>, 
 /**
+ * This copy of the app runs from this temporary folder, so no browser
+ * is set up to start it.
+ */
+temporaryLocation?: string, 
+/**
  * Browsers paired with the vault; `None` while it is locked or missing.
  */
 paired: Array<PairedBrowser> | null, 

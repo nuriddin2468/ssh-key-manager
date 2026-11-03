@@ -114,7 +114,11 @@ impl Origin {
     /// How a saved address fits this page, or `None` if its login must not
     /// be offered here.
     pub fn fit(&self, saved_address: &str) -> Option<Fit> {
-        let saved = Self::of_saved(saved_address)?;
+        self.fits(&Self::of_saved(saved_address)?)
+    }
+
+    /// How a login of the origin `saved` fits this page, by the same rules.
+    pub fn fits(&self, saved: &Self) -> Option<Fit> {
         if saved.secure && !self.secure {
             return None;
         }

@@ -52,7 +52,6 @@ arboard = { version = "3.7", features = ["wayland-data-control"] }
 # The in-app terminal: a PTY (ConPTY on Windows) per ssh session.
 portable-pty = "0.9"
 sshkm-os = { path = "../crates/sshkm-os" }
-tauri-plugin-process = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 

@@ -18,8 +18,10 @@ import { IconButton } from '@/components/ui/IconButton';
 import { SearchField } from '@/components/ui/SearchField';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
+import { fileChangeError } from '@/features/hosts/fileErrors';
 import { cn } from '@/lib/cn';
 import { CheckHostKeyDialog } from './CheckHostKeyDialog';
+import type { KnownHostsRemoval } from './removal';
 
 type Filter = 'all' | 'named' | 'hashed' | 'rsa';
 
@@ -40,7 +42,7 @@ export function KnownHostsPage() {
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
   const [checking, setChecking] = useState(false);
-  const [toRemove, setToRemove] = useState<number[] | null>(null);
+  const [toRemove, setToRemove] = useState<KnownHostsRemoval | null>(null);
   const search = useRef<HTMLInputElement>(null);
   useFindShortcut(search);
 
@@ -54,8 +56,14 @@ export function KnownHostsPage() {
   });
 
   const remove = useAppMutation(api.removeKnownHosts, {
-    success: (_, lines) => t('known.removed', { line: lines.join(', ') }),
+    success: (_, { lines }) => t('known.removed', { line: lines.join(', ') }),
     onSuccess: () => setToRemove(null),
+    // Changed on disk: the list is read again for the user to pick again.
+    onError: (error) => {
+      if (!fileChangeError(error, t('known.changedOnDisk'))) return false;
+      setToRemove(null);
+      return true;
+    },
   });
 
   const entries = known.data?.view.entries ?? [];
@@ -163,7 +171,10 @@ export function KnownHostsPage() {
                     key={entry.line}
                     entry={entry}
                     striped={index % 2 === 1}
-                    onRemove={() => setToRemove([entry.line])}
+                    onRemove={() =>
+                      known.data &&
+                      setToRemove({ lines: [entry.line], revision: known.data.view.revision })
+                    }
                   />
                 ))}
                 {visible.length === 0 ? (
@@ -183,7 +194,7 @@ export function KnownHostsPage() {
         {checking ? (
           <CheckHostKeyDialog
             initialHost={target?.host ?? ''}
-            onRemove={(lines) => setToRemove(lines)}
+            onRemove={setToRemove}
             onDone={() => setChecking(false)}
           />
         ) : null}

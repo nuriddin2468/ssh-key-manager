@@ -192,19 +192,41 @@ pub enum PromptAsk {
         /// The server's question, without the `(user@host)` prefix.
         question: String,
         retry: bool,
+        /// The account the prompt names, if it does.
+        account: Option<PromptAccount>,
+        /// The prompt is for another account than the host's.
+        foreign: bool,
     },
     /// `ssh` does not know the server's key yet.
     HostKey {
-        /// The host as `ssh` names it in its question.
+        /// The host as `ssh` names it in its question: the one whose key it
+        /// is, which may be a `ProxyJump` host rather than the tab's.
         host: String,
         /// `ED25519`, `ECDSA`, `RSA`, …
         #[serde(rename = "keyType")]
         key_type: String,
         /// `SHA256:…`
         fingerprint: String,
+        /// What `ssh` says besides the plain question (the other names this
+        /// key is known by, what DNS says), line by line. Empty for a host
+        /// seen for the first time.
+        extra: Vec<String>,
     },
-    /// Anything else, such as a security key's PIN or a new password.
-    Other { text: String },
+    /// Anything else, such as a security key's PIN or a new password, in the
+    /// words of whoever sent it: `ssh` or a server, never the app.
+    Other {
+        /// The question, without the `(user@host)` prefix that `account`
+        /// shows.
+        text: String,
+        /// The account the prompt names, if it does.
+        account: Option<PromptAccount>,
+        /// The prompt is for another account than the host's.
+        foreign: bool,
+        /// `ssh` cannot tell which host sent it (OpenSSH before 8.5): it may
+        /// be a server's question posing as `ssh`'s own, or another host's.
+        /// `text` is then all of it, any account it names included.
+        unverified: bool,
+    },
 }
 
 /// Why a password is asked, which the dialog says.
@@ -235,7 +257,8 @@ pub enum SaveOffer {
     Locked,
     /// There is no vault yet.
     NoVault,
-    /// Cannot be saved (another account's prompt, a key outside `~/.ssh`).
+    /// Cannot be saved: another account's prompt, a key outside `~/.ssh`, or
+    /// a terminal that cannot tell for sure when it signed in (Windows).
     None,
 }
 

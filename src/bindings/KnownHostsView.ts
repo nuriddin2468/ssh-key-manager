@@ -13,4 +13,10 @@ entries: Array<KnownHostEntry>,
 /**
  * Lines that could not be parsed.
  */
-invalid: Array<InvalidLine>, };
+invalid: Array<InvalidLine>, 
+/**
+ * SHA-256 of the file's bytes, in hex. Removals name the revision their
+ * line numbers belong to, so a line that moved in the meantime (an
+ * `@revoked` one, say) is never removed instead.
+ */
+revision: string, };

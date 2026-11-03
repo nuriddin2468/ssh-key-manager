@@ -1,18 +1,23 @@
 import { AlertOctagon, CheckCircle2, HelpCircle, ShieldQuestion, XCircle } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import { api } from '@/api/commands';
-import { useAppMutation } from '@/api/useAppMutation';
+import { keys, queryClient } from '@/api/queries';
+import { toastError, useAppMutation } from '@/api/useAppMutation';
 import type { HostKeyCheck } from '@/bindings/HostKeyCheck';
+import type { KnownHostEntry } from '@/bindings/KnownHostEntry';
 import { Button } from '@/components/ui/Button';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
 import { TextField } from '@/components/ui/TextField';
 import { Tile } from '@/components/ui/Tile';
 import { cn } from '@/lib/cn';
+import { type KnownHostsRemoval, removalOf } from './removal';
 
 interface CheckHostKeyDialogProps {
   initialHost: string;
-  onRemove: (lines: number[]) => void;
+  /** Asks to remove the saved keys that no longer match. */
+  onRemove: (removal: KnownHostsRemoval) => void;
   onDone: () => void;
 }
 
@@ -53,6 +58,28 @@ export function CheckHostKeyDialog({ initialHost, onRemove, onDone }: CheckHostK
     (vars: { host: string; port: number | null }) => api.checkHostKey(vars.host, vars.port),
     { onSuccess: setResult },
   );
+
+  // The check read the file at some revision; the lines are removed from the
+  // file as it is now only if they still hold the same entries.
+  const removeSaved = async (saved: KnownHostEntry[]) => {
+    try {
+      const file = await queryClient.fetchQuery({
+        queryKey: keys.knownHosts,
+        queryFn: api.knownHosts,
+        staleTime: 0,
+      });
+      const removal = removalOf(file.view, saved);
+      if (removal) {
+        onRemove(removal);
+        onDone();
+      } else {
+        toast.error(t('known.changedOnDisk'));
+        setResult(null);
+      }
+    } catch (error) {
+      toastError(t, error);
+    }
+  };
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -115,10 +142,7 @@ export function CheckHostKeyDialog({ initialHost, onRemove, onDone }: CheckHostK
                 <Button
                   variant="danger"
                   className="field self-start border-critical-solid/40"
-                  onClick={() => {
-                    onRemove(result.saved.map((entry) => entry.line));
-                    onDone();
-                  }}
+                  onClick={() => void removeSaved(result.saved)}
                 >
                   {t('known.removeOld')}
                 </Button>

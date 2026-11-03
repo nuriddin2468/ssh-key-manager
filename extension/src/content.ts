@@ -4,13 +4,17 @@
 // to the background so the top frame can offer to save it.
 //
 // Nothing is filled on its own: a page can't make the extension fill a
-// field without the user choosing a login in the menu.
+// field without the user choosing a login in the menu. Events a page script
+// makes up (`isTrusted` false) open nothing, move nothing into the menu and
+// send no login to the background.
 
 import {
   fill,
   isPassword,
+  isVisible,
   type LoginFields,
   loginFieldsFor,
+  onScreen,
   scopeOf,
   typedIn,
 } from './content/fields';
@@ -74,6 +78,11 @@ function start(): void {
     const asked = keystrokes;
     const reply = await send<LoginsReply>({ kind: 'logins' });
     if (document.activeElement !== input || active?.input !== input || keystrokes !== asked) return;
+    // A field the page focused without scrolling to it is out of sight.
+    if (!isVisible(input) || !onScreen(input)) {
+      menu.hide();
+      return;
+    }
     if (reply?.state === 'ready' && reply.logins.length > 0) menu.showLogins(input, reply.logins);
     else if (reply?.state === 'locked' && fields.password) menu.showLocked(input);
     else menu.hide();
@@ -114,6 +123,7 @@ function start(): void {
   document.addEventListener(
     'focusin',
     (event) => {
+      if (!event.isTrusted) return;
       const target = event.target;
       if (menu.contains(target) || banner.contains(target)) return;
       if (target instanceof HTMLInputElement) void offer(target);
@@ -140,6 +150,7 @@ function start(): void {
   document.addEventListener(
     'pointerdown',
     (event) => {
+      if (!event.isTrusted) return;
       const target = event.target;
       if (menu.contains(target)) return;
       // A click into the field that already has focus opens the menu again.
@@ -156,7 +167,7 @@ function start(): void {
     'keydown',
     (event) => {
       const target = event.target;
-      if (!(target instanceof HTMLInputElement)) return;
+      if (!event.isTrusted || !(target instanceof HTMLInputElement)) return;
       if (menu.shown && target === active?.input) {
         if (event.key === 'ArrowDown') {
           event.preventDefault();
@@ -165,7 +176,7 @@ function start(): void {
           menu.hide();
         }
       }
-      if (event.key === 'Enter' && event.isTrusted && isPassword(target)) capture(scopeOf(target));
+      if (event.key === 'Enter' && isPassword(target)) capture(scopeOf(target));
     },
     true,
   );
@@ -183,7 +194,7 @@ function start(): void {
   document.addEventListener(
     'submit',
     (event) => {
-      if (event.target instanceof HTMLFormElement) capture(event.target);
+      if (event.isTrusted && event.target instanceof HTMLFormElement) capture(event.target);
     },
     true,
   );
@@ -214,7 +225,24 @@ function start(): void {
   void offerSave();
 }
 
-if (/^https?:$/.test(location.protocol) && !(MARK in window)) {
+/**
+ * Whether this document's origin is opaque: a sandboxed frame, whose URL
+ * may be a site's though its content isn't that site's to vouch for. The
+ * background refuses such frames by the origin the browser reports; this
+ * covers a browser that reports none.
+ */
+function opaqueOrigin(): boolean {
+  if (self.origin === 'null') return true;
+  try {
+    // Throws in a sandboxed document without `allow-same-origin`.
+    void document.cookie;
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+if (/^https?:$/.test(location.protocol) && !opaqueOrigin() && !(MARK in window)) {
   Object.defineProperty(window, MARK, { value: true });
   start();
 }

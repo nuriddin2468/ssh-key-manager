@@ -3,6 +3,12 @@
 // an element of its own, so the page's styles can't reach in and its scripts
 // can't read the logins listed. The look follows the app: its dark popover
 // surface, the Passwords section's pink accent and its type sizes.
+//
+// A choice in them counts only when the user could see what they chose:
+// not in the first moments after the surface appeared or moved (a page
+// could have put it under a click or a key press meant for something else),
+// not where anything covers it, and not after the page restyled, moved or
+// hid the element it lives on, which is in the page's own DOM.
 
 import type { LoginOffer } from '../shared/client';
 import { t } from '../shared/i18n';
@@ -89,6 +95,10 @@ const STYLE = `
 
 const SVG = 'http://www.w3.org/2000/svg';
 
+/** The list's tallest height (as in STYLE), and the header and padding above and below it. */
+const LIST_HEIGHT = 264;
+const HEAD_HEIGHT = 36;
+
 function icon(paths: string[], className?: string): SVGSVGElement {
   const svg = document.createElementNS(SVG, 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
@@ -135,21 +145,117 @@ function logo(): HTMLElement {
   return box;
 }
 
+/** How long a surface must stay put before a choice in it counts. */
+export const SETTLE_MS = 500;
+
+/** At most this many returns to the front of the top layer a second; a page that forces more gets no surface. */
+const MAX_FRONTS = 5;
+
+interface Point {
+  x: number;
+  y: number;
+}
+
+/**
+ * IntersectionObserver v2 (Chromium) also tells whether anything covers an
+ * element, including what hit testing skips: content with
+ * `pointer-events: none` on top of it.
+ */
+const TRACKS_VISIBILITY =
+  typeof IntersectionObserverEntry !== 'undefined' &&
+  'isVisible' in IntersectionObserverEntry.prototype;
+
+/** When a choice in a surface starts to count. */
+export class Settling {
+  private from = Number.POSITIVE_INFINITY;
+
+  constructor(private readonly now: () => number = () => performance.now()) {}
+
+  /** The surface appeared or moved: wait again. */
+  restart(): void {
+    this.from = this.now() + SETTLE_MS;
+  }
+
+  get settled(): boolean {
+    return this.now() >= this.from;
+  }
+}
+
+/** Whether the middle of `part`, inside the surface on `host`, shows: no page content is over it. */
+export function uncovered(host: Element, part: Element): boolean {
+  return uncoveredAt(host, visibleMiddle(part));
+}
+
+/** Whether the surface on `host` is what shows at `point`. */
+export function uncoveredAt(host: Element, point: Point): boolean {
+  const doc = host.ownerDocument;
+  // jsdom: no layout to ask.
+  if (typeof doc.elementFromPoint !== 'function') return true;
+  // Points in the closed shadow root come back as its host.
+  return doc.elementFromPoint(point.x, point.y) === host;
+}
+
+/** The middle of the part of `part` inside the window. */
+function visibleMiddle(part: Element): Point {
+  const rect = part.getBoundingClientRect();
+  const left = Math.max(rect.left, 0);
+  const right = Math.min(rect.right, window.innerWidth);
+  const top = Math.max(rect.top, 0);
+  const bottom = Math.min(rect.bottom, window.innerHeight);
+  return { x: (left + right) / 2, y: (top + bottom) / 2 };
+}
+
 /** An element in a closed shadow root, shown in the top layer where it can be. */
 class Surface {
   readonly host: HTMLElement;
   protected readonly root: ShadowRoot;
+  protected readonly settling = new Settling();
+  /** The `style` attribute `place` wrote, and where it put the host. */
+  private written: string | null = null;
+  private parent: ParentNode | null = null;
+  /** Whether the host made it into the top layer. */
+  private inTopLayer = false;
+  /** What IntersectionObserver v2 last said: shown with nothing over it, where it can tell. */
+  private seen: boolean | null = null;
+  private visibility: IntersectionObserver | null = null;
+  /** When the surface last came back to the front. */
+  private fronts: number[] = [];
 
   constructor() {
-    this.host = document.createElement('sshkm-autofill');
+    // A built-in element: a page can define a custom element of any name
+    // first, and reach the shadow root of one it defined.
+    this.host = document.createElement('div');
     this.root = this.host.attachShadow({ mode: 'closed' });
     const style = element('style');
     style.textContent = STYLE;
     this.root.append(style);
+    // The host is in the page's DOM, so the page can restyle, move or hide
+    // it. Whatever it changes takes the surface down.
+    new MutationObserver(() => {
+      if (this.shown && !this.intact()) this.hide();
+    }).observe(this.host, { attributes: true });
+    this.host.addEventListener('toggle', () => {
+      if (this.shown && !this.intact()) this.hide();
+    });
+    // Page content can't cover the top layer, but a popover, modal dialog or
+    // full-screen element opened later joins it above this one: come back to
+    // the front, and wait again.
+    document.addEventListener(
+      'toggle',
+      (event) => {
+        if (!this.shown || event.target === this.host) return;
+        if ((event as Event & { newState?: string }).newState === 'open') this.front();
+      },
+      true,
+    );
+    document.addEventListener('fullscreenchange', () => {
+      if (this.shown) this.front();
+    });
   }
 
   protected place(styles: Record<string, string>, near: Element | null): void {
     const host = this.host;
+    if (!this.shown) this.seen = null;
     host.removeAttribute('style');
     const all: Record<string, string> = {
       all: 'initial',
@@ -166,25 +272,102 @@ class Surface {
     };
     for (const [name, value] of Object.entries(all))
       host.style.setProperty(name, value, 'important');
+    this.written = host.getAttribute('style');
     // Inside an open modal dialog, everything else is inert: join it.
     const parent = near?.closest('dialog[open]') ?? document.documentElement;
     if (host.parentNode !== parent) parent.append(host);
+    this.parent = parent;
+    this.inTopLayer = false;
     if ('showPopover' in host && typeof host.showPopover === 'function') {
       host.popover = 'manual';
       try {
         if (host.matches(':popover-open')) host.hidePopover();
         host.showPopover();
+        this.inTopLayer = true;
       } catch {
         // Not connected yet, or the page forbids it: stay a fixed element.
       }
     }
+    this.watchVisibility();
+  }
+
+  private watchVisibility(): void {
+    if (!TRACKS_VISIBILITY || this.visibility) return;
+    this.visibility = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          this.seen =
+            (entry as IntersectionObserverEntry & { isVisible?: boolean }).isVisible ?? null;
+        }
+      },
+      { threshold: [0, 1], trackVisibility: true, delay: 100 } as IntersectionObserverInit,
+    );
+    this.visibility.observe(this.host);
+  }
+
+  /** Brings the surface back above layers opened after it, and waits again. */
+  private front(): void {
+    const now = performance.now();
+    this.fronts = this.fronts.filter((at) => now - at < 1000);
+    this.fronts.push(now);
+    if (this.fronts.length > MAX_FRONTS || !this.inTopLayer) {
+      this.hide();
+      return;
+    }
+    try {
+      this.host.hidePopover();
+      this.host.showPopover();
+    } catch {
+      this.hide();
+      return;
+    }
+    this.settling.restart();
   }
 
   get shown(): boolean {
     return this.host.isConnected;
   }
 
+  /** Whether the host is as `place` left it: same style, same place, still in the top layer. */
+  private intact(): boolean {
+    const host = this.host;
+    if (!host.isConnected || host.parentNode !== this.parent) return false;
+    if (host.getAttribute('style') !== this.written) return false;
+    if (this.inTopLayer) {
+      if (host.getAttribute('popover') !== 'manual') return false;
+      try {
+        if (!host.matches(':popover-open')) return false;
+      } catch {
+        // No `:popover-open` to ask (tests).
+      }
+    }
+    // The inline `all: initial !important` keeps the page's style sheets
+    // out; this is a second look.
+    const style = getComputedStyle(host);
+    const is = (value: string, normal: string) => value === '' || value === normal;
+    return (
+      is(style.opacity, '1') &&
+      is(style.visibility, 'visible') &&
+      is(style.transform, 'none') &&
+      is(style.filter, 'none') &&
+      is(style.clipPath, 'none')
+    );
+  }
+
+  /** Whether a real click or key press on `part` counts as the user's choice. */
+  protected accepts(event: Event, part: Element): boolean {
+    if (!event.isTrusted || !this.settling.settled || !this.intact()) return false;
+    // A click with the pointer counts where it landed; a key press, on what
+    // of the part the window shows.
+    if (event instanceof MouseEvent && event.detail > 0) {
+      if (this.seen === false) return false;
+      return uncoveredAt(this.host, { x: event.clientX, y: event.clientY });
+    }
+    return uncovered(this.host, part);
+  }
+
   hide(): void {
+    this.seen = null;
     this.host.remove();
   }
 
@@ -204,6 +387,9 @@ export interface MenuHandlers {
 /** The saved logins for a login field, under it. */
 export class LoginMenu extends Surface {
   private anchor: HTMLInputElement | null = null;
+  private list: HTMLElement | null = null;
+  /** Where the menu was put last. */
+  private placed = '';
   private readonly reposition = () => this.position();
 
   constructor(private readonly handlers: MenuHandlers) {
@@ -253,7 +439,7 @@ export class LoginMenu extends Surface {
       if (item.icon) button.append(item.icon);
       button.append(item.lines);
       button.addEventListener('click', (event) => {
-        if (event.isTrusted) item.onChoose();
+        if (this.accepts(event, button)) item.onChoose();
       });
       li.append(button);
       list.append(li);
@@ -268,6 +454,8 @@ export class LoginMenu extends Surface {
     }, 50);
     this.root.append(panel);
     this.anchor = anchor;
+    this.list = list;
+    this.placed = '';
     this.position();
     window.addEventListener('scroll', this.reposition, true);
     window.addEventListener('resize', this.reposition);
@@ -284,12 +472,23 @@ export class LoginMenu extends Surface {
     const left = Math.min(Math.max(8, rect.left), window.innerWidth - width - 8);
     const below = window.innerHeight - rect.bottom;
     const styles: Record<string, string> = { width: `${width}px`, left: `${left}px` };
-    if (below < 200 && rect.top > below) styles.bottom = `${window.innerHeight - rect.top + 4}px`;
+    const above = below < 200 && rect.top > below;
+    if (above) styles.bottom = `${window.innerHeight - rect.top + 4}px`;
     else styles.top = `${rect.bottom + 4}px`;
+    // The list scrolls within the window, so every login can be reached.
+    const room = (above ? rect.top : below) - 4 - 8 - HEAD_HEIGHT;
+    if (this.list) this.list.style.maxHeight = `${Math.max(64, Math.min(LIST_HEIGHT, room))}px`;
+    // A menu that moves may have moved under the pointer: it starts anew.
+    const placed = JSON.stringify(styles);
+    if (placed !== this.placed) this.settling.restart();
+    this.placed = placed;
     this.place(styles, anchor);
   }
 
-  /** Moves focus into the menu, for the arrow keys. */
+  /**
+   * Moves focus into the menu, for the arrow keys. Only a key press the
+   * browser marks as the user's own calls this, so it needn't wait again.
+   */
   focusFirst(): void {
     this.buttons()[0]?.focus();
   }
@@ -331,6 +530,12 @@ export interface SaveOffer {
   mode: 'save' | 'update';
   /** The login to update. */
   title?: string;
+  /**
+   * Typed on another site than this page's (a sign-in that sent you on, or
+   * a sign-in frame): only that site's name is shown here, not the username
+   * or the saved login's title.
+   */
+  elsewhere?: boolean;
 }
 
 export interface BannerHandlers {
@@ -358,7 +563,7 @@ export class SaveBanner extends Surface {
     const row = element('div', 'row');
     const text = element('div', 'text');
     text.append(element('h2', undefined, title));
-    text.append(element('div', 'sub', offer.username || t('noUsername')));
+    if (!offer.elsewhere) text.append(element('div', 'sub', offer.username || t('noUsername')));
     const close = element('button', 'close');
     close.type = 'button';
     close.setAttribute('aria-label', t('close'));
@@ -397,7 +602,7 @@ export class SaveBanner extends Surface {
       if (event.key === 'Escape') dismiss(event);
     });
     save.addEventListener('click', async (event) => {
-      if (!event.isTrusted) return;
+      if (!this.accepts(event, save)) return;
       save.setAttribute('aria-busy', 'true');
       const result = await this.handlers.onSave(offer);
       save.removeAttribute('aria-busy');
@@ -410,5 +615,6 @@ export class SaveBanner extends Surface {
     });
 
     this.place({ top: '16px', right: '16px' }, document.activeElement);
+    this.settling.restart();
   }
 }

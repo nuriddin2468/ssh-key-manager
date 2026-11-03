@@ -1,9 +1,11 @@
-// System file dialogs for the vault's files. In `pnpm dev` outside the
-// desktop shell there are none, so each returns a made-up path the mock
-// backend understands (see src/mocks/vaultFiles.ts).
+// System file dialogs for choosing where the vault lives. The backend
+// confirms what these pick in a native dialog. Files that are read or
+// written for import and export are picked by the backend itself. In
+// `pnpm dev` outside the desktop shell there are no dialogs, so each returns
+// a made-up path the mock backend understands (see src/mocks/vaultFiles.ts).
 
 import { isTauri } from '@tauri-apps/api/core';
-import { open, save } from '@tauri-apps/plugin-dialog';
+import { open } from '@tauri-apps/plugin-dialog';
 
 const DEV_HOME = '/Users/dev';
 
@@ -24,11 +26,6 @@ export async function pickFolder(title: string) {
   return typeof path === 'string' ? path : null;
 }
 
-export async function pickSaveTarget(title: string, fileName: string, filter: Filter) {
-  if (!isTauri()) return `${DEV_HOME}/Documents/${fileName}`;
-  return save({ title, defaultPath: fileName, filters: [filter] });
-}
-
 /** The last part of a path, on any platform. */
 export function baseName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
@@ -38,10 +35,4 @@ export function baseName(path: string): string {
 export function folderOf(path: string): string {
   const index = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
   return index > 0 ? path.slice(0, index) : path;
-}
-
-/** `2026-11-02`, for default file names. */
-export function today(now: Date = new Date()): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }

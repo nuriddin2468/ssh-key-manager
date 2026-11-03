@@ -59,7 +59,9 @@ real `~/.ssh`. Its modules:
   - `channel` pairs a browser (P-256 ECDH, HKDF-SHA-256) and seals every later message
     with AES-256-GCM, using only what WebCrypto offers. `channel-vectors.json` is shared
     with the extension's tests so both sides compute the same bytes.
-  - `protocol` is the JSON. Paired browsers live in the vault's custom data.
+  - `protocol` is the JSON. Paired browsers live in the vault's custom data. One
+    question goes unsealed and needs no pairing: whether two origins are the same site
+    (`sameSite`), so the extension can keep a save offer on the site it came from.
 
 Errors have a stable `code` (`wrong_passphrase`, `agent_unavailable`, …) that the UI
 translates.
@@ -102,7 +104,8 @@ translates.
     JSON to the app and never sees a secret in the clear.
   - While autofill is on, the app listens on a private socket or pipe, writes where to
     `browser-endpoint` in its local data folder, and keeps the browsers' host manifests
-    pointing at itself.
+    pointing at itself: at the AppImage under an AppImage, and never at a temporary
+    folder. On Windows the host checks who serves the pipe before it sends anything.
   - The broker pairs a browser after the user's yes in a dialog, then answers sealed
     requests: logins for a page, the one picked, and saving or updating a typed login.
     It reaches the app through a small `Env` trait, so its tests run against a real
@@ -139,7 +142,10 @@ translates.
 - The background script is the only part that talks to the app for pages, and names each
   page by the origin the browser reports for the sending frame.
 - The content script finds login fields, shows the saved logins in a menu in a closed
-  shadow root, fills the one picked and passes sent login forms to the background, which
-  offers to save them in a banner on the next page.
+  shadow root (on a plain `div` popover, so a page can't define the element), fills the
+  one picked and passes sent login forms to the background, which offers to save them in
+  a banner on the next page (naming only the site, if that page is another site's). It
+  reacts only to trusted events, and a menu item or banner button counts only once the
+  surface has been shown, uncovered and untouched by the page, for half a second.
 - The popup shows the connection state; the connect page pairs the browser. Keys stay in
   IndexedDB as non-extractable WebCrypto keys.

@@ -31,7 +31,9 @@ interface Options<TVars, TResult> {
 /**
  * A command that changes files or the agent: on success every query is
  * refreshed and an optional toast is shown; failures become a toast unless
- * `onError` handles them.
+ * `onError` handles them. The mutation leaves TanStack's cache as soon as
+ * nothing shows it: its variables may hold a key's passphrase or the master
+ * password (the default keeps finished mutations for five minutes).
  */
 export function useAppMutation<TVars, TResult>(
   run: (vars: TVars) => Promise<TResult>,
@@ -40,6 +42,7 @@ export function useAppMutation<TVars, TResult>(
   const { t } = useTranslation();
   return useMutation({
     mutationFn: run,
+    gcTime: 0,
     onSuccess: async (result, vars) => {
       await invalidateAll();
       const message = options.success?.(result, vars);

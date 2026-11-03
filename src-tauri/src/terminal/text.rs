@@ -9,6 +9,12 @@ pub struct HostKeyQuestion {
     pub host: String,
     pub key_type: String,
     pub fingerprint: String,
+    /// The lines besides the plain question, as `ssh` wrote them: the other
+    /// names the key is known by, what DNS says, anything unrecognised.
+    pub extra: Vec<String>,
+    /// `ssh` says "but keys of different type are already known for this
+    /// host": the host is known, by another key.
+    pub other_types_known: bool,
 }
 
 /// Reads `ssh`'s question about an unknown host key:
@@ -16,11 +22,14 @@ pub struct HostKeyQuestion {
 /// ```text
 /// The authenticity of host 'example.com (93.184.216.34)' can't be established.
 /// ED25519 key fingerprint is SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU.
+/// This key is not known by any other names.
 /// Are you sure you want to continue connecting (yes/no/[fingerprint])?
 /// ```
 ///
-/// `None` for anything else, such as the warning that a host's key differs
-/// from its IP address's: those are not offered for trust.
+/// Any other line (the key's random art aside) goes to
+/// [`extra`](HostKeyQuestion::extra). `None` for anything else, such as the
+/// warning that a host's key differs from its IP address's: those are not
+/// offered for trust.
 pub fn host_key_question(text: &str) -> Option<HostKeyQuestion> {
     let host = text
         .split_once("authenticity of host '")
@@ -32,10 +41,30 @@ pub fn host_key_question(text: &str) -> Option<HostKeyQuestion> {
         let key_type = before.split_whitespace().last()?;
         (!fingerprint.is_empty()).then(|| (key_type.to_owned(), fingerprint.to_owned()))
     })?;
+    let plain = |line: &str| {
+        line.is_empty()
+            || line.starts_with("The authenticity of host '")
+            || line.contains(" key fingerprint is ")
+            || line.starts_with("This key is not known by any other names")
+            || line.starts_with("Are you sure you want to continue connecting")
+            // VisualHostKey's random art.
+            || line.starts_with(['+', '|'])
+    };
+    let extra: Vec<String> = text
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !plain(line.trim_start()))
+        .map(str::to_owned)
+        .collect();
+    let other_types_known = extra
+        .iter()
+        .any(|line| line.contains("keys of different type are already known"));
     Some(HostKeyQuestion {
         host,
         key_type,
         fingerprint,
+        extra,
+        other_types_known,
     })
 }
 
@@ -46,7 +75,9 @@ pub struct Resolved {
     pub host_name: Option<String>,
     pub host_key_alias: Option<String>,
     pub proxy_jump: Option<String>,
+    pub proxy_command: Option<String>,
     pub pubkey_authentication: bool,
+    pub keyboard_interactive: bool,
     pub identities_only: bool,
     pub identity_files: Vec<String>,
 }
@@ -57,6 +88,7 @@ impl Resolved {
     pub fn parse(text: &str) -> Self {
         let mut resolved = Self {
             pubkey_authentication: true,
+            keyboard_interactive: true,
             ..Self::default()
         };
         for line in text.lines() {
@@ -79,7 +111,13 @@ impl Resolved {
                 "proxyjump" if value != "none" => {
                     resolved.proxy_jump.get_or_insert_with(|| value.to_owned());
                 }
+                "proxycommand" if value != "none" => {
+                    resolved
+                        .proxy_command
+                        .get_or_insert_with(|| value.to_owned());
+                }
                 "pubkeyauthentication" => resolved.pubkey_authentication = value != "no",
+                "kbdinteractiveauthentication" => resolved.keyboard_interactive = value != "no",
                 "identitiesonly" => resolved.identities_only = value == "yes",
                 "identityfile" => resolved.identity_files.push(value.to_owned()),
                 _ => {}
@@ -106,6 +144,11 @@ impl Resolved {
             path.exists()
         });
         file_exists || (!self.identities_only && agent_has_keys())
+    }
+
+    /// Through a `ProxyJump` or `ProxyCommand`.
+    pub fn proxied(&self) -> bool {
+        self.proxy_jump.is_some() || self.proxy_command.is_some()
     }
 }
 
@@ -228,6 +271,8 @@ mod tests {
                 host: "bastion.example.net (203.0.113.7)".into(),
                 key_type: "ED25519".into(),
                 fingerprint: "SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU".into(),
+                extra: Vec::new(),
+                other_types_known: false,
             })
         );
         let proxied = "The authenticity of host 'prod (<no hostip for proxy command>)' can't be \
@@ -238,6 +283,7 @@ mod tests {
         assert_eq!(question.key_type, "ECDSA");
         assert_eq!(question.fingerprint, "MD5:aa:bb:cc");
         assert_eq!(question.host, "prod (<no hostip for proxy command>)");
+        assert!(question.extra.is_empty(), "{:?}", question.extra);
 
         let mismatch = "Warning: the ECDSA host key for 'example.com' differs from the key for \
                         the IP address '93.184.216.34'\nOffending key for IP in \
@@ -245,6 +291,39 @@ mod tests {
                         connecting (yes/no)? ";
         assert_eq!(host_key_question(mismatch), None);
         assert_eq!(host_key_question("Password: "), None);
+    }
+
+    #[test]
+    fn keeps_what_host_key_questions_say_besides() {
+        // sshconnect.c, when the host is known by a key of another type.
+        let other_type = "The authenticity of host 'prod.example (10.0.4.12)' can't be \
+                          established\nbut keys of different type are already known for this \
+                          host.\nECDSA key fingerprint is SHA256:abc.\nAre you sure you want to \
+                          continue connecting (yes/no/[fingerprint])? ";
+        let question = host_key_question(other_type).unwrap();
+        assert!(question.other_types_known);
+        assert_eq!(
+            question.extra,
+            ["but keys of different type are already known for this host."]
+        );
+
+        let other_names = "The authenticity of host 'db (10.0.4.20)' can't be established.\n\
+                           ED25519 key fingerprint is SHA256:abc.\nThis host key is known by the \
+                           following other names/addresses:\n    ~/.ssh/known_hosts:3: \
+                           db.example\n    ~/.ssh/known_hosts:9: 10.0.4.20\nNo matching host \
+                           key fingerprint found in DNS.\nAre you sure you want to continue \
+                           connecting (yes/no/[fingerprint])? ";
+        let question = host_key_question(other_names).unwrap();
+        assert!(!question.other_types_known);
+        assert_eq!(
+            question.extra,
+            [
+                "This host key is known by the following other names/addresses:",
+                "    ~/.ssh/known_hosts:3: db.example",
+                "    ~/.ssh/known_hosts:9: 10.0.4.20",
+                "No matching host key fingerprint found in DNS.",
+            ]
+        );
     }
 
     #[test]
@@ -259,10 +338,19 @@ mod tests {
         assert!(resolved.pubkey_authentication && resolved.identities_only);
         assert_eq!(resolved.identity_files.len(), 2);
 
-        let plain =
-            Resolved::parse("user a\nhostname h\nproxyjump none\npubkeyauthentication no\n");
+        assert!(resolved.proxied() && resolved.keyboard_interactive);
+
+        let plain = Resolved::parse(
+            "user a\nhostname h\nproxyjump none\nproxycommand none\npubkeyauthentication \
+             no\nkbdinteractiveauthentication no\n",
+        );
         assert_eq!(plain.proxy_jump, None);
         assert!(!plain.pubkey_authentication);
+        assert!(!plain.proxied() && !plain.keyboard_interactive);
+
+        let command = Resolved::parse("user a\nhostname h\nproxycommand nc %h %p\n");
+        assert_eq!(command.proxy_command.as_deref(), Some("nc %h %p"));
+        assert!(command.proxied());
     }
 
     #[test]

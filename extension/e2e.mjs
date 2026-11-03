@@ -36,6 +36,10 @@ function check(what, ok, detail = '') {
   if (!ok) failures += 1;
 }
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** The extension's menu or banner: a plain element, shown as a popover. */
+const SURFACE = 'html > div:popover-open';
+/** A choice in the menu or banner counts only once it has been in place this long. */
+const SETTLE = 600;
 
 // A site with a login form; a sent form lands on /welcome.
 const LOGIN = `<!doctype html><title>Sign in</title>
@@ -135,7 +139,7 @@ async function popupText() {
 /** Waits until a menu or banner of the extension is on the page. */
 async function surface(page, timeout = 10_000) {
   try {
-    await page.waitForSelector('sshkm-autofill', { timeout });
+    await page.waitForSelector(SURFACE, { timeout });
     return true;
   } catch {
     return false;
@@ -153,7 +157,8 @@ async function signIn(page, username, password) {
 
 /** Clicks the banner's main button: the last button, at its bottom right. */
 async function clickBannerSave(page) {
-  const box = await page.$eval('sshkm-autofill', (host) => {
+  await sleep(SETTLE);
+  const box = await page.$eval(SURFACE, (host) => {
     const r = host.getBoundingClientRect();
     return { right: r.right, bottom: r.bottom };
   });
@@ -186,6 +191,7 @@ try {
   check('the menu opens on a login field', await surface(page));
   await shot(page, 'menu');
   await page.keyboard.press('ArrowDown');
+  await sleep(SETTLE);
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.querySelector('#password').value !== '', {
     timeout: 10_000,

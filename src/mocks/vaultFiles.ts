@@ -1,12 +1,14 @@
 // The vault's files for `pnpm dev` (see backend.ts): CSV import and export,
 // and moving or switching the vault file. It builds on the in-memory vault
 // in vault.ts through its handlers. The made-up paths come from
-// src/features/passwords/files/pickers.ts.
+// src/features/passwords/files/pickers.ts, and from here for the files the
+// backend picks itself (import and export).
 
 import type { CsvFormat } from '@/bindings/CsvFormat';
 import type { EntryInput } from '@/bindings/EntryInput';
 import type { EntrySummary } from '@/bindings/EntrySummary';
-import type { ImportPreview } from '@/bindings/ImportPreview';
+import type { Exported } from '@/bindings/Exported';
+import type { ImportPick } from '@/bindings/ImportPick';
 import type { ImportRow } from '@/bindings/ImportRow';
 import type { VaultLocation } from '@/bindings/VaultLocation';
 import type { VaultStatus } from '@/bindings/VaultStatus';
@@ -90,7 +92,12 @@ let current: string | null = null;
 let foreign = false;
 /** The default vault was moved away, so nothing is left at the default place. */
 let defaultMoved = false;
+let picked: string | null = null;
 let lastImport: string | null = null;
+
+/** What the backend's file dialogs "pick" in the mock. */
+const DEV_CSV = '/Users/dev/Downloads/bitwarden_export.csv';
+const DEV_DOCUMENTS = '/Users/dev/Documents';
 
 const keysOf = (database: string) => database.replace(/\.kdbx$/i, '.keys');
 const folderOf = (path: string) => path.slice(0, Math.max(path.lastIndexOf('/'), 0));
@@ -144,6 +151,7 @@ function rowsFor(existing: EntrySummary[]): ImportRow[] {
       group: row.group,
       hasPassword: row.password !== '',
       hasOtp: row.otp !== '',
+      hasUnreadableOtp: false,
       duplicateOf: duplicate?.id ?? null,
     };
   });
@@ -171,14 +179,17 @@ export const vaultFilesHandlers: Record<string, Handler> = {
       settings: { ...status.settings, database: current },
     } satisfies VaultStatus;
   },
-  vault_import_preview: async ({ path }): Promise<ImportPreview> => {
+  vault_import_preview: async (): Promise<ImportPick> => {
     const existing = await entries();
-    if (/contacts/i.test(String(path))) return fail('unsupported', 'no password column');
-    const format = FORMATS.find(([pattern]) => pattern.test(String(path)))?.[1] ?? 'generic';
-    return { format, rows: rowsFor(existing), skipped: 1 };
+    const path = DEV_CSV;
+    const format = FORMATS.find(([pattern]) => pattern.test(path))?.[1] ?? 'generic';
+    picked = path;
+    return { path, preview: { format, rows: rowsFor(existing), skipped: 1 } };
   },
-  vault_import: async ({ path, indices }) => {
+  vault_import: async ({ indices }) => {
     await entries();
+    const path = picked;
+    if (!path) return fail('invalid_input', 'choose the file to import again');
     let count = 0;
     for (const index of indices as number[]) {
       const row = SAMPLE[index];
@@ -197,29 +208,28 @@ export const vaultFilesHandlers: Record<string, Handler> = {
       await vaultHandlers.vault_add?.({ input });
       count += 1;
     }
-    lastImport = String(path);
+    picked = null;
+    lastImport = path;
     return count;
   },
-  vault_trash_import_file: ({ path }) => {
-    if (path !== lastImport) {
+  vault_trash_import_file: () => {
+    if (!lastImport) {
       return fail('invalid_input', 'only the CSV file just imported can be moved to the Trash');
     }
     lastImport = null;
   },
-  vault_export_csv: async ({ path, master }) => {
+  vault_export_csv: async ({ master }): Promise<Exported> => {
     const all = await entries();
     // Checks the master password without changing anything in the mock.
     await vaultHandlers.vault_new_recovery_key?.({ master });
-    if (String(path).includes('/.ssh/')) {
-      return fail('invalid_input', 'an export is never written into the SSH folder');
-    }
-    return all.filter((e) => !e.inTrash).length;
+    const count = all.filter((e) => !e.inTrash).length;
+    return { path: `${DEV_DOCUMENTS}/passwords.csv`, count };
   },
-  vault_export_kdbx: async ({ path }) => {
-    const { paths } = await location();
-    if (path === paths.database || path === paths.keys || String(path).includes('/.ssh/')) {
-      return fail('invalid_input', "an export never replaces the vault's own files");
-    }
+  vault_export_kdbx: async ({ master }): Promise<Exported> => {
+    const all = await entries();
+    await vaultHandlers.vault_new_recovery_key?.({ master });
+    const count = all.filter((e) => !e.inTrash).length;
+    return { path: `${DEV_DOCUMENTS}/vault.kdbx`, count };
   },
   vault_location: location,
   vault_move: async ({ folder }) => {

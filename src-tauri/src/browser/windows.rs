@@ -2,12 +2,14 @@
 //!
 //! As for askpass, the pipe rejects remote clients and is created as the
 //! first instance of its name. Its default security lets other local users
-//! open it for reading only, so they can't send a request.
+//! open it for reading only, so they can't send a request. The host, before
+//! it sends one, checks that the pipe is this user's ([`sshkm_os::pipe`]).
 
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::windows::fs::OpenOptionsExt;
+use std::os::windows::io::AsHandle;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
@@ -142,10 +144,12 @@ async fn read_frame(pipe: &mut NamedPipeServer) -> io::Result<Vec<u8>> {
 }
 
 /// The host's side: opens the app's pipe, retrying briefly while every
-/// instance is busy.
+/// instance is busy, and checks that this user serves it. The endpoint file
+/// may be stale (the app crashed), and another user could then have taken
+/// the name it gives.
 pub fn connect(endpoint: &OsStr) -> io::Result<File> {
     let mut attempts = 0;
-    loop {
+    let pipe = loop {
         let opened = OpenOptions::new()
             .read(true)
             .write(true)
@@ -156,7 +160,10 @@ pub fn connect(endpoint: &OsStr) -> io::Result<File> {
                 attempts += 1;
                 thread::sleep(Duration::from_millis(50));
             }
-            other => return other,
+            other => break other?,
         }
-    }
+    };
+    sshkm_os::pipe::check_server(pipe.as_handle(), sshkm_os::pipe::Trusted::User)
+        .map_err(|e| io::Error::new(io::ErrorKind::PermissionDenied, e.to_string()))?;
+    Ok(pipe)
 }

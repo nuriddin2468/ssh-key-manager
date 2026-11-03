@@ -14,7 +14,8 @@
 //!   only this user can write. The host reads it there.
 //! - Turning autofill on registers the host with each installed browser
 //!   ([`manifests`]); turning it off removes the registrations and stops the
-//!   listener.
+//!   listener. A copy of the app in a temporary folder is never registered
+//!   ([`host_program`]).
 //!
 //! What the extension may ask, and the pairing that guards it, is the
 //! [`broker`]'s business; the cryptography and the page matching are in
@@ -28,6 +29,7 @@ mod unix;
 #[cfg(windows)]
 mod windows;
 
+use std::ffi::OsString;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -91,6 +93,95 @@ fn data_dir() -> io::Result<PathBuf> {
 /// The file that names the running app's socket or pipe.
 pub fn endpoint_file() -> io::Result<PathBuf> {
     Ok(data_dir()?.join(ENDPOINT_FILE))
+}
+
+/// Where the browsers are to start the host from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostProgram {
+    /// This program, at a path that lasts.
+    At(PathBuf),
+    /// This program, in a temporary folder: an `AppImage`'s mount, or a copy
+    /// unpacked there. The path goes away when the app quits, and in a shared
+    /// folder such as `/tmp` another user could then put a program of theirs
+    /// at it, which the browser would start as this user. Browsers are not
+    /// pointed at it.
+    Temporary(PathBuf),
+}
+
+/// The program to register with the browsers: this executable, or for an
+/// `AppImage` the `.AppImage` file itself, since the executable inside runs
+/// from a mount under `/tmp` that lasts only while the app runs.
+pub fn host_program() -> io::Result<HostProgram> {
+    let exe = std::env::current_exe()?;
+    let appimage = if cfg!(target_os = "linux") {
+        appimage_of(
+            &exe,
+            std::env::var_os("APPDIR"),
+            std::env::var_os("APPIMAGE"),
+        )
+    } else {
+        None
+    };
+    Ok(classify(appimage.unwrap_or(exe), &temporary_dirs()))
+}
+
+/// Whether `program` is in a temporary folder (see [`HostProgram::Temporary`]).
+pub fn is_temporary(program: &Path) -> bool {
+    matches!(
+        classify(program.to_path_buf(), &temporary_dirs()),
+        HostProgram::Temporary(_)
+    )
+}
+
+/// The `AppImage` that `exe` runs from: `$APPIMAGE`, when `exe` is inside that
+/// image's mount, `$APPDIR`. An `AppImage` that started this app (a terminal,
+/// say) passes its own variables on, so they count only then.
+fn appimage_of(
+    exe: &Path,
+    appdir: Option<OsString>,
+    appimage: Option<OsString>,
+) -> Option<PathBuf> {
+    let appdir = PathBuf::from(appdir.filter(|dir| !dir.is_empty())?);
+    let appimage = PathBuf::from(appimage.filter(|file| !file.is_empty())?);
+    (appdir.is_absolute() && appimage.is_absolute() && exe.starts_with(&appdir)).then_some(appimage)
+}
+
+fn classify(program: PathBuf, temporary: &[PathBuf]) -> HostProgram {
+    let real = std::fs::canonicalize(&program).unwrap_or_else(|_| program.clone());
+    let in_mount = [&program, &real].into_iter().any(|path| {
+        path.components()
+            .any(|part| part.as_os_str().to_string_lossy().starts_with(".mount_"))
+    });
+    let in_temporary = temporary
+        .iter()
+        .any(|dir| program.starts_with(dir) || real.starts_with(dir));
+    if in_mount || in_temporary {
+        HostProgram::Temporary(program)
+    } else {
+        HostProgram::At(program)
+    }
+}
+
+/// Folders whose contents don't last: the system's temporary folder and, on
+/// Unix, the usual shared ones. A temporary folder that holds the home folder
+/// (a `TMPDIR` of `/`, say) is left out, or every path would be temporary.
+fn temporary_dirs() -> Vec<PathBuf> {
+    let mut candidates = vec![std::env::temp_dir()];
+    if cfg!(unix) {
+        candidates.extend(["/tmp", "/var/tmp", "/dev/shm"].map(PathBuf::from));
+    }
+    let home = dirs::home_dir();
+    let mut dirs = Vec::new();
+    for dir in candidates {
+        let real = std::fs::canonicalize(&dir).ok();
+        for dir in [Some(dir), real].into_iter().flatten() {
+            let holds_home = home.as_ref().is_some_and(|home| home.starts_with(&dir));
+            if dir.parent().is_some() && !holds_home && !dirs.contains(&dir) {
+                dirs.push(dir);
+            }
+        }
+    }
+    dirs
 }
 
 /// Frames between the host and the app: a big-endian `u32` length, then the
@@ -204,10 +295,14 @@ impl Bridge {
     }
 
     /// At startup: listens and refreshes the browser registrations, so they
-    /// follow the app when it moves, if autofill is on.
+    /// follow the app when it moves, if autofill is on. If it is off, removes
+    /// an endpoint file left behind by a crash: on Windows another user could
+    /// otherwise wait for the host under the pipe name it gives.
     pub fn start_if_enabled(&self, app: &AppHandle) {
         if self.enabled() {
             self.start(app);
+        } else {
+            forget_endpoint();
         }
     }
 
@@ -227,8 +322,18 @@ impl Bridge {
     }
 
     fn start(&self, app: &AppHandle) {
-        if let Ok(program) = std::env::current_exe() {
-            manifests::install(&program);
+        match host_program() {
+            Ok(HostProgram::At(program)) => {
+                manifests::install(&program);
+            }
+            Ok(HostProgram::Temporary(program)) => {
+                log::warn!(
+                    "browser: not registering {}: it is in a temporary folder",
+                    program.display()
+                );
+                manifests::remove_temporary();
+            }
+            Err(error) => log::warn!("browser: cannot tell where this program is: {error}"),
         }
         let mut running = lock(&self.running);
         if running.is_some() {
@@ -243,6 +348,7 @@ impl Bridge {
             Err(error) => {
                 log::warn!("browser: cannot listen: {error}");
                 *lock(&self.problem) = Some(error.to_string());
+                forget_endpoint();
             }
         }
     }
@@ -265,6 +371,17 @@ fn write_endpoint(endpoint: &str) -> io::Result<()> {
     }
     fsutil::atomic_write(&file, endpoint.as_bytes(), 0o600)
         .map_err(|e| io::Error::other(e.to_string()))
+}
+
+/// Removes the endpoint file while nothing of this app listens.
+fn forget_endpoint() {
+    if let Ok(file) = endpoint_file() {
+        match std::fs::remove_file(&file) {
+            Ok(()) => log::info!("browser: removed a stale endpoint file"),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => log::warn!("browser: cannot remove the endpoint file: {e}"),
+        }
+    }
 }
 
 /// The broker's view of the running app.
@@ -402,6 +519,53 @@ mod tests {
         assert_eq!(frame::read(&mut buffer.as_slice()).unwrap(), b"{\"a\":1}");
         assert!(frame::read(&mut u32::MAX.to_be_bytes().as_slice()).is_err());
         assert!(frame::write(&mut Vec::new(), &vec![0; MAX_MESSAGE + 5000]).is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn an_appimage_is_registered_as_its_file() {
+        let mount = "/tmp/.mount_SSH KeAbC123";
+        let exe = Path::new(mount).join("usr/bin/sshkm-app");
+        let image = "/home/me/Apps/SSH Key Manager.AppImage";
+        assert_eq!(
+            appimage_of(&exe, Some(mount.into()), Some(image.into())),
+            Some(PathBuf::from(image))
+        );
+        // Variables passed on by another AppImage that started this app.
+        let installed = Path::new("/usr/bin/sshkm-app");
+        assert_eq!(
+            appimage_of(installed, Some(mount.into()), Some(image.into())),
+            None
+        );
+        assert_eq!(appimage_of(&exe, None, Some(image.into())), None);
+        assert_eq!(appimage_of(&exe, Some(mount.into()), Some("".into())), None);
+        assert_eq!(
+            appimage_of(&exe, Some(mount.into()), Some("relative.AppImage".into())),
+            None
+        );
+    }
+
+    #[test]
+    fn programs_in_temporary_folders_are_not_registered() {
+        let temp = tempfile::tempdir().unwrap();
+        let temporary = [temp.path().to_path_buf()];
+        let inside = temp.path().join("Temp1_app.zip").join("sshkm-app");
+        assert_eq!(
+            classify(inside.clone(), &temporary),
+            HostProgram::Temporary(inside)
+        );
+        let mount = PathBuf::from("/run/user/1000/.mount_SSH KeAbC123/usr/bin/sshkm-app");
+        assert_eq!(
+            classify(mount.clone(), &temporary),
+            HostProgram::Temporary(mount)
+        );
+        let installed = PathBuf::from("/opt/SSH Key Manager/sshkm-app");
+        assert_eq!(
+            classify(installed.clone(), &temporary),
+            HostProgram::At(installed)
+        );
+        assert!(is_temporary(&std::env::temp_dir().join("x/sshkm-app")));
+        assert!(is_temporary(Path::new("/tmp/.mount_abc/usr/bin/sshkm-app")));
     }
 
     #[test]

@@ -296,7 +296,8 @@ pub struct AuditInput<'a> {
     pub config_file: Option<&'a PathPermissions>,
     /// `IdentityFile` references.
     pub identity_usage: &'a [IdentityUsage],
-    /// Entries of the system hosts file.
+    /// Lines of the system hosts file as resolvers read them
+    /// ([`HostsFile::resolver_entries`]); turned-off entries are skipped.
     pub hosts_file: &'a [HostsFileEntry],
     /// The time temporary entries are compared with (none: never expired).
     pub now: Option<OffsetDateTime>,
@@ -383,7 +384,7 @@ pub fn run_for_paths(paths: &SshPaths, hosts_file: &Path) -> Result<AuditReport>
         .map(|c| c.identity_usage(paths))
         .unwrap_or_default();
     let hosts = HostsFile::load(hosts_file)
-        .map(|file| file.entries())
+        .map(|file| file.resolver_entries())
         .unwrap_or_default();
     let mut items: Vec<(PathBuf, PermKind)> = Vec::new();
     if paths.dir.exists() {
@@ -575,19 +576,18 @@ fn hosts_file_findings(
     }
     // Keyed by name and IPv6-ness: each address family resolves on its own.
     let mut by_name: BTreeMap<(String, bool), NameUse<'_>> = BTreeMap::new();
-    // Scoped addresses (`fe80::1%lo0 localhost`) apply to one interface and
-    // are left alone.
-    for entry in entries
-        .iter()
-        .filter(|e| e.enabled && !e.address.contains('%'))
-    {
+    for entry in entries.iter().filter(|e| e.enabled) {
+        // Scoped addresses (`fe80::1%lo0 localhost`) apply to one interface:
+        // fine for localhost and not a conflict, but no place for a code host.
+        let scoped = entry.address.contains('%');
         for name in &entry.names {
             let key = hosts_file::normalize_name(name);
             let redirected = if key == "localhost" {
-                matches!(
-                    entry.kind,
-                    HostsAddressKind::Private | HostsAddressKind::Public
-                )
+                !scoped
+                    && matches!(
+                        entry.kind,
+                        HostsAddressKind::Private | HostsAddressKind::Public
+                    )
             } else {
                 CODE_HOSTS.contains(&key.as_str())
             };
@@ -603,6 +603,9 @@ fn hosts_file_findings(
                     subject: FindingSubject::default(),
                     fix: None,
                 });
+            }
+            if scoped {
+                continue;
             }
             let uses = by_name.entry((key, entry.is_ipv6())).or_default();
             if !uses.addresses.contains(&entry.address.as_str()) {
@@ -825,6 +828,7 @@ mod tests {
             raw: "~/.ssh/gone".into(),
             resolved: true,
             exists: false,
+            remote: false,
         };
         let unresolved = IdentityUsage {
             resolved: false,
@@ -942,6 +946,50 @@ mod tests {
         });
         assert_eq!(ids(&report), ["hostsFileRedirect:localhost:10.1.1.1"]);
         assert_eq!(report.counts.critical, 1);
+    }
+
+    #[test]
+    fn hosts_file_redirects_are_found_where_resolvers_find_them() {
+        // Line 1 has a name the app rejects, line 3 a scope it rejects, but
+        // resolvers read both.
+        let entries = HostsFile::parse(
+            "203.0.113.66 github.com x/1\n\
+             140.82.112.3 github.com\n\
+             fe80::1%en0/1 bitbucket.org\n\
+             fe80::1%en0 gitlab.com\n\
+             fe80::1%lo0 localhost\n\
+             fe80::2%lo0 localhost\n\
+             ::1 localhost\n",
+        )
+        .resolver_entries();
+        let report = run(&AuditInput {
+            hosts_file: &entries,
+            ..AuditInput::default()
+        });
+        assert_eq!(
+            ids(&report),
+            [
+                "hostsFileRedirect:bitbucket.org:fe80::1%en0/1",
+                "hostsFileRedirect:github.com:203.0.113.66",
+                "hostsFileRedirect:gitlab.com:fe80::1%en0",
+                "hostsFileConflict:github.com:ipv4",
+            ]
+        );
+        assert_eq!(
+            report.findings[1].kind,
+            FindingKind::HostsFileRedirect {
+                name: "github.com".into(),
+                address: "203.0.113.66".into(),
+                line: 1,
+            }
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let hosts = dir.path().join("hosts");
+        std::fs::write(&hosts, "203.0.113.66 github.com x/1\n").unwrap();
+        let paths = SshPaths::with_home(dir.path(), dir.path().join(".ssh"));
+        let report = run_for_paths(&paths, &hosts).unwrap();
+        assert_eq!(ids(&report), ["hostsFileRedirect:github.com:203.0.113.66"]);
     }
 
     #[test]

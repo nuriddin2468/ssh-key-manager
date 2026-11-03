@@ -1,9 +1,10 @@
-import { Database, FileDown, FileSpreadsheet, ShieldAlert } from 'lucide-react';
+import { Database, FileDown, FileSpreadsheet, Lock, ShieldAlert } from 'lucide-react';
 import { type FormEvent, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
 import { useVaultStatus } from '@/api/queries';
-import { toastError, useAppMutation } from '@/api/useAppMutation';
+import { useAppMutation } from '@/api/useAppMutation';
+import type { Exported } from '@/bindings/Exported';
 import { Button } from '@/components/ui/Button';
 import { ChoiceCards } from '@/components/ui/ChoiceCards';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
@@ -11,7 +12,7 @@ import { TextField } from '@/components/ui/TextField';
 import { Tile, type Tone } from '@/components/ui/Tile';
 import { Callout } from './Callout';
 import { showFileError } from './errors';
-import { baseName, pickSaveTarget, today } from './pickers';
+import { baseName } from './pickers';
 
 export interface ExportDialogProps {
   /** Closes the dialog. Render it inside `<Dialog>`, like the app's other dialogs. */
@@ -26,8 +27,10 @@ const FORMATS: { id: Format; tone: Tone; Icon: typeof Database }[] = [
 ];
 
 /**
- * Exports the vault as an encrypted copy of its KeePass file, or — after
- * the master password and a clear warning — as a plain-text CSV file.
+ * Exports the unlocked vault as an encrypted copy of its KeePass file, or —
+ * after a clear warning — as a plain-text CSV file. Both need the master
+ * password; the backend then asks where to save in a system dialog, so the
+ * page never names the file that is written.
  */
 export function ExportDialog({ onDone }: ExportDialogProps) {
   const { t } = useTranslation();
@@ -38,14 +41,22 @@ export function ExportDialog({ onDone }: ExportDialogProps) {
   const masterField = useRef<HTMLInputElement>(null);
   const csv = format === 'csv';
 
-  const badTarget = t('vaultFiles.export.badTarget');
-  const exportCsv = useAppMutation(
-    (vars: { path: string; master: string }) => api.vaultExportCsv(vars.path, vars.master),
+  const exportVault = useAppMutation(
+    (vars: { format: Format; master: string }) =>
+      vars.format === 'csv' ? api.vaultExportCsv(vars.master) : api.vaultExportKdbx(vars.master),
     {
-      success: (count, vars) =>
-        t('vaultFiles.export.exportedCsv', { count, file: baseName(vars.path) }),
-      onSuccess: onDone,
+      success: (result: Exported | null, vars) => {
+        if (!result) return undefined;
+        const file = baseName(result.path);
+        return vars.format === 'csv'
+          ? t('vaultFiles.export.exportedCsv', { count: result.count, file })
+          : t('vaultFiles.export.exportedKdbx', { file });
+      },
+      onSuccess: (result) => {
+        if (result) onDone();
+      },
       onError: (error) => {
+        if (error.code === 'cancelled') return true;
         if (error.code === 'wrong_passphrase') {
           setMasterError(t('vaultFiles.export.wrongMaster'));
           masterField.current?.focus();
@@ -53,41 +64,23 @@ export function ExportDialog({ onDone }: ExportDialogProps) {
           return true;
         }
         return showFileError(t, error, {
-          invalid_input: badTarget,
+          invalid_input: t('vaultFiles.export.badTarget'),
           vault_locked: t('vaultFiles.export.unlockFirst'),
         });
       },
     },
   );
-  const exportKdbx = useAppMutation((path: string) => api.vaultExportKdbx(path), {
-    success: (_, path) => t('vaultFiles.export.exportedKdbx', { file: baseName(path) }),
-    onSuccess: onDone,
-    onError: (error) => showFileError(t, error, { invalid_input: badTarget }),
-  });
-  const busy = exportCsv.isPending || exportKdbx.isPending;
+  const ready = unlocked && master !== '';
 
-  const submit = async (event: FormEvent) => {
+  const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (busy || (csv && (!unlocked || master === ''))) return;
-    try {
-      const path = await pickSaveTarget(
-        t('vaultFiles.export.saveTitle'),
-        csv ? `passwords-${today()}.csv` : `vault-${today()}.kdbx`,
-        csv
-          ? { name: t('vaultFiles.export.csvFiles'), extensions: ['csv'] }
-          : { name: t('vaultFiles.export.keepassFiles'), extensions: ['kdbx'] },
-      );
-      if (!path) return;
-      if (csv) exportCsv.mutate({ path, master });
-      else exportKdbx.mutate(path);
-    } catch (error) {
-      toastError(t, error);
-    }
+    if (exportVault.isPending || !ready) return;
+    exportVault.mutate({ format, master });
   };
 
   return (
     <DialogContent section="passwords" className="max-w-[560px]">
-      <form onSubmit={(event) => void submit(event)} className="flex min-h-0 flex-col">
+      <form onSubmit={submit} className="flex min-h-0 flex-col">
         <DialogHeader
           icon={
             <Tile tone="pink" size={44} glow>
@@ -106,52 +99,51 @@ export function ExportDialog({ onDone }: ExportDialogProps) {
               setMasterError(undefined);
             }}
             layout="stack"
-            options={FORMATS.map((option) => {
-              const disabled = option.id === 'csv' && !unlocked;
-              return {
-                value: option.id,
-                tone: option.tone,
-                icon: option.Icon,
-                disabled,
-                title: (
-                  <>
-                    {t(`vaultFiles.export.${option.id}`)}
-                    <span className="ml-1.5 font-mono text-[11.5px] font-normal text-subtle">
-                      .{option.id}
-                    </span>
-                  </>
-                ),
-                hint: disabled
-                  ? t('vaultFiles.export.unlockFirst')
-                  : t(`vaultFiles.export.${option.id}Hint`),
-              };
-            })}
+            options={FORMATS.map((option) => ({
+              value: option.id,
+              tone: option.tone,
+              icon: option.Icon,
+              disabled: !unlocked,
+              title: (
+                <>
+                  {t(`vaultFiles.export.${option.id}`)}
+                  <span className="ml-1.5 font-mono text-[11.5px] font-normal text-subtle">
+                    .{option.id}
+                  </span>
+                </>
+              ),
+              hint: t(`vaultFiles.export.${option.id}Hint`),
+            }))}
           />
 
+          {unlocked ? null : (
+            <Callout tone="info" icon={Lock}>
+              {t('vaultFiles.export.unlockFirst')}
+            </Callout>
+          )}
           {csv ? (
-            <>
-              <Callout
-                tone="critical"
-                icon={ShieldAlert}
-                title={t('vaultFiles.export.csvWarningTitle')}
-              >
-                {t('vaultFiles.export.csvWarning')}
-              </Callout>
-              <TextField
-                ref={masterField}
-                label={t('vaultFiles.export.master')}
-                type="password"
-                autoComplete="current-password"
-                value={master}
-                onChange={(event) => {
-                  setMaster(event.target.value);
-                  setMasterError(undefined);
-                }}
-                hint={t('vaultFiles.export.masterHint')}
-                error={masterError}
-              />
-            </>
+            <Callout
+              tone="critical"
+              icon={ShieldAlert}
+              title={t('vaultFiles.export.csvWarningTitle')}
+            >
+              {t('vaultFiles.export.csvWarning')}
+            </Callout>
           ) : null}
+          <TextField
+            ref={masterField}
+            label={t('vaultFiles.export.master')}
+            type="password"
+            autoComplete="current-password"
+            value={master}
+            disabled={!unlocked}
+            onChange={(event) => {
+              setMaster(event.target.value);
+              setMasterError(undefined);
+            }}
+            hint={csv ? t('vaultFiles.export.masterHint') : t('vaultFiles.export.masterHintKdbx')}
+            error={masterError}
+          />
         </DialogBody>
         <DialogFooter>
           <Button size="lg" onClick={onDone}>
@@ -161,8 +153,8 @@ export function ExportDialog({ onDone }: ExportDialogProps) {
             type="submit"
             variant="primary"
             size="lg"
-            loading={busy}
-            disabled={csv && (!unlocked || master === '')}
+            loading={exportVault.isPending}
+            disabled={!ready}
             icon={<FileDown className="size-4" strokeWidth={2} />}
           >
             {t('vaultFiles.export.submit')}

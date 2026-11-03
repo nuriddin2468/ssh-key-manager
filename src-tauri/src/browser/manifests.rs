@@ -174,14 +174,15 @@ fn manifest(family: Family, program: &Path) -> String {
     text
 }
 
-/// The installed browsers and whether each is registered for `program`.
-pub fn status(program: &Path) -> Vec<BrowserInstall> {
+/// The installed browsers and whether each is registered for `program`
+/// (none is, without one).
+pub fn status(program: Option<&Path>) -> Vec<BrowserInstall> {
     targets()
         .into_iter()
         .filter(|target| target.profile.is_dir())
         .map(|target| BrowserInstall {
             name: target.name.to_owned(),
-            registered: registered(&target, program),
+            registered: program.is_some_and(|program| registered(&target, program)),
         })
         .collect()
 }
@@ -224,13 +225,35 @@ fn install_one(target: &Target, program: &Path) -> io::Result<()> {
 /// Removes the registration from every browser.
 pub fn remove() {
     for target in targets() {
-        match std::fs::remove_file(&target.manifest) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => log::warn!("browser: cannot unregister from {}: {e}", target.name),
-        }
-        clear_registry(&target);
+        remove_one(&target);
     }
+}
+
+/// Removes the registrations that name a program in a temporary folder
+/// ([`super::HostProgram::Temporary`]), such as an `AppImage`'s mount, which
+/// earlier versions registered.
+pub fn remove_temporary() {
+    for target in targets() {
+        if registered_program(&target).is_some_and(|program| super::is_temporary(&program)) {
+            remove_one(&target);
+        }
+    }
+}
+
+/// The program a browser's manifest names, if it has one.
+fn registered_program(target: &Target) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(&target.manifest).ok()?;
+    let manifest: serde_json::Value = serde_json::from_str(&text).ok()?;
+    manifest["path"].as_str().map(PathBuf::from)
+}
+
+fn remove_one(target: &Target) {
+    match std::fs::remove_file(&target.manifest) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => log::warn!("browser: cannot unregister from {}: {e}", target.name),
+    }
+    clear_registry(target);
 }
 
 #[cfg(windows)]
@@ -312,6 +335,24 @@ mod tests {
             serde_json::from_str(&manifest(Family::Firefox, program)).unwrap();
         assert_eq!(firefox["allowed_extensions"][0], FIREFOX_EXTENSION_ID);
         assert!(firefox.get("allowed_origins").is_none());
+    }
+
+    #[test]
+    fn reads_back_the_registered_program() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = Target {
+            name: "Test",
+            family: Family::Chromium,
+            profile: dir.path().to_path_buf(),
+            manifest: dir.path().join(MANIFEST_FILE),
+            #[cfg(windows)]
+            key: r"HKCU\Software\sshkm-test",
+        };
+        assert_eq!(registered_program(&target), None);
+        let program = Path::new("/tmp/.mount_SSH KeAbC123/usr/bin/sshkm-app");
+        std::fs::write(&target.manifest, manifest(Family::Chromium, program)).unwrap();
+        assert_eq!(registered_program(&target).as_deref(), Some(program));
+        assert!(super::super::is_temporary(program));
     }
 
     #[test]

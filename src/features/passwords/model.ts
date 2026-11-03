@@ -343,7 +343,8 @@ export function lockToastKey(reason: LockReason) {
 
 /** The conflict copy's path from a `conflict` error's message. */
 export function conflictCopyPath(message: string): string | null {
-  const match = /changed on disk:\s*(.+)$/s.exec(message);
+  // A conflict over the key slots names `vault.keys`, of which no copy is made.
+  const match = /changed on disk:\s*(.+\.kdbx)\s*$/is.exec(message);
   return match?.[1]?.trim() || null;
 }
 

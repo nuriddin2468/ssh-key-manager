@@ -5,9 +5,17 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// How much of stdout and of stderr is kept: the last 256 KiB of each. The
+/// rest is read and dropped, so a process (or the server behind `ssh`) that
+/// prints without end cannot fill the app's memory. What callers look for
+/// comes last: `ssh`'s errors, the markers of the key install script.
+const KEEP: usize = 256 * 1024;
+
 /// Output of a finished (or killed) process.
 pub struct Output {
     pub success: bool,
+    /// The exit code, if the program exited by itself.
+    pub code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
     pub timed_out: bool,
@@ -58,8 +66,8 @@ pub fn run_command(
     });
     let mut stdout = child.stdout.take();
     let mut stderr = child.stderr.take();
-    let out_reader = thread::spawn(move || read_all(stdout.as_mut()));
-    let err_reader = thread::spawn(move || read_all(stderr.as_mut()));
+    let out_reader = thread::spawn(move || read_tail(stdout.as_mut(), KEEP));
+    let err_reader = thread::spawn(move || read_tail(stderr.as_mut(), KEEP));
 
     let started = Instant::now();
     let mut timed_out = false;
@@ -80,18 +88,36 @@ pub fn run_command(
 
     Ok(Output {
         success: !timed_out && status.is_some_and(|s| s.success()),
+        code: status.filter(|_| !timed_out).and_then(|s| s.code()),
         stdout: out_reader.join().unwrap_or_default(),
         stderr: err_reader.join().unwrap_or_default(),
         timed_out,
     })
 }
 
-fn read_all<R: Read>(reader: Option<&mut R>) -> String {
-    let mut bytes = Vec::new();
+/// Reads `reader` to the end, keeping the last `keep` bytes.
+fn read_tail<R: Read>(reader: Option<&mut R>, keep: usize) -> String {
+    let mut kept = Vec::new();
     if let Some(reader) = reader {
-        let _ = reader.read_to_end(&mut bytes);
+        let mut buffer = [0; 8 * 1024];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) => {
+                    kept.extend_from_slice(&buffer[..n]);
+                    // Cut now and then rather than at every read.
+                    if kept.len() > 2 * keep {
+                        kept.drain(..kept.len() - keep);
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
     }
-    String::from_utf8_lossy(&bytes).into_owned()
+    let excess = kept.len().saturating_sub(keep);
+    kept.drain(..excess);
+    String::from_utf8_lossy(&kept).into_owned()
 }
 
 /// `OpenSSH_9.9p1` from `ssh -V`, which prints to stderr.
@@ -105,4 +131,36 @@ pub fn openssh_version() -> Option<String> {
     text.split([',', ' ', '\n'])
         .find(|part| part.starts_with("OpenSSH"))
         .map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_the_tail_of_long_output() {
+        let mut long = vec![b'a'; 3 * 1024 * 1024 + 17];
+        long.extend_from_slice(b"\nlast line\n");
+        let kept = read_tail(Some(&mut std::io::Cursor::new(long)), KEEP);
+        assert_eq!(kept.len(), KEEP);
+        assert!(kept.ends_with("aaa\nlast line\n"));
+
+        let short = read_tail(Some(&mut std::io::Cursor::new(b"ok\n".to_vec())), KEEP);
+        assert_eq!(short, "ok\n");
+        assert_eq!(read_tail(None::<&mut std::io::Empty>, KEEP), "");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_flood_of_output_is_cut() {
+        let output = run(
+            "/bin/sh",
+            &["-c", "yes | head -c 2000000; echo done"],
+            Duration::from_secs(20),
+        )
+        .unwrap();
+        assert!(output.success);
+        assert_eq!(output.stdout.len(), KEEP);
+        assert!(output.stdout.ends_with("y\ndone\n"));
+    }
 }

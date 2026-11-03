@@ -139,6 +139,7 @@ async function run(session: Session, askPassword: boolean) {
         host: 'bastion.example.net (203.0.113.7)',
         keyType: 'ED25519',
         fingerprint: 'SHA256:Ka7Sd1Fg5Hj9Kl3Zx7Cv1Bn5Mq9Wr3Ty7Ui1Op5As9D',
+        extra: [],
       });
       if (answer?.type !== 'trust' || !answer.trust) {
         if (!session.ended) fail(session, 'hostKeyNotTrusted', 'Host key verification failed.\n');
@@ -188,6 +189,8 @@ async function run(session: Session, askPassword: boolean) {
         type: 'oneTimeCode',
         question: 'Verification code:',
         retry: false,
+        account: { user: 'ubuntu', host: '10.0.8.20' },
+        foreign: false,
       });
       if (session.ended) return;
       if (code?.type !== 'secret') {

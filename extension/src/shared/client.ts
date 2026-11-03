@@ -1,6 +1,6 @@
 // Talks to SSH Key Manager through its native messaging host
-// (src-tauri/src/browser/host.rs). Everything but `hello`, `show`, `launch`
-// and pairing is sealed with the keys from pairing.
+// (src-tauri/src/browser/host.rs). Everything but `hello`, `show`,
+// `sameSite`, `launch` and pairing is sealed with the keys from pairing.
 
 import {
   deriveKeyBytes,
@@ -93,6 +93,16 @@ export async function hello(): Promise<Result<VaultLock>> {
 /** Brings the app forward on the vault so the user can unlock it. */
 export async function showApp(): Promise<void> {
   await native({ type: 'show' });
+}
+
+/**
+ * Whether a login typed on `origin` belongs on `page` too: the same site, by
+ * the rules the app offers logins by. Needs no pairing. False if the app
+ * can't be asked.
+ */
+export async function sameSite(origin: string, page: string): Promise<boolean> {
+  const reply = await native({ type: 'sameSite', origin, page });
+  return reply.type === 'sameSite' && reply.same === true;
 }
 
 /** Starts the app when it isn't running. */

@@ -1,13 +1,14 @@
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
-import { useVaultStatus } from '@/api/queries';
+import { useConfig, useVaultStatus } from '@/api/queries';
 import { useAppMutation } from '@/api/useAppMutation';
 import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
 import type { Finding } from '@/bindings/Finding';
 import type { FixAction } from '@/bindings/FixAction';
 import type { KeyView } from '@/bindings/KeyView';
+import { configChangeError } from '@/features/hosts/fileErrors';
 import { editOf } from '@/features/hostsFile/draft';
 import { reportUnapplied } from '@/features/hostsFile/useHostsApply';
 import { AppError } from '@/lib/ipc';
@@ -44,6 +45,7 @@ export function useFix(keysById: ReadonlyMap<string, KeyView>) {
   const { navigate } = useRouter();
   // With the vault open, a missing passphrase can be generated and saved there.
   const vaultUnlocked = useVaultStatus().data?.state === 'unlocked';
+  const configRevision = useConfig().data?.view.revision ?? '';
 
   const run = useAppMutation(
     async (action: FixAction) => {
@@ -55,7 +57,11 @@ export function useFix(keysById: ReadonlyMap<string, KeyView>) {
         case 'regeneratePublic':
           return api.regeneratePublic(action.keyId).then(() => undefined);
         case 'removeIdentityFile':
-          return api.removeIdentityFile(action.hostId, action.path).then(() => undefined);
+          // The block id is the audit's, which read the file as the config
+          // query did; a newer file is refused, and both are read again.
+          return api
+            .removeIdentityFile(action.hostId, action.path, configRevision)
+            .then(() => undefined);
         case 'addPassphrase':
           return undefined;
         case 'turnOffHostsEntry': {
@@ -84,6 +90,7 @@ export function useFix(keysById: ReadonlyMap<string, KeyView>) {
     {
       success: (_, action) =>
         action.kind === 'fixPermissions' ? t('audit.fixedPermissions', { count: 1 }) : undefined,
+      onError: (error) => configChangeError(t, error),
     },
   );
 

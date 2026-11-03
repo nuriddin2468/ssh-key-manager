@@ -362,6 +362,110 @@ fn a_write_over_someone_elses_change_is_a_conflict() {
 }
 
 #[test]
+fn a_write_over_newer_key_slots_is_a_conflict() {
+    let fx = Fixture::new();
+    let (mut here, _) = Vault::create(&fx.paths, &s("old")).unwrap();
+    let mut there = Vault::unlock(&fx.paths, &s("old")).unwrap();
+
+    // Another computer changes the master password and turns on device unlock.
+    there.change_master_password(&s("old"), &s("new")).unwrap();
+    let laptop = there.enable_device_unlock().unwrap();
+
+    // This copy still has the old slots: writing them would bring the old
+    // password back and drop the other computer's slot.
+    let Err(error) = here.enable_device_unlock() else {
+        panic!("expected a conflict");
+    };
+    assert!(matches!(error, Error::Conflict(_)));
+    assert!(matches!(
+        Vault::unlock(&fx.paths, &s("old")),
+        Err(Error::WrongPassphrase)
+    ));
+    // The conflict loaded the newer slots, so trying again keeps both.
+    let desktop = here.enable_device_unlock().unwrap();
+    let files = probe(&fx.paths).unwrap();
+    assert_eq!(files.device_slots, [laptop.slot_id, desktop.slot_id]);
+    assert!(Vault::unlock(&fx.paths, &s("new")).is_ok());
+}
+
+#[test]
+fn a_refresh_picks_up_key_slots_changed_elsewhere() {
+    let fx = Fixture::new();
+    let (mut here, _) = Vault::create(&fx.paths, &s("old")).unwrap();
+    let mut there = Vault::unlock(&fx.paths, &s("old")).unwrap();
+    there.change_master_password(&s("old"), &s("new")).unwrap();
+
+    assert!(here.refresh().unwrap());
+    assert!(here.verify_master_password(&s("new")).is_ok());
+    here.disable_device_unlock("not-there").unwrap();
+    here.change_master_password(&s("new"), &s("newer")).unwrap();
+    assert!(Vault::unlock(&fx.paths, &s("newer")).is_ok());
+}
+
+#[test]
+fn a_new_recovery_key_re_encrypts_backups_and_conflict_copies() {
+    let fx = Fixture::new();
+    let (mut vault, old_key) = Vault::create(&fx.paths, &s("master")).unwrap();
+    for title in ["A", "B", "C"] {
+        vault.add_entry(&login(title, "x")).unwrap();
+        vault.save(&fx.backups()).unwrap();
+    }
+    // A conflict copy, made under the old key.
+    let mut other = Vault::unlock(&fx.paths, &s("master")).unwrap();
+    other.add_entry(&login("D", "y")).unwrap();
+    other.save(&fx.backups()).unwrap();
+    vault.add_entry(&login("E", "z")).unwrap();
+    let Err(Error::Conflict(copy)) = vault.save(&fx.backups()) else {
+        panic!("expected a conflict");
+    };
+    vault.refresh().unwrap();
+    // A backup of another vault with the same file name stays as it is.
+    let stranger = fx.backups().join("vault.kdbx.20000101T000000.000Z.bak");
+    let mut db = Database::new();
+    db.root_mut()
+        .add_entry()
+        .set_unprotected(fields::TITLE, "x");
+    let mut bytes = Vec::new();
+    db.save(&mut bytes, key(&s("someone else"))).unwrap();
+    std::fs::write(&stranger, &bytes).unwrap();
+
+    let new_key = vault.new_recovery_key(&s("master"), &fx.backups()).unwrap();
+    let mut copies = fsutil::list_backups(&fx.backups(), "vault.kdbx");
+    copies.retain(|path| path != &stranger);
+    copies.push(PathBuf::from(copy));
+    assert!(copies.len() >= 4);
+    for copy in copies {
+        let bytes = std::fs::read(&copy).unwrap();
+        assert!(Database::parse(&bytes, key(&old_key)).is_err(), "{copy:?}");
+        assert!(Database::parse(&bytes, key(&new_key)).is_ok(), "{copy:?}");
+    }
+    assert_eq!(std::fs::read(&stranger).unwrap(), bytes);
+}
+
+#[test]
+fn a_database_asking_for_too_much_memory_is_refused_before_deriving() {
+    let fx = Fixture::new();
+    let (vault, recovery) = Vault::create(&fx.paths, &s("master")).unwrap();
+    drop(vault);
+    let mut bytes = std::fs::read(&fx.paths.database).unwrap();
+    // The Argon2 memory, in bytes, in the header's KDF parameters.
+    let at = bytes
+        .windows(6)
+        .position(|w| w == [0x05, 1, 0, 0, 0, b'M'])
+        .unwrap();
+    bytes[at + 10..at + 18].copy_from_slice(&(4u64 << 40).to_le_bytes());
+    std::fs::write(&fx.paths.database, &bytes).unwrap();
+    assert!(matches!(
+        Vault::unlock(&fx.paths, &s("master")),
+        Err(Error::Unsupported(_))
+    ));
+    assert!(matches!(
+        Vault::recover(&fx.paths, &recovery, &s("master")),
+        Err(Error::Unsupported(_))
+    ));
+}
+
+#[test]
 fn master_password_and_recovery_key_can_be_replaced() {
     let fx = Fixture::new();
     let (mut vault, old_key) = Vault::create(&fx.paths, &s("one")).unwrap();

@@ -28,11 +28,15 @@ pub enum Error {
     /// The credential store reported an error.
     #[error("credential store error: {0}")]
     Store(String),
+    /// A key that should be there is gone (for example, a Windows Hello key
+    /// after Windows Hello was reset).
+    #[error("not found: {0}")]
+    NotFound(String),
 }
 
 impl Error {
     /// A stable, machine-readable code: `unsupported`, `unavailable`,
-    /// `cancelled`, `failed` or `store`.
+    /// `cancelled`, `failed`, `store` or `not_found`.
     pub const fn code(&self) -> &'static str {
         match self {
             Self::Unsupported => "unsupported",
@@ -40,6 +44,7 @@ impl Error {
             Self::Cancelled => "cancelled",
             Self::Failed(_) => "failed",
             Self::Store(_) => "store",
+            Self::NotFound(_) => "not_found",
         }
     }
 }
@@ -56,6 +61,7 @@ mod tests {
             (Error::Cancelled, "cancelled"),
             (Error::Failed("x".into()), "failed"),
             (Error::Store("x".into()), "store"),
+            (Error::NotFound("x".into()), "not_found"),
         ];
         for (err, code) in cases {
             assert_eq!(err.code(), code);

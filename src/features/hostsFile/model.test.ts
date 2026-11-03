@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { HostsFileEntry } from '@/bindings/HostsFileEntry';
 import { EMPTY_FORM, optionRow } from '@/features/hosts/model';
 import { resolutionTarget } from './HostResolution';
-import { isAddress, isValidName, lookupName } from './model';
+import { isAddress, isIpAddress, isValidName, lookupName } from './model';
 
 function entry(line: number, address: string, names: string[], enabled = true): HostsFileEntry {
   return {
@@ -51,6 +51,40 @@ describe('names and addresses', () => {
     expect(isAddress('10.0.4.12')).toBe(true);
     expect(isAddress('fe80::1')).toBe(true);
     expect(isAddress('db.internal')).toBe(false);
+  });
+
+  it('validates addresses like the core does', () => {
+    for (const good of [
+      '10.0.4.12',
+      '::1',
+      '::ffff:10.0.0.1',
+      'fe80::1%lo0',
+      'fe80::1%eth0.100',
+      'fe80::1%12',
+      'fe80::1%wl_p-2',
+      `fe80::1%${'a'.repeat(64)}`,
+    ]) {
+      expect(isIpAddress(good), good).toBe(true);
+    }
+    for (const bad of [
+      '10.0.4.256',
+      '10.0.4',
+      'db.internal',
+      'fe80::1%',
+      '10.0.0.1%lo0',
+      'fe80::1%lo0%1',
+      'fe80::1%a b',
+      // A scope that would add a line of its own.
+      'fe80::1%x\n203.0.113.66 www.bank.example',
+      'fe80::1%lo0\r',
+      'fe80::1%ünï',
+      'fe80::1%a/b',
+      'fe80::\n1',
+      'fe80::\t1',
+      `fe80::1%${'a'.repeat(65)}`,
+    ]) {
+      expect(isIpAddress(bad), JSON.stringify(bad)).toBe(false);
+    }
   });
 });
 

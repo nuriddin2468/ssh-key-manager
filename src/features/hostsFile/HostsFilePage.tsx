@@ -1,9 +1,13 @@
 import { isTauri } from '@tauri-apps/api/core';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import {
+  ChevronRight,
   Clock,
+  FolderInput,
   FolderOpen,
+  FolderPlus,
   FolderTree,
+  GripVertical,
   History,
   Lock,
   MoreHorizontal,
@@ -15,8 +19,9 @@ import {
   Undo2,
   Ungroup,
 } from 'lucide-react';
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { type PointerEvent, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import { useEnvironment, useHostsFile } from '@/api/queries';
 import { errorMessage, toastError } from '@/api/useAppMutation';
 import { useLeaveGuard, useRouter } from '@/app/router';
@@ -32,7 +37,14 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Dialog } from '@/components/ui/Dialog';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { IconButton } from '@/components/ui/IconButton';
-import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '@/components/ui/Menu';
+import {
+  Menu,
+  MenuContent,
+  MenuItem,
+  MenuSeparator,
+  MenuSub,
+  MenuTrigger,
+} from '@/components/ui/Menu';
 import { SearchField } from '@/components/ui/SearchField';
 import { Spinner } from '@/components/ui/Spinner';
 import { Switch } from '@/components/ui/Switch';
@@ -45,17 +57,21 @@ import {
   addEntry,
   baseline,
   changeCount,
+  createGroup,
   type Draft,
-  rows as draftRows,
+  sections as draftSections,
   type EntryRow,
+  editOf,
   emptyDraft,
   type GroupRow,
-  groupNames,
-  type Row,
+  LOOSE,
+  moveEntry,
   removeAdded,
   removeEntry,
   renameGroup,
   restoreEntry,
+  restoreGroup,
+  type Section,
   setEntry,
   toChanges,
   ungroup,
@@ -65,21 +81,33 @@ import { EntryDialog, GroupDialog } from './EntryDialog';
 import { LookupDialog } from './LookupDialog';
 import { isExpired, KIND_STYLE } from './model';
 import { ReviewDialog } from './ReviewDialog';
+import { useEntryDrag } from './useEntryDrag';
 
 type Filter = 'all' | 'on' | 'off' | 'blocked';
 
 const GRID =
-  'grid grid-cols-[minmax(0,1.25fr)_minmax(0,2fr)_minmax(0,1.1fr)_112px_84px] items-center gap-3';
+  'grid grid-cols-[20px_minmax(0,1.25fr)_minmax(0,2fr)_minmax(0,1.1fr)_112px_84px] items-center gap-x-3';
 
 /** Block lists run to six figures; rows past this wait for a narrower search. */
 const ROW_LIMIT = 500;
 
+/** The drop target that makes a new group for the dropped entry. */
+const NEW_GROUP = 'new-group';
+
+/** A drop target with an entry over it. */
+const DROP =
+  'border-[rgb(var(--accent-rgb)/0.55)] bg-[rgb(var(--accent-rgb)/0.07)] shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.12)]';
+
 const EMPTY_VIEW: HostsFileView = { entries: [], invalid: [], groups: [] };
+
+const TOAST_ACTION =
+  '!h-7 !rounded-lg !border !border-white/15 !bg-white/10 !px-2.5 !text-[12.5px] !font-medium !text-fg hover:!bg-white/15';
 
 type OpenDialog =
   | { kind: 'lookup' }
   | { kind: 'entry'; row: EntryRow | null; group: string | null }
   | { kind: 'rename'; name: string }
+  | { kind: 'create'; move: EntryRow | null }
   | { kind: 'review' }
   | { kind: 'backups' };
 
@@ -93,6 +121,38 @@ function kindOf(row: EntryRow): HostsAddressKind {
     : 'public';
 }
 
+/** The draft edits build on: changes made against an older revision no longer fit the file. */
+function current(state: Draft | null, revision: string): Draft {
+  if (state && changeCount(state) > 0 && state.revision === revision) return state;
+  // Groups made empty don't name lines, so they outlive a new revision.
+  return { ...emptyDraft(revision), created: state?.created ?? [] };
+}
+
+const rowId = (row: EntryRow) =>
+  row.base ? `hosts-line-${row.base.line}` : `hosts-new-${row.addId}`;
+
+/**
+ * For menus whose items open dialogs: the closing menu would hand focus back
+ * to its button, away from the dialog's first field.
+ */
+function useDialogItems() {
+  const opening = useRef(false);
+  return {
+    open: (show: () => void) => () => {
+      opening.current = true;
+      show();
+    },
+    onCloseAutoFocus: (event: Event) => {
+      if (opening.current) event.preventDefault();
+      opening.current = false;
+    },
+  };
+}
+
+/** Entries a group's switch and delete act on: the system's own lines stay. */
+const editableEntries = (section: Section) =>
+  section.entries.filter((row) => row.status !== 'removed' && !row.base?.system);
+
 export function HostsFilePage({ line }: { line?: number }) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
@@ -102,7 +162,10 @@ export function HostsFilePage({ line }: { line?: number }) {
   const [query, setQuery] = useState('');
   const [dialog, setDialog] = useState<OpenDialog | null>(null);
   const [draftState, setDraftState] = useState<Draft | null>(null);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const [flash, setFlash] = useState<string | null>(null);
   const search = useRef<HTMLInputElement>(null);
+  const table = useRef<HTMLDivElement>(null);
   useFindShortcut(search);
 
   const info = hostsFile.data;
@@ -110,18 +173,27 @@ export function HostsFilePage({ line }: { line?: number }) {
   const view = info?.view ?? EMPTY_VIEW;
   const editable = info?.readOnly === null;
   const pending = draftState ? changeCount(draftState) : 0;
-  // Changes made against an older revision no longer fit the file.
   const stale = pending > 0 && draftState?.revision !== revision;
-  const draft = useMemo(
-    () => (draftState && pending > 0 && !stale ? draftState : emptyDraft(revision)),
-    [draftState, pending, stale, revision],
-  );
-  const update = (change: (draft: Draft) => Draft) => setDraftState(change(draft));
+  const draft = useMemo(() => current(draftState, revision), [draftState, revision]);
+  // A toast's undo runs later, against the draft as it is then.
+  const revisionNow = useRef(revision);
+  useEffect(() => {
+    revisionNow.current = revision;
+  }, [revision]);
+  const update = (change: (draft: Draft) => Draft) =>
+    setDraftState((state) => change(current(state, revisionNow.current)));
   const discard = () => setDraftState(null);
   // Unsaved changes would be lost on another page, so leaving asks first.
   const guard = useLeaveGuard(pending > 0);
-  const allRows = useMemo(() => draftRows(view, draft), [view, draft]);
-  const groups = useMemo(() => groupNames(view, draft), [view, draft]);
+  const all = useMemo(() => draftSections(view, draft), [view, draft]);
+  const groups = useMemo(
+    () => [
+      ...new Set(
+        all.flatMap(({ group }) => (group && group.status !== 'ungrouped' ? [group.name] : [])),
+      ),
+    ],
+    [all],
+  );
 
   const loaded = info !== undefined;
   // Opened from an audit finding or a lookup: bring that line into view.
@@ -129,6 +201,14 @@ export function HostsFilePage({ line }: { line?: number }) {
     if (line === undefined || !loaded) return;
     document.getElementById(`hosts-line-${line}`)?.scrollIntoView({ block: 'center' });
   }, [line, loaded]);
+
+  // A moved entry lights up where it landed.
+  useEffect(() => {
+    if (!flash) return;
+    document.getElementById(flash)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    const timer = setTimeout(() => setFlash(null), 1600);
+    return () => clearTimeout(timer);
+  }, [flash]);
 
   const reveal = async () => {
     const path = environment.data?.hostsFile;
@@ -139,39 +219,6 @@ export function HostsFilePage({ line }: { line?: number }) {
       toastError(t, error);
     }
   };
-
-  const tests: Record<Filter, (row: EntryRow) => boolean> = {
-    all: () => true,
-    on: (row) => row.entry.enabled,
-    off: (row) => !row.entry.enabled,
-    blocked: (row) => kindOf(row) === 'blocked',
-  };
-  const needle = useDeferredValue(query).trim().toLowerCase();
-  const filtering = filter !== 'all' || needle !== '';
-  const matches = (row: EntryRow) =>
-    tests[filter](row) &&
-    (!needle ||
-      row.entry.address.toLowerCase().includes(needle) ||
-      row.entry.names.some((name) => name.toLowerCase().includes(needle)) ||
-      (row.entry.comment?.toLowerCase().includes(needle) ?? false));
-  const entryRows = allRows.filter((row): row is EntryRow => row.kind === 'entry');
-  const visible: Row[] = [];
-  let header: GroupRow | null = null;
-  for (const row of allRows) {
-    if (row.kind === 'group') {
-      header = row;
-      if (!filtering) visible.push(row);
-    } else if (matches(row)) {
-      if (filtering && header && row.entry.group === header.name) {
-        visible.push(header);
-        header = null;
-      }
-      visible.push(row);
-    }
-  }
-  const shown = visible.slice(0, ROW_LIMIT);
-  const shownEntries = visible.filter((row) => row.kind === 'entry').length;
-  const invalid = view.invalid;
 
   // Draft edits.
   const setRow = (row: EntryRow, edit: HostsEntryEdit) =>
@@ -194,13 +241,32 @@ export function HostsFilePage({ line }: { line?: number }) {
           : setEntry(d, row.base, baseline(d, row.base))
         : d,
     );
-  const groupEntries = (name: string) =>
-    entryRows.filter(
-      (row) => row.entry.group === name && row.status !== 'removed' && !row.base?.system,
+  /** Moves an entry, says where it went, and offers to take it back. */
+  const moveRow = (row: EntryRow, to: string | null, prepare = (d: Draft) => d) => {
+    const from = row.entry.group;
+    if (to === from) return;
+    update((d) => moveEntry(prepare(d), row, to));
+    setFlash(rowId(row));
+    const name = row.entry.names[0] ?? row.entry.address;
+    const at = revision;
+    toast.success(
+      to === null
+        ? t('hostsFile.movedOut', { name, group: from ?? '' })
+        : t('hostsFile.moved', { name, group: to }),
+      {
+        action: {
+          label: t('hostsFile.undo'),
+          onClick: () => {
+            if (revisionNow.current === at) update((d) => moveEntry(d, row, from));
+          },
+        },
+        classNames: { actionButton: TOAST_ACTION },
+      },
     );
-  const toggleGroup = (name: string, enabled: boolean) =>
+  };
+  const toggleGroup = (section: Section, enabled: boolean) =>
     update((d) =>
-      groupEntries(name).reduce(
+      editableEntries(section).reduce(
         (next, row) =>
           row.base
             ? setEntry(next, row.base, { ...row.entry, enabled })
@@ -210,18 +276,88 @@ export function HostsFilePage({ line }: { line?: number }) {
         d,
       ),
     );
-  const deleteGroup = (group: GroupRow) =>
-    update((d) => {
-      const next = groupEntries(group.name).reduce(
+  const deleteGroup = (section: Section, group: GroupRow) =>
+    update((d) =>
+      ungroup(
+        editableEntries(section).reduce(
+          (acc, row) =>
+            row.base
+              ? removeEntry(acc, row.base.line)
+              : row.addId !== null
+                ? removeAdded(acc, row.addId)
+                : acc,
+          d,
+        ),
+        view,
+        group.name,
+      ),
+    );
+  // Takes back an ungroup, or a delete: the markers and the entries return.
+  const restoreSection = (section: Section, group: GroupRow) =>
+    update((d) =>
+      section.entries.reduce(
         (acc, row) =>
-          row.base
-            ? removeEntry(acc, row.base.line)
-            : row.addId !== null
-              ? removeAdded(acc, row.addId)
-              : acc,
-        d,
-      );
-      return group.original === null ? next : ungroup(next, view, group.name);
+          row.base && row.status === 'removed' ? restoreEntry(acc, row.base.line) : acc,
+        group.original === null ? d : restoreGroup(d, view, group.original),
+      ),
+    );
+
+  const { drag, ghost, start } = useEntryDrag(table, (row, target) => {
+    if (target === NEW_GROUP) {
+      setDialog({ kind: 'create', move: row });
+      return;
+    }
+    const section = all.find((s) => s.key === target);
+    if (section) moveRow(row, section.group?.name ?? null);
+  });
+  const dragFrom = drag
+    ? all.find((s) => s.entries.some((row) => row.key === drag.row.key))?.key
+    : undefined;
+  /** The section under a drag, when dropping there would move the entry. */
+  const over = drag && drag.target !== dragFrom ? drag.target : null;
+
+  // Filters and search.
+  const tests: Record<Filter, (row: EntryRow) => boolean> = {
+    all: () => true,
+    on: (row) => row.entry.enabled,
+    off: (row) => !row.entry.enabled,
+    blocked: (row) => kindOf(row) === 'blocked',
+  };
+  const needle = useDeferredValue(query).trim().toLowerCase();
+  const filtering = filter !== 'all' || needle !== '';
+  const matches = (row: EntryRow) =>
+    tests[filter](row) &&
+    (!needle ||
+      row.entry.address.toLowerCase().includes(needle) ||
+      row.entry.names.some((name) => name.toLowerCase().includes(needle)) ||
+      (row.entry.comment?.toLowerCase().includes(needle) ?? false));
+  const entryRows = all.flatMap((section) => section.entries);
+  const anyGroup = all.some((section) => section.group !== null);
+  // Search looks inside closed groups; an ungrouped one has no toggle to open it.
+  const isOpen = (section: Section) =>
+    filtering || section.group?.status === 'ungrouped' || !collapsed.has(section.key);
+  let budget = ROW_LIMIT;
+  let matched = 0;
+  const visible = all.flatMap((section) => {
+    const found = filtering ? section.entries.filter(matches) : section.entries;
+    matched += found.length;
+    // Loose entries only need room when there are some, or one could land there.
+    const empty = found.length === 0;
+    if (section.group === null ? empty && !drag : filtering && empty) return [];
+    const open = isOpen(section);
+    const rows = open ? found.slice(0, budget) : [];
+    budget -= rows.length;
+    return [{ section, found: found.length, rows, hidden: open ? found.length - rows.length : 0 }];
+  });
+  const rendered = ROW_LIMIT - budget;
+  const limited = visible.some((v) => v.hidden > 0);
+  const invalid = view.invalid;
+  const setOpen = (key: string, open: boolean) =>
+    setCollapsed((keys) => {
+      const next = new Set(keys);
+      if (open) next.delete(key);
+      else next.add(key);
+      return next;
     });
 
   const chips: { id: Filter; label: string }[] = [
@@ -230,6 +366,13 @@ export function HostsFilePage({ line }: { line?: number }) {
     { id: 'off', label: t('hostsFile.filterOff') },
     { id: 'blocked', label: t('hostsFile.filterBlocked') },
   ];
+
+  const ghostTarget =
+    drag?.target === NEW_GROUP
+      ? t('hostsFile.newGroup')
+      : drag?.target === LOOSE
+        ? t('hostsFile.groupNone')
+        : (all.find((s) => s.key === drag?.target)?.group?.name ?? null);
 
   return (
     <>
@@ -260,6 +403,12 @@ export function HostsFilePage({ line }: { line?: number }) {
               variant="secondary"
               icon={<History className="size-[15px]" strokeWidth={1.75} />}
               onClick={() => setDialog({ kind: 'backups' })}
+            />
+            <IconButton
+              label={t('hostsFile.newGroup')}
+              variant="secondary"
+              icon={<FolderPlus className="size-[15px]" strokeWidth={1.75} />}
+              onClick={() => setDialog({ kind: 'create', move: null })}
             />
             <Button
               variant="primary"
@@ -314,7 +463,7 @@ export function HostsFilePage({ line }: { line?: number }) {
             description={errorMessage(t, hostsFile.error)}
             action={<Button onClick={() => void hostsFile.refetch()}>{t('common.retry')}</Button>}
           />
-        ) : allRows.length === 0 ? (
+        ) : entryRows.length === 0 && !anyGroup ? (
           <EmptyState
             icon={
               <Tile tone="indigo" size={52} glow>
@@ -338,56 +487,136 @@ export function HostsFilePage({ line }: { line?: number }) {
               ))}
             </div>
 
-            <div className="glass overflow-x-auto rounded-2xl">
-              <div className="min-w-[700px] p-1.5">
+            {/* The list scrolls on its own, under the filters, with its column names kept in view. */}
+            <div ref={table} className="glass min-h-[260px] overflow-auto rounded-2xl">
+              <div className="flex min-w-[720px] flex-col gap-1.5 p-1.5 pt-0">
                 <div
                   className={cn(
                     GRID,
-                    'h-[34px] px-3 text-[11.5px] font-medium tracking-[0.02em] text-subtle',
+                    'sticky top-0 z-10 -mx-1.5 h-9 bg-[rgb(17_21_31/0.94)] pr-[18px] pl-3 text-[11.5px] font-medium tracking-[0.02em] text-subtle backdrop-blur',
                   )}
                 >
+                  <span />
                   <span>{t('hostsFile.colAddress')}</span>
                   <span>{t('hostsFile.colNames')}</span>
                   <span>{t('hostsFile.colComment')}</span>
                   <span>{t('hostsFile.colExpires')}</span>
                   <span className="sr-only">{t('hostsFile.colActions')}</span>
                 </div>
-                {shown.map((row, index) =>
-                  row.kind === 'group' ? (
-                    <GroupHeader
-                      key={row.key}
-                      group={row}
-                      entries={groupEntries(row.name)}
-                      editable={editable}
-                      onToggle={(enabled) => toggleGroup(row.name, enabled)}
-                      onAdd={() => setDialog({ kind: 'entry', row: null, group: row.name })}
-                      onRename={() => setDialog({ kind: 'rename', name: row.name })}
-                      onUngroup={() => update((d) => ungroup(d, view, row.name))}
-                      onDelete={() => deleteGroup(row)}
-                    />
-                  ) : (
+                {visible.map(({ section, found, rows, hidden }) => {
+                  const group = section.group;
+                  const droppable = editable && group?.status !== 'ungrouped';
+                  const open = isOpen(section);
+                  const lines = rows.map((row) => (
                     <EntryLine
                       key={row.key}
                       row={row}
-                      striped={index % 2 === 1}
                       highlighted={row.base !== null && row.base.line === line}
+                      flashing={flash === rowId(row)}
+                      dragging={drag?.row.key === row.key}
                       editable={editable}
+                      groups={groups}
+                      onDragStart={(event) => start(event, row)}
                       onToggle={(enabled) => setRow(row, { ...row.entry, enabled })}
                       onEdit={() => setDialog({ kind: 'entry', row, group: row.entry.group })}
+                      onMove={(to) => moveRow(row, to)}
+                      onMoveNew={() => setDialog({ kind: 'create', move: row })}
                       onRemove={() => removeRow(row)}
                       onUndo={() => undoRow(row)}
                     />
-                  ),
-                )}
-                {shownEntries === 0 ? (
+                  ));
+                  return group === null ? (
+                    <section
+                      key={section.key}
+                      aria-label={anyGroup ? t('hostsFile.groupNone') : undefined}
+                      data-drop={droppable ? section.key : undefined}
+                      className={cn(
+                        'rounded-xl border border-transparent transition-colors duration-150',
+                        over === section.key && DROP,
+                      )}
+                    >
+                      {anyGroup ? (
+                        <div className="flex h-8 items-center gap-2 pr-3 pl-[38px] text-[12px]">
+                          <span className="font-medium text-fg-2">{t('hostsFile.groupNone')}</span>
+                          <span className="text-subtle">
+                            {t('hostsFile.entries', { count: found })}
+                          </span>
+                        </div>
+                      ) : null}
+                      {lines}
+                      {found === 0 && drag ? (
+                        <DropHint active={over === section.key}>{t('hostsFile.dragOut')}</DropHint>
+                      ) : null}
+                    </section>
+                  ) : (
+                    <section
+                      key={section.key}
+                      aria-label={group.name}
+                      data-drop={droppable ? section.key : undefined}
+                      className={cn(
+                        'rounded-xl border border-white/[0.07] bg-white/[0.025] transition-colors duration-150',
+                        group.status === 'ungrouped' && 'border-dashed bg-transparent',
+                        over === section.key && DROP,
+                      )}
+                    >
+                      <GroupHeader
+                        group={group}
+                        entries={editableEntries(section)}
+                        count={section.entries.filter((row) => row.status !== 'removed').length}
+                        deleted={section.entries.some((row) => row.status === 'removed')}
+                        open={open}
+                        collapsible={!filtering}
+                        editable={editable}
+                        onOpenChange={(next) => setOpen(section.key, next)}
+                        onToggle={(enabled) => toggleGroup(section, enabled)}
+                        onAdd={() => setDialog({ kind: 'entry', row: null, group: group.name })}
+                        onRename={() => setDialog({ kind: 'rename', name: group.name })}
+                        onUngroup={() => update((d) => ungroup(d, view, group.name))}
+                        onDelete={() => deleteGroup(section, group)}
+                        onRestore={() => restoreSection(section, group)}
+                      />
+                      {open ? (
+                        <div className="flex flex-col pb-1">
+                          {lines}
+                          {section.entries.length === 0 && group.status === 'new' ? (
+                            <DropHint active={over === section.key}>
+                              {t('hostsFile.groupEmpty')}
+                            </DropHint>
+                          ) : null}
+                          {hidden > 0 ? (
+                            <p className="px-[38px] py-2 text-[12px] text-subtle">
+                              {t('hostsFile.moreEntries', { count: hidden })}
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </section>
+                  );
+                })}
+                {filtering && matched === 0 ? (
                   <p className="px-4 py-8 text-center text-subtle">{t('hostsFile.noMatches')}</p>
+                ) : null}
+                {editable && (!filtering || drag) ? (
+                  <button
+                    type="button"
+                    data-drop={NEW_GROUP}
+                    onClick={() => setDialog({ kind: 'create', move: null })}
+                    className={cn(
+                      'pressable-soft flex h-11 items-center justify-center gap-2 rounded-xl border border-dashed border-white/[0.12] text-[12.5px] font-medium text-subtle transition-colors duration-150 hover:border-white/20 hover:bg-white/[0.03] hover:text-fg-2',
+                      drag && 'border-white/20 text-fg-2',
+                      over === NEW_GROUP && DROP,
+                    )}
+                  >
+                    <FolderPlus aria-hidden="true" className="size-4" strokeWidth={1.9} />
+                    {drag ? t('hostsFile.dragNew') : t('hostsFile.newGroup')}
+                  </button>
                 ) : null}
               </div>
             </div>
             <p className="text-[12.5px] text-subtle">
-              {visible.length > shown.length
-                ? t('hostsFile.footerLimited', { shown: shown.length, total: visible.length })
-                : t('hostsFile.footer', { shown: shownEntries, total: entryRows.length })}
+              {limited
+                ? t('hostsFile.footerLimited', { shown: rendered, total: matched })
+                : t('hostsFile.footer', { shown: matched, total: entryRows.length })}
               {editable ? ` ${t('hostsFile.editNote')}` : ''}
               {invalid.length > 0
                 ? ` ${t('hostsFile.invalid', {
@@ -428,6 +657,37 @@ export function HostsFilePage({ line }: { line?: number }) {
         </section>
       ) : null}
 
+      {drag ? (
+        <div
+          ref={ghost}
+          aria-hidden="true"
+          style={{ transform: `translate(${drag.x + 14}px, ${drag.y + 12}px)` }}
+          className="pointer-events-none fixed top-0 left-0 z-[60] flex max-w-[300px] items-center gap-2.5 rounded-xl border border-white/[0.12] bg-popover/95 py-2 pr-3.5 pl-2.5 shadow-[0_18px_40px_-12px_rgb(0_0_0/0.75)] backdrop-blur"
+        >
+          <DragTile row={drag.row} />
+          <span className="flex min-w-0 flex-col">
+            <span className="truncate font-mono text-[12.5px] font-medium">
+              {drag.row.entry.names[0] ?? drag.row.entry.address}
+            </span>
+            <span
+              className={cn(
+                'inline-flex min-w-0 items-center gap-1 truncate text-[11.5px]',
+                over && ghostTarget ? 'text-[var(--accent-text)]' : 'text-subtle',
+              )}
+            >
+              {over && ghostTarget ? (
+                <>
+                  <FolderInput aria-hidden="true" className="size-3 shrink-0" strokeWidth={2} />
+                  <span className="truncate">{ghostTarget}</span>
+                </>
+              ) : (
+                <span className="truncate font-mono">{drag.row.entry.address}</span>
+              )}
+            </span>
+          </span>
+        </div>
+      ) : null}
+
       <Dialog open={dialog !== null} onOpenChange={(open) => (open ? undefined : setDialog(null))}>
         {dialog?.kind === 'lookup' ? (
           <LookupDialog
@@ -446,9 +706,21 @@ export function HostsFilePage({ line }: { line?: number }) {
             initial={dialog.row?.entry ?? null}
             groups={groups}
             defaultGroup={dialog.group}
-            onSave={(edit) =>
-              dialog.row ? setRow(dialog.row, edit) : update((d) => addEntry(d, edit))
-            }
+            onSave={(edit) => {
+              // A group named here stays, like one made with the button, if its entry moves on.
+              const made = (d: Draft) =>
+                edit.group !== null && !groups.includes(edit.group)
+                  ? createGroup(d, edit.group)
+                  : d;
+              if (!dialog.row) update((d) => addEntry(made(d), edit));
+              else if (dialog.row.base) {
+                const base = dialog.row.base;
+                update((d) => setEntry(made(d), base, edit));
+              } else {
+                const id = dialog.row.addId;
+                if (id !== null) update((d) => updateAdded(made(d), id, edit));
+              }
+            }}
             onDone={() => setDialog(null)}
           />
         ) : dialog?.kind === 'rename' ? (
@@ -456,6 +728,17 @@ export function HostsFilePage({ line }: { line?: number }) {
             name={dialog.name}
             taken={groups.filter((name) => name !== dialog.name)}
             onSave={(to) => update((d) => renameGroup(d, view, dialog.name, to))}
+            onDone={() => setDialog(null)}
+          />
+        ) : dialog?.kind === 'create' ? (
+          <GroupDialog
+            name={null}
+            taken={groups}
+            onSave={(name) =>
+              dialog.move
+                ? moveRow(dialog.move, name, (d) => createGroup(d, name))
+                : update((d) => createGroup(d, name))
+            }
             onDone={() => setDialog(null)}
           />
         ) : dialog?.kind === 'review' ? (
@@ -493,60 +776,127 @@ export function HostsFilePage({ line }: { line?: number }) {
   );
 }
 
+function DragTile({ row }: { row: EntryRow }) {
+  const style = KIND_STYLE[kindOf(row)];
+  return (
+    <Tile tone={row.entry.enabled ? style.tone : 'slate'} size={26}>
+      <style.Icon className="size-3.5" strokeWidth={2} />
+    </Tile>
+  );
+}
+
+/** Where a dragged entry can land in a section that has none. */
+function DropHint({ active, children }: { active: boolean; children: string }) {
+  return (
+    <p
+      className={cn(
+        'mx-1.5 mb-1 flex h-11 items-center justify-center rounded-lg border border-dashed px-3 text-center text-[12.5px] transition-colors duration-150',
+        active
+          ? 'border-[rgb(var(--accent-rgb)/0.5)] text-[var(--accent-text)]'
+          : 'border-white/[0.1] text-subtle',
+      )}
+    >
+      {children}
+    </p>
+  );
+}
+
 interface GroupHeaderProps {
   group: GroupRow;
+  /** Entries the switch acts on. */
   entries: EntryRow[];
+  /** Entries in the group once saved. */
+  count: number;
+  /** Some of its entries will be deleted; with an ungroup, the whole group goes. */
+  deleted: boolean;
+  open: boolean;
+  collapsible: boolean;
   editable: boolean;
+  onOpenChange: (open: boolean) => void;
   onToggle: (enabled: boolean) => void;
   onAdd: () => void;
   onRename: () => void;
   onUngroup: () => void;
   onDelete: () => void;
+  onRestore: () => void;
 }
 
 function GroupHeader({
   group,
   entries,
+  count,
+  deleted,
+  open,
+  collapsible,
   editable,
+  onOpenChange,
   onToggle,
   onAdd,
   onRename,
   onUngroup,
   onDelete,
+  onRestore,
 }: GroupHeaderProps) {
   const { t } = useTranslation();
+  const dialogs = useDialogItems();
   const on = entries.length > 0 && entries.every((row) => row.entry.enabled);
+  const off = entries.filter((row) => !row.entry.enabled).length;
+  const ungrouped = group.status === 'ungrouped';
   const status =
     group.status === 'renamed'
       ? t('hostsFile.groupRenamed')
       : group.status === 'new'
         ? t('hostsFile.groupNew')
-        : group.status === 'ungrouped'
-          ? t('hostsFile.groupUngrouped')
+        : ungrouped
+          ? deleted
+            ? t('hostsFile.groupDeleted')
+            : t('hostsFile.groupUngrouped')
           : null;
   return (
-    <div
-      className={cn(
-        'mt-1.5 flex min-h-11 items-center gap-2.5 rounded-xl border border-white/[0.06] bg-white/[0.035] px-3 py-1.5',
-        group.status === 'ungrouped' && 'opacity-70',
+    <div className="flex min-h-11 items-center gap-3 py-1.5 pr-3 pl-1.5">
+      {collapsible && !ungrouped ? (
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-label={group.name}
+          onClick={() => onOpenChange(!open)}
+          className="pressable grid size-5 shrink-0 place-items-center rounded-md text-subtle hover:bg-white/[0.08] hover:text-fg"
+        >
+          <ChevronRight
+            aria-hidden="true"
+            className={cn('size-4 transition-transform duration-150', open && 'rotate-90')}
+            strokeWidth={2}
+          />
+        </button>
+      ) : (
+        <span className="w-5 shrink-0" />
       )}
-    >
-      <FolderTree
-        aria-hidden="true"
-        className="size-4 shrink-0 text-indigo-300"
-        strokeWidth={1.9}
-      />
-      <span className="truncate font-semibold">{group.name}</span>
-      <span className="text-[12px] text-subtle">
-        {t('hostsFile.entries', { count: entries.length })}
+      <span className="flex min-w-0 items-center gap-2.5">
+        <Tile tone={ungrouped ? 'slate' : 'indigo'} size={28}>
+          <FolderTree className="size-3.5" strokeWidth={2} />
+        </Tile>
+        <span
+          className={cn('truncate font-semibold', ungrouped && 'text-muted line-through')}
+          title={group.name}
+        >
+          {group.name}
+        </span>
+      </span>
+      <span className="shrink-0 text-[12px] text-subtle">
+        {t('hostsFile.entries', { count })}
+        {off > 0 && off < entries.length ? ` · ${t('hostsFile.entriesOff', { count: off })}` : ''}
       </span>
       {status ? (
-        <Badge tone={group.status === 'ungrouped' ? 'warning' : 'accent'} pill>
+        <Badge tone={ungrouped ? 'warning' : 'accent'} pill>
           {status}
         </Badge>
       ) : null}
       <span className="flex-1" />
-      {editable && group.status !== 'ungrouped' ? (
+      {!editable ? null : ungrouped ? (
+        <Button size="sm" variant="ghost" icon={<Undo2 className="size-3.5" />} onClick={onRestore}>
+          {t('hostsFile.undo')}
+        </Button>
+      ) : (
         <>
           <Switch
             checked={on}
@@ -561,11 +911,11 @@ function GroupHeader({
                 icon={<MoreHorizontal className="size-4" strokeWidth={2} />}
               />
             </MenuTrigger>
-            <MenuContent>
-              <MenuItem icon={<Plus className="size-4" />} onSelect={onAdd}>
+            <MenuContent onCloseAutoFocus={dialogs.onCloseAutoFocus}>
+              <MenuItem icon={<Plus className="size-4" />} onSelect={dialogs.open(onAdd)}>
                 {t('hostsFile.groupAdd')}
               </MenuItem>
-              <MenuItem icon={<Pencil className="size-4" />} onSelect={onRename}>
+              <MenuItem icon={<Pencil className="size-4" />} onSelect={dialogs.open(onRename)}>
                 {t('hostsFile.groupRename')}
               </MenuItem>
               {group.original !== null ? (
@@ -580,37 +930,50 @@ function GroupHeader({
             </MenuContent>
           </Menu>
         </>
-      ) : null}
+      )}
     </div>
   );
 }
 
 interface EntryLineProps {
   row: EntryRow;
-  striped: boolean;
   highlighted: boolean;
+  flashing: boolean;
+  dragging: boolean;
   editable: boolean;
+  /** Groups the entry can be moved to. */
+  groups: string[];
+  onDragStart: (event: PointerEvent) => void;
   onToggle: (enabled: boolean) => void;
   onEdit: () => void;
+  onMove: (group: string | null) => void;
+  onMoveNew: () => void;
   onRemove: () => void;
   onUndo: () => void;
 }
 
 function EntryLine({
   row,
-  striped,
   highlighted,
+  flashing,
+  dragging,
   editable,
+  groups,
+  onDragStart,
   onToggle,
   onEdit,
+  onMove,
+  onMoveNew,
   onRemove,
   onUndo,
 }: EntryLineProps) {
   const { t, i18n } = useTranslation();
+  const dialogs = useDialogItems();
   const { entry, base, status } = row;
   const style = KIND_STYLE[kindOf(row)];
   const shadowed = new Set(status === 'same' ? (base?.shadowed ?? []) : []);
   const removed = status === 'removed';
+  const movable = editable && !removed && !base?.system;
   const name = entry.names[0] ?? entry.address;
   const expires = entry.expires ? new Date(entry.expires) : null;
   const today = expires?.toDateString() === new Date().toDateString();
@@ -623,22 +986,38 @@ function EntryLine({
       ).format(expires)
     : null;
   const expired = entry.enabled && isExpired(entry.expires);
-  const movedTo =
-    base && status === 'changed' && entry.group !== null && entry.group !== base.group
-      ? entry.group
-      : null;
+  // A move alone is not an edit; the badge says which happened.
+  const edited =
+    status === 'changed' &&
+    base !== null &&
+    JSON.stringify({ ...editOf(base), group: null }) !== JSON.stringify({ ...entry, group: null });
+  const targets = groups.filter((group) => group !== entry.group);
   return (
     <div
-      id={base ? `hosts-line-${base.line}` : undefined}
+      id={rowId(row)}
       aria-current={highlighted ? 'true' : undefined}
       className={cn(
         GRID,
-        'min-h-12 rounded-xl px-3 py-1',
-        striped && 'bg-white/[0.02]',
+        'group/row min-h-12 rounded-xl py-1 pr-3 pl-1.5 transition-opacity duration-150 hover:bg-white/[0.03]',
         highlighted && 'bg-[rgb(var(--accent-rgb)/0.1)] ring-1 ring-[rgb(var(--accent-rgb)/0.55)]',
         status === 'new' && 'bg-ok/[0.05]',
+        flashing && 'animate-flash',
+        dragging && 'opacity-35',
       )}
     >
+      {movable ? (
+        <Tooltip content={t('hostsFile.dragHandle')}>
+          <span
+            aria-hidden="true"
+            onPointerDown={onDragStart}
+            className="grid h-8 w-5 cursor-grab touch-none place-items-center rounded-md text-faint transition-colors duration-100 group-hover/row:text-muted hover:bg-white/[0.07] hover:text-fg"
+          >
+            <GripVertical className="size-4" strokeWidth={1.9} />
+          </span>
+        </Tooltip>
+      ) : (
+        <span />
+      )}
       <span className="flex min-w-0 items-center gap-2.5">
         <Tile tone={entry.enabled && !removed ? style.tone : 'slate'} size={28}>
           <style.Icon className="size-3.5" strokeWidth={2} />
@@ -674,16 +1053,21 @@ function EntryLine({
           <Badge tone="accent" pill>
             {t('hostsFile.statusNew')}
           </Badge>
-        ) : status === 'changed' ? (
-          <Badge tone="accent" pill>
-            {t('hostsFile.statusChanged')}
-          </Badge>
         ) : removed ? (
           <Badge tone="critical" pill>
             {t('hostsFile.statusRemoved')}
           </Badge>
         ) : null}
-        {movedTo ? <Badge pill>{t('hostsFile.movedTo', { group: movedTo })}</Badge> : null}
+        {row.moved ? (
+          <Badge tone="accent" pill>
+            {t('hostsFile.statusMoved')}
+          </Badge>
+        ) : null}
+        {edited ? (
+          <Badge tone="accent" pill>
+            {t('hostsFile.statusChanged')}
+          </Badge>
+        ) : null}
         {!entry.enabled && !removed ? <Badge pill>{t('hostsFile.off')}</Badge> : null}
         {base?.system ? (
           <Badge tone="info" pill>
@@ -745,10 +1129,33 @@ function EntryLine({
                   icon={<MoreHorizontal className="size-4" strokeWidth={2} />}
                 />
               </MenuTrigger>
-              <MenuContent>
-                <MenuItem icon={<Pencil className="size-4" />} onSelect={onEdit}>
+              <MenuContent onCloseAutoFocus={dialogs.onCloseAutoFocus}>
+                <MenuItem icon={<Pencil className="size-4" />} onSelect={dialogs.open(onEdit)}>
                   {t('hostsFile.edit')}
                 </MenuItem>
+                <MenuSub icon={<FolderInput className="size-4" />} label={t('hostsFile.moveTo')}>
+                  {entry.group !== null ? (
+                    <MenuItem icon={<Ungroup className="size-4" />} onSelect={() => onMove(null)}>
+                      {t('hostsFile.groupNone')}
+                    </MenuItem>
+                  ) : null}
+                  {targets.map((group) => (
+                    <MenuItem
+                      key={group}
+                      icon={<FolderTree className="size-4" />}
+                      onSelect={() => onMove(group)}
+                    >
+                      <span className="truncate">{group}</span>
+                    </MenuItem>
+                  ))}
+                  {entry.group !== null || targets.length > 0 ? <MenuSeparator /> : null}
+                  <MenuItem
+                    icon={<FolderPlus className="size-4" />}
+                    onSelect={dialogs.open(onMoveNew)}
+                  >
+                    {t('hostsFile.groupCreate')}
+                  </MenuItem>
+                </MenuSub>
                 {status === 'changed' ? (
                   <MenuItem icon={<Undo2 className="size-4" />} onSelect={onUndo}>
                     {t('hostsFile.undoChanges')}

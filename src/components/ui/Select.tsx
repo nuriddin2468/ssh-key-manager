@@ -26,6 +26,8 @@ interface SelectProps {
   disabled?: boolean;
   className?: string;
   'aria-label'?: string;
+  /** Runs when the list closes; `preventDefault()` keeps focus off the field, e.g. to move it on. */
+  onCloseAutoFocus?: (event: Event) => void;
 }
 
 /**
@@ -46,6 +48,7 @@ export function Select({
   disabled,
   className,
   'aria-label': ariaLabel,
+  onCloseAutoFocus,
 }: SelectProps) {
   const id = useId();
   const selected = options.find((option) => option.value === value);
@@ -84,6 +87,7 @@ export function Select({
           position="popper"
           sideOffset={6}
           collisionPadding={12}
+          onCloseAutoFocus={onCloseAutoFocus}
           className={cn(
             'z-50 max-h-[min(320px,var(--radix-select-content-available-height))] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border border-white/10',
             'bg-[rgb(22_27_39/0.96)] text-[13px] text-fg shadow-[0_24px_48px_-16px_rgb(0_0_0/0.75),inset_0_1px_0_rgb(255_255_255/0.06)]',

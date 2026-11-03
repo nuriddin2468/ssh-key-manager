@@ -48,8 +48,10 @@ export function BrowserPairing() {
   // A request may already wait, e.g. after the window reloaded.
   useEffect(() => {
     if (import.meta.env.DEV && !isTauri()) {
-      if (new URLSearchParams(window.location.search).get('open') === 'pairing') {
-        show({ id: 'dev', browser: 'Google Chrome', code: '624499' });
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('open') === 'pairing') {
+        const code = params.get('code') ?? '';
+        show({ id: 'dev', browser: 'Google Chrome', code: /^\d{6}$/.test(code) ? code : '624499' });
       }
       return;
     }

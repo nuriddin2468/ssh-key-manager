@@ -3,6 +3,6 @@
     "message": "SSH Key Manager"
   },
   "extensionDescription": {
-    "message": "Заполняет и сохраняет пароли из хранилища SSH Key Manager — только на их собственных сайтах."
+    "message": "Заполняет и сохраняет пароли из хранилища SSH Key Manager — только на их сайтах. Работает с приложением SSH Key Manager."
   }
 }

@@ -3,6 +3,6 @@
     "message": "SSH Key Manager"
   },
   "extensionDescription": {
-    "message": "Fill and save passwords from the SSH Key Manager vault, only on the sites they belong to."
+    "message": "Fill and save passwords from your SSH Key Manager vault, only on the sites they belong to. Works with the SSH Key Manager app."
   }
 }

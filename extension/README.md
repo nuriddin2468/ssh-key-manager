@@ -13,6 +13,8 @@ src/popup.ts          the toolbar popup: connection state and one action
 src/connect.ts        the page that pairs this browser with the app
 src/shared/channel.ts pairing and sealing with WebCrypto (mirrors sshkm-core)
 manifest.json         one manifest; build.mjs adjusts it per browser
+package.mjs           the Chrome Web Store zip
+store/                the store listing, privacy answers and images
 ```
 
 ## Build
@@ -64,6 +66,12 @@ second to keep screenshots of each step.
 
 ## Publishing
 
-Not done yet. The stores assign their own extension ids; add them to
-`CHROMIUM_EXTENSION_IDS` in `src-tauri/src/browser/mod.rs` before shipping a build that
-should talk to them.
+```bash
+pnpm extension:package
+```
+
+This writes `extension/dist/ssh-key-manager-chromium-<version>.zip` for the Chrome Web
+Store: the Chromium build without the manifest's `key`, since the store assigns its
+own. [store/README.md](store/README.md) walks through the dashboard, with the listing
+texts, privacy answers and images in [store/](store/). The store's extension id goes
+into `CHROMIUM_EXTENSION_IDS` in `src-tauri/src/browser/mod.rs`, so the app lets it in.

@@ -7,6 +7,11 @@
 //!     --login http://127.0.0.1:8765 alice s3cret
 //! ```
 //!
+//! `--login <url> <user> <password>` adds a login titled by its address;
+//! `--entry <title> <url> <user> <password>` gives it a title of its own.
+//! `--approve-after <ms>` waits that long before approving a pairing
+//! (default 300), to keep the code on screen for a screenshot.
+//!
 //! The browsers start the native host from the manifests the app writes, or
 //! from ones you write for a test profile (`extension/e2e.mjs` does). The
 //! bridge takes over the app's endpoint file while it runs and puts the old
@@ -36,6 +41,7 @@ struct Harness {
     paths: VaultPaths,
     backups: PathBuf,
     vault: Mutex<Option<Vault>>,
+    approve_after: Duration,
 }
 
 fn say(value: &serde_json::Value) {
@@ -81,8 +87,9 @@ impl Env for Harness {
         };
         say(&json!({ "event": "pairing", "browser": request.browser, "code": request.code }));
         let broker = Arc::clone(&self.broker);
+        let wait = self.approve_after;
         thread::spawn(move || {
-            thread::sleep(Duration::from_millis(300));
+            thread::sleep(wait);
             broker.decide(&request.id, true);
         });
     }
@@ -114,12 +121,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let master = SecretString::from("master");
     let (mut vault, _) = Vault::create(&paths, &master)?;
     let args: Vec<String> = std::env::args().skip(1).collect();
-    for login in args.windows(4).filter(|w| w[0] == "--login") {
+    let logins = args.iter().enumerate().filter_map(|(at, arg)| match arg.as_str() {
+        "--login" => args.get(at + 1..at + 4).map(|w| (&w[0], &w[0], &w[1], &w[2])),
+        "--entry" => args.get(at + 1..at + 5).map(|w| (&w[0], &w[1], &w[2], &w[3])),
+        _ => None,
+    });
+    let approve_after = args
+        .iter()
+        .position(|arg| arg == "--approve-after")
+        .and_then(|at| args.get(at + 1)?.parse().ok())
+        .unwrap_or(300);
+    for (title, url, username, password) in logins {
         vault.add_entry(&EntryInput {
-            title: login[1].clone(),
-            username: login[2].clone(),
-            password: Some(SecretString::from(login[3].clone())),
-            url: login[1].clone(),
+            title: title.clone(),
+            username: username.clone(),
+            password: Some(SecretString::from(password.clone())),
+            url: url.clone(),
             ..EntryInput::default()
         })?;
     }
@@ -132,6 +149,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         paths,
         backups,
         vault: Mutex::new(Some(vault)),
+        approve_after: Duration::from_millis(approve_after),
     });
     let previous = std::fs::read_to_string(endpoint_file()?).ok();
     let serving = serve(broker, Arc::clone(&harness))?;

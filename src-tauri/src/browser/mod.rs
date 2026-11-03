@@ -139,15 +139,41 @@ struct Settings {
 pub struct Bridge {
     settings_file: PathBuf,
     broker: Arc<Broker>,
-    running: Mutex<Option<Running>>,
+    running: Mutex<Option<Serving>>,
     /// Why the listener could not start, for the settings page.
     problem: Mutex<Option<String>>,
 }
 
-struct Running {
+/// The bridge while it listens. Dropping it stops listening and removes the
+/// endpoint file, if that still names this bridge.
+pub struct Serving {
     endpoint: String,
-    // Dropping it stops listening and removes the socket.
+    // Dropped first: stops listening and removes the socket.
     _listener: platform::Listener,
+}
+
+/// Serves `broker` to the native host, answering with `env`, and writes the
+/// endpoint file so the host finds it. The app does this while autofill is
+/// on; `examples/autofill_bridge.rs` does it over a test vault.
+pub fn serve<E: Env + Send + Sync + 'static>(broker: Arc<Broker>, env: E) -> io::Result<Serving> {
+    let handler: Handler = Arc::new(move |request| broker.handle(&env, request));
+    let listener = platform::Listener::start(handler)?;
+    let endpoint = listener.endpoint().to_string_lossy().into_owned();
+    write_endpoint(&endpoint)?;
+    Ok(Serving {
+        endpoint,
+        _listener: listener,
+    })
+}
+
+impl Drop for Serving {
+    fn drop(&mut self) {
+        if let Ok(file) = endpoint_file()
+            && std::fs::read_to_string(&file).is_ok_and(|text| text.trim() == self.endpoint)
+        {
+            let _ = std::fs::remove_file(file);
+        }
+    }
 }
 
 impl Bridge {
@@ -208,17 +234,7 @@ impl Bridge {
             return;
         }
         let env = TauriEnv { app: app.clone() };
-        let broker = Arc::clone(&self.broker);
-        let handler: Handler = Arc::new(move |request| broker.handle(&env, request));
-        let started = platform::Listener::start(handler).and_then(|listener| {
-            let endpoint = listener.endpoint().to_string_lossy().into_owned();
-            write_endpoint(&endpoint)?;
-            Ok(Running {
-                endpoint,
-                _listener: listener,
-            })
-        });
-        match started {
+        match serve(Arc::clone(&self.broker), env) {
             Ok(started) => {
                 *running = Some(started);
                 *lock(&self.problem) = None;
@@ -232,14 +248,7 @@ impl Bridge {
 
     /// Stops listening and removes the endpoint file, if it is still ours.
     pub fn stop(&self) {
-        let Some(running) = lock(&self.running).take() else {
-            return;
-        };
-        if let Ok(file) = endpoint_file()
-            && std::fs::read_to_string(&file).is_ok_and(|text| text.trim() == running.endpoint)
-        {
-            let _ = std::fs::remove_file(file);
-        }
+        lock(&self.running).take();
     }
 
     /// Whether the listener runs.

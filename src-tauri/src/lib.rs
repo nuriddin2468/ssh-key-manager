@@ -24,6 +24,8 @@ use sshkm_core::paths::SshPaths;
 use tauri::webview::PageLoadEvent;
 use tauri::{Manager, RunEvent, WindowEvent};
 
+pub use crate::error::{AppError, AppResult};
+
 use crate::commands::Shared;
 use crate::state::AppState;
 use crate::vault::LockReason;

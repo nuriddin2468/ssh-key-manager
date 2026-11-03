@@ -87,6 +87,34 @@ pub trait Env {
     fn version(&self) -> String;
 }
 
+/// An environment shared with its owner.
+impl<E: Env> Env for std::sync::Arc<E> {
+    fn vault_lock(&self) -> VaultLock {
+        (**self).vault_lock()
+    }
+    fn read<T>(&self, active: bool, work: impl FnOnce(&Vault) -> AppResult<T>) -> AppResult<T> {
+        (**self).read(active, work)
+    }
+    fn write<T>(&self, work: impl FnOnce(&mut Vault) -> AppResult<T>) -> AppResult<T> {
+        (**self).write(work)
+    }
+    fn ask(&self, request: Option<&PairingRequest>) {
+        (**self).ask(request);
+    }
+    fn show(&self) {
+        (**self).show();
+    }
+    fn changed(&self, what: Changed) {
+        (**self).changed(what);
+    }
+    fn computer(&self) -> String {
+        (**self).computer()
+    }
+    fn version(&self) -> String {
+        (**self).version()
+    }
+}
+
 struct Pending {
     request: PairingRequest,
     decision: Option<bool>,

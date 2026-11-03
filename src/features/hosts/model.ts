@@ -97,6 +97,11 @@ const yes = (value: string | undefined) => value?.toLowerCase() === 'yes';
 /** A block `ssh` can be run with by name: a `Host` without wildcards. */
 export const isConcrete = (host: HostEntry) => host.kind === 'host' && !host.isWildcard;
 
+/** How a host signs in, by the same rule as its form; `null` for patterns. */
+export function hostMethod(host: HostEntry, passwordSaved: boolean): SignInMethod | null {
+  return formFromHost(host, { passwordSaved }).method;
+}
+
 /**
  * The form for a block. The sign-in method of a concrete host:
  * `PubkeyAuthentication no` means `password`; otherwise a password saved in

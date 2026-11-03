@@ -10,6 +10,7 @@ import {
   gitAccount,
   gitService,
   type HostForm,
+  hostMethod,
   hostMonogram,
   hostTarget,
   optionProblem,
@@ -262,6 +263,13 @@ describe('sign-in method', () => {
       expect(formFromHost(keyHost, { passwordSaved: true }).method).toBe('both');
       expect(formFromHost(keyHost).method).toBe('key');
       expect(formFromHost(host({ options: [] })).method).toBe('key');
+    });
+
+    it('is the same for the host list as for the form', () => {
+      expect(hostMethod(passwordHost, true)).toBe('password');
+      expect(hostMethod(keyHost, true)).toBe('both');
+      expect(hostMethod(keyHost, false)).toBe('key');
+      expect(hostMethod(host({ patterns: ['*.corp'], isWildcard: true }), true)).toBeNull();
     });
 
     it('leaves any other PubkeyAuthentication value as an option', () => {

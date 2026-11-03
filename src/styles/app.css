@@ -204,13 +204,13 @@
   --glow-b: rgb(124 58 237 / 0.1);
 }
 [data-section="passwords"] {
-  --accent-1: #a5b4fc;
-  --accent-2: #818cf8;
-  --accent-ink: #0e1240;
-  --accent-text: #c7d2fe;
-  --accent-rgb: 129 140 248;
-  --glow-a: rgb(79 70 229 / 0.26);
-  --glow-b: rgb(20 184 166 / 0.08);
+  --accent-1: #f9a8d4;
+  --accent-2: #ec4899;
+  --accent-ink: #3f0a24;
+  --accent-text: #fbcfe8;
+  --accent-rgb: 244 114 182;
+  --glow-a: rgb(219 39 119 / 0.22);
+  --glow-b: rgb(124 58 237 / 0.08);
 }
 [data-section="terminal"] {
   --accent-1: #86efac;

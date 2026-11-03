@@ -113,7 +113,7 @@ export function Sidebar() {
         <NavGroup label={t('nav.groupSecrets')}>
           <NavItem
             label={t('nav.passwords')}
-            tone="indigo"
+            tone="pink"
             icon={RectangleEllipsis}
             active={route.page === 'passwords'}
             count={savedPasswords}

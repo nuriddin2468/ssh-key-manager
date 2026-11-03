@@ -194,7 +194,7 @@ export function VaultBrowser({ entryId }: { entryId?: string }) {
           <EmptyState
             className="my-auto"
             icon={
-              <Tile tone="indigo" size={52} glow>
+              <Tile tone="pink" size={52} glow>
                 <RectangleEllipsis className="size-6" strokeWidth={2} />
               </Tile>
             }

@@ -27,7 +27,7 @@ import { StrengthMeter, useStrength } from './StrengthMeter';
 import { useVaultMutation } from './vault';
 
 const KINDS: { kind: EntryKind; tone: Tone; icon: LucideIcon }[] = [
-  { kind: 'login', tone: 'indigo', icon: LogIn },
+  { kind: 'login', tone: 'pink', icon: LogIn },
   { kind: 'host', tone: 'blue', icon: Server },
   { kind: 'key', tone: 'teal', icon: KeyRound },
 ];
@@ -182,7 +182,7 @@ export function EntryEditor({ entry, onDone }: EntryEditorProps) {
       <form onSubmit={submit} noValidate className="flex min-h-0 flex-col">
         <DialogHeader
           icon={
-            <Tile tone="indigo" size={44} glow>
+            <Tile tone="pink" size={44} glow>
               <ShieldCheck className="size-[22px]" strokeWidth={2} />
             </Tile>
           }

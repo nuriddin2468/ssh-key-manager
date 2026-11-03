@@ -22,7 +22,7 @@ export function VaultCard({ icon, title, text, focusTitle = false, children }: V
   return (
     <section aria-labelledby={id} className="m-auto flex w-full max-w-[440px] flex-col gap-5 py-4">
       <div className="flex flex-col items-center gap-3 text-center">
-        <Tile tone="indigo" size={56} glow>
+        <Tile tone="pink" size={56} glow>
           {icon}
         </Tile>
         <h2

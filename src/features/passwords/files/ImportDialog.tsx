@@ -17,12 +17,12 @@ import type { ImportPreview } from '@/bindings/ImportPreview';
 import type { ImportRow } from '@/bindings/ImportRow';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { CheckboxControl } from '@/components/ui/Checkbox';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
 import { Tile } from '@/components/ui/Tile';
 import { cn } from '@/lib/cn';
 import { AppError } from '@/lib/ipc';
 import { Callout } from './Callout';
-import { Checkbox } from './Checkbox';
 import { showFileError } from './errors';
 import { baseName, pickFile } from './pickers';
 
@@ -109,7 +109,7 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
     <DialogContent section="passwords" className="max-w-[760px]">
       <DialogHeader
         icon={
-          <Tile tone="indigo" size={44} glow>
+          <Tile tone="pink" size={44} glow>
             <FileUp className="size-[22px]" strokeWidth={2} />
           </Tile>
         }
@@ -303,7 +303,7 @@ function PreviewStep({
               <thead className="sticky top-0 z-10 bg-popover">
                 <tr className="h-[36px] text-[11.5px] tracking-[0.02em] text-subtle">
                   <th scope="col" className="pl-3.5 font-medium">
-                    <Checkbox
+                    <CheckboxControl
                       aria-label={t('vaultFiles.import.selectAll')}
                       checked={all ? true : count > 0 ? 'indeterminate' : false}
                       onCheckedChange={toggleAll}
@@ -381,7 +381,7 @@ function PreviewRow({
       )}
     >
       <td className="pl-3.5">
-        <Checkbox
+        <CheckboxControl
           aria-label={t('vaultFiles.import.select', { title: row.title })}
           checked={checked}
           onCheckedChange={onToggle}

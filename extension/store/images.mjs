@@ -37,7 +37,7 @@ const out = join(here, 'images');
 const chrome = process.env.CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const app = process.env.APP_URL ?? 'http://localhost:1420';
 const port = Number(process.env.PORT ?? 443);
-const EXTENSION_ID = 'hklpabjhanmldimfcgoamipkmedjfpla';
+const EXTENSION_ID = 'lkmgdcanagjeajepncgokapkbihahddb';
 const HOST = 'dev.sshkeymanager.autofill';
 const DOMAIN = 'console.example.com';
 const site = port === 443 ? `https://${DOMAIN}` : `https://${DOMAIN}:${port}`;

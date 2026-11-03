@@ -26,7 +26,7 @@ import puppeteer from 'puppeteer-core';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const chrome = process.argv[2] ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const shots = process.argv[3] ?? null;
-const EXTENSION_ID = 'hklpabjhanmldimfcgoamipkmedjfpla';
+const EXTENSION_ID = 'lkmgdcanagjeajepncgokapkbihahddb';
 const HOST = 'dev.sshkeymanager.autofill';
 const exe = process.platform === 'win32' ? '.exe' : '';
 

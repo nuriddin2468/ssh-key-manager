@@ -53,9 +53,10 @@ use crate::error::{AppError, AppResult};
 /// The native messaging host's name, as the browsers know it.
 pub const HOST_NAME: &str = "dev.sshkeymanager.autofill";
 pub const MANIFEST_FILE: &str = "dev.sshkeymanager.autofill.json";
-/// The extension in Chrome, Edge and other Chromium browsers. The id comes
-/// from the `key` in `extension/manifest.json`.
-pub const CHROMIUM_EXTENSION_IDS: &[&str] = &["hklpabjhanmldimfcgoamipkmedjfpla"];
+/// The extension in Chrome, Edge and other Chromium browsers: its Chrome Web
+/// Store item. The `key` in `extension/manifest.json` is that item's public
+/// key, so unpacked builds get the same id.
+pub const CHROMIUM_EXTENSION_IDS: &[&str] = &["lkmgdcanagjeajepncgokapkbihahddb"];
 /// The extension in Firefox.
 pub const FIREFOX_EXTENSION_ID: &str = "autofill@sshkeymanager.dev";
 /// The app's identifier (`tauri.conf.json`), naming its data folder.

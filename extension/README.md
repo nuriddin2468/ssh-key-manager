@@ -33,8 +33,8 @@ This writes `extension/dist/chromium` and `extension/dist/firefox`.
 2. Load the extension:
    - Chrome, Edge, Brave: open `chrome://extensions`, turn on Developer mode, choose
      **Load unpacked** and pick `extension/dist/chromium`. Its id is
-     `hklpabjhanmldimfcgoamipkmedjfpla`, fixed by the `key` in `manifest.json`; the
-     host manifest allows only that id.
+     `lkmgdcanagjeajepncgokapkbihahddb`, the Chrome Web Store item's: the `key` in
+     `manifest.json` is the item's public key. The host manifest allows only that id.
    - Firefox (128 or newer): open `about:debugging#/runtime/this-firefox`, choose
      **Load Temporary Add-on** and pick `extension/dist/firefox/manifest.json`.
 3. Click the extension's icon and choose **Connect**. Check that the app shows the same
@@ -71,7 +71,8 @@ pnpm extension:package
 ```
 
 This writes `extension/dist/ssh-key-manager-chromium-<version>.zip` for the Chrome Web
-Store: the Chromium build without the manifest's `key`, since the store assigns its
-own. [store/README.md](store/README.md) walks through the dashboard, with the listing
-texts, privacy answers and images in [store/](store/). The store's extension id goes
-into `CHROMIUM_EXTENSION_IDS` in `src-tauri/src/browser/mod.rs`, so the app lets it in.
+Store: the Chromium build without the manifest's `key`, which the store keeps itself.
+[store/README.md](store/README.md) walks through the dashboard, with the listing texts,
+privacy answers and images in [store/](store/). The item's id,
+`lkmgdcanagjeajepncgokapkbihahddb`, is in `CHROMIUM_EXTENSION_IDS` in
+`src-tauri/src/browser/mod.rs`, so the app lets it in.

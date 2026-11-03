@@ -1,8 +1,9 @@
 // Packs extension/dist/chromium (run build.mjs first) into the zip uploaded
 // to the Chrome Web Store: extension/dist/ssh-key-manager-chromium-<version>.zip.
-// The store assigns the extension's id and key, so the manifest's `key`, which
-// only pins the id of unpacked dev builds, is left out. Entries are sorted and
-// dated 1980-01-01, so the same build always gives the same zip.
+// The store keeps the item's key itself, so the manifest's `key` is left out:
+// it is the item's public key, there so unpacked builds get the store's id.
+// Entries are sorted and dated 1980-01-01, so the same build always gives the
+// same zip.
 
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';

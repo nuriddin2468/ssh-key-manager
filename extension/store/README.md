@@ -18,8 +18,9 @@ browser does.
 The app must know the extension's store id before the store version can talk to it,
 and reviewers need a working app to test with. So:
 
-1. Upload once to create the item, then send us its id and public key.
-2. We add them, merge, and release the app as 0.4.0, with the extension at 0.4.0.
+1. ~~Upload once to create the item, then send us its id and public key.~~ Done: see
+   [step 3](#3-create-the-item-done).
+2. Merge, and release the app as 0.4.0, with the extension at 0.4.0.
 3. Upload the 0.4.0 package and submit it for review.
 
 Fill in the listing, Privacy and other tabs whenever you like and save them as a
@@ -27,7 +28,7 @@ draft. Only **Submit for review** waits for step 3.
 
 ## 1. Build the package
 
-On this branch (later, on the 0.4.0 release commit):
+On the 0.4.0 release commit (and later, on each release commit):
 
 ```bash
 pnpm install
@@ -38,8 +39,8 @@ pnpm extension:package
 ```
 
 This writes `extension/dist/ssh-key-manager-chromium-<version>.zip`, for example
-`ssh-key-manager-chromium-0.3.1.zip`. It is the Chromium build without the manifest's
-`key`: the store assigns its own id and key. The same build always gives the same zip.
+`ssh-key-manager-chromium-0.4.0.zip`. It is the Chromium build without the manifest's
+`key`, which the store keeps itself. The same build always gives the same zip.
 
 ## 2. Account
 
@@ -51,25 +52,19 @@ This writes `extension/dist/ssh-key-manager-chromium-<version>.zip`, for example
 | Publisher name | Shown under the listing as "Offered by".                        |
 | Trader status  | If you're asked (EU Digital Services Act), answer for yourself. |
 
-## 3. Create the item
+## 3. Create the item: done
 
-**Items → New item**, choose the zip, then **Upload**. If the upload names
-`_locales/uz` as a problem, remove that folder from the zip and upload again:
+The item is `lkmgdcanagjeajepncgokapkbihahddb`. Its store page will be
+`https://chromewebstore.google.com/detail/lkmgdcanagjeajepncgokapkbihahddb` once it
+is published.
 
-```bash
-zip -d extension/dist/ssh-key-manager-chromium-0.3.1.zip '_locales/uz/*'
-```
+- Its public key (**Package → View public key**) is the `key` in
+  `extension/manifest.json`, so unpacked dev builds get the store's id too.
+- Its id is in `CHROMIUM_EXTENSION_IDS` in `src-tauri/src/browser/mod.rs`, so the
+  app's native messaging host lets the store version in. A test checks that the key
+  gives this id.
 
-Then **send the item id and the public key**:
-
-- **Item id:** 32 letters (`a` to `p`), at the top of the item's page and in its URL.
-- **Public key:** **Package → View public key**. Copy everything between
-  `-----BEGIN PUBLIC KEY-----` and `-----END PUBLIC KEY-----`.
-
-The key goes into `extension/manifest.json` as `key`, so unpacked dev builds get the
-store's id too. The id goes into `CHROMIUM_EXTENSION_IDS` in
-`src-tauri/src/browser/mod.rs`, so the app's native messaging host lets the store
-version in. Both are public; neither is a secret.
+Both are public; neither is a secret.
 
 ## 4. Store listing
 
@@ -132,7 +127,14 @@ released. **Save draft.**
 ## 8. Submit, after the app's 0.4.0 release
 
 1. Build the 0.4.0 package on the release commit (step 1). Then use
-   **Package → Upload new package** with `ssh-key-manager-chromium-0.4.0.zip`.
+   **Package → Upload new package** with `ssh-key-manager-chromium-0.4.0.zip`. If the
+   upload names `_locales/uz` as a problem, remove that folder from the zip and upload
+   again:
+
+   ```bash
+   zip -d extension/dist/ssh-key-manager-chromium-0.4.0.zip '_locales/uz/*'
+   ```
+
 2. Choose **Submit for review**.
 3. In the dialog, **clear the box that publishes the item automatically after
    review** (deferred publishing). The extension then goes live only when you choose

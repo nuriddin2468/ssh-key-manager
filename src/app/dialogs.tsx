@@ -23,16 +23,19 @@ import { useSettings } from '@/lib/settings';
 import { useRouter } from './router';
 
 type Open =
-  | { kind: 'generate' }
+  | { kind: 'generate'; onCreated?: (key: KeyView) => void }
   | { kind: 'addHost' }
-  | { kind: 'passphrase'; key: KeyView }
+  | { kind: 'passphrase'; key: KeyView; suggest: boolean }
   | { kind: 'unlock'; key: KeyView; lifetime: number | null }
   | null;
 
 interface DialogsValue {
   generateKey: () => void;
+  /** Generates a key and hands it to `onCreated`, staying on the current page. */
+  generateKeyFor: (onCreated: (key: KeyView) => void) => void;
   addHost: () => void;
-  editPassphrase: (key: KeyView) => void;
+  /** `suggest` starts with a generated passphrase, to be saved in the vault. */
+  editPassphrase: (key: KeyView, options?: { suggest?: boolean }) => void;
   /** Adds a key to the agent, asking for its passphrase when it has one. */
   unlockKey: (key: KeyView, lifetime?: number | null) => void;
   importKey: () => Promise<void>;
@@ -69,8 +72,10 @@ export function DialogsProvider({ children }: { children: ReactNode }) {
   const value = useMemo<DialogsValue>(
     () => ({
       generateKey: () => setOpen({ kind: 'generate' }),
+      generateKeyFor: (onCreated) => setOpen({ kind: 'generate', onCreated }),
       addHost: () => setOpen({ kind: 'addHost' }),
-      editPassphrase: (key) => setOpen({ kind: 'passphrase', key }),
+      editPassphrase: (key, options) =>
+        setOpen({ kind: 'passphrase', key, suggest: options?.suggest ?? false }),
       unlockKey: (key, lifetime = settings.defaultLifetime) => {
         if (key.encrypted) setOpen({ kind: 'unlock', key, lifetime });
         else addPlain.mutate({ key, lifetime });
@@ -98,10 +103,12 @@ export function DialogsProvider({ children }: { children: ReactNode }) {
     <DialogsContext value={value}>
       {children}
       <Dialog open={open !== null} onOpenChange={(next) => (next ? undefined : close())}>
-        {open?.kind === 'generate' ? <GenerateKeyDialog onDone={close} /> : null}
+        {open?.kind === 'generate' ? (
+          <GenerateKeyDialog onDone={close} onCreated={open.onCreated} />
+        ) : null}
         {open?.kind === 'addHost' ? <AddHostDialog onDone={close} /> : null}
         {open?.kind === 'passphrase' ? (
-          <PassphraseDialog keyView={open.key} onDone={close} />
+          <PassphraseDialog keyView={open.key} suggest={open.suggest} onDone={close} />
         ) : null}
         {open?.kind === 'unlock' ? (
           <UnlockDialog keyView={open.key} lifetime={open.lifetime} onDone={close} />

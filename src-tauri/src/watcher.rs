@@ -13,7 +13,7 @@ use tauri::{AppHandle, Emitter, Manager};
 pub const EVENT: &str = "ssh-files-changed";
 
 /// A burst of changes closer together than this is reported once.
-const QUIET: Duration = Duration::from_millis(400);
+pub(crate) const QUIET: Duration = Duration::from_millis(400);
 
 /// Keeps the watchers alive for the lifetime of the app.
 struct WatcherHandle(#[allow(dead_code)] Vec<RecommendedWatcher>);
@@ -64,7 +64,7 @@ fn watch(
 
 /// Reads are not changes. Linux reports every open and close, including the
 /// app's own reads while it refreshes, so passing them on would refresh forever.
-fn is_change(event: &Event) -> bool {
+pub(crate) fn is_change(event: &Event) -> bool {
     !matches!(event.kind, EventKind::Access(_))
 }
 
@@ -80,7 +80,7 @@ fn concerns(event: &Event, only: Option<&OsStr>) -> bool {
 
 /// Calls `on_change` after each burst of signals, once `quiet` has passed
 /// without another. Returns when the sending side is dropped.
-fn debounce(signals: &Receiver<()>, quiet: Duration, on_change: impl Fn()) {
+pub(crate) fn debounce(signals: &Receiver<()>, quiet: Duration, on_change: impl Fn()) {
     while signals.recv().is_ok() {
         while signals.recv_timeout(quiet).is_ok() {}
         on_change();

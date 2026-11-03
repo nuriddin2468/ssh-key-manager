@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
+import { useVaultStatus } from '@/api/queries';
 import { useAppMutation } from '@/api/useAppMutation';
 import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
@@ -41,6 +42,8 @@ export function useFix(keysById: ReadonlyMap<string, KeyView>) {
   const { t } = useTranslation();
   const dialogs = useDialogs();
   const { navigate } = useRouter();
+  // With the vault open, a missing passphrase can be generated and saved there.
+  const vaultUnlocked = useVaultStatus().data?.state === 'unlocked';
 
   const run = useAppMutation(
     async (action: FixAction) => {
@@ -88,7 +91,7 @@ export function useFix(keysById: ReadonlyMap<string, KeyView>) {
     const action = finding.fix;
     if (action?.kind === 'addPassphrase') {
       const key = keysById.get(action.keyId);
-      if (key) dialogs.editPassphrase(key);
+      if (key) dialogs.editPassphrase(key, { suggest: vaultUnlocked });
       return;
     }
     if (action) {

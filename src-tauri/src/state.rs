@@ -1,9 +1,14 @@
 use std::collections::HashMap;
+use std::io;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use sshkm_core::paths::SshPaths;
 use time::OffsetDateTime;
+
+use crate::askpass::{self, Interactive, Responder, Session};
+use crate::terminal::Terminals;
+use crate::vault::VaultRuntime;
 
 /// Shared by all commands.
 pub struct AppState {
@@ -16,16 +21,31 @@ pub struct AppState {
     /// agent protocol has no way to ask for it.
     lifetimes: Mutex<HashMap<String, OffsetDateTime>>,
     openssh_version: OnceLock<Option<String>>,
+    pub vault: Arc<VaultRuntime>,
+    /// Answers `ssh`'s prompts; started on first use.
+    askpass: Mutex<Option<askpass::Server>>,
+    /// The in-app terminal's sessions.
+    pub terminals: Arc<Terminals>,
 }
 
 impl AppState {
-    pub fn new(paths: SshPaths, hosts_file: PathBuf, backup_dir: PathBuf) -> Self {
+    /// `hosts_file` is the system hosts file; `data_dir` is the app's own data
+    /// folder, home of the vault by default.
+    pub fn new(
+        paths: SshPaths,
+        hosts_file: PathBuf,
+        backup_dir: PathBuf,
+        data_dir: PathBuf,
+    ) -> Self {
         Self {
             paths,
             hosts_file,
             backup_dir,
             lifetimes: Mutex::new(HashMap::new()),
             openssh_version: OnceLock::new(),
+            vault: Arc::new(VaultRuntime::new(data_dir)),
+            askpass: Mutex::new(None),
+            terminals: Arc::new(Terminals::default()),
         }
     }
 
@@ -71,5 +91,36 @@ impl AppState {
         self.openssh_version
             .get_or_init(crate::process::openssh_version)
             .clone()
+    }
+
+    /// A batch session of the askpass server whose prompts `responder`
+    /// answers. Starts the server if it is not running.
+    pub fn askpass_session(&self, responder: impl Responder) -> io::Result<Session> {
+        self.with_askpass(|server| server.session(responder))
+    }
+
+    /// An interactive askpass session, for the in-app terminal.
+    pub fn askpass_interactive_session(&self, responder: impl Interactive) -> io::Result<Session> {
+        self.with_askpass(|server| server.interactive_session(responder))
+    }
+
+    fn with_askpass(&self, open: impl FnOnce(&askpass::Server) -> Session) -> io::Result<Session> {
+        let mut server = self.askpass.lock().unwrap_or_else(PoisonError::into_inner);
+        if server.is_none() {
+            *server = Some(askpass::Server::start()?);
+        }
+        Ok(open(
+            server
+                .as_ref()
+                .expect("the askpass server was just started"),
+        ))
+    }
+
+    /// Stops the askpass server and removes its socket, when the app exits.
+    pub fn stop_askpass(&self) {
+        self.askpass
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
     }
 }

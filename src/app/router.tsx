@@ -21,6 +21,9 @@ export type Route =
   | { page: 'known' }
   | { page: 'hostsFile'; line?: number }
   | { page: 'audit' }
+  | { page: 'passwords'; entryId?: string }
+  /** `connect` starts a session to that alias; `nonce` makes each request a new one. */
+  | { page: 'terminal'; connect?: string; nonce?: number }
   | { page: 'settings' };
 
 export type Page = Route['page'];
@@ -50,6 +53,8 @@ function devRoute(): Route | undefined {
     return { page, hostId: params.has('host') ? Number(params.get('host')) : undefined };
   if (page === 'hostsFile')
     return { page, line: params.has('line') ? Number(params.get('line')) : undefined };
+  if (page === 'passwords') return { page, entryId: params.get('entry') ?? undefined };
+  if (page === 'terminal') return { page, connect: params.get('connect') ?? undefined };
   if (
     page === 'overview' ||
     page === 'agent' ||

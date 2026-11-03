@@ -1,0 +1,2 @@
+# Product and algorithm names that `doc_markdown` would otherwise want in backticks.
+doc-valid-idents = ["KeePass", "KeePassXC", "ChaCha20", "XChaCha20", "Argon2id", ".."]

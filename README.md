@@ -108,12 +108,26 @@ Builds are not code-signed yet (it's on the [roadmap](#roadmap)), so your system
   - config lines that point to missing files.
 - Fixes file permissions in one click.
 
-**Feels native.** Menu bar and keyboard shortcuts on macOS (⌘1–6, ⌘N, ⌘,), and changes you make in a terminal show up instantly.
+**Passwords**
+- An encrypted vault for server passwords, key passphrases and website logins. It is a standard KeePass file on your computer (or in a folder you choose, such as Dropbox or iCloud Drive), so KeePassXC opens it too.
+- One master password unlocks it, or Touch ID / Windows Hello. A recovery key, shown once when you create the vault, gets you back in if you forget the master password.
+- Copy a password or 2FA code in one click: it stays out of clipboard history and is cleared after 30 seconds. A password generator and a strength meter are built in.
+- It locks itself after a few idle minutes, when the computer sleeps and when the screen locks.
+- Works with the rest of the app: a new key's passphrase can be generated and saved for you, keys unlock in the agent with their saved passphrase, a server's saved password and 2FA code are used to test the connection, and a guided step moves a server from a password to a key.
+- Import from Bitwarden, 1Password, Chrome, Edge, Firefox, Apple Passwords or KeePassXC; export as a KeePass copy or CSV. The Audit points out weak, reused and old passwords.
+
+**Terminal**
+- Connect to a server in the app: sessions open in tabs and keep running while you use other sections.
+- Passwords, 2FA codes and key passphrases come from the vault. Anything missing is asked in a dialog, with an option to save it once you're signed in.
+- A server you've never connected to shows its key fingerprint first, and you decide whether to trust it. A server whose key changed is stopped, with a way to compare the keys.
+
+**Feels native.** Menu bar and keyboard shortcuts on macOS (⌘1–9, ⌘N, ⌘T, ⌘,), and changes you make in a terminal show up instantly.
 
 ## Privacy and safety
 
-- **Nothing leaves your computer.** The app sends none of your data anywhere. It goes online only to check GitHub for a new version of itself (you can turn this off in **Settings → Updates**) and when you ask it to reach a server: checking a host key, testing a connection or looking up a name in DNS.
-- **Your private keys stay private.** The interface only ever sees public keys and fingerprints. Passphrases are used once and never stored.
+- **Nothing leaves your computer.** The app sends none of your data anywhere. It goes online only to check GitHub for a new version of itself (you can turn this off in **Settings → Updates**) and when you ask it to reach a server: checking a host key, testing a connection or opening a terminal session.
+- **Your private keys stay private.** The interface only ever sees public keys and fingerprints. Passphrases are used once and never stored, unless you save them in your password vault.
+- **Your passwords stay encrypted.** The vault is decrypted only in memory while it's unlocked, and the interface sees a password only when you choose to reveal it. There is no way in without the master password or the recovery key, so keep the recovery key somewhere safe.
 - **Your files stay standard.** Everything is plain OpenSSH, and you can stop using the app at any time.
 - **Mistakes can be undone.** Config files are backed up before every edit, and keys go to the Trash, not into oblivion.
 - **Administrator rights only when you save the hosts file.** The app never keeps them: it shows you the diff, asks for your password once, and backs up the file first.

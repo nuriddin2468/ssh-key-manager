@@ -7,7 +7,11 @@ interface TextFieldProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'pr
   error?: ReactNode;
   /** Fixed text shown inside the field before the value, e.g. `~/.ssh/`. */
   prefix?: string;
+  /** Controls inside the field after the value, e.g. show/hide buttons. */
+  suffix?: ReactNode;
   mono?: boolean;
+  /** Classes for the input itself, e.g. a larger code font. */
+  inputClassName?: string;
   ref?: Ref<HTMLInputElement>;
 }
 
@@ -16,7 +20,9 @@ export function TextField({
   hint,
   error,
   prefix,
+  suffix,
   mono = false,
+  inputClassName,
   className,
   id,
   ref,
@@ -52,9 +58,11 @@ export function TextField({
           className={cn(
             'h-full min-w-0 flex-1 bg-transparent px-[11px] text-fg outline-none',
             mono && 'font-mono text-[12.5px]',
+            inputClassName,
           )}
           {...props}
         />
+        {suffix ? <span className="flex shrink-0 items-center gap-0.5 pr-1">{suffix}</span> : null}
       </div>
       {error ? (
         <p id={`${inputId}-error`} className="text-[12px] text-critical">

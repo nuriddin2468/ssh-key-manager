@@ -2,14 +2,18 @@ import { KeyRound, Plus } from 'lucide-react';
 import { RadioGroup } from 'radix-ui';
 import { type FormEvent, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import { api } from '@/api/commands';
 import { useAgent, useEnvironment, useKeys } from '@/api/queries';
-import { useAppMutation } from '@/api/useAppMutation';
+import { errorMessage, useAppMutation } from '@/api/useAppMutation';
 import { useRouter } from '@/app/router';
 import type { EcdsaCurve } from '@/bindings/EcdsaCurve';
 import type { GenerateAlgorithm } from '@/bindings/GenerateAlgorithm';
+import type { GenerateKeyRequest } from '@/bindings/GenerateKeyRequest';
+import type { KeyView } from '@/bindings/KeyView';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { ChoiceCards } from '@/components/ui/ChoiceCards';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
 import { PassphraseFields } from '@/components/ui/PassphraseFields';
 import { SwitchGroup, SwitchRow } from '@/components/ui/Switch';
@@ -18,6 +22,8 @@ import { Tile, type Tone } from '@/components/ui/Tile';
 import { cn } from '@/lib/cn';
 import { useSettings } from '@/lib/settings';
 import { FILE_NAME_PATTERN, suggestFileName } from './model';
+import { GeneratePassphraseButton, savePassphrase, VaultSaveRow } from './VaultControls';
+import { useVaultKey } from './vaultKey';
 
 type Algo = 'ed25519' | 'rsa' | 'ecdsa';
 
@@ -29,7 +35,13 @@ const ALGOS: { id: Algo; tone: Tone; base: string }[] = [
 
 const CURVE_BITS: Record<EcdsaCurve, number> = { p256: 256, p384: 384, p521: 521 };
 
-export function GenerateKeyDialog({ onDone }: { onDone: () => void }) {
+interface GenerateKeyDialogProps {
+  onDone: () => void;
+  /** Gets the new key instead of opening it on the Keys page. */
+  onCreated?: (key: KeyView) => void;
+}
+
+export function GenerateKeyDialog({ onDone, onCreated }: GenerateKeyDialogProps) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const settings = useSettings();
@@ -56,6 +68,10 @@ export function GenerateKeyDialog({ onDone }: { onDone: () => void }) {
   const [comment, setComment] = useState<string | null>(null);
   const [passphrase, setPassphrase] = useState('');
   const [repeat, setRepeat] = useState('');
+  const [showPassphrase, setShowPassphrase] = useState(false);
+  // A new key has no entry yet, so only the vault's state matters here.
+  const vault = useVaultKey(null);
+  const [saveToVault, setSaveToVault] = useState(true);
   const [addToAgent, setAddToAgent] = useState(true);
   const [addHost, setAddHost] = useState(false);
   const [alias, setAlias] = useState('');
@@ -93,24 +109,45 @@ export function GenerateKeyDialog({ onDone }: { onDone: () => void }) {
     `-C "${commentValue}"`,
   ].join(' ');
 
-  const generate = useAppMutation(api.generateKey, {
-    success: (key) => t('generate.created', { name: key.name }),
-    onSuccess: (key) => {
-      navigate({ page: 'keys', keyId: key.id });
-      onDone();
+  const generate = useAppMutation(
+    async (vars: { request: GenerateKeyRequest; saveToVault: boolean }) => {
+      const key = await api.generateKey(vars.request);
+      const passphrase = vars.request.key.passphrase;
+      let saved = false;
+      if (vars.saveToVault && passphrase && key.fingerprint) {
+        try {
+          await savePassphrase({ name: key.name, fingerprint: key.fingerprint }, passphrase);
+          saved = true;
+        } catch (error) {
+          toast.error(t('keys.vaultSaveFailed'), { description: errorMessage(t, error) });
+        }
+      }
+      return { key, saved };
     },
-  });
+    {
+      success: ({ key, saved }) =>
+        t(saved ? 'generate.createdSaved' : 'generate.created', { name: key.name }),
+      onSuccess: ({ key }) => {
+        if (onCreated) onCreated(key);
+        else navigate({ page: 'keys', keyId: key.id });
+        onDone();
+      },
+    },
+  );
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (nameError || mismatch || hostInvalid || generate.isPending) return;
     generate.mutate({
-      key: { algorithm, fileName, comment: commentValue.trim(), passphrase: passphrase || null },
-      addToAgent: addToAgent && agentAvailable,
-      agentLifetimeSecs: settings.defaultLifetime,
-      host: addHost
-        ? { alias: alias.trim(), hostName: hostName.trim() || null, user: user.trim() || null }
-        : null,
+      request: {
+        key: { algorithm, fileName, comment: commentValue.trim(), passphrase: passphrase || null },
+        addToAgent: addToAgent && agentAvailable,
+        agentLifetimeSecs: settings.defaultLifetime,
+        host: addHost
+          ? { alias: alias.trim(), hostName: hostName.trim() || null, user: user.trim() || null }
+          : null,
+      },
+      saveToVault: saveToVault && vault.vault === 'unlocked',
     });
   };
 
@@ -127,45 +164,30 @@ export function GenerateKeyDialog({ onDone }: { onDone: () => void }) {
           description={t('generate.description')}
         />
         <DialogBody>
-          <fieldset className="flex flex-col">
-            <legend className="mb-2.5 text-[12px] font-semibold tracking-[0.02em] text-subtle">
-              {t('generate.keyType')}
-            </legend>
-            <RadioGroup.Root
+          <div className="flex flex-col">
+            <ChoiceCards
+              legend={t('generate.keyType')}
               value={algo}
-              onValueChange={(value) => setAlgo(value as Algo)}
-              className="grid grid-cols-3 gap-2.5"
-            >
-              {ALGOS.map((option) => (
-                <RadioGroup.Item
-                  key={option.id}
-                  value={option.id}
-                  className={cn(
-                    'pressable-soft flex flex-col items-start gap-2.5 rounded-[14px] border p-[13px] text-left',
-                    algo === option.id
-                      ? 'border-[rgb(45_212_191/0.6)] bg-[rgb(45_212_191/0.08)] shadow-[0_0_0_3px_rgb(45_212_191/0.14),0_14px_30px_-18px_rgb(45_212_191/0.8)]'
-                      : 'border-white/[0.09] bg-white/[0.03] hover:bg-white/[0.05]',
-                  )}
-                >
-                  <Tile tone={option.tone} size={36}>
-                    <KeyRound className="size-[18px]" strokeWidth={2} />
-                  </Tile>
-                  <span className="flex flex-col gap-0.5">
-                    <span className="flex flex-wrap items-center gap-1.5 font-semibold">
-                      {t(`generate.${option.id}`)}
-                      {option.id === 'ed25519' ? (
-                        <Badge tone="accent" pill>
-                          {t('generate.recommended')}
-                        </Badge>
-                      ) : null}
-                    </span>
-                    <span className="text-[12px] leading-[17px] text-muted">
-                      {t(`generate.${option.id}Hint`)}
-                    </span>
+              onValueChange={setAlgo}
+              layout="stack"
+              glow
+              options={ALGOS.map((option) => ({
+                value: option.id,
+                tone: option.tone,
+                icon: KeyRound,
+                title: (
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    {t(`generate.${option.id}`)}
+                    {option.id === 'ed25519' ? (
+                      <Badge tone="accent" pill>
+                        {t('generate.recommended')}
+                      </Badge>
+                    ) : null}
                   </span>
-                </RadioGroup.Item>
-              ))}
-            </RadioGroup.Root>
+                ),
+                hint: t(`generate.${option.id}Hint`),
+              }))}
+            />
 
             {algo === 'rsa' ? (
               <SizePicker
@@ -189,7 +211,7 @@ export function GenerateKeyDialog({ onDone }: { onDone: () => void }) {
                 onChange={(value) => setCurve(value as EcdsaCurve)}
               />
             ) : null}
-          </fieldset>
+          </div>
 
           <div className="grid grid-cols-2 gap-3.5">
             <TextField
@@ -212,17 +234,34 @@ export function GenerateKeyDialog({ onDone }: { onDone: () => void }) {
               repeat={repeat}
               onChange={setPassphrase}
               onRepeatChange={setRepeat}
+              visible={showPassphrase}
             />
           </div>
-          {passphrase === '' ? (
-            <p className="-mt-2 text-[12px] text-warning">{t('generate.noPassphrase')}</p>
-          ) : null}
+          <div className="-mt-2 flex flex-col gap-1.5">
+            {passphrase === '' ? (
+              <p className="text-[12px] text-warning">{t('generate.noPassphrase')}</p>
+            ) : null}
+            <GeneratePassphraseButton
+              onGenerated={(value) => {
+                setPassphrase(value);
+                setRepeat(value);
+                setShowPassphrase(true);
+              }}
+            />
+          </div>
 
           <fieldset className="flex flex-col">
             <legend className="mb-2 text-[12px] font-semibold tracking-[0.02em] text-subtle">
               {t('generate.afterCreating')}
             </legend>
             <SwitchGroup>
+              <VaultSaveRow
+                vault={vault}
+                checked={saveToVault}
+                onCheckedChange={setSaveToVault}
+                disabled={passphrase === ''}
+                onLeave={onDone}
+              />
               <SwitchRow
                 label={t('generate.addToAgent')}
                 hint={agentAvailable ? t('generate.addToAgentHint') : t('agent.stoppedTitle')}

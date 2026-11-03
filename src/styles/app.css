@@ -26,6 +26,13 @@
   --color-info: #9ccbff;
   --color-info-solid: #6cb4ff;
   --color-ok: #5eead4;
+  /* A live session: dots, the signed-in banner. */
+  --color-online: #4ade80;
+
+  /* The terminal's panel: the xterm surface and its tab strip. */
+  --color-terminal: #06080d;
+  --color-terminal-bar: #10141d;
+  --color-terminal-line: rgb(255 255 255 / 0.09);
 
   --animate-floaty: floaty 6s ease-in-out infinite;
   --animate-orbit: spin 48s linear infinite;
@@ -36,6 +43,17 @@
   --animate-dialog-in: dialog-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
   --animate-popover-in: popover-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
   --animate-popover-out: popover-out 100ms ease-in forwards;
+  --animate-pulse-dot: pulse-dot 1.2s ease-in-out infinite;
+
+  @keyframes pulse-dot {
+    0%,
+    100% {
+      opacity: 0.4;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
 
   @keyframes popover-in {
     from {
@@ -184,6 +202,24 @@
   --accent-rgb: 251 113 133;
   --glow-a: rgb(225 29 72 / 0.22);
   --glow-b: rgb(124 58 237 / 0.1);
+}
+[data-section="passwords"] {
+  --accent-1: #f9a8d4;
+  --accent-2: #ec4899;
+  --accent-ink: #3f0a24;
+  --accent-text: #fbcfe8;
+  --accent-rgb: 244 114 182;
+  --glow-a: rgb(219 39 119 / 0.22);
+  --glow-b: rgb(124 58 237 / 0.08);
+}
+[data-section="terminal"] {
+  --accent-1: #86efac;
+  --accent-2: #22c55e;
+  --accent-ink: #052e16;
+  --accent-text: #bbf7d0;
+  --accent-rgb: 74 222 128;
+  --glow-a: rgb(22 163 74 / 0.22);
+  --glow-b: rgb(37 99 235 / 0.08);
 }
 [data-section="settings"] {
   --accent-1: #cbd5e1;

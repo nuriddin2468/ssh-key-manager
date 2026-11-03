@@ -9,9 +9,14 @@ use sshkm_core::keys::{GenerateRequest, KeyInfo, SkippedFile};
 use sshkm_core::known_hosts::{KnownHostEntry, KnownHostsView};
 use sshkm_core::paths::SshPaths;
 use sshkm_core::perms::PermKind;
+use sshkm_core::vault::{VaultFiles, VaultPaths};
+
+use crate::vault::VaultSettings;
+
+use crate::askpass::AskedPrompt;
 
 #[cfg(test)]
-const BINDINGS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/bindings/");
+pub(crate) const BINDINGS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/bindings/");
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -257,6 +262,25 @@ pub struct ConnectionTest {
     pub ok: bool,
     /// What `ssh` printed, for the user to read.
     pub output: String,
+    /// What `ssh` asked the app for and what became of it, in order. Empty
+    /// unless a password or one-time code was given: without one `ssh` runs in
+    /// batch mode and asks nothing.
+    pub prompts: Vec<AskedPrompt>,
+}
+
+/// The result of adding a public key to a server's `~/.ssh/authorized_keys`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub struct KeyInstall {
+    /// The key is in `authorized_keys` now.
+    pub ok: bool,
+    /// It was added; `false` if it was there already or the install failed.
+    pub added: bool,
+    /// What `ssh` and the remote shell printed, for the user to read.
+    pub output: String,
+    /// As in [`ConnectionTest`].
+    pub prompts: Vec<AskedPrompt>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -265,4 +289,78 @@ pub struct ConnectionTest {
 pub struct PermissionFix {
     pub path: String,
     pub kind: PermKind,
+}
+
+/// Whether there is a vault and whether it is open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub enum VaultState {
+    /// No database file yet.
+    Missing,
+    Locked,
+    Unlocked,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub struct VaultStatus {
+    pub state: VaultState,
+    pub files: VaultFiles,
+    pub paths: VaultPaths,
+    pub settings: VaultSettings,
+    pub device: DeviceUnlockStatus,
+}
+
+/// The system's way of confirming it's the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub enum BiometricKind {
+    TouchId,
+    WindowsHello,
+}
+
+/// Touch ID / Windows Hello for the vault on this computer.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub struct DeviceUnlockStatus {
+    /// What this computer offers; `None` when it offers nothing usable.
+    pub kind: Option<BiometricKind>,
+    /// Why it can't be used, in English, for logs and tooltips.
+    pub unavailable_reason: Option<String>,
+    /// Turned on for this vault on this computer.
+    pub enabled: bool,
+}
+
+/// What [`crate::commands::vault::vault_copy`] copies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub enum CopyField {
+    Username,
+    Password,
+    Url,
+    /// The current 2FA code.
+    Otp,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub struct CopyResult {
+    /// Seconds until the clipboard is cleared; `None` if it won't be.
+    pub clears_in_secs: Option<u32>,
+}
+
+/// A 2FA code and how long it stays valid.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub struct OtpCode {
+    pub code: String,
+    /// Seconds.
+    pub valid_for: u32,
 }

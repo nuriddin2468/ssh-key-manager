@@ -16,6 +16,10 @@ import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostEntry } from '@/bindings/KnownHostEntry';
 import type { PermissionFix } from '@/bindings/PermissionFix';
 import { hostsFileFindings, hostsFileHandlers } from './hostsFile';
+import { terminalHandlers } from './terminal';
+import { vaultHandlers } from './vault';
+import { vaultFilesHandlers } from './vaultFiles';
+import { vaultLinkHandlers } from './vaultLinks';
 
 const HOME = '/Users/dev';
 const DIR = `${HOME}/.ssh`;
@@ -139,21 +143,23 @@ let hostSpecs: { patterns: string[]; options: HostOption[] }[] = [
       opt('ServerAliveInterval', '60'),
     ],
   },
+  // Signs in with a password alone, and none is saved.
   {
     patterns: ['staging-api'],
     options: [
       opt('HostName', '10.0.8.20'),
       opt('User', 'ubuntu'),
-      opt('IdentityFile', '~/.ssh/id_ed25519_work'),
-      opt('ProxyJump', 'bastion'),
+      opt('PubkeyAuthentication', 'no'),
     ],
   },
+  // A password host with a key left over from before (and its password saved).
   {
     patterns: ['legacy-nas'],
     options: [
       opt('HostName', '192.168.1.20'),
       opt('User', 'admin'),
       opt('IdentityFile', '~/.ssh/id_rsa'),
+      opt('PubkeyAuthentication', 'no'),
     ],
   },
   {
@@ -358,6 +364,10 @@ const fail = (code: string, message: string) => Promise.reject({ code, message }
 const findKey = (id: unknown) => keys.find((k) => k.id === id);
 
 const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
+  ...vaultHandlers,
+  ...vaultLinkHandlers({ keys: () => keys, hosts, agent: agentLoaded }),
+  ...vaultFilesHandlers,
+  ...terminalHandlers(hosts),
   get_environment: (): Environment => ({
     paths: { home: HOME, dir: DIR, config: `${DIR}/config`, knownHosts: `${DIR}/known_hosts` },
     platform: 'macos',
@@ -470,8 +480,26 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
           ok: true,
           output:
             "Hi dev! You've successfully authenticated, but GitHub does not provide shell access.",
+          prompts: [],
         }
-      : { ok: false, output: `ssh: connect to host ${alias} port 22: Operation timed out` },
+      : {
+          ok: false,
+          // Batch mode: an unknown host key fails outright, and servers
+          // that want a password turn every key down.
+          output:
+            alias === 'legacy-nas'
+              ? 'Host key verification failed.'
+              : ['prod-api', 'staging-api', 'bastion'].includes(String(alias))
+                ? `ubuntu@${alias}: Permission denied (publickey,password).`
+                : `ssh: connect to host ${alias} port 22: Operation timed out`,
+          prompts: [],
+        },
+  install_public_key: ({ alias }) => ({
+    ok: false,
+    added: false,
+    output: `deploy@${alias}: Permission denied (publickey,password).`,
+    prompts: [],
+  }),
   read_known_hosts: () => ({
     path: `${DIR}/known_hosts`,
     exists: true,
@@ -518,11 +546,16 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   },
 };
 
+/** Keystrokes must keep their order, so they skip the simulated latency. */
+const INSTANT = new Set(['terminal_write', 'terminal_resize', 'terminal_answer']);
+
 export async function invoke(
   command: string,
   args: Record<string, unknown> = {},
 ): Promise<unknown> {
-  await new Promise((resolve) => setTimeout(resolve, 120 + Math.random() * 200));
+  if (!INSTANT.has(command)) {
+    await new Promise((resolve) => setTimeout(resolve, 120 + Math.random() * 200));
+  }
   const handler = handlers[command];
   if (!handler) throw { code: 'unsupported', message: `mock: no handler for ${command}` };
   return structuredClone(await handler(args));

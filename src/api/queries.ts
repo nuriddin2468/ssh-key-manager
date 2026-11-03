@@ -22,6 +22,8 @@ export const keys = {
   knownHosts: ['known-hosts'] as const,
   hostsFile: ['hosts-file'] as const,
   audit: ['audit'] as const,
+  vaultStatus: ['vault', 'status'] as const,
+  vaultEntries: ['vault', 'entries'] as const,
 };
 
 /** Everything derived from files in `~/.ssh`, the hosts file or the agent. */
@@ -46,3 +48,12 @@ export const useKnownHosts = () => useQuery({ queryKey: keys.knownHosts, queryFn
 export const useHostsFile = () => useQuery({ queryKey: keys.hostsFile, queryFn: api.hostsFile });
 
 export const useAudit = () => useQuery({ queryKey: keys.audit, queryFn: api.audit });
+
+export const useVaultStatus = () =>
+  useQuery({ queryKey: keys.vaultStatus, queryFn: api.vaultStatus });
+
+/** Entries of the unlocked vault; idle while it is locked. */
+export const useVaultEntries = () => {
+  const unlocked = useVaultStatus().data?.state === 'unlocked';
+  return useQuery({ queryKey: keys.vaultEntries, queryFn: api.vaultEntries, enabled: unlocked });
+};

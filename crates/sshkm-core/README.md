@@ -5,8 +5,9 @@ commands; this crate does all the work on the files.
 
 The app is a front-end over the **standard OpenSSH files**: keys in `~/.ssh`,
 `~/.ssh/config`, `~/.ssh/known_hosts` and the system `ssh-agent`. There is no
-vault and no agent of our own, so everything stays compatible with `ssh`,
-`ssh-keygen`, `ssh-add`, git and IDEs.
+agent of our own, so everything stays compatible with `ssh`, `ssh-keygen`,
+`ssh-add`, git and IDEs. The optional password vault is a standard KeePass
+file, so KeePassXC and other KeePass apps open it too.
 
 ## Modules
 
@@ -20,11 +21,12 @@ vault and no agent of our own, so everything stays compatible with `ssh`,
 | `agent` | Synchronous `ssh-agent` client: status, list, add (lifetime / confirm constraints), remove, remove all. Unix socket or Windows named pipe. |
 | `perms` | Permission checks and fixes: Unix modes; Windows ACLs via one batched PowerShell call, compared by SID, fixed with `icacls`. |
 | `audit` | Findings (DSA, short RSA, no passphrase, open permissions, missing/mismatched `.pub`, duplicates, dangling `IdentityFile`, legacy format) with stable ids and one-click fixes. |
+| `vault` | The password vault: a KeePass KDBX 4.1 database (Argon2id, ChaCha20) whose password is a random recovery key, plus a key slots file that opens it with the master password or a device key. Entries with history and recycle bin, links to SSH hosts and keys, 2FA codes, conflict-safe writes for synced folders, a password/passphrase generator and zxcvbn strength. |
 
 All errors are one `Error` enum with a stable `code()` (`not_found`,
 `already_exists`, `invalid_input`, `wrong_passphrase`, `passphrase_required`,
 `agent_unavailable`, `agent_refused`, `unsupported`, `parse`, `io`,
-`permission_denied`) that serialises as `{ "code": …, "message": … }`. Statuses
+`permission_denied`, `conflict`, `vault_locked`) that serialises as `{ "code": …, "message": … }`. Statuses
 and findings are machine-readable kinds with parameters, so the UI can localise
 them.
 

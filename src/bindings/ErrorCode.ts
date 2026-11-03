@@ -6,4 +6,4 @@
  * The UI localises errors by this code; [`Error`]'s message is English text
  * meant for logs and developers only.
  */
-export type ErrorCode = "not_found" | "already_exists" | "invalid_input" | "wrong_passphrase" | "passphrase_required" | "agent_unavailable" | "agent_refused" | "unsupported" | "parse" | "io" | "permission_denied";
+export type ErrorCode = "not_found" | "already_exists" | "invalid_input" | "wrong_passphrase" | "passphrase_required" | "agent_unavailable" | "agent_refused" | "unsupported" | "parse" | "io" | "permission_denied" | "conflict" | "vault_locked" | "cancelled";

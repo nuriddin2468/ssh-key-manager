@@ -33,6 +33,11 @@ pub fn install(app: &App) -> tauri::Result<()> {
         .item(&item("new-key", "New Key…", "CmdOrCtrl+N")?)
         .item(&item("import-key", "Import Key…", "CmdOrCtrl+O")?)
         .item(&item("add-host", "Add Host", "CmdOrCtrl+Shift+N")?)
+        .item(&item(
+            "new-session",
+            "New Terminal Session…",
+            "CmdOrCtrl+T",
+        )?)
         .separator()
         .close_window()
         .build()?;
@@ -57,6 +62,8 @@ pub fn install(app: &App) -> tauri::Result<()> {
         .item(&item("nav-known", "Known Hosts", "CmdOrCtrl+5")?)
         .item(&item("nav-audit", "Audit", "CmdOrCtrl+6")?)
         .item(&item("nav-hostsFile", "Hosts File", "CmdOrCtrl+7")?)
+        .item(&item("nav-passwords", "Passwords", "CmdOrCtrl+8")?)
+        .item(&item("nav-terminal", "Terminal", "CmdOrCtrl+9")?)
         .separator()
         .item(&item("check", "Check Again", "CmdOrCtrl+R")?)
         .separator()

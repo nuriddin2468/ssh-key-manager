@@ -1,7 +1,7 @@
-import { AlertTriangle, Code2, Plus, Server } from 'lucide-react';
+import { AlertTriangle, Code2, KeyRound, LockKeyhole, Plus, Server } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useConfig } from '@/api/queries';
+import { useConfig, useVaultEntries } from '@/api/queries';
 import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
 import { useFindShortcut } from '@/app/useAppEvents';
@@ -17,8 +17,9 @@ import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
 import { cn } from '@/lib/cn';
 import { HostEditor } from './HostEditor';
-import { hostLabel, hostMonogram, hostTarget } from './model';
+import { hostLabel, hostMethod, hostMonogram, hostTarget, type SignInMethod } from './model';
 import { RawConfigDialog } from './RawConfigDialog';
+import { findHostEntry, hostAliases } from './vault';
 
 export function HostsPage({ hostId }: { hostId?: number }) {
   const { t } = useTranslation();
@@ -31,6 +32,7 @@ export function HostsPage({ hostId }: { hostId?: number }) {
   useFindShortcut(search);
 
   const hosts = config.data?.view.hosts ?? [];
+  const vaultEntries = useVaultEntries().data;
   const missing = new Set(
     (config.data?.usage ?? []).filter((u) => u.resolved && !u.exists).map((u) => u.hostId),
   );
@@ -112,6 +114,10 @@ export function HostsPage({ hostId }: { hostId?: number }) {
               <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-1.5 pb-2">
                 {visible.map((host) => (
                   <HostRow
+                    method={hostMethod(
+                      host,
+                      findHostEntry(vaultEntries, hostAliases(host)) !== undefined,
+                    )}
                     key={host.id}
                     host={host}
                     selected={host.id === selected?.id}
@@ -159,12 +165,13 @@ export function HostsPage({ hostId }: { hostId?: number }) {
 
 interface HostRowProps {
   host: HostEntry;
+  method: SignInMethod | null;
   selected: boolean;
   broken: boolean;
   onSelect: () => void;
 }
 
-function HostRow({ host, selected, broken, onSelect }: HostRowProps) {
+function HostRow({ host, method, selected, broken, onSelect }: HostRowProps) {
   const { t } = useTranslation();
   const mono = hostMonogram(host);
   const isDefaults = host.kind === 'host' && host.patterns.length === 1 && host.patterns[0] === '*';
@@ -206,6 +213,24 @@ function HostRow({ host, selected, broken, onSelect }: HostRowProps) {
               : hostTarget(host, (jump) => t('hosts.via', { jump }))}
         </span>
       </span>
+      {method ? <MethodIcons method={method} /> : null}
     </button>
+  );
+}
+
+/** The sign-in method as small icons: a key, a lock, or both. */
+function MethodIcons({ method }: { method: SignInMethod }) {
+  const { t } = useTranslation();
+  const label = t('hosts.signIn.listLabel', { method: t(`hosts.signIn.${method}`) });
+  return (
+    <span title={label} className="flex shrink-0 items-center gap-1 text-subtle">
+      {method !== 'password' ? (
+        <KeyRound aria-hidden="true" className="size-3.5" strokeWidth={1.9} />
+      ) : null}
+      {method !== 'key' ? (
+        <LockKeyhole aria-hidden="true" className="size-3.5" strokeWidth={1.9} />
+      ) : null}
+      <span className="sr-only">{label}</span>
+    </span>
   );
 }

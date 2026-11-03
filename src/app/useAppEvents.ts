@@ -2,14 +2,26 @@ import { isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { type RefObject, useEffect } from 'react';
 import { invalidateAll } from '@/api/queries';
+import { useTerminals } from '@/features/terminal/TerminalProvider';
 import { platform } from '@/lib/platform';
 import { checkForUpdates } from '@/lib/updater';
 import { useDialogs } from './dialogs';
 import { type Page, type Route, useRouter } from './router';
 
-const FIND_EVENT = 'sshkm:find';
-// ⌘1–⌘7, in the order they were added so existing shortcuts never move.
-const PAGES: Page[] = ['overview', 'keys', 'hosts', 'agent', 'known', 'audit', 'hostsFile'];
+/** ⌘F / ⌘K: the page's search, or the terminal's find bar. */
+export const FIND_EVENT = 'sshkm:find';
+// ⌘1–⌘9, in the order they were added so existing shortcuts never move.
+const PAGES: Page[] = [
+  'overview',
+  'keys',
+  'hosts',
+  'agent',
+  'known',
+  'audit',
+  'hostsFile',
+  'passwords',
+  'terminal',
+];
 
 /**
  * Wires the native menu (macOS), keyboard shortcuts (Windows/Linux, where
@@ -18,12 +30,16 @@ const PAGES: Page[] = ['overview', 'keys', 'hosts', 'agent', 'known', 'audit', '
 export function useAppEvents(): void {
   const { navigate } = useRouter();
   const dialogs = useDialogs();
+  const { setPickerOpen } = useTerminals();
 
   useEffect(() => {
     const command = (id: string) => {
       if (id.startsWith('nav-')) navigate({ page: id.slice(4) } as Route);
       else if (id === 'settings') navigate({ page: 'settings' });
-      else if (id === 'new-key') dialogs.generateKey();
+      else if (id === 'new-session') {
+        navigate({ page: 'terminal' });
+        setPickerOpen(true);
+      } else if (id === 'new-key') dialogs.generateKey();
       else if (id === 'import-key') void dialogs.importKey();
       else if (id === 'add-host') dialogs.addHost();
       else if (id === 'check') void invalidateAll();
@@ -48,6 +64,9 @@ export function useAppEvents(): void {
       else if (event.key === ',') id = 'settings';
       else if (event.key.toLowerCase() === 'n') id = event.shiftKey ? 'add-host' : 'new-key';
       else if (event.key.toLowerCase() === 'o') id = 'import-key';
+      // ⌘T on macOS; Ctrl+Shift+T elsewhere, as Ctrl+T belongs to the shell.
+      else if (event.key.toLowerCase() === 't' && (platform === 'macos' || event.shiftKey))
+        id = 'new-session';
       else if (event.key.toLowerCase() === 'r') id = 'check';
       else if (event.key.toLowerCase() === 'f' || event.key.toLowerCase() === 'k') id = 'find';
       if (!id) return;
@@ -60,7 +79,7 @@ export function useAppEvents(): void {
       window.removeEventListener('keydown', onKey);
       for (const promise of unlisten) void promise.then((stop) => stop());
     };
-  }, [navigate, dialogs]);
+  }, [navigate, dialogs, setPickerOpen]);
 }
 
 /** Focuses the page's search field on ⌘F / ⌘K. */

@@ -2,12 +2,15 @@ import {
   Cpu,
   Globe,
   KeyRound,
+  LockKeyhole,
   type LucideIcon,
   Network,
+  RectangleEllipsis,
   Server,
   Settings as SettingsIcon,
   ShieldCheck,
   Sparkle,
+  SquareTerminal,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -18,16 +21,21 @@ import {
   useHostsFile,
   useKeys,
   useKnownHosts,
+  useVaultEntries,
+  useVaultStatus,
 } from '@/api/queries';
 import { type Page, type Route, useRouter } from '@/app/router';
 import { Logo } from '@/components/Logo';
 import { Tile, type Tone } from '@/components/ui/Tile';
-import { Tooltip } from '@/components/ui/Tooltip';
+import { useSessionCounts } from '@/features/terminal/TerminalProvider';
 import { cn } from '@/lib/cn';
-import { modLabel, platform } from '@/lib/platform';
+import { platform } from '@/lib/platform';
 import { useUpdateState } from '@/lib/updater';
 
 const PLATFORM_NAMES = { macos: 'macOS', windows: 'Windows', linux: 'Linux' } as const;
+
+/** The sidebar's `px-2.5 pb-2.5` padding, which the toasts line up with (see App.tsx). */
+export const SIDEBAR_INSET = 10;
 
 export function Sidebar() {
   const { t } = useTranslation();
@@ -39,12 +47,18 @@ export function Sidebar() {
   const known = useKnownHosts();
   const hostsFile = useHostsFile();
   const audit = useAudit();
+  const vault = useVaultStatus();
+  const vaultEntries = useVaultEntries();
+  const sessions = useSessionCounts();
 
   const findings = audit.data ? audit.data.counts.critical + audit.data.counts.warning : 0;
   const unlocked = agent.data?.identities.length ?? 0;
   const running = agent.data?.status.available ?? false;
   const update = useUpdateState();
   const updateReady = update.status === 'available' || update.status === 'downloading';
+  const vaultState = vault.data?.state;
+  const savedPasswords =
+    vaultState === 'unlocked' ? vaultEntries.data?.filter((e) => !e.inTrash).length : undefined;
 
   const item = (page: Page, label: string, tone: Tone, Icon: LucideIcon, count?: number) => (
     <NavItem
@@ -96,6 +110,48 @@ export function Sidebar() {
             hostsFile.data?.view.entries.filter((entry) => entry.enabled).length,
           )}
         </NavGroup>
+        <NavGroup label={t('nav.groupSecrets')}>
+          <NavItem
+            label={t('nav.passwords')}
+            tone="pink"
+            icon={RectangleEllipsis}
+            active={route.page === 'passwords'}
+            count={savedPasswords}
+            trailing={
+              vaultState === 'locked' ? (
+                <LockKeyhole
+                  role="img"
+                  aria-label={t('nav.vaultLocked')}
+                  className="ml-auto size-3.5 text-subtle"
+                  strokeWidth={2}
+                />
+              ) : undefined
+            }
+            onClick={() => navigate({ page: 'passwords' })}
+          />
+        </NavGroup>
+        <NavGroup label={t('nav.groupSessions')}>
+          <NavItem
+            label={t('nav.terminal')}
+            tone="green"
+            icon={SquareTerminal}
+            active={route.page === 'terminal'}
+            trailing={
+              sessions.tabs > 0 ? (
+                <span className="ml-auto inline-flex items-center gap-[5px] text-[12px] text-subtle tabular-nums">
+                  {sessions.connected > 0 ? (
+                    <span aria-hidden="true" className="size-1.5 rounded-full bg-online" />
+                  ) : null}
+                  <span aria-hidden="true">{sessions.tabs}</span>
+                  <span className="sr-only">
+                    {t('nav.sessions', { count: sessions.tabs, connected: sessions.connected })}
+                  </span>
+                </span>
+              ) : undefined
+            }
+            onClick={() => navigate({ page: 'terminal' })}
+          />
+        </NavGroup>
         <NavGroup label={t('nav.groupHealth')}>
           <NavItem
             label={t('nav.audit')}
@@ -107,63 +163,25 @@ export function Sidebar() {
             onClick={() => navigate({ page: 'audit' })}
           />
         </NavGroup>
-      </nav>
-
-      <div className="mt-auto flex items-center gap-1.5 border-t border-white/[0.06] pt-2.5">
-        <button
-          type="button"
-          onClick={() => navigate({ page: 'agent' })}
-          className="pressable-soft flex h-10 min-w-0 flex-1 items-center gap-[9px] rounded-[9px] px-2 text-left hover:bg-white/[0.05]"
-        >
-          <span
-            aria-hidden="true"
-            className={cn(
-              'size-2 shrink-0 rounded-full',
-              running
-                ? 'bg-violet-400 shadow-[0_0_0_3px_rgb(167_139_250/0.2),0_0_10px_rgb(167_139_250/0.9)]'
-                : 'bg-faint',
-            )}
-          />
-          <span className="flex min-w-0 flex-col">
-            <span className="text-[12px] leading-4 font-semibold">
-              {running ? t('nav.agentRunning') : t('nav.agentStopped')}
-            </span>
-            {running ? (
-              <span className="truncate text-[11.5px] leading-[15px] text-subtle">
-                {t('nav.agentUnlocked', { count: unlocked })}
-              </span>
-            ) : null}
-          </span>
-        </button>
-        <Tooltip
-          content={
-            updateReady
-              ? `${t('nav.settings')} · ${t('updates.available', { version: update.version })}`
-              : t('nav.settings')
-          }
-          shortcut={`${modLabel},`}
-          side="top"
-        >
-          <button
-            type="button"
-            aria-label={t('nav.settings')}
-            aria-pressed={route.page === 'settings'}
+        <div className="flex flex-col gap-px">
+          <NavItem
+            label={t('nav.settings')}
+            tone="slate"
+            icon={SettingsIcon}
+            active={route.page === 'settings'}
+            trailing={
+              updateReady ? (
+                <span
+                  role="img"
+                  aria-label={t('updates.available', { version: update.version })}
+                  className="ml-auto size-[7px] rounded-full bg-teal-300 shadow-[0_0_8px_rgb(94_234_212/0.9)]"
+                />
+              ) : undefined
+            }
             onClick={() => navigate({ page: 'settings' })}
-            className={cn(
-              'pressable relative grid size-8 shrink-0 place-items-center rounded-lg text-fg-2 hover:bg-white/[0.07] hover:text-fg',
-              route.page === 'settings' && 'bg-white/10 text-fg',
-            )}
-          >
-            <SettingsIcon aria-hidden="true" className="size-[17px]" strokeWidth={1.8} />
-            {updateReady ? (
-              <span
-                aria-hidden="true"
-                className="absolute top-1 right-1 size-[7px] rounded-full bg-teal-300 shadow-[0_0_8px_rgb(94_234_212/0.9)]"
-              />
-            ) : null}
-          </button>
-        </Tooltip>
-      </div>
+          />
+        </div>
+      </nav>
     </aside>
   );
 }
@@ -185,6 +203,8 @@ interface NavItemProps {
   count?: number;
   badge?: number;
   badgeLabel?: string;
+  /** Shown at the end instead of a count, e.g. a status icon. */
+  trailing?: React.ReactNode;
   onClick: () => void;
 }
 
@@ -196,6 +216,7 @@ function NavItem({
   count,
   badge,
   badgeLabel,
+  trailing,
   onClick,
 }: NavItemProps) {
   return (
@@ -224,7 +245,9 @@ function NavItem({
         </span>
       ) : count !== undefined ? (
         <span className="ml-auto text-[12px] text-subtle tabular-nums">{count}</span>
-      ) : null}
+      ) : (
+        (trailing ?? null)
+      )}
     </button>
   );
 }

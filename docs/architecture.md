@@ -38,6 +38,20 @@ real `~/.ssh`. Its modules:
     `icacls`.
 - `audit`: pure rules over the data above. Findings carry machine-readable kinds and
   parameters, so the UI can localise them.
+- `vault`: the password vault, two files side by side.
+  - `vault.kdbx` is a standard KeePass database (KDBX 4.1, Argon2id, ChaCha20). Its
+    password is the _vault secret_: a random 256-bit recovery key, shown once, which
+    also opens the file in KeePassXC.
+  - `vault.keys` holds key slots: the secret encrypted with XChaCha20-Poly1305 under a
+    key derived from the master password (Argon2id, 128 MiB) and, optionally, under a
+    random device key kept in the OS credential store for Touch ID / Windows Hello.
+    Losing it loses nothing: the recovery key opens the database and sets a new
+    master password.
+  - Entry summaries and details never contain a password or 2FA secret; those are
+    read one at a time.
+  - Every change is written atomically after a backup. Before each operation the
+    vault re-reads a database changed elsewhere (a synced folder); a write over such
+    a change fails with `conflict` and is kept as a separate copy.
 
 Errors have a stable `code` (`wrong_passphrase`, `agent_unavailable`, …) that the UI
 translates.
@@ -49,8 +63,37 @@ translates.
   the hosts that use each key.
 - **Process helpers.** Run `ssh -V`, `ssh-keyscan` and `ssh` without a console window and
   with timeouts.
+- **Askpass.** The app executable doubles as `ssh`'s `SSH_ASKPASS` program, so `ssh` can
+  ask for a password, one-time code or key passphrase without a terminal.
+  - `main` runs the helper before Tauri starts when `SSHKM_ASKPASS_*` is set: it sends the
+    prompt to the running app and prints the reply.
+  - The app listens on a Unix socket in a private (0700) temp directory, or on a named
+    pipe with a random name that rejects remote clients.
+  - Each `ssh` run gets a session with a one-time 256-bit token and the caller's secrets.
+    In a batch session (connection tests, installing a key) yes/no questions (an unknown
+    host key) are always answered "no", each secret is given at most once, and prompts
+    naming another account are refused.
+  - An interactive session (the terminal) hands host-key questions, secrets asked again
+    and other accounts' prompts to its responder too, saying which they are; other yes/no
+    questions still get "no".
+- **Terminal.** `src-tauri/src/terminal/`: one pseudo-terminal per session (`portable-pty`,
+  ConPTY on Windows) running `ssh -o ConnectTimeout=10 -- <alias>`.
+  - Output goes to the UI over a `tauri::ipc::Channel` as raw bytes; state changes and
+    prompts go over the same channel as JSON events. Input, resizing, answers and closing
+    are commands (`terminal_*`).
+  - The prompt bridge answers from the vault once, then asks the user (five minutes at
+    most) and saves answers the user chose to save after signing in.
+  - A session is connected once `ssh` puts the terminal in raw mode (macOS, Linux), or
+    on the first output after the last prompt that isn't `ssh`'s own (Windows). Exiting
+    before that is a failure with a reason read from the prompts and `ssh`'s output.
+  - Sessions end when the app quits or the page reloads; locking the vault doesn't end
+    them.
 - **Watcher.** Watches `~/.ssh` and the hosts file so changes made in a terminal appear
   immediately.
+- **Vault runtime.** The unlocked vault lives only in the Rust process. A timer locks
+  it after inactivity or sleep; each lock emits `vault-locked`. Copied passwords go
+  from Rust to the clipboard, marked to stay out of clipboard history, and are
+  cleared after a while.
 - **Menu.** The macOS menu bar with keyboard shortcuts.
 
 ## UI
@@ -60,6 +103,9 @@ translates.
 - TanStack Query caches every command. Any change invalidates everything, which is cheap
   because all data is local.
 - Every section sets `data-section`, which drives its accent colour through CSS variables.
+- The Terminal's sessions and their xterm.js instances live in a provider above the pages,
+  so they keep running and keep their scrollback while other sections show. xterm uses
+  its DOM renderer on Linux (WebKitGTK often renders on the CPU) and WebGL elsewhere.
 - i18next with English, Russian and Uzbek. A test keeps the translations' keys and
   placeholders in sync.
 - `pnpm dev` in a browser uses `src/mocks/backend.ts` instead of Tauri, so the UI can be

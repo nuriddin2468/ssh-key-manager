@@ -28,7 +28,7 @@ impl AppError {
         Self::new(ErrorCode::InvalidInput, message)
     }
 
-    fn code(&self) -> ErrorCode {
+    pub(crate) fn code(&self) -> ErrorCode {
         match self {
             Self::Core(error) => error.code(),
             Self::App { code, .. } => *code,

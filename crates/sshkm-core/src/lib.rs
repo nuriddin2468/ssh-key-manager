@@ -4,7 +4,11 @@
 //! public keys in `~/.ssh`, `~/.ssh/config`, `~/.ssh/known_hosts` — and the system
 //! `ssh-agent`. This crate reads and edits those files in a way that keeps them
 //! 100% compatible with `ssh`, `ssh-keygen`, `ssh-add` and every other tool that
-//! consumes them. There is no private vault and no private agent.
+//! consumes them. There is no private agent.
+//!
+//! The one file of the app's own is the optional password vault ([`vault`]): a
+//! standard KeePass (KDBX 4) database that KeePassXC and other KeePass apps can
+//! open too.
 //!
 //! Modules:
 //!
@@ -17,6 +21,8 @@
 //! - [`agent`]: a small synchronous client for the system `ssh-agent`.
 //! - [`perms`]: permission checks and fixes (Unix modes, Windows ACLs).
 //! - [`audit`]: security findings computed from all of the above.
+//! - [`vault`]: the encrypted password vault, its key slots and the password
+//!   generator.
 //!
 //! Every public data type implements [`serde::Serialize`] with camelCase field
 //! names so it can be returned from Tauri commands unchanged. With the `ts`
@@ -39,6 +45,7 @@ pub mod known_hosts;
 pub mod paths;
 pub mod perms;
 mod text;
+pub mod vault;
 
 pub use error::{Error, ErrorCode, ErrorInfo, Result};
 pub use secrecy::{self, ExposeSecret, SecretString};

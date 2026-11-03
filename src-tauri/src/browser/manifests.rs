@@ -239,7 +239,14 @@ fn set_registry(target: &Target) -> io::Result<()> {
     let output = crate::process::run(
         "reg",
         &[
-            "add", target.key, "/ve", "/t", "REG_SZ", "/d", &manifest, "/f",
+            "add",
+            target.key,
+            "/ve",
+            "/t",
+            "REG_SZ",
+            "/d",
+            manifest.as_ref(),
+            "/f",
         ],
         std::time::Duration::from_secs(10),
     )?;

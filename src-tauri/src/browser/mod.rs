@@ -376,6 +376,11 @@ mod tests {
             manifest["browser_specific_settings"]["gecko"]["id"],
             FIREFOX_EXTENSION_ID
         );
+        assert_eq!(
+            manifest["version"],
+            env!("CARGO_PKG_VERSION"),
+            "extension/manifest.json follows the app's version"
+        );
         // Chrome derives the id from the public key: SHA-256, first 16
         // bytes, each nibble as a letter from `a` to `p`.
         let key =

@@ -9,6 +9,7 @@ import {
   KeyRound,
   MoreHorizontal,
   Pencil,
+  Send,
   Server,
   Trash2,
   Undo2,
@@ -25,9 +26,11 @@ import type { EntrySummary } from '@/bindings/EntrySummary';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { Dialog } from '@/components/ui/Dialog';
 import { IconButton } from '@/components/ui/IconButton';
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '@/components/ui/Menu';
 import { Tile, TONES } from '@/components/ui/Tile';
+import { SendDialog } from '@/features/nearby/SendDialog';
 import { cn } from '@/lib/cn';
 import { formatDate, formatRelative, shortFingerprint } from '@/lib/format';
 import { avatar, openableUrl } from './model';
@@ -70,6 +73,7 @@ export function EntryPane({ entry, onEdit, onGone }: EntryPaneProps) {
   const keys = useKeys();
   const [revealed, setRevealed] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [sending, setSending] = useState(false);
   const mark = avatar(entry.title);
   const href = openableUrl(entry.url);
   const passwordLabel = entry.kind === 'key' ? t('passwords.passphrase') : t('passwords.password');
@@ -287,6 +291,14 @@ export function EntryPane({ entry, onEdit, onGone }: EntryPaneProps) {
               >
                 {t('passwords.edit')}
               </Button>
+              {entry.kind !== 'key' ? (
+                <Button
+                  icon={<Send className="size-[15px]" strokeWidth={1.9} />}
+                  onClick={() => setSending(true)}
+                >
+                  {t('passwords.send')}
+                </Button>
+              ) : null}
             </>
           )}
         </div>
@@ -474,6 +486,15 @@ export function EntryPane({ entry, onEdit, onGone }: EntryPaneProps) {
         )}
       </div>
 
+      <Dialog open={sending} onOpenChange={setSending}>
+        {sending ? (
+          <SendDialog
+            what={{ type: 'password', entryId: entry.id, hasOtp: entry.hasOtp }}
+            name={entry.title}
+            onStarted={() => setSending(false)}
+          />
+        ) : null}
+      </Dialog>
       <ConfirmDialog
         open={confirmDelete}
         onOpenChange={setConfirmDelete}

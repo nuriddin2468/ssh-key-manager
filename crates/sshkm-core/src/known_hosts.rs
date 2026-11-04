@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     Error, Result, fsutil,
-    text::{self, Line},
+    text::{self, Eol, Line},
 };
 
 /// Largest `known_hosts` file that is loaded.
@@ -214,6 +214,59 @@ impl KnownHosts {
             .filter_map(|n| usize::try_from(*n).ok()?.checked_sub(1))
             .collect();
         text::remove_indices(&mut self.lines, &doomed)
+    }
+
+    /// The keys plain (unmarked) entries give `host`/`port`, hashed or not,
+    /// as `(key type, standard base64)`, each once, in file order.
+    pub fn keys_for(&self, host: &str, port: u16) -> Vec<(String, String)> {
+        let name = lookup_name(host, port);
+        let mut keys = Vec::new();
+        for (_, parsed) in self.parsed() {
+            if let Parsed::Entry(parts) = parsed
+                && parts.marker == HostMarker::None
+                && parts.hosts.matches(&name)
+            {
+                let key = (parts.key_type.clone(), Base64::encode_string(&parts.blob));
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
+        }
+        keys
+    }
+
+    /// Trusts `key` (standard base64 of a `key_type` key) for `host`/`port`
+    /// with a plain entry at the end, unless the host has that key already.
+    /// Returns whether a line was added.
+    pub fn add_key(&mut self, host: &str, port: u16, key_type: &str, key: &str) -> Result<bool> {
+        if host.is_empty()
+            || !host
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'))
+        {
+            return Err(Error::invalid("not a host name"));
+        }
+        let blob = decode_b64(key)
+            .filter(|blob| blob_type(blob) == Some(key_type))
+            .ok_or_else(|| Error::invalid("not a host key of that type"))?;
+        let encoded = Base64::encode_string(&blob);
+        if self
+            .keys_for(host, port)
+            .iter()
+            .any(|(kind, known)| kind == key_type && *known == encoded)
+        {
+            return Ok(false);
+        }
+        if let Some(last) = self.lines.last_mut()
+            && last.eol == Eol::None
+        {
+            last.eol = Eol::Lf;
+        }
+        self.lines.push(Line::new(
+            format!("{} {key_type} {encoded}", lookup_name(host, port)),
+            Eol::Lf,
+        ));
+        Ok(true)
     }
 
     /// Removes every plain (unmarked) entry for `host`/`port`, hashed or not,
@@ -454,6 +507,39 @@ mod tests {
              \n\
              \ttabbed.example.com\t{KEY}   "
         )
+    }
+
+    #[test]
+    fn keys_for_a_host_and_adding_one() {
+        let mut file = KnownHosts::parse(&sample());
+        let (key_type, base64) = KEY.split_once(' ').unwrap();
+        let want = vec![(key_type.to_owned(), base64.to_owned())];
+        // Plain and hashed, the same key once; never @revoked or @cert-authority.
+        assert_eq!(file.keys_for("example.com", 22), want);
+        assert_eq!(file.keys_for("github.com", 22), want);
+        assert_eq!(file.keys_for("git.example.com", 2222), want);
+        assert_eq!(file.keys_for("other.org", 22), Vec::new());
+
+        // A known key is not added twice; a new host gets a plain line.
+        assert!(!file.add_key("example.com", 22, key_type, base64).unwrap());
+        assert!(
+            file.add_key("New.Example.org", 2200, key_type, base64)
+                .unwrap()
+        );
+        assert_eq!(file.keys_for("new.example.org", 2200), want);
+        assert!(
+            file.to_string()
+                .ends_with(&format!("{KEY}   \n[new.example.org]:2200 {KEY}\n"))
+        );
+        for (host, kind, key) in [
+            ("a b", key_type, base64),
+            ("a,b", key_type, base64),
+            ("", key_type, base64),
+            ("host", "ssh-rsa", base64),
+            ("host", key_type, "!!!"),
+        ] {
+            assert!(file.add_key(host, 22, kind, key).is_err(), "{host} {kind}");
+        }
     }
 
     #[test]

@@ -3,6 +3,7 @@ import {
   KeyRound,
   MoreHorizontal,
   PlugZap,
+  Send,
   ShieldCheck,
   SquareTerminal,
   Terminal,
@@ -38,6 +39,7 @@ import { Tooltip } from '@/components/ui/Tooltip';
 import { HostResolution } from '@/features/hostsFile/HostResolution';
 import { CheckHostKeyDialog } from '@/features/known/CheckHostKeyDialog';
 import type { KnownHostsRemoval } from '@/features/known/removal';
+import { SendDialog } from '@/features/nearby/SendDialog';
 import { useConnect } from '@/features/terminal/connect';
 import { copyText } from '@/lib/clipboard';
 import { displayPath } from '@/lib/format';
@@ -149,6 +151,7 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
   // `otp`: opened to add a 2FA secret, so that field takes focus.
   const [passwordOpen, openPassword, closePassword] = useDialog<'edit' | 'otp'>(sectionButton);
   const [hostKeyOpen, openHostKey, closeHostKey] = useDialog<true>();
+  const [sending, openSend, closeSend] = useDialog<true>();
   // Captured when it opens, so it keeps signing in the same way if the vault locks.
   const [serverKeys, openServerKeys, closeServerKeys] = useDialog<{ withVault: boolean }>();
   // Captured when it opens, so it stays put if the vault locks meanwhile.
@@ -421,6 +424,13 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
                 >
                   {t('hosts.editor.openTerminal')}
                 </MenuItem>
+                <MenuItem
+                  icon={<Send className="size-[15px]" strokeWidth={1.9} />}
+                  disabled={dirty}
+                  onSelect={() => openSend(true)}
+                >
+                  {t('hosts.editor.send')}
+                </MenuItem>
                 <MenuSeparator />
               </>
             ) : null}
@@ -578,6 +588,11 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
             }}
             onDone={endSwitch}
           />
+        ) : null}
+      </Dialog>
+      <Dialog open={sending !== null} onOpenChange={(open) => open || closeSend()}>
+        {sending ? (
+          <SendDialog what={{ type: 'host', alias }} name={alias} onStarted={closeSend} />
         ) : null}
       </Dialog>
       {/* Under the password and host key dialogs its failed sign-ins open. */}

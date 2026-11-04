@@ -17,6 +17,7 @@ import type { KnownHostEntry } from '@/bindings/KnownHostEntry';
 import type { PermissionFix } from '@/bindings/PermissionFix';
 import { browserHandlers } from './browser';
 import { hostsFileFindings, hostsFileHandlers } from './hostsFile';
+import { nearbyHandlers } from './nearby';
 import { serverKeysHandlers } from './serverKeys';
 import { terminalHandlers } from './terminal';
 import { vaultHandlers } from './vault';
@@ -416,6 +417,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   ...vaultFilesHandlers,
   ...browserHandlers,
   ...terminalHandlers(hosts),
+  ...nearbyHandlers,
   ...serverKeysHandlers({
     keys: () => keys,
     batchLogin: batchTest,

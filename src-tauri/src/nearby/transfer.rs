@@ -1,0 +1,278 @@
+//! Sending one item to a contact, after [`converse`] made sure the two
+//! know each other.
+//!
+//! The side that connected offers the item: what it is, nothing secret. The
+//! other user accepts or turns it down; only after a yes does the item go
+//! over, and the receiver checks that it is what was offered and that every
+//! field is something it may save before it saves it.
+
+use std::net::TcpStream;
+use std::time::Duration;
+
+use sshkm_core::p2p::protocol::Item;
+use sshkm_core::p2p::{Message, Session};
+
+use super::pairing::{
+    ANSWER_TIMEOUT, PairingFailure, PairingPhase, Side, broken, converse, wait_for_answer,
+};
+
+/// How long the side that was connected to waits for an offer after
+/// pairing; a side that only paired hangs up at once.
+const OFFER_WAIT: Duration = Duration::from_secs(10);
+/// How long a step takes once both users have answered.
+const STEP_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The whole conversation on one side: pairing, then sending `item` (the
+/// side that connected, if it has one) or receiving one (the other side).
+pub fn exchange(
+    session: &mut Session<TcpStream>,
+    side: &impl Side,
+    outgoing: bool,
+    item: Option<&Item>,
+) -> PairingPhase {
+    let end = converse(session, side);
+    if !matches!(end, PairingPhase::Paired | PairingPhase::Known) {
+        return end;
+    }
+    match (outgoing, item) {
+        (true, Some(item)) => send(session, side, item),
+        (true, None) => end,
+        (false, _) => receive(session, side).unwrap_or(end),
+    }
+}
+
+/// Offers `item` and sends it once the other user accepts.
+pub fn send(session: &mut Session<TcpStream>, side: &impl Side, item: &Item) -> PairingPhase {
+    let summary = item.summary();
+    side.show(
+        None,
+        &PairingPhase::Offering {
+            item: summary.clone(),
+        },
+    );
+    let result = (|| {
+        session
+            .send(&Message::Offer {
+                item: summary.clone(),
+            })
+            .map_err(|_| PairingFailure::Broken)?;
+        let _ = session.stream().set_read_timeout(Some(ANSWER_TIMEOUT));
+        match session.recv().map_err(broken)? {
+            Message::Reply { accepted: true } => {}
+            Message::Reply { accepted: false } => return Err(PairingFailure::Refused),
+            _ => return Err(PairingFailure::Broken),
+        }
+        let _ = session.stream().set_read_timeout(Some(STEP_TIMEOUT));
+        session
+            .send(&Message::Payload { item: item.clone() })
+            .map_err(|_| PairingFailure::Broken)?;
+        match session.recv().map_err(broken)? {
+            Message::Received { saved: true } => Ok(PairingPhase::Sent {
+                item: summary.clone(),
+            }),
+            Message::Received { saved: false } => Err(PairingFailure::NotSaved),
+            _ => Err(PairingFailure::Broken),
+        }
+    })();
+    result.unwrap_or_else(|reason| PairingPhase::Failed { reason })
+}
+
+/// Receives the item the other side offers, if it offers one: `None` when
+/// it hung up instead (it only paired).
+pub fn receive(session: &mut Session<TcpStream>, side: &impl Side) -> Option<PairingPhase> {
+    let _ = session.stream().set_read_timeout(Some(OFFER_WAIT));
+    let summary = match session.recv() {
+        Ok(Message::Offer { item }) => item,
+        Ok(_) => {
+            return Some(PairingPhase::Failed {
+                reason: PairingFailure::Broken,
+            });
+        }
+        Err(_) => return None,
+    };
+    side.show(
+        None,
+        &PairingPhase::Offered {
+            item: summary.clone(),
+        },
+    );
+    let result = (|| {
+        let (accepted, _) = wait_for_answer(session, side)?;
+        session
+            .send(&Message::Reply { accepted })
+            .map_err(|_| PairingFailure::Broken)?;
+        if !accepted {
+            return Err(PairingFailure::Turned);
+        }
+        let _ = session.stream().set_read_timeout(Some(STEP_TIMEOUT));
+        let Message::Payload { item } = session.recv().map_err(broken)? else {
+            return Err(PairingFailure::Broken);
+        };
+        // What was offered, and nothing a name could smuggle a command in.
+        if item.summary() != summary || item.check().is_err() {
+            let _ = session.send(&Message::Received { saved: false });
+            return Err(PairingFailure::Broken);
+        }
+        match side.store(&item) {
+            Ok((name, keys_differ)) => {
+                let _ = session.send(&Message::Received { saved: true });
+                Ok(PairingPhase::Received {
+                    item: summary.clone(),
+                    name,
+                    keys_differ,
+                })
+            }
+            Err(reason) => {
+                let _ = session.send(&Message::Received { saved: false });
+                Err(reason)
+            }
+        }
+    })();
+    Some(result.unwrap_or_else(|reason| PairingPhase::Failed { reason }))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{TcpListener, TcpStream};
+    use std::thread;
+
+    use sshkm_core::p2p::protocol::{HostKey, ItemSummary, VERSION};
+    use sshkm_core::p2p::{Identity, accept, connect};
+
+    use super::super::script::{Script, codes, run};
+    use super::*;
+
+    fn password() -> Item {
+        Item::Password {
+            title: "prod DB".into(),
+            username: "deploy".into(),
+            password: "s3cret".into(),
+            url: String::new(),
+            notes: String::new(),
+            otp: None,
+            host: None,
+        }
+    }
+
+    fn host() -> Item {
+        Item::Host {
+            alias: "prod".into(),
+            host_name: Some("10.0.4.12".into()),
+            user: Some("deploy".into()),
+            port: None,
+            proxy_jump: None,
+            host_keys: vec![HostKey {
+                key_type: "ssh-ed25519".into(),
+                key: "AAAAC3NzaC1lZDI1NTE5AAAAIBIZ".into(),
+            }],
+        }
+    }
+
+    fn failed(reason: PairingFailure) -> PairingPhase {
+        PairingPhase::Failed { reason }
+    }
+
+    #[test]
+    fn pairs_then_sends_and_the_receiver_saves() {
+        let right = Script::answering("bob", &[Some(true), Some(true)]);
+        let ((left_end, left), (right_end, right)) =
+            run(Script::new("alice", Some(true)), right, Some(&password()));
+        let summary = password().summary();
+        assert_eq!(
+            left_end,
+            PairingPhase::Sent {
+                item: summary.clone()
+            }
+        );
+        assert_eq!(
+            right_end,
+            PairingPhase::Received {
+                item: summary,
+                name: "prod DB".into(),
+                keys_differ: false,
+            }
+        );
+        assert_eq!(*right.stored.lock().unwrap(), [password()]);
+        assert_eq!(codes(&left), codes(&right));
+        assert_eq!(*right.saved.lock().unwrap(), ["alice"]);
+    }
+
+    #[test]
+    fn contacts_send_without_a_code() {
+        let mut left = Script::new("alice", Some(true));
+        left.knows = true;
+        let mut right = Script::new("bob", Some(true));
+        right.knows = true;
+        let ((left_end, left), (right_end, right)) = run(left, right, Some(&host()));
+        assert!(matches!(left_end, PairingPhase::Sent { .. }));
+        assert!(matches!(right_end, PairingPhase::Received { .. }));
+        assert_eq!(codes(&left), Vec::<String>::new());
+        assert!(
+            right
+                .shown
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(_, phase)| matches!(
+                    phase,
+                    PairingPhase::Offered {
+                        item: ItemSummary::Host { .. }
+                    }
+                ))
+        );
+    }
+
+    #[test]
+    fn the_receiver_may_turn_it_down() {
+        let right = Script::answering("bob", &[Some(true), Some(false)]);
+        let ((left_end, _), (right_end, right)) =
+            run(Script::new("alice", Some(true)), right, Some(&password()));
+        assert_eq!(left_end, failed(PairingFailure::Refused));
+        assert_eq!(right_end, failed(PairingFailure::Turned));
+        assert_eq!(*right.stored.lock().unwrap(), Vec::<Item>::new());
+    }
+
+    #[test]
+    fn a_failed_save_reaches_the_sender() {
+        let mut right = Script::new("bob", Some(true));
+        right.store_fails = Some(PairingFailure::NotSaved);
+        let ((left_end, _), (right_end, _)) =
+            run(Script::new("alice", Some(true)), right, Some(&host()));
+        assert_eq!(left_end, failed(PairingFailure::NotSaved));
+        assert_eq!(right_end, failed(PairingFailure::NotSaved));
+    }
+
+    #[test]
+    fn a_payload_other_than_the_offer_is_not_saved() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let receiver = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut session = accept(stream, &Identity::generate().unwrap()).unwrap();
+            let mut side = Script::new("bob", Some(true));
+            side.knows = true;
+            (exchange(&mut session, &side, false, None), side)
+        });
+        // A sender that offers a password, then sends a host.
+        let stream = TcpStream::connect(address).unwrap();
+        let mut session = connect(stream, &Identity::generate().unwrap()).unwrap();
+        let hello = Message::Hello {
+            version: VERSION,
+            name: "mallory".into(),
+            known: true,
+        };
+        session.send(&hello).unwrap();
+        assert!(matches!(session.recv().unwrap(), Message::Hello { .. }));
+        session
+            .send(&Message::Offer {
+                item: password().summary(),
+            })
+            .unwrap();
+        assert_eq!(session.recv().unwrap(), Message::Reply { accepted: true });
+        session.send(&Message::Payload { item: host() }).unwrap();
+        assert_eq!(session.recv().unwrap(), Message::Received { saved: false });
+        let (end, side) = receiver.join().unwrap();
+        assert_eq!(end, failed(PairingFailure::Broken));
+        assert_eq!(*side.stored.lock().unwrap(), Vec::<Item>::new());
+    }
+}

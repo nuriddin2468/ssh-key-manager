@@ -19,6 +19,8 @@
 //! - [`known_hosts`]: a lossless model of `known_hosts`, including hashed entries.
 //! - [`hosts_file`]: a lossless, read-only model of the system hosts file.
 //! - [`agent`]: a small synchronous client for the system `ssh-agent`.
+//! - [`authorized_keys`]: the keys an `authorized_keys` file lets in, read
+//!   from a server's copy.
 //! - [`perms`]: permission checks and fixes (Unix modes, Windows ACLs).
 //! - [`audit`]: security findings computed from all of the above.
 //! - [`vault`]: the encrypted password vault, its key slots and the password
@@ -38,6 +40,7 @@
 
 pub mod agent;
 pub mod audit;
+pub mod authorized_keys;
 pub mod browser;
 pub mod config;
 mod error;

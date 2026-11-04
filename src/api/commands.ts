@@ -35,6 +35,8 @@ import type { PermissionFix } from '@/bindings/PermissionFix';
 import type { PromptAnswer } from '@/bindings/PromptAnswer';
 import type { SavedHost } from '@/bindings/SavedHost';
 import type { SecretField } from '@/bindings/SecretField';
+import type { ServerKeys } from '@/bindings/ServerKeys';
+import type { ServerKeysAction } from '@/bindings/ServerKeysAction';
 import type { Strength } from '@/bindings/Strength';
 import type { TerminalEvent } from '@/bindings/TerminalEvent';
 import type { TerminalInfo } from '@/bindings/TerminalInfo';
@@ -86,6 +88,9 @@ export const api = {
   testConnection: (alias: string) => call<ConnectionTest>('test_connection', { alias }),
   installPublicKey: (alias: string, keyId: string) =>
     call<KeyInstall>('install_public_key', { alias, keyId }),
+  /** Reads the host's `~/.ssh/authorized_keys` after the change, if any, in one sign-in. */
+  serverKeys: (alias: string, action: ServerKeysAction) =>
+    call<ServerKeys>('server_keys', { alias, action }),
 
   knownHosts: () => call<KnownHostsFile>('read_known_hosts'),
   findKnownHosts: (host: string, port: number | null) =>
@@ -158,6 +163,9 @@ export const api = {
     call<KeyInstall>('vault_install_public_key', { alias, keyId }),
   /** Tests that the host lets the user in with a key alone (no password). */
   vaultTestKeyLogin: (alias: string) => call<ConnectionTest>('vault_test_key_login', { alias }),
+  /** `serverKeys`, signing in with the saved password and 2FA code. */
+  vaultServerKeys: (alias: string, action: ServerKeysAction) =>
+    call<ServerKeys>('vault_server_keys', { alias, action }),
 
   /** Opens the system terminal with `ssh <alias>`. */
   terminalOpenExternal: (alias: string) => call<void>('terminal_open_external', { alias }),

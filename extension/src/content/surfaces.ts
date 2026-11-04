@@ -62,7 +62,10 @@ const STYLE = `
 .banner .row { display: flex; align-items: flex-start; gap: 10px; }
 .banner .logo { width: 28px; height: 28px; border-radius: 8px; }
 .banner .logo svg { width: 15px; height: 15px; }
-.banner h2 { margin: 1px 0 2px; font-size: 14px; line-height: 19px; font-weight: 600; color: #f2f4f8; overflow-wrap: anywhere; }
+.banner h2 {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+  height: 38px; margin: 1px 0 2px; font-size: 14px; line-height: 19px; font-weight: 600; color: #f2f4f8; overflow-wrap: anywhere;
+}
 .banner .sub { font: 12px/17px ui-monospace, "Geist Mono", Menlo, monospace; color: #a7b0c0; overflow-wrap: anywhere; }
 .banner .text { flex: 1; min-width: 0; }
 .status { margin: 10px 0 0; font-size: 12.5px; line-height: 18px; color: #ffc266; }
@@ -570,7 +573,13 @@ export interface BannerHandlers {
   onDismiss: (offer: SaveOffer) => void;
 }
 
-/** "Save login for example.com?", at the top right of the page. */
+/**
+ * "Save login for example.com?", at the top right of the page.
+ *
+ * The page can't read it, but it can measure the element it lives on: the
+ * title always takes two lines, so the banner's size doesn't tell whether it
+ * offers to save or to update, or the saved login's title.
+ */
 export class SaveBanner extends Surface {
   constructor(private readonly handlers: BannerHandlers) {
     super();
@@ -588,7 +597,10 @@ export class SaveBanner extends Surface {
 
     const row = element('div', 'row');
     const text = element('div', 'text');
-    text.append(element('h2', undefined, title));
+    const heading = element('h2', undefined, title);
+    // A title too long for two lines shows in full on hover.
+    heading.title = title;
+    text.append(heading);
     if (!offer.elsewhere) text.append(element('div', 'sub', offer.username || t('noUsername')));
     const close = element('button', 'close');
     close.type = 'button';

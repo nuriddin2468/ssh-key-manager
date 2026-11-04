@@ -147,6 +147,7 @@ async function run(session: Session, askPassword: boolean) {
         keyType: 'ED25519',
         fingerprint: 'SHA256:Ka7Sd1Fg5Hj9Kl3Zx7Cv1Bn5Mq9Wr3Ty7Ui1Op5As9D',
         extra: [],
+        unverified: false,
       });
       if (answer?.type !== 'trust' || !answer.trust) {
         if (!session.ended) fail(session, 'hostKeyNotTrusted', 'Host key verification failed.\n');

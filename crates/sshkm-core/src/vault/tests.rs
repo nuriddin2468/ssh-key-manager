@@ -275,6 +275,73 @@ fn otp_secrets_become_uris_and_produce_codes() {
     assert!(!vault.entries()[0].has_otp);
 }
 
+/// 2FA secrets the KeePass crate parses but can't make a code for without
+/// panicking (a period of 0, 64 digits), or makes wrong codes for.
+const BAD_OTP_URIS: [&str; 10] = [
+    "otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=0",
+    "otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&digits=64",
+    "otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&digits=4294967295",
+    "otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&digits=20",
+    "otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&digits=5",
+    "otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=86400",
+    "otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&algorithm=MD5",
+    "otpauth://hotp/x?secret=JBSWY3DPEHPK3PXP&counter=1",
+    "otpauth://totp/x?secret=&period=30",
+    "otpauth://totp/x?period=30",
+];
+
+#[test]
+fn otp_uris_no_code_can_be_made_for_are_refused() {
+    let fx = Fixture::new();
+    let (mut vault, _) = Vault::create(&fx.paths, &s("master")).unwrap();
+    for bad in BAD_OTP_URIS {
+        let mut input = login("GitHub", "x");
+        input.otp = Some(s(bad));
+        assert!(
+            matches!(vault.add_entry(&input), Err(Error::InvalidInput(_))),
+            "{bad}"
+        );
+        // An import keeps it as an unreadable secret instead.
+        assert!(otp_uri(bad, "GitHub").is_err(), "{bad}");
+    }
+    assert_eq!(vault.entries(), Vec::<EntrySummary>::new());
+
+    let mut input = login("Bank", "x");
+    input.otp = Some(s(
+        "otpauth://TOTP/Bank?secret=JBSWY3DPEHPK3PXP&period=60&digits=8&algorithm=SHA256",
+    ));
+    let id = vault.add_entry(&input).unwrap();
+    let (code, valid_for) = vault.otp_code(&id).unwrap();
+    assert_eq!(code.len(), 8);
+    assert!((1..=60).contains(&valid_for));
+}
+
+#[test]
+fn a_bad_otp_secret_in_a_keepass_file_is_an_error_not_a_crash() {
+    let fx = Fixture::new();
+    let mut db = Database::new();
+    let mut root = db.root_mut();
+    for bad in BAD_OTP_URIS {
+        let mut entry = root.add_entry();
+        entry.set_unprotected(fields::TITLE, bad);
+        entry.set_protected(fields::OTP, bad);
+    }
+    let mut bytes = Vec::new();
+    db.save(&mut bytes, key(&s("keepass"))).unwrap();
+    std::fs::write(&fx.paths.database, bytes).unwrap();
+
+    let vault = Vault::recover(&fx.paths, &s("keepass"), &s("master")).unwrap();
+    let entries = vault.entries();
+    assert_eq!(entries.len(), BAD_OTP_URIS.len());
+    for entry in entries {
+        assert!(
+            matches!(vault.otp_code(&entry.id), Err(Error::Parse(_))),
+            "{}",
+            entry.title
+        );
+    }
+}
+
 #[test]
 fn trash_restore_and_delete() {
     let fx = Fixture::new();

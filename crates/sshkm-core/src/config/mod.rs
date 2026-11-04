@@ -8,10 +8,10 @@
 //!
 //! Lexing follows OpenSSH (`readconf.c`, `argv_split()`): keywords are
 //! case-insensitive, values may be quoted with `"` or `'`, `\` escapes quotes,
-//! backslashes and spaces, and an unquoted `#` at the start of an argument
-//! begins a comment — except for `ProxyCommand`, `LocalCommand`,
-//! `RemoteCommand` and `KnownHostsCommand`, which take the rest of the line
-//! literally.
+//! backslashes and spaces, only spaces and tabs separate arguments, and an
+//! unquoted `#` at the start of an argument begins a comment — except for
+//! `ProxyCommand`, `LocalCommand`, `RemoteCommand` and `KnownHostsCommand`,
+//! which take the rest of the line literally.
 
 mod lexer;
 mod risky;
@@ -25,7 +25,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use self::lexer::{Directive, LineKind, lex, render_value, split_args};
-pub use self::risky::RiskyDirective;
+pub use self::risky::{Risk, RiskyDirective};
 use crate::{
     Error, Result, fsutil,
     paths::{SshPaths, native_separators, path_string},
@@ -285,9 +285,7 @@ impl SshConfig {
                 Some(ConfigIssueKind::MissingKeyword)
             } else if d.value.is_empty() {
                 Some(ConfigIssueKind::MissingValue)
-            } else if lexer::value_style(&d.key_lower()) != lexer::ValueStyle::RestOfLine
-                && split_args(d.value).1
-            {
+            } else if d.style != lexer::ValueStyle::RestOfLine && split_args(d.value).1 {
                 Some(ConfigIssueKind::UnterminatedQuote)
             } else {
                 None
@@ -730,18 +728,38 @@ fn validate_option(option: &HostOption) -> Result<()> {
     if option.key.eq_ignore_ascii_case("host") || option.key.eq_ignore_ascii_case("match") {
         return Err(Error::invalid("Host and Match cannot be used as options"));
     }
-    if option.value.trim().is_empty()
-        || option
-            .value
-            .chars()
-            .any(|c| matches!(c, '\n' | '\r' | '\0'))
-    {
+    // A control character other than a tab may mean one thing to `ssh` and
+    // another to this parser (see `lexer`).
+    if option.value.trim().is_empty() || option.value.chars().any(is_odd_control) {
         return Err(Error::invalid(format!(
             "invalid value for {}: must be one non-empty line",
             option.key
         )));
     }
     Ok(())
+}
+
+/// Fails with [`Error::InvalidInput`] if `text`, a whole config file, has a
+/// control character other than a tab, a line feed, or a carriage return
+/// that ends a line. `ssh` may read a line with one differently from this
+/// parser (see `lexer`), so such text from the page is not written.
+pub fn validate_text(text: &str) -> Result<()> {
+    for (index, line) in text.split('\n').enumerate() {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if let Some(c) = line.chars().find(|&c| is_odd_control(c)) {
+            return Err(Error::invalid(format!(
+                "line {}: control character U+{:04X}",
+                line_number(index),
+                u32::from(c)
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// A control character other than a tab.
+fn is_odd_control(c: char) -> bool {
+    c.is_control() && c != '\t'
 }
 
 struct TokenContext<'a> {

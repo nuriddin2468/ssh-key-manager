@@ -11,7 +11,9 @@
 //!   app's own password or passphrase dialogs.
 //! - A host key is offered for trust only when `ssh` asks the plain
 //!   question; one of a type the host is not known by, while keys of other
-//!   types are, is declined like a changed key.
+//!   types are, is declined like a changed key. A host-key question the
+//!   session cannot vouch for may still be `ssh`'s real one, so it is
+//!   offered too, in a dialog that says a server may have sent it.
 //! - Answers the user asked to save are kept until the session signs in
 //!   ([`Bridge::signed_in`]), then written to the vault
 //!   ([`Bridge::save_answers`]); a refused password is never saved. The 2FA
@@ -33,7 +35,7 @@ use super::types::{
     FailReason, Failure, PasswordWhy, PromptAnswer, PromptAsk, PromptClosedReason, PromptRequest,
     SaveOffer, SavedTarget, SignIn, Source, TerminalEvent,
 };
-use crate::askpass::{Ask, Interactive, Prompt, PromptKind, Reply};
+use crate::askpass::{Ask, Interactive, PromptKind, Reply};
 pub use crate::error::{AppError, AppResult};
 
 /// How long a prompt waits for the user.
@@ -460,10 +462,13 @@ impl Bridge {
         }
     }
 
-    fn host_key(&self, prompt: &Prompt) -> Reply {
+    /// Asks the user whether to trust a new host key. One the session cannot
+    /// vouch for is still asked about, since it may be `ssh`'s real question,
+    /// but the dialog then says that a server may have sent it.
+    fn host_key(&self, ask: &Ask<'_>) -> Reply {
         // Only the "unknown key" question is offered for trust; other
         // warnings (a key that differs from the IP address's) are declined.
-        let Some(question) = host_key_question(&prompt.text) else {
+        let Some(question) = host_key_question(&ask.prompt.text) else {
             self.lock().host_key_trusted = Some(false);
             return Reply::No;
         };
@@ -483,6 +488,7 @@ impl Bridge {
                 key_type: question.key_type,
                 fingerprint: question.fingerprint,
                 extra: question.extra,
+                unverified: ask.unverified,
             }),
             Some(PromptAnswer::Trust { trust: true })
         );
@@ -497,7 +503,7 @@ impl Interactive for Arc<Bridge> {
             return Reply::Refuse;
         }
         match &ask.prompt.kind {
-            PromptKind::HostKeyConfirm => self.host_key(ask.prompt),
+            PromptKind::HostKeyConfirm => self.host_key(ask),
             // The session answers other yes/no questions itself.
             PromptKind::Confirm => Reply::No,
             // It may not be what it says: no saved secret, and not the app's
@@ -541,7 +547,7 @@ mod tests {
     use sshkm_core::{ErrorCode, ExposeSecret};
 
     use super::*;
-    use crate::askpass::PromptAccount;
+    use crate::askpass::{Prompt, PromptAccount};
     use crate::error::AppError;
 
     /// A vault: saved secrets, the offer it makes and what was saved.
@@ -975,6 +981,7 @@ mod tests {
                 key_type: "ED25519".into(),
                 fingerprint: "SHA256:Ka7Sd1Fg5Hj9".into(),
                 extra: Vec::new(),
+                unverified: false,
             })
         );
         let (reply, _) = h.ask(
@@ -988,6 +995,24 @@ mod tests {
             h.bridge.failure("", Some(255)).reason,
             FailReason::HostKeyNotTrusted
         );
+
+        // A question the session cannot vouch for: the dialog says so, and
+        // "Trust" still only answers it.
+        let (reply, shown) = h.ask_unverified(
+            HOST_KEY,
+            0,
+            false,
+            true,
+            Some(PromptAnswer::Trust { trust: true }),
+        );
+        assert!(matches!(reply, Reply::Yes));
+        assert!(matches!(
+            shown,
+            Some(PromptAsk::HostKey {
+                unverified: true,
+                ..
+            })
+        ));
 
         // Not the plain question: declined without asking.
         let h = harness(FakeStore::default(), Options::default());
@@ -1245,6 +1270,25 @@ mod tests {
                 })
             );
         }
+        // Another account's password, which before OpenSSH 8.5 and without a
+        // proxy only the server can have asked: not "Password for
+        // bob@bank.example", but the server's text as it is.
+        let (_, shown) = h.ask_unverified(
+            "bob@bank.example's password: ",
+            0,
+            true,
+            true,
+            typed("typed", false),
+        );
+        assert_eq!(
+            shown,
+            Some(PromptAsk::Other {
+                text: "bob@bank.example's password:".into(),
+                account: None,
+                foreign: false,
+                unverified: true,
+            })
+        );
         h.bridge.signed_in();
         h.bridge.save_answers();
         assert!(h.saved.lock().unwrap().is_empty());
@@ -1305,6 +1349,7 @@ mod tests {
                     "This host key is known by the following other names/addresses:".into(),
                     "    ~/.ssh/known_hosts:3: db.example".into(),
                 ],
+                unverified: false,
             })
         );
     }

@@ -102,7 +102,7 @@ fn launch() -> io::Result<()> {
     let HostProgram::At(exe) = host_program()? else {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "the app is in a temporary folder",
+            "the app is in a temporary folder or on a mounted volume",
         ));
     };
     #[cfg(target_os = "macos")]

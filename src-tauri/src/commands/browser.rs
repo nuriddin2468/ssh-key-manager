@@ -2,6 +2,7 @@
 //! browsers. The extension's own requests never come through here; the
 //! bridge answers them ([`crate::browser`]).
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -32,6 +33,12 @@ pub struct BrowserStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional))]
     pub temporary_location: Option<String>,
+    /// This copy of the app runs from this place on a mounted volume (on
+    /// macOS: a disk image, another drive, or where a downloaded app runs
+    /// until it is moved), so no browser is set up to start it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    pub mounted_location: Option<String>,
     /// Browsers paired with the vault; `None` while it is locked or missing.
     pub paired: Option<Vec<PairedBrowser>>,
     /// A pairing waiting for the user.
@@ -42,13 +49,12 @@ type SharedBridge = Arc<Bridge>;
 
 fn status(app: &AppHandle, state: &AppState, bridge: &Bridge) -> BrowserStatus {
     // Registered means: for the program `Bridge::start` registers.
-    let (browsers, temporary_location) = match host_program() {
-        Ok(HostProgram::At(program)) => (manifests::status(Some(&program)), None),
-        Ok(HostProgram::Temporary(program)) => (
-            manifests::status(None),
-            Some(program.to_string_lossy().into_owned()),
-        ),
-        Err(_) => (manifests::status(None), None),
+    let path = |program: PathBuf| Some(program.to_string_lossy().into_owned());
+    let (browsers, temporary_location, mounted_location) = match host_program() {
+        Ok(HostProgram::At(program)) => (manifests::status(Some(&program)), None, None),
+        Ok(HostProgram::Temporary(program)) => (manifests::status(None), path(program), None),
+        Ok(HostProgram::Mounted(program)) => (manifests::status(None), None, path(program)),
+        Err(_) => (manifests::status(None), None, None),
     };
     let paired = state
         .vault
@@ -60,6 +66,7 @@ fn status(app: &AppHandle, state: &AppState, bridge: &Bridge) -> BrowserStatus {
         problem: bridge.problem(),
         browsers,
         temporary_location,
+        mounted_location,
         paired,
         pairing: bridge.broker().pending(),
     }

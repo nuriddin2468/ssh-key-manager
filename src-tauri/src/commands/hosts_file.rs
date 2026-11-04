@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
@@ -13,6 +14,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use super::{Shared, blocking};
+use crate::confirm::Localized;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 use crate::types::{
@@ -50,15 +52,13 @@ pub async fn preview_hosts_changes(
     .await
 }
 
-/// Applies `changes` with administrator rights. `prompt` is the reason the
-/// password dialog gives (macOS).
+/// Applies `changes` with administrator rights.
 #[tauri::command]
 pub async fn apply_hosts_changes(
     state: State<'_, Shared>,
     revision: String,
     changes: Vec<HostsChange>,
     flush_dns: bool,
-    prompt: String,
 ) -> AppResult<HostsApplyResult> {
     blocking(&state, move |state| {
         let file = writable_hosts_file(state)?;
@@ -66,12 +66,13 @@ pub async fn apply_hosts_changes(
             return apply_result(state, HostsApplyOutcome::Stale);
         }
         let edited = file.edited(&changes)?;
+        let prompt = auth_prompt(false, &file, &edited.file);
         install(
             state,
             &edited.file.to_string(),
             file.revision(),
             flush_dns,
-            &prompt,
+            prompt.pick(),
         )
     })
     .await
@@ -107,7 +108,6 @@ pub async fn restore_hosts_backup(
     state: State<'_, Shared>,
     path: String,
     flush_dns: bool,
-    prompt: String,
 ) -> AppResult<HostsApplyResult> {
     blocking(&state, move |state| {
         let path = PathBuf::from(path);
@@ -117,7 +117,8 @@ pub async fn restore_hosts_backup(
         let file = writable_hosts_file(state)?;
         let text = String::from_utf8(fs::read(&path)?)
             .map_err(|_| AppError::invalid("the backup is not UTF-8"))?;
-        install(state, &text, file.revision(), flush_dns, &prompt)
+        let prompt = auth_prompt(true, &file, &HostsFile::parse(&text));
+        install(state, &text, file.revision(), flush_dns, prompt.pick())
     })
     .await
 }
@@ -198,6 +199,84 @@ fn hosts_backups(state: &AppState) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
+/// How many of the names a change readdresses the password dialog lists.
+const PROMPT_NAMES: usize = 5;
+
+/// The reason the macOS password dialog gives for writing `new` over `old`:
+/// what the app is doing, and the names that will lead to another address.
+/// The system shows it in the dialog that asks for the administrator
+/// password, so it is built here and never taken from the page.
+fn auth_prompt(restoring: bool, old: &HostsFile, new: &HostsFile) -> Localized {
+    let (en, ru, uz) = if restoring {
+        (
+            "SSH Key Manager wants to restore the hosts file from a backup.",
+            "SSH Key Manager хочет восстановить файл hosts из резервной копии.",
+            "SSH Key Manager hosts faylini zaxira nusxadan tiklamoqchi.",
+        )
+    } else {
+        (
+            "SSH Key Manager wants to update the hosts file.",
+            "SSH Key Manager хочет обновить файл hosts.",
+            "SSH Key Manager hosts faylini yangilamoqchi.",
+        )
+    };
+    let names = readdressed(old, new);
+    if names.is_empty() {
+        return Localized::new(en, ru, uz);
+    }
+    let list = |more: fn(usize) -> String| {
+        let mut list = names[..names.len().min(PROMPT_NAMES)].join(", ");
+        if names.len() > PROMPT_NAMES {
+            list.push_str(&more(names.len() - PROMPT_NAMES));
+        }
+        list
+    };
+    Localized::new(
+        format!(
+            "{en} Names whose address changes: {}.",
+            list(|n| format!(" and {n} more"))
+        ),
+        format!(
+            "{ru} Имена, у которых меняется адрес: {}.",
+            list(|n| format!(" и ещё {n}"))
+        ),
+        format!(
+            "{uz} Manzili oʻzgaradigan nomlar: {}.",
+            list(|n| format!(" va yana {n} ta"))
+        ),
+    )
+}
+
+/// Host names whose address, for either IP version, differs between `old`
+/// and `new` (set, changed or gone), in alphabetical order. Names host names
+/// cannot have are left out, so the dialog shows nothing else.
+fn readdressed(old: &HostsFile, new: &HostsFile) -> Vec<String> {
+    let (old, new) = (addresses(old), addresses(new));
+    old.keys()
+        .chain(new.keys())
+        .filter(|name| old.get(*name) != new.get(*name))
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// The IPv4 and IPv6 address resolvers use for each host name in `file`:
+/// the first turned-on line that lists it.
+fn addresses(file: &HostsFile) -> BTreeMap<String, [Option<String>; 2]> {
+    let mut addresses: BTreeMap<String, [Option<String>; 2]> = BTreeMap::new();
+    for entry in file.resolver_entries() {
+        let family = usize::from(entry.is_ipv6());
+        for name in entry.names.iter().filter(|n| hosts_file::is_valid_name(n)) {
+            addresses
+                .entry(hosts_file::normalize_name(name))
+                .or_default()[family]
+                .get_or_insert_with(|| entry.address.clone());
+        }
+    }
+    addresses
+}
+
 /// Backs up the current file, then installs `text` in place of `revision`
 /// of it. The file changing while the password prompt is open makes the
 /// outcome [`HostsApplyOutcome::Stale`].
@@ -247,6 +326,49 @@ mod tests {
     use sshkm_core::paths::SshPaths;
 
     use super::*;
+
+    #[test]
+    fn the_password_prompt_names_what_will_lead_elsewhere() {
+        let old = HostsFile::parse("127.0.0.1 localhost\n10.0.0.1 box old.example\n");
+        let new = HostsFile::parse(
+            "127.0.0.1 localhost\n10.0.0.2 BOX.\n#10.0.0.9 off.example\n\
+             203.0.113.7 github.com\n10.0.0.5 bad!name\n10.0.0.6 github.com\n",
+        );
+        assert_eq!(
+            readdressed(&old, &new),
+            ["box", "github.com", "old.example"]
+        );
+        let prompt = auth_prompt(false, &old, &new);
+        assert_eq!(
+            prompt.en,
+            "SSH Key Manager wants to update the hosts file. Names whose address changes: \
+             box, github.com, old.example."
+        );
+        assert!(prompt.ru.ends_with(": box, github.com, old.example."));
+        assert!(prompt.uz.ends_with(": box, github.com, old.example."));
+
+        // Comments and turned-off lines lead nowhere.
+        let same = HostsFile::parse(
+            "# notes\n127.0.0.1 localhost\n#10.0.0.9 off.example\n10.0.0.1 old.example box\n",
+        );
+        assert_eq!(
+            auth_prompt(true, &old, &same).en,
+            "SSH Key Manager wants to restore the hosts file from a backup."
+        );
+
+        let many = (0..8)
+            .map(|i| format!("10.1.0.{i} n{i}.example"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let prompt = auth_prompt(false, &HostsFile::parse(""), &HostsFile::parse(&many));
+        assert!(
+            prompt.en.ends_with(
+                ": n0.example, n1.example, n2.example, n3.example, n4.example and 3 more."
+            )
+        );
+        assert!(prompt.ru.ends_with("n4.example и ещё 3."));
+        assert!(prompt.uz.ends_with("n4.example va yana 3 ta."));
+    }
 
     #[test]
     fn only_a_replaced_file_keeps_its_backup() {

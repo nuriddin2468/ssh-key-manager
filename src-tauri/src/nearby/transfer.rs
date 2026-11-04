@@ -6,6 +6,11 @@
 //! over, and the receiver checks that it is what was offered and that every
 //! field is something it may save before it saves it.
 //!
+//! Any device can announce any name, so the name the user picked a device
+//! under says nothing about who answers. When a contact answers that this
+//! vault knows by another name, the sending user says first whether it is
+//! the one they meant; until then nothing goes to it, not even the offer.
+//!
 //! [`conversation`]: super::pairing::conversation
 
 use std::net::TcpStream;
@@ -17,13 +22,42 @@ use sshkm_core::p2p::{Message, Session};
 use super::pairing::{ANSWER_TIMEOUT, PairingFailure, PairingPhase, Side, broken, wait_for_answer};
 
 /// How long the side that was connected to waits for an offer after
-/// pairing; a side that only paired hangs up at once.
-const OFFER_WAIT: Duration = Duration::from_secs(10);
+/// pairing, while the other user may be asked whether it is the device
+/// they meant; a side that only paired hangs up at once.
+const OFFER_WAIT: Duration = Duration::from_secs(ANSWER_TIMEOUT.as_secs() + 10);
 /// How long a step takes once both users have answered.
 pub(super) const STEP_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Offers `item` and sends it once the other user accepts.
-pub fn send(session: &mut Session<TcpStream>, side: &impl Side, item: &Item) -> PairingPhase {
+/// Offers `item` and sends it once the other user accepts. `known` is the
+/// name this vault keeps for the other side, if it knew it before, and
+/// `to` the name the user picked it under; when the two differ, this user
+/// first says whether to send it all the same, and on a no nothing goes.
+pub fn send(
+    session: &mut Session<TcpStream>,
+    side: &impl Side,
+    item: &Item,
+    known: Option<&str>,
+    to: Option<&str>,
+) -> PairingPhase {
+    if let (Some(known), Some(to)) = (known, to)
+        && known != to
+    {
+        side.show(
+            None,
+            &PairingPhase::NameMismatch {
+                announced: to.to_owned(),
+            },
+        );
+        match wait_for_answer(session, side) {
+            Ok((true, _)) => {}
+            Ok((false, _)) => {
+                return PairingPhase::Failed {
+                    reason: PairingFailure::Cancelled,
+                };
+            }
+            Err(reason) => return PairingPhase::Failed { reason },
+        }
+    }
     let summary = item.summary();
     side.show(
         None,
@@ -120,8 +154,8 @@ mod tests {
     use sshkm_core::p2p::protocol::{HostKey, HostsEntry, ItemSummary, VERSION};
     use sshkm_core::p2p::{Identity, accept, connect};
 
-    use super::super::pairing::conversation;
-    use super::super::script::{Script, codes, run};
+    use super::super::pairing::{Purpose, conversation};
+    use super::super::script::{Script, codes, peers, run, talk_as};
     use super::*;
 
     fn password() -> Item {
@@ -221,6 +255,141 @@ mod tests {
                     }
                 ))
         );
+    }
+
+    fn asked(side: &Script) -> bool {
+        side.shown
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, phase)| matches!(phase, PairingPhase::NameMismatch { .. }))
+    }
+
+    /// Alice, who has Bob and Carol as contacts and answers `answer`, and
+    /// Carol, who has Alice as a contact and calls herself by Bob's name.
+    fn carol_as_bob(answer: Option<bool>) -> ((Script, Identity), (Script, Identity)) {
+        let alice = Identity::generate().unwrap();
+        let bob = Identity::generate().unwrap();
+        let carol = Identity::generate().unwrap();
+        let mut left = Script::new("Alice", answer);
+        left.contacts = vec![(bob.public(), "Bob's MacBook"), (carol.public(), "Carol")];
+        let mut right = Script::new("Bob's MacBook", Some(true));
+        right.contacts = vec![(alice.public(), "Alice")];
+        ((left, alice), (right, carol))
+    }
+
+    #[test]
+    fn a_contact_answering_in_another_ones_name_gets_nothing_on_a_no() {
+        let (alice, carol) = carol_as_bob(Some(false));
+        let item = password();
+        let to = Some("Bob's MacBook");
+        let ((left_end, left), (right_end, right)) =
+            talk_as(alice, carol, Purpose::Send { item: &item, to });
+        assert_eq!(left_end, failed(PairingFailure::Cancelled));
+        // Alice's screen names Carol, by the name her vault keeps, and asks
+        // before anything goes.
+        assert_eq!(peers(&left), ["Carol"]);
+        assert!(left.shown.lock().unwrap().iter().any(|(_, phase)| {
+            *phase
+                == PairingPhase::NameMismatch {
+                    announced: "Bob's MacBook".into(),
+                }
+        }));
+        assert_eq!(codes(&left), Vec::<String>::new());
+        // Carol got no offer, let alone the password.
+        assert_eq!(right_end, PairingPhase::Known);
+        assert!(
+            right
+                .shown
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(_, phase)| !matches!(phase, PairingPhase::Offered { .. }))
+        );
+        assert_eq!(*right.stored.lock().unwrap(), Vec::<Item>::new());
+    }
+
+    #[test]
+    fn a_contact_answering_in_another_ones_name_gets_it_on_a_yes() {
+        let (alice, carol) = carol_as_bob(Some(true));
+        let item = password();
+        let to = Some("Bob's MacBook");
+        let ((left_end, left), (right_end, right)) =
+            talk_as(alice, carol, Purpose::Send { item: &item, to });
+        assert_eq!(
+            left_end,
+            PairingPhase::Sent {
+                item: item.summary()
+            }
+        );
+        assert!(matches!(right_end, PairingPhase::Received { .. }));
+        assert_eq!(peers(&left), ["Carol"]);
+        assert_eq!(peers(&right), ["Alice"]);
+        // The question came before the offer.
+        let shown = left.shown.lock().unwrap();
+        let position =
+            |of: fn(&PairingPhase) -> bool| shown.iter().position(|(_, p)| of(p)).unwrap();
+        assert!(
+            position(|p| matches!(p, PairingPhase::NameMismatch { .. }))
+                < position(|p| matches!(p, PairingPhase::Offering { .. }))
+        );
+    }
+
+    #[test]
+    fn a_contact_under_the_name_it_was_picked_by_is_not_asked_about() {
+        let alice = Identity::generate().unwrap();
+        let bob = Identity::generate().unwrap();
+        // A "no" from Alice would stop it.
+        let mut left = Script::new("Alice", Some(false));
+        left.contacts = vec![(bob.public(), "Bob's MacBook")];
+        let mut right = Script::new("Bob's MacBook", Some(true));
+        right.contacts = vec![(alice.public(), "Alice")];
+        let item = host();
+        let to = Some("Bob's MacBook");
+        let ((left_end, left), (right_end, _)) = talk_as(
+            (left, alice),
+            (right, bob),
+            Purpose::Send { item: &item, to },
+        );
+        assert_eq!(
+            left_end,
+            PairingPhase::Sent {
+                item: item.summary()
+            }
+        );
+        assert!(matches!(right_end, PairingPhase::Received { .. }));
+        assert!(!asked(&left));
+
+        // Reached by its address, there is no name to hold it against.
+        let (alice, carol) = carol_as_bob(Some(false));
+        let ((left_end, left), _) = talk_as(
+            alice,
+            carol,
+            Purpose::Send {
+                item: &item,
+                to: None,
+            },
+        );
+        assert!(matches!(left_end, PairingPhase::Sent { .. }));
+        assert!(!asked(&left));
+        assert_eq!(peers(&left), ["Carol"]);
+    }
+
+    #[test]
+    fn an_offer_names_the_contact_it_comes_from() {
+        // Carol, as "Bob's MacBook", offers Alice a host.
+        let ((alice, alice_key), (carol, carol_key)) = carol_as_bob(Some(true));
+        let item = host();
+        let (_, (right_end, right)) = talk_as(
+            (carol, carol_key),
+            (alice, alice_key),
+            Purpose::Send {
+                item: &item,
+                to: None,
+            },
+        );
+        assert!(matches!(right_end, PairingPhase::Received { .. }));
+        assert_eq!(peers(&right), ["Carol"]);
     }
 
     #[test]

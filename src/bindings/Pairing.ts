@@ -4,7 +4,9 @@ import type { PairingPhase } from "./PairingPhase";
 
 export type Pairing = { id: number, 
 /**
- * The other device's name, once it said it.
+ * The other device's name once it said who it is: for a contact or
+ * one of the user's devices the one the vault keeps for it, else the
+ * one it gave.
  */
 peer: string | null, 
 /**

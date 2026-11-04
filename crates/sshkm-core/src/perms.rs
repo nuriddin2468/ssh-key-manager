@@ -22,6 +22,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result};
 
+#[cfg(windows)]
+mod private_file;
+
 /// What a path is, which decides the rule applied to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -197,6 +200,20 @@ pub fn fix_inside(ssh_dir: &Path, path: &Path, kind: PermKind) -> Result<()> {
     fix(&without_verbatim_prefix(target), kind)
 }
 
+/// Creates the new file `path` for writing so that, from the first moment,
+/// only the current user, `SYSTEM` and `Administrators` can open it
+/// (Windows): it is created with that access list, protected from
+/// inheritance, and while the returned handle is open no one else can read,
+/// write or delete it. The access list is then read back from the file
+/// system; where it keeps none or not this one (FAT, exFAT, some network
+/// shares), the still empty file is removed and the error is
+/// [`std::io::ErrorKind::Unsupported`]. Fails with `AlreadyExists` if `path`
+/// exists, as `tempfile` expects.
+#[cfg(windows)]
+pub(crate) fn create_private(path: &Path) -> std::io::Result<fs::File> {
+    imp::create_private(path)
+}
+
 /// `C:\…` for `\\?\C:\…`, which [`fs::canonicalize`] returns on Windows and
 /// not every tool takes; other paths are returned unchanged.
 fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
@@ -244,6 +261,7 @@ mod imp {
 #[cfg(windows)]
 mod imp {
     use std::{
+        fs, io,
         os::windows::process::CommandExt,
         path::{Path, PathBuf},
         process::{Command, Stdio},
@@ -252,7 +270,7 @@ mod imp {
 
     use base64ct::{Base64, Encoding};
 
-    use super::{PermKind, PermissionProblem, PermissionReport, windows_acl};
+    use super::{PermKind, PermissionProblem, PermissionReport, private_file, windows_acl};
     use crate::{Error, Result, paths::system32};
 
     /// `CREATE_NO_WINDOW`: do not flash a console window from the GUI app.
@@ -316,6 +334,29 @@ mod imp {
             }
         }
         Ok(())
+    }
+
+    pub(super) fn create_private(path: &Path) -> io::Result<fs::File> {
+        let user = current_user_sid()
+            .ok_or_else(|| io::Error::other("cannot determine the current user's SID"))?;
+        let sddl = windows_acl::private_sddl(user)
+            .ok_or_else(|| io::Error::other("the current user's SID is malformed"))?;
+        let file = private_file::create(path, &sddl)?;
+        // FAT and exFAT drop the access list without a word; some network
+        // shares map it to something else.
+        let private = private_file::keeps_access_lists(&file)
+            && private_file::owner_and_access(&file)
+                .is_ok_and(|actual| windows_acl::is_private_sddl(&actual, user));
+        if private {
+            return Ok(file);
+        }
+        // Nothing has been written yet.
+        drop(file);
+        let _ = fs::remove_file(path);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this drive can't keep a file private to this user (FAT, exFAT or a network share)",
+        ))
     }
 
     fn run_quiet(cmd: &mut Command, path: &Path) -> Result<()> {
@@ -495,6 +536,71 @@ for ($i = 0; $i -lt $paths.Count; $i++) {{
         let line = stdout.lines().find(|l| !l.trim().is_empty())?;
         let sid = line.rsplit(',').next()?.trim().trim_matches('"');
         sid.starts_with("S-1-").then(|| sid.to_owned())
+    }
+
+    /// The access list a private file is created with, in SDDL: protected
+    /// from inheritance (`P`), full access (`FA`) for `user`, `SYSTEM` (`SY`)
+    /// and `Administrators` (`BA`). `None` unless `user` is a well-formed
+    /// SID, so nothing else can get into the string.
+    pub(super) fn private_sddl(user: &str) -> Option<String> {
+        let numbers = user.strip_prefix("S-1-")?;
+        let well_formed = numbers
+            .split('-')
+            .all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        well_formed.then(|| format!("D:P(A;;FA;;;{user})(A;;FA;;;SY)(A;;FA;;;BA)"))
+    }
+
+    /// Whether a file's owner and access list, as SDDL (`O:…D:…`), keep it
+    /// private to `user`: the access list exists and is protected from
+    /// inheritance, and the owner and every principal it allows anything
+    /// are `user`, `SYSTEM` or `Administrators` ([`evaluate`]). Anything not
+    /// understood counts as not private.
+    pub(super) fn is_private_sddl(sddl: &str, user: &str) -> bool {
+        parse_sddl(sddl, user).is_some_and(|(acl, protected)| protected && evaluate(&acl, user).ok)
+    }
+
+    /// The owner and allowed SIDs in `O:<owner>D:<flags>(<entry>)…`, and
+    /// whether the access list is protected. Windows writes `SYSTEM`,
+    /// `Administrators` and the built-in Administrator account (`LA`) by
+    /// their aliases; any other alias stays as it is, which matches no
+    /// trusted SID. `None` for anything else: no access list at all
+    /// (`NO_ACCESS_CONTROL`), entries other than plain allow and deny ones.
+    fn parse_sddl(sddl: &str, user: &str) -> Option<(Acl, bool)> {
+        let sid = |text: &str| -> String {
+            match text {
+                "SY" => SYSTEM.to_owned(),
+                "BA" => ADMINISTRATORS.to_owned(),
+                "LA" if user.ends_with("-500") => user.to_owned(),
+                other => other.to_owned(),
+            }
+        };
+        let rest = sddl.strip_prefix("O:")?;
+        let owner_len = match rest.strip_prefix("S-1-") {
+            Some(numbers) => {
+                4 + numbers
+                    .find(|c: char| !c.is_ascii_digit() && c != '-')
+                    .unwrap_or(numbers.len())
+            }
+            None => 2,
+        };
+        let owner = sid(rest.get(..owner_len)?);
+        let rest = rest.get(owner_len..)?.strip_prefix("D:")?;
+        let (flags, mut entries) = rest.split_at(rest.find('(').unwrap_or(rest.len()));
+        if !flags.chars().all(|c| matches!(c, 'P' | 'A' | 'I' | 'R')) {
+            return None;
+        }
+        let mut allowed = Vec::new();
+        while !entries.is_empty() {
+            let (entry, next) = entries.strip_prefix('(')?.split_once(')')?;
+            entries = next;
+            let fields: Vec<&str> = entry.split(';').collect();
+            match fields.as_slice() {
+                ["A", _, _, _, _, who] => allowed.push(sid(who)),
+                ["D", _, _, _, _, _] => {}
+                _ => return None,
+            }
+        }
+        Some((Acl { owner, allowed }, flags.contains('P')))
     }
 }
 
@@ -739,6 +845,54 @@ mod tests {
             Some("S-1-5-21-111-222-333-1001")
         );
         assert_eq!(parse_whoami_csv("nonsense"), None);
+    }
+
+    #[test]
+    fn windows_private_file_access_lists() {
+        use windows_acl::*;
+        let user = "S-1-5-21-1-2-3-1001";
+        assert_eq!(
+            private_sddl(user).as_deref(),
+            Some("D:P(A;;FA;;;S-1-5-21-1-2-3-1001)(A;;FA;;;SY)(A;;FA;;;BA)")
+        );
+        for bad in ["", "S-1-", "S-1-5--1", "X-1-5-21", "S-1-5-21-1)(A;;FA;;;WD"] {
+            assert_eq!(private_sddl(bad), None, "{bad}");
+        }
+
+        // As Windows reads back a file created with that list.
+        let created = format!("O:{user}D:P(A;;FA;;;{user})(A;;FA;;;SY)(A;;FA;;;BA)");
+        assert!(is_private_sddl(&created, user));
+        // Owned by Administrators (an elevated process), with inheritance
+        // flags, other rights and a deny entry.
+        let elevated = format!("O:BAD:PAI(D;;FA;;;WD)(A;;FA;;;{user})(A;;0x1200a9;;;SY)");
+        assert!(is_private_sddl(&elevated, user));
+        // The built-in Administrator account goes by an alias.
+        let admin = "S-1-5-21-1-2-3-500";
+        assert!(is_private_sddl("O:LAD:P(A;;FA;;;LA)(A;;FA;;;SY)", admin));
+        assert!(!is_private_sddl("O:LAD:P(A;;FA;;;LA)(A;;FA;;;SY)", user));
+
+        for open in [
+            // Inherits from its folder.
+            format!("O:{user}D:(A;;FA;;;{user})"),
+            format!("O:{user}D:AI(A;;FA;;;{user})(A;ID;0x1200a9;;;BU)"),
+            // Lets others in.
+            format!("O:{user}D:P(A;;FA;;;{user})(A;;FR;;;WD)"),
+            format!("O:{user}D:P(A;;FA;;;{user})(A;;FR;;;S-1-5-21-1-2-3-1002)"),
+            // Someone else's.
+            format!("O:S-1-5-21-1-2-3-1002D:P(A;;FA;;;{user})"),
+            // No access list at all: anyone may do anything.
+            format!("O:{user}D:NO_ACCESS_CONTROL"),
+            // Entries this doesn't read.
+            format!("O:{user}D:P(A;;FA;;;{user})(XA;;FR;;;WD;(@User.x == 1))"),
+            format!("O:{user}D:P(OA;;FA;;;{user})"),
+            // Malformed.
+            format!("D:P(A;;FA;;;{user})"),
+            format!("O:{user}D:P(A;;FA;;;{user}"),
+            format!("O:{user}"),
+            String::new(),
+        ] {
+            assert!(!is_private_sddl(&open, user), "{open}");
+        }
     }
 
     #[test]

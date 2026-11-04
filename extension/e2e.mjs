@@ -214,10 +214,13 @@ try {
   await connect.close();
   check('the popup says connected', (await popupText()).includes('Connected'));
 
-  // Filling: the menu under the field, chosen with the keyboard.
+  // Filling: the menu under the field, chosen with the keyboard. It opens
+  // on the user's click, not on the page's own `focus()`.
   const page = await browser.newPage();
   await page.goto(`${site}/login`);
   await page.focus('#password');
+  check("the page's own focus opens no menu", !(await surface(page, 2500)));
+  await page.click('#password');
   check('the menu opens on a login field', await surface(page));
   await shot(page, 'menu');
   await page.keyboard.press('ArrowDown');
@@ -245,7 +248,7 @@ try {
   // Nothing for another host, not even one that is the same machine.
   const other = await browser.newPage();
   await other.goto(`http://localhost:${port}/login`);
-  await other.focus('#password');
+  await other.click('#password');
   check('another host gets no menu', !(await surface(other, 2500)));
   await other.close();
 
@@ -253,12 +256,12 @@ try {
   const keysAt = await pairingKeysAt(Date.now() - 2 * 86_400_000);
   await page.goto(`${site}/login`);
   await sleep(11_000); // past the background's 10-second cache of logins
-  await page.focus('#password');
+  await page.click('#password');
   await next('keys'); // the app keeps the browser's next keys
   await next('keys'); // and makes them its current ones on their first use
   check('day-old keys change', (await pairingKeysAt()) > keysAt);
   await page.goto(`${site}/login`);
-  await page.focus('#password');
+  await page.click('#password');
   check('the menu opens with the new keys', await surface(page));
   await page.keyboard.press('ArrowDown');
   await sleep(SETTLE);
@@ -302,11 +305,23 @@ try {
   await signIn(page, 'alice', 'changed2');
   check('a saved login is not offered again', !(await surface(page, 2500)));
 
+  // A login the page put in and sent itself is not checked at all.
+  await page.goto(`${site}/login`);
+  await Promise.all([
+    page.waitForNavigation(),
+    page.evaluate(() => {
+      document.querySelector('#username').value = 'mallory';
+      document.querySelector('#password').value = 'guess1';
+      document.querySelector('form').requestSubmit();
+    }),
+  ]);
+  check('a login the page sent itself gets no banner', !(await surface(page, 2500)));
+
   // Locked: the menu offers to unlock, the popup says so.
   await bridgeSays('lock', 'locked');
   await page.goto(`${site}/login`);
   await sleep(11_000); // past the background's 10-second cache of logins
-  await page.focus('#password');
+  await page.click('#password');
   check('a locked vault shows the unlock item', await surface(page));
   await shot(page, 'menu-locked');
   check('the popup says locked', (await popupText()).includes('locked'));

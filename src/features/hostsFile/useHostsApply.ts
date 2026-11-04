@@ -13,7 +13,7 @@ export function reportUnapplied(t: TFunction, result: HostsApplyResult): void {
 
 /**
  * Writing the hosts file with the administrator password: applying changes or
- * restoring a backup. The password dialog says `prompt` on macOS.
+ * restoring a backup. The backend words the password dialog.
  */
 export function useHostsApply() {
   const { t } = useTranslation();
@@ -31,5 +31,5 @@ export function useHostsApply() {
       else reportUnapplied(t, result);
     },
   });
-  return { apply, restore, prompt: t('hostsFile.authPrompt') };
+  return { apply, restore };
 }

@@ -356,7 +356,9 @@ Host *
         });
         let lines = risky(&config, &command).unwrap();
         let keys: Vec<&str> = lines.iter().map(|l| l.key.as_str()).collect();
-        assert_eq!(keys, ["ProxyCommand", "ForwardAgent"]);
+        // With where the forwarded agent goes: the new host, and the `Match`
+        // block, which may apply to any host.
+        assert_eq!(keys, ["User", "HostName", "ProxyCommand", "ForwardAgent"]);
         // Nothing happened to the config itself.
         assert_eq!(config.to_string(), CONFIG);
     }

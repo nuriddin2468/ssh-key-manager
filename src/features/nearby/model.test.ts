@@ -44,6 +44,7 @@ describe('isActive', () => {
     expect(isActive(pairing({ type: 'connecting' }))).toBe(true);
     expect(isActive(pairing({ type: 'compare', code: '123456' }))).toBe(true);
     expect(isActive(pairing({ type: 'waiting', code: '123456' }))).toBe(true);
+    expect(isActive(pairing({ type: 'nameMismatch', announced: 'MacBook' }))).toBe(true);
     expect(isActive(pairing({ type: 'authorize', vault: true }))).toBe(true);
     expect(isActive(pairing({ type: 'setMaster' }))).toBe(true);
     expect(isActive(pairing({ type: 'syncing' }))).toBe(true);

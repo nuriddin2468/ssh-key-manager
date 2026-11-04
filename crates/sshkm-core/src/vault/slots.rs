@@ -413,19 +413,24 @@ mod tests {
 
     #[test]
     fn a_planted_slot_with_a_huge_kdf_cost_is_refused() {
-        let mut slots = KeySlots::new();
-        slots
-            .set_password(&secret(), &SecretString::from("pw"))
-            .unwrap();
-        for slot in &mut slots.slots {
-            if let Slot::Password { kdf, .. } = slot {
-                kdf.memory_kib = u32::MAX;
+        // Memory; and a thread per lane each quarter pass, for hours.
+        for (memory_kib, iterations, parallelism) in [(u32::MAX, 3, 4), (512 * 1024, 128, 65_536)] {
+            let mut slots = KeySlots::new();
+            slots
+                .set_password(&secret(), &SecretString::from("pw"))
+                .unwrap();
+            for slot in &mut slots.slots {
+                if let Slot::Password { kdf, .. } = slot {
+                    kdf.memory_kib = memory_kib;
+                    kdf.iterations = iterations;
+                    kdf.parallelism = parallelism;
+                }
             }
+            assert!(matches!(
+                slots.open_password(&SecretString::from("pw")),
+                Err(Error::Unsupported(_))
+            ));
         }
-        assert!(matches!(
-            slots.open_password(&SecretString::from("pw")),
-            Err(Error::Unsupported(_))
-        ));
     }
 
     #[test]

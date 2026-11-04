@@ -47,6 +47,39 @@ pub fn atomic_write(path: &Path, bytes: &[u8], new_file_mode: u32) -> Result<()>
     Ok(())
 }
 
+/// Atomically replaces `path` with `bytes` in a file that only this user,
+/// `SYSTEM` and `Administrators` can open (Windows), for secrets in plain
+/// text. Unlike [`atomic_write`], whose temporary file has the folder's
+/// access list until it is renamed, the temporary file gets its own
+/// protected access list as it is created, and no one else can open it
+/// while it is written ([`crate::perms::create_private`]). Where the file
+/// system can't keep that access list (FAT, exFAT, some network shares),
+/// nothing is written and the call fails with [`Error::Unsupported`].
+#[cfg(windows)]
+pub(crate) fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    let target = resolve_symlinks(path)?;
+    let (dir, prefix) = temp_location(&target);
+    let created = tempfile::Builder::new()
+        .prefix(&prefix)
+        .suffix(".sshkm-tmp")
+        .make_in(dir, crate::perms::create_private);
+    let (mut file, tmp) = match created {
+        Ok(created) => created.into_parts(),
+        Err(e) if e.kind() == io::ErrorKind::Unsupported => {
+            return Err(Error::Unsupported(format!("{}: {e}", dir.display())));
+        }
+        Err(e) => return Err(Error::io(e, dir)),
+    };
+    // No one else may open the file while `file` is open, so it is closed
+    // before `tmp` renames it, or removes it when dropped on an error.
+    let written = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
+    written.map_err(|e| Error::io(e, &tmp))?;
+    tmp.persist(&target)
+        .map_err(|e| Error::io(e.error, &target))?;
+    Ok(())
+}
+
 /// Writes a new file atomically and fails with [`Error::AlreadyExists`] if
 /// `path` exists (also when it is created concurrently). The file gets `mode`
 /// on Unix.
@@ -195,17 +228,7 @@ fn write_temp(
     keep: Option<&fs::Permissions>,
     mode: u32,
 ) -> Result<tempfile::NamedTempFile> {
-    let dir = match target.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p,
-        _ => Path::new("."),
-    };
-    let prefix = format!(
-        ".{}.",
-        target
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default()
-    );
+    let (dir, prefix) = temp_location(target);
     // tempfile creates the file with mode 0600 on Unix, so secrets are never
     // briefly world-readable.
     let mut tmp = tempfile::Builder::new()
@@ -227,6 +250,23 @@ fn write_temp(
         None => set_mode(tmp.path(), mode)?,
     }
     Ok(tmp)
+}
+
+/// Where the temporary file for `target` goes, and how its name starts:
+/// next to the target, as `.<file name>.`.
+fn temp_location(target: &Path) -> (&Path, String) {
+    let dir = match target.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let prefix = format!(
+        ".{}.",
+        target
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    );
+    (dir, prefix)
 }
 
 /// Follows symbolic links so the final file is replaced, not the link.
@@ -307,6 +347,27 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"one");
         atomic_write(&path, b"two", 0o600).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"two");
+        // No temp files left behind.
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn private_writes_are_private_from_the_start() {
+        use crate::perms::{PermKind, check};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("passwords.csv");
+        atomic_write_private(&path, b"one").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"one");
+        let report = check(&path, PermKind::PrivateKey);
+        assert!(report.ok, "{report:?}");
+        // A file made the ordinary way is replaced by a private one.
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, "ordinary").unwrap();
+        atomic_write_private(&path, b"two").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"two");
+        let report = check(&path, PermKind::PrivateKey);
+        assert!(report.ok, "{report:?}");
         // No temp files left behind.
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }

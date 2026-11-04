@@ -1,10 +1,18 @@
 //! The user's own devices: whether two computers have the same vault, and
 //! the names under which only they recognise each other on the network.
 //!
-//! Both come from [`OwnKey`], derived from the vault secret. Every computer
-//! with the vault has it; nobody else learns anything from what it makes.
-//! Once the vault has a new recovery key, a computer that is gone no
-//! longer has it.
+//! Both come from [`OwnKey`], derived from 32 random bytes the vault keeps
+//! in its custom data, encrypted with everything else (`sshkm.own.key`, see
+//! `Vault::own_key`). The vault makes them the first time it needs them:
+//! when the user starts adding a device, or this computer is announced to
+//! the user's other devices. They go with the vault file to a new device,
+//! and two computers that share the file through a synced folder find them
+//! in it. Every computer with the vault has the key; nobody else learns
+//! anything from what it makes. Nothing about it comes from the vault
+//! secret, which for a KeePass file opened here is the user's own password:
+//! a proof or a presence name is never something to test a guessed password
+//! against. A new recovery key replaces the key too, so a computer that is
+//! gone no longer has it.
 //!
 //! - **Proof.** In its `Hello` a side sends an HMAC of the session's
 //!   handshake hash and its role. A peer with the same vault checks it; any
@@ -20,7 +28,7 @@ use std::fmt::{self, Write as _};
 use base64ct::{Base64, Encoding};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
-use secrecy::{ExposeSecret, SecretString};
+use rand_core::{OsRng, RngCore};
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
@@ -35,14 +43,28 @@ const PRESENCE_LABEL: &[u8] = b"sshkm presence";
 /// Hex digits of a presence name.
 const PRESENCE_LEN: usize = 16;
 
-/// The key own devices share, derived from the vault secret.
+/// Bytes of the random value an [`OwnKey`] comes from.
+pub const SEED_LEN: usize = 32;
+
+/// The random value the vault keeps for its [`OwnKey`].
+pub type Seed = Zeroizing<[u8; SEED_LEN]>;
+
+/// A new random value for an [`OwnKey`].
+pub fn new_seed() -> Seed {
+    let mut seed = Zeroizing::new([0; SEED_LEN]);
+    OsRng.fill_bytes(seed.as_mut());
+    seed
+}
+
+/// The key own devices share, derived from the random value the vault
+/// keeps for it.
 pub struct OwnKey(Zeroizing<[u8; 32]>);
 
 impl OwnKey {
-    pub fn from_secret(secret: &SecretString) -> Self {
-        let hkdf = Hkdf::<Sha256>::new(Some(SALT), secret.expose_secret().as_bytes());
+    pub fn from_seed(seed: &[u8; SEED_LEN]) -> Self {
+        let hkdf = Hkdf::<Sha256>::new(Some(SALT), seed);
         let mut key = Zeroizing::new([0; 32]);
-        hkdf.expand(b"v1", key.as_mut())
+        hkdf.expand(b"v2", key.as_mut())
             .unwrap_or_else(|_| unreachable!("32 bytes is a valid length"));
         Self(key)
     }
@@ -115,8 +137,16 @@ mod tests {
     use super::*;
     use crate::p2p::Identity;
 
-    fn key(secret: &str) -> OwnKey {
-        OwnKey::from_secret(&SecretString::from(secret))
+    fn key(seed: &str) -> OwnKey {
+        let mut bytes = [0; SEED_LEN];
+        bytes[..seed.len()].copy_from_slice(seed.as_bytes());
+        OwnKey::from_seed(&bytes)
+    }
+
+    #[test]
+    fn a_new_seed_is_random() {
+        assert_ne!(*new_seed(), *new_seed());
+        assert_ne!(*new_seed(), [0; SEED_LEN]);
     }
 
     #[test]

@@ -24,7 +24,8 @@
 //! - prompts naming another account than the one expected (for example a
 //!   `ProxyJump` host's password) are refused;
 //! - so are prompts the session cannot vouch for: with OpenSSH before 8.5 a
-//!   server's prompt looks like `ssh`'s own (see [`Connection`]).
+//!   server's prompt looks like `ssh`'s own, host-key question included (see
+//!   [`Connection`]).
 //!
 //! An interactive session is for a terminal the user watches. Its
 //! [`Interactive`] responder can ask the user, so it is also asked about host
@@ -127,7 +128,10 @@ pub struct Ask<'a> {
     pub foreign: bool,
     /// The session cannot vouch for the prompt (see [`Connection`]): it may be
     /// a server's text posing as `ssh`'s own, or another host's. It must not
-    /// get a saved secret, nor be shown as what its text claims to be.
+    /// get a saved secret, nor be shown as what its text claims to be. A
+    /// host-key question is the exception: it may be `ssh`'s real one, the
+    /// only way to trust a new key, so it is still shown as one, saying that
+    /// the server may have sent it.
     pub unverified: bool,
     /// How many times this secret was already given in this session: more
     /// than zero means the server rejected it.
@@ -140,16 +144,22 @@ pub struct Ask<'a> {
 /// OpenSSH 8.5 and later start every server's keyboard-interactive prompt
 /// with `(user@host) `, so a prompt without it is `ssh`'s own. Before 8.5 a
 /// server's prompt looks just like `ssh`'s: it can ask "Enter passphrase for
-/// key …", or name the target's account to get its password. So, before 8.5:
+/// key …", ask `ssh`'s host-key question, or name any account to get its
+/// password. So, before 8.5:
 ///
-/// - if the host may use keyboard-interactive, a passphrase prompt may be
-///   the server's: the session does not vouch for it;
+/// - if the host may use keyboard-interactive, the session vouches only for
+///   what the host may ask anyway: its own password and code, and other
+///   questions, which are shown in the sender's words. Not for a passphrase
+///   prompt, a host-key question, or a prompt that names another account:
+///   without a proxy no other host is on the way, so if `ssh` did not ask,
+///   only the server can have;
 /// - through a `ProxyJump` or `ProxyCommand`, any prompt may be the jump
 ///   host's (its own `ssh` asks the same session, and the options of this
 ///   run do not reach it): the session vouches for none.
 ///
 /// Prompts it does not vouch for are [`Ask::unverified`]: refused by a batch
-/// session, left to the user by an interactive one.
+/// session, left to the user by an interactive one. Other yes/no questions
+/// are always answered "no", so they need no vouching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Connection {
     /// `ssh` marks servers' prompts: OpenSSH 8.5 or later.
@@ -176,15 +186,22 @@ impl Connection {
     }
 
     /// Whether a prompt like `prompt` can only be `ssh`'s own or the
-    /// expected host's. Yes/no questions are never answered "yes" for the
-    /// user, so they need no vouching.
-    fn vouches_for(self, prompt: &Prompt) -> bool {
-        if self.marks_server_prompts || prompt.kind.is_confirmation() {
+    /// expected host's. `foreign`: it names another account than the one
+    /// expected.
+    fn vouches_for(self, prompt: &Prompt, foreign: bool) -> bool {
+        if self.marks_server_prompts || prompt.kind == PromptKind::Confirm {
             true
         } else if self.proxied {
             false
+        } else if self.keyboard_interactive {
+            !foreign
+                && !matches!(
+                    prompt.kind,
+                    PromptKind::Passphrase { .. } | PromptKind::HostKeyConfirm
+                )
         } else {
-            !(self.keyboard_interactive && matches!(prompt.kind, PromptKind::Passphrase { .. }))
+            // No server can put a prompt to the session.
+            true
         }
     }
 }
@@ -611,7 +628,7 @@ impl SessionState {
                 (&log.account, &prompt.account),
                 (Some(expected), Some(named)) if !named.matches(expected)
             );
-            let unverified = !log.connection.vouches_for(&prompt);
+            let unverified = !log.connection.vouches_for(&prompt, foreign);
             (
                 foreign,
                 unverified,
@@ -1295,12 +1312,125 @@ mod tests {
         session.expect_connection(Connection::new(Some("OpenSSH_8.4p1"), true, true));
         ask_session(&server, &session, "Password: ");
         ask_session(&server, &session, "Enter passphrase for key '/k': ");
+        // The jump host's server can send the host-key question too.
         ask_session(&server, &session, HOST_KEY);
-        assert_eq!(*unverified.lock().unwrap(), [true, true, false]);
+        assert_eq!(*unverified.lock().unwrap(), [true, true, true]);
 
         session.expect_connection(Connection::default());
         ask_session(&server, &session, "Enter passphrase for key '/k2': ");
-        assert_eq!(unverified.lock().unwrap().last(), Some(&false));
+        ask_session(&server, &session, HOST_KEY);
+        assert_eq!(
+            *unverified.lock().unwrap(),
+            [true, true, true, false, false]
+        );
+    }
+
+    /// What an interactive session over `connection` says about each of
+    /// `texts`, expecting alice@target.example: (foreign, unverified), or
+    /// `None` when the responder was not asked.
+    fn vouching(connection: Connection, texts: &[&str]) -> Vec<Option<(bool, bool)>> {
+        let server = server();
+        let seen = Arc::new(Mutex::new(None));
+        let session = server.interactive_session(Recorder {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            reply: {
+                let seen = Arc::clone(&seen);
+                move |ask: &Ask<'_>| {
+                    *seen.lock().unwrap() = Some((ask.foreign, ask.unverified));
+                    Reply::Refuse
+                }
+            },
+        });
+        session.expect_account(PromptAccount::new("alice", "target.example"));
+        session.expect_connection(connection);
+        texts
+            .iter()
+            .map(|text| {
+                ask_session(&server, &session, text);
+                seen.lock().unwrap().take()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn old_openssh_does_not_vouch_for_what_only_a_server_can_have_sent() {
+        let texts = [
+            "alice@target.example's password: ",
+            "Password: ",
+            "Verification code: ",
+            "What is your favourite colour? ",
+            // No other host is on the way: these can only be the server's.
+            "bob@bank.example's password: ",
+            "(bob@bank.example) Password: ",
+            "(bob@bank.example) Verification code: ",
+            HOST_KEY,
+            "Enter passphrase for key '/k': ",
+            // Answered "no" without asking.
+            "Accept updated hostkeys? (yes/no): ",
+        ];
+        let own = Some((false, false));
+        let theirs = Some((true, true));
+        assert_eq!(
+            vouching(Connection::new(Some("OpenSSH_8.4p1"), true, false), &texts),
+            [
+                own,
+                own,
+                own,
+                own,
+                theirs,
+                theirs,
+                theirs,
+                Some((false, true)),
+                Some((false, true)),
+                None
+            ]
+        );
+        // Without keyboard-interactive no server can ask: everything is
+        // `ssh`'s own.
+        let foreign = Some((true, false));
+        assert_eq!(
+            vouching(Connection::new(Some("OpenSSH_8.4p1"), false, false), &texts),
+            [
+                own, own, own, own, foreign, foreign, foreign, own, own, None
+            ]
+        );
+        // From 8.5 on a prompt without `(user@host)` is `ssh`'s own, and one
+        // with it is the host's it names.
+        assert_eq!(
+            vouching(Connection::new(Some("OpenSSH_9.9p1"), true, true), &texts),
+            [
+                own, own, own, own, foreign, foreign, foreign, own, own, None
+            ]
+        );
+    }
+
+    #[test]
+    fn interactive_sessions_offer_unverified_host_keys_to_the_user() {
+        // The question may be `ssh`'s real one: only the user can tell, and
+        // "yes" trusts a key only if it is.
+        let server = server();
+        let session = server.interactive_session(Recorder {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            reply: |ask: &Ask<'_>| {
+                if ask.unverified {
+                    Reply::Yes
+                } else {
+                    Reply::No
+                }
+            },
+        });
+        session.expect_connection(Connection::new(Some("OpenSSH_8.4p1"), true, false));
+        assert_eq!(
+            ask_session(&server, &session, HOST_KEY).as_deref(),
+            Some("yes")
+        );
+        // A batch session still says "no".
+        let batch = server.session(|_: &Prompt| Reply::Yes);
+        batch.expect_connection(Connection::new(Some("OpenSSH_8.4p1"), true, false));
+        assert_eq!(
+            ask_session(&server, &batch, HOST_KEY).as_deref(),
+            Some("no")
+        );
     }
 
     #[test]

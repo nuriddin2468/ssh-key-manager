@@ -25,6 +25,12 @@ browsers: Array<BrowserInstall>,
  */
 temporaryLocation?: string, 
 /**
+ * This copy of the app runs from this place on a mounted volume (on
+ * macOS: a disk image, another drive, or where a downloaded app runs
+ * until it is moved), so no browser is set up to start it.
+ */
+mountedLocation?: string, 
+/**
  * Browsers paired with the vault; `None` while it is locked or missing.
  */
 paired: Array<PairedBrowser> | null, 

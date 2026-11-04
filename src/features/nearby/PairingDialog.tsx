@@ -80,7 +80,7 @@ export function PairingDialog() {
     // These steps focus a field or button of their own.
     if (!step || step === 'authorize' || step === 'setMaster') return;
     const buttons = footer.current?.querySelectorAll<HTMLElement>('button');
-    const asks = step === 'compare' || step === 'offered';
+    const asks = step === 'compare' || step === 'offered' || step === 'nameMismatch';
     const target = asks ? buttons?.[0] : buttons?.[buttons.length - 1];
     target?.focus();
   }, [step]);
@@ -99,7 +99,9 @@ export function PairingDialog() {
 
   if (!current) return null;
   // The name comes with the other side's first message; until then the
-  // dialog names nobody. Every sentence that names it comes after.
+  // dialog names nobody. Every sentence that names it comes after. For a
+  // computer paired before, it is the name the vault keeps, whatever name
+  // that computer gives itself now.
   const peer = current.peer ?? '';
   const phase = current.phase;
   const active = isActive(current);
@@ -112,7 +114,9 @@ export function PairingDialog() {
       ? phase.item
       : null;
   const device = current.kind === 'device';
-  const title = !current.peer
+  const mismatch = phase.type === 'nameMismatch' ? phase.announced : null;
+  const aboutItem = item !== null || mismatch !== null;
+  const usualTitle = !current.peer
     ? t('nearby.pairing.title')
     : device
       ? current.outgoing
@@ -125,7 +129,8 @@ export function PairingDialog() {
           : current.outgoing
             ? t('nearby.pairing.titleOut', { peer })
             : t('nearby.pairing.titleIn', { peer });
-  const description = item
+  const title = mismatch !== null ? t('nearby.send.mismatchTitle') : usualTitle;
+  const description = aboutItem
     ? t('nearby.send.description')
     : device
       ? t('nearby.own.description')
@@ -173,6 +178,21 @@ export function PairingDialog() {
                     : t('nearby.pairing.waiting', { peer })}
                 </p>
               </>
+            ) : null}
+            {mismatch !== null ? (
+              <div className="flex gap-2.5 rounded-xl border border-warning-solid/30 bg-warning-solid/[0.09] px-3 py-2.5 text-[12.5px] leading-[18px] text-fg-2">
+                <AlertTriangle
+                  aria-hidden="true"
+                  className="mt-0.5 size-4 shrink-0 text-warning"
+                  strokeWidth={2}
+                />
+                <span className="flex flex-col gap-1">
+                  <span className="font-medium text-fg">
+                    {t('nearby.send.mismatch', { peer, announced: mismatch })}
+                  </span>
+                  <span>{t('nearby.send.mismatchHint')}</span>
+                </span>
+              </div>
             ) : null}
             {item ? <ItemCard item={item} /> : null}
             {phase.type === 'offering' ? (
@@ -280,6 +300,25 @@ export function PairingDialog() {
                   onClick={() => answer.mutate({ id: current.id, matched: true })}
                 >
                   {t('nearby.send.accept')}
+                </Button>
+              </>
+            ) : phase.type === 'nameMismatch' ? (
+              // Not sending is the safe answer, so it is the one that stands out.
+              <>
+                <Button
+                  size="lg"
+                  variant="primary"
+                  disabled={answer.isPending}
+                  onClick={() => answer.mutate({ id: current.id, matched: false })}
+                >
+                  {t('nearby.send.dontSend')}
+                </Button>
+                <Button
+                  size="lg"
+                  loading={answer.isPending}
+                  onClick={() => answer.mutate({ id: current.id, matched: true })}
+                >
+                  {t('nearby.send.sendAnyway')}
                 </Button>
               </>
             ) : phase.type === 'compare' ? (

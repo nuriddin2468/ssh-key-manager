@@ -18,7 +18,7 @@ import { CheckHostKeyDialog } from '@/features/known/CheckHostKeyDialog';
 import type { KnownHostsRemoval } from '@/features/known/removal';
 import { formatRelative } from '@/lib/format';
 import { HostPicker } from './HostPicker';
-import { hostIdOf, isConnectable, isLive, phaseLabel, type Tab } from './model';
+import { hostIdOf, isLive, phaseLabel, type Tab } from './model';
 import { PromptDialog } from './PromptDialog';
 import { panelId, SessionTabs, tabId } from './SessionTabs';
 import { FindBar, LoginBanner, SessionView, StatusBar } from './SessionView';
@@ -55,7 +55,8 @@ export function TerminalPage({ connect, nonce }: { connect?: string; nonce?: num
     const request = nonce ?? 0;
     if (!started.has(request)) {
       started.add(request);
-      if (isConnectable(connect)) terminals.open(connect);
+      // A name ssh isn't run with opens too: its tab says why.
+      terminals.open(connect);
     }
     navigate({ page: 'terminal' });
   }, [connect, nonce, terminals, navigate]);

@@ -128,14 +128,10 @@ export const api = {
   lookupHost: (name: string) => call<NameLookup>('lookup_host', { name }),
   previewHostsChanges: (revision: string, changes: HostsChange[]) =>
     call<HostsPreview>('preview_hosts_changes', { revision, changes }),
-  applyHostsChanges: (vars: {
-    revision: string;
-    changes: HostsChange[];
-    flushDns: boolean;
-    prompt: string;
-  }) => call<HostsApplyResult>('apply_hosts_changes', vars),
+  applyHostsChanges: (vars: { revision: string; changes: HostsChange[]; flushDns: boolean }) =>
+    call<HostsApplyResult>('apply_hosts_changes', vars),
   hostsBackups: () => call<HostsBackup[]>('list_hosts_backups'),
-  restoreHostsBackup: (vars: { path: string; flushDns: boolean; prompt: string }) =>
+  restoreHostsBackup: (vars: { path: string; flushDns: boolean }) =>
     call<HostsApplyResult>('restore_hosts_backup', vars),
 
   audit: () => call<AuditReport>('run_audit'),

@@ -43,7 +43,11 @@ export function ItemCard({ item }: { item: ItemSummary }) {
           label: t('nearby.item.host'),
           title: item.alias,
           monoTitle: true,
-          details: item.address,
+          // The way the connection goes is part of what is accepted: shown whole.
+          details: item.proxyJump
+            ? `${item.address} · ${t('nearby.item.via', { jump: item.proxyJump })}`
+            : item.address,
+          wrapDetails: item.proxyJump !== null,
           badge:
             item.hostKeys > 0 ? (
               <Badge>{t('nearby.item.hostKeys', { count: item.hostKeys })}</Badge>

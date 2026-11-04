@@ -7,7 +7,7 @@ import type { SyncSummary } from "./SyncSummary";
 /**
  * Where a conversation is.
  */
-export type PairingPhase = { "type": "connecting" } | { "type": "compare", code: string, } | { "type": "waiting", code: string, } | { "type": "paired" } | { "type": "known" } | { "type": "offering", item: ItemSummary, } | { "type": "offered", item: ItemSummary, } | { "type": "sent", item: ItemSummary, } | { "type": "received", item: ItemSummary, name: string, 
+export type PairingPhase = { "type": "connecting" } | { "type": "compare", code: string, } | { "type": "waiting", code: string, } | { "type": "paired" } | { "type": "known" } | { "type": "nameMismatch", announced: string, } | { "type": "offering", item: ItemSummary, } | { "type": "offered", item: ItemSummary, } | { "type": "sent", item: ItemSummary, } | { "type": "received", item: ItemSummary, name: string, 
 /**
  * A host came with server keys other than the ones this computer
  * has for it; this computer's are kept.

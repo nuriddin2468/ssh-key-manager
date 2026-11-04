@@ -11,7 +11,8 @@
 //! An unlocked [`Vault`] holds the decrypted database and the secret in memory;
 //! dropping it is locking it. Entries reach the UI as [`EntrySummary`] and
 //! [`EntryDetail`], which never contain a password or a 2FA secret: those are
-//! read one at a time with [`Vault::secret`].
+//! read one at a time with [`Vault::secret`]. A password (or a key's
+//! passphrase) is shown to the user when they ask; a 2FA secret never is.
 //!
 //! Every change is written at once (atomically, after a backup of the previous
 //! file). If another program or computer changed the database or the key slots
@@ -51,7 +52,6 @@ pub use self::import::{CsvFormat, ImportPreview, ImportRow};
 pub use self::location::{check_database, copy_files, remove_files};
 pub use self::own_devices::{DeviceRecord, MAX_RECORDS, OwnDevice, check_records};
 use self::slots::KeySlots;
-use crate::p2p::own::OwnKey;
 use crate::{Error, Result, fsutil};
 
 /// Largest database file that is opened, or taken from another computer.
@@ -463,11 +463,6 @@ impl Vault {
         self.slots.device_ids()
     }
 
-    /// The key the user's own devices share (see [`crate::p2p::own`]).
-    pub fn own_key(&self) -> OwnKey {
-        OwnKey::from_secret(&self.secret)
-    }
-
     /// The vault secret, to give a new own device along with the database
     /// file; for nothing else.
     pub fn share_secret(&self) -> SecretString {
@@ -622,7 +617,8 @@ impl Vault {
     ///
     /// Device unlock is switched off on every computer, because those slots
     /// hold the old key: turn it on again and delete the old credential store
-    /// items.
+    /// items. The key the user's own devices share is replaced as well, so a
+    /// computer that is gone fails their check.
     pub fn new_recovery_key(
         &mut self,
         master: &SecretString,
@@ -631,7 +627,9 @@ impl Vault {
         self.refresh()?;
         self.verify_master_password(master)?;
         let secret = recovery::generate();
-        let bytes = serialize(&self.db, &secret)?;
+        let mut db = self.db.clone();
+        own_devices::renew_own_key(&mut db);
+        let bytes = serialize(&db, &secret)?;
         let mut slots = self.slots.clone();
         slots.set_password(&secret, master)?;
         slots.remove_all_devices();
@@ -639,6 +637,7 @@ impl Vault {
         // opens the database and sets the master password again.
         self.write_slots(slots)?;
         self.write_database(&bytes, backup_dir, true)?;
+        self.db = db;
         let old = std::mem::replace(&mut self.secret, duplicate(&secret));
         reencrypt_copies(&self.paths, backup_dir, &old, &secret);
         Ok(secret)
@@ -704,16 +703,16 @@ impl Vault {
         Ok(SecretString::from(text(entry.get(name))))
     }
 
-    /// The current 2FA code of an entry and the seconds it stays valid.
+    /// The current 2FA code of an entry and the seconds it stays valid. A
+    /// stored secret this app can't make codes for (from a KeePass file made
+    /// elsewhere) is an error, never a crash.
     pub fn otp_code(&self, id: &str) -> Result<(String, u64)> {
         let entry = self.find(id)?;
         let uri = entry
             .get(fields::OTP)
             .filter(|uri| !uri.is_empty())
             .ok_or_else(|| Error::NotFound("2FA secret".into()))?;
-        let totp: TOTP = uri
-            .parse()
-            .map_err(|_| Error::Parse("unreadable 2FA secret".into()))?;
+        let totp = parse_totp(uri).ok_or_else(|| Error::Parse("unreadable 2FA secret".into()))?;
         let code = totp
             .value_now()
             .map_err(|_| Error::invalid("the system clock is before 1970"))?;
@@ -980,9 +979,38 @@ fn otp_uri(input: &str, title: &str) -> Result<String> {
             .collect();
         format!("otpauth://totp/{label}?secret={secret}&period=30&digits=6&algorithm=SHA1")
     };
-    uri.parse::<TOTP>()
-        .map_err(|_| Error::invalid("not a 2FA secret"))?;
+    if parse_totp(&uri).is_none() {
+        return Err(Error::invalid("not a 2FA secret"));
+    }
     Ok(uri)
+}
+
+/// Seconds a 2FA code lasts: 30 almost everywhere, 60 at a few sites.
+const OTP_PERIODS: std::ops::RangeInclusive<u64> = 1..=300;
+/// Digits of a 2FA code: 6 almost everywhere, 8 at a few sites.
+const OTP_DIGITS: std::ops::RangeInclusive<u32> = 6..=10;
+
+/// An `otpauth://` URI this app can make codes for: TOTP with a secret, a
+/// known algorithm (the parser knows no other), and a period and number of
+/// digits within [`OTP_PERIODS`] and [`OTP_DIGITS`]. The KeePass crate takes
+/// any numbers, and computing a code then panics — which aborts the app —
+/// on a period of 0 or 64 digits and more. So anything else is refused
+/// when entered, kept as an unreadable secret on import, and an error when
+/// a code is asked for.
+fn parse_totp(uri: &str) -> Option<TOTP> {
+    // The KeePass crate reads `otpauth://hotp/…` as TOTP too.
+    let parsed = url::Url::parse(uri).ok()?;
+    if !parsed
+        .host_str()
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("totp"))
+    {
+        return None;
+    }
+    let totp: TOTP = uri.parse().ok()?;
+    let usable = OTP_PERIODS.contains(&totp.period)
+        && OTP_DIGITS.contains(&totp.digits)
+        && !Zeroizing::new(totp.get_secret()).is_empty();
+    usable.then_some(totp)
 }
 
 /// When the current password was set: the oldest version in the unbroken run

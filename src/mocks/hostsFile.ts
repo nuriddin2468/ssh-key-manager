@@ -248,9 +248,7 @@ function compress(rows: HostsDiffLine[]): HostsDiffLine[] {
   return out;
 }
 
-function install(next: string[], prompt: unknown): HostsApplyResult {
-  // Answering the password prompt with "cancel" is simulated by a prompt of "cancel".
-  if (prompt === 'cancel') return { outcome: 'cancelled', file: hostsFileInfo() };
+function install(next: string[]): HostsApplyResult {
   backups.push({ path: `/backups/hosts.${revision}.bak`, saved: new Date().toISOString(), lines });
   lines = next;
   revision += 1;
@@ -263,20 +261,20 @@ export const hostsFileHandlers: Record<string, (args: Record<string, unknown>) =
     rev !== `rev-${revision}`
       ? { stale: true, diff: [] }
       : { stale: false, diff: compress(edited(changes as HostsChange[]).diff) },
-  apply_hosts_changes: ({ revision: rev, changes, prompt }) =>
+  apply_hosts_changes: ({ revision: rev, changes }) =>
     rev !== `rev-${revision}`
       ? { outcome: 'stale', file: hostsFileInfo() }
-      : install(edited(changes as HostsChange[]).next, prompt),
+      : install(edited(changes as HostsChange[]).next),
   list_hosts_backups: () =>
     [...backups].reverse().map((b) => ({
       path: b.path,
       saved: b.saved,
       entries: b.lines.filter((l) => parse(l).kind === 'entry').length,
     })),
-  restore_hosts_backup: ({ path, prompt }) => {
+  restore_hosts_backup: ({ path }) => {
     const backup = backups.find((b) => b.path === path);
     if (!backup) return Promise.reject({ code: 'invalid_input', message: 'not a backup' });
-    return install(backup.lines, prompt);
+    return install(backup.lines);
   },
   lookup_host: ({ name }) => {
     const wanted = String(name).toLowerCase();

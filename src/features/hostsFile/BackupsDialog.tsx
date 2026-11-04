@@ -12,7 +12,7 @@ import { useHostsApply } from './useHostsApply';
 export function BackupsDialog({ onDone }: { onDone: () => void }) {
   const { t, i18n } = useTranslation();
   const backups = useQuery({ queryKey: ['hosts-file', 'backups'], queryFn: api.hostsBackups });
-  const { restore, prompt } = useHostsApply();
+  const { restore } = useHostsApply();
   const format = (iso: string | null) =>
     iso
       ? new Intl.DateTimeFormat(i18n.language, { dateStyle: 'medium', timeStyle: 'short' }).format(
@@ -57,7 +57,7 @@ export function BackupsDialog({ onDone }: { onDone: () => void }) {
                   disabled={restore.isPending}
                   onClick={() =>
                     restore.mutate(
-                      { path: backup.path, flushDns: true, prompt },
+                      { path: backup.path, flushDns: true },
                       { onSuccess: (result) => result.outcome === 'applied' && onDone() },
                     )
                   }

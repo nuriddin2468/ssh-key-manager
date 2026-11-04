@@ -211,6 +211,11 @@ pub enum PromptAsk {
         /// key is known by, what DNS says), line by line. Empty for a host
         /// seen for the first time.
         extra: Vec<String>,
+        /// A server may have sent the question (OpenSSH before 8.5, with
+        /// keyboard-interactive or a proxy), so everything above may be made
+        /// up. "Trust" still answers "yes", which trusts a key only if it was
+        /// `ssh`'s real question.
+        unverified: bool,
     },
     /// Anything else, such as a security key's PIN or a new password, in the
     /// words of whoever sent it: `ssh` or a server, never the app.

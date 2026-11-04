@@ -14,8 +14,8 @@
 //!   only this user can write. The host reads it there.
 //! - Turning autofill on registers the host with each installed browser
 //!   ([`manifests`]); turning it off removes the registrations and stops the
-//!   listener. A copy of the app in a temporary folder is never registered
-//!   ([`host_program`]).
+//!   listener. A copy of the app in a temporary folder, or on macOS on a
+//!   mounted volume, is never registered ([`host_program`]).
 //!
 //! What the extension may ask, and the pairing that guards it, is the
 //! [`broker`]'s business; the cryptography and the page matching are in
@@ -107,6 +107,13 @@ pub enum HostProgram {
     /// at it, which the browser would start as this user. Browsers are not
     /// pointed at it.
     Temporary(PathBuf),
+    /// This program, on macOS, on a volume under `/Volumes` (a disk image, a
+    /// USB drive, a network share), or in the read-only mount macOS runs a
+    /// downloaded app from until it is moved (App Translocation). The path
+    /// goes away when the volume is ejected or the app quits, and any user can
+    /// then mount a volume of their own under the same name, with a program
+    /// of theirs at the same path. Browsers are not pointed at it.
+    Mounted(PathBuf),
 }
 
 /// The program to register with the browsers: this executable, or for an
@@ -126,11 +133,12 @@ pub fn host_program() -> io::Result<HostProgram> {
     Ok(classify(appimage.unwrap_or(exe), &temporary_dirs()))
 }
 
-/// Whether `program` is in a temporary folder (see [`HostProgram::Temporary`]).
+/// Whether `program` is somewhere that doesn't last: in a temporary folder or
+/// on a mounted volume (see [`HostProgram`]).
 pub fn is_temporary(program: &Path) -> bool {
-    matches!(
+    !matches!(
         classify(program.to_path_buf(), &temporary_dirs()),
-        HostProgram::Temporary(_)
+        HostProgram::At(_)
     )
 }
 
@@ -149,6 +157,9 @@ fn appimage_of(
 
 fn classify(program: PathBuf, temporary: &[PathBuf]) -> HostProgram {
     let real = std::fs::canonicalize(&program).unwrap_or_else(|_| program.clone());
+    if cfg!(target_os = "macos") && on_mounted_volume(&program, &real) {
+        return HostProgram::Mounted(program);
+    }
     let in_mount = [&program, &real].into_iter().any(|path| {
         path.components()
             .any(|part| part.as_os_str().to_string_lossy().starts_with(".mount_"))
@@ -161,6 +172,22 @@ fn classify(program: PathBuf, temporary: &[PathBuf]) -> HostProgram {
     } else {
         HostProgram::At(program)
     }
+}
+
+/// Whether a program at `program` (`real` once links are resolved) runs, on
+/// macOS, from a mounted volume (see [`HostProgram::Mounted`]): anything
+/// under `/Volumes`, or an app App Translocation runs from under
+/// `/private/var/folders/…/AppTranslocation/`. The startup disk shows in
+/// `/Volumes` too, as a link to `/`: a path through it counts by where it
+/// leads.
+fn on_mounted_volume(program: &Path, real: &Path) -> bool {
+    let translocated = |path: &Path| {
+        (path.starts_with("/private/var/folders") || path.starts_with("/var/folders"))
+            && path
+                .components()
+                .any(|part| part.as_os_str() == "AppTranslocation")
+    };
+    real.starts_with("/Volumes") || translocated(program) || translocated(real)
 }
 
 /// Folders whose contents don't last: the system's temporary folder and, on
@@ -330,6 +357,13 @@ impl Bridge {
             Ok(HostProgram::Temporary(program)) => {
                 log::warn!(
                     "browser: not registering {}: it is in a temporary folder",
+                    program.display()
+                );
+                manifests::remove_temporary();
+            }
+            Ok(HostProgram::Mounted(program)) => {
+                log::warn!(
+                    "browser: not registering {}: it is on a mounted volume",
                     program.display()
                 );
                 manifests::remove_temporary();
@@ -587,6 +621,50 @@ mod tests {
         );
         assert!(is_temporary(&std::env::temp_dir().join("x/sshkm-app")));
         assert!(is_temporary(Path::new("/tmp/.mount_abc/usr/bin/sshkm-app")));
+    }
+
+    #[test]
+    fn programs_on_mounted_volumes_are_spotted() {
+        let on_image =
+            Path::new("/Volumes/SSH Key Manager/SSH Key Manager.app/Contents/MacOS/sshkm-app");
+        assert!(on_mounted_volume(on_image, on_image));
+        let translocated = Path::new(
+            "/private/var/folders/x1/abc123/T/AppTranslocation/0F1E2D3C/d/SSH Key Manager.app/Contents/MacOS/sshkm-app",
+        );
+        assert!(on_mounted_volume(translocated, translocated));
+        let unresolved = Path::new(
+            "/var/folders/x1/abc123/T/AppTranslocation/0F1E2D3C/d/SSH Key Manager.app/Contents/MacOS/sshkm-app",
+        );
+        assert!(on_mounted_volume(unresolved, unresolved));
+
+        let installed = Path::new("/Applications/SSH Key Manager.app/Contents/MacOS/sshkm-app");
+        assert!(!on_mounted_volume(installed, installed));
+        // The startup disk, through its link in /Volumes.
+        let startup = Path::new(
+            "/Volumes/Macintosh HD/Applications/SSH Key Manager.app/Contents/MacOS/sshkm-app",
+        );
+        assert!(!on_mounted_volume(startup, installed));
+        // Only App Translocation's folder, not any under /var/folders.
+        let cached = Path::new("/private/var/folders/x1/abc123/C/sshkm-app");
+        assert!(!on_mounted_volume(cached, cached));
+        assert!(!on_mounted_volume(
+            Path::new("/Users/me/Volumes/sshkm-app"),
+            Path::new("/Users/me/Volumes/sshkm-app")
+        ));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn programs_on_mounted_volumes_are_not_registered() {
+        let on_image =
+            PathBuf::from("/Volumes/SSH Key Manager/SSH Key Manager.app/Contents/MacOS/sshkm-app");
+        assert_eq!(
+            classify(on_image.clone(), &[]),
+            HostProgram::Mounted(on_image.clone())
+        );
+        assert!(is_temporary(&on_image));
+        let installed = PathBuf::from("/Applications/SSH Key Manager.app/Contents/MacOS/sshkm-app");
+        assert_eq!(classify(installed.clone(), &[]), HostProgram::At(installed));
     }
 
     #[test]

@@ -122,6 +122,8 @@ impl Terminals {
         options: &OpenOptions,
         sink: Arc<dyn Sink>,
     ) -> AppResult<TerminalInfo> {
+        // Before `ssh -G` sees it: a name with shell syntax may run as a
+        // command there.
         check_alias(alias)?;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         let resolved = resolve(alias);

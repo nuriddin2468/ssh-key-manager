@@ -68,9 +68,11 @@ function originOf(sender: WebExt.MessageSender): string | null {
 }
 
 /**
- * At most `burst` at once, then one per `interval` milliseconds, per tab: a
- * page that sends its own form over and over, to learn from the banner
- * whether a password is the saved one, learns little.
+ * At most `burst` at once, then one per `interval` milliseconds, per tab.
+ * The content script sends only logins the user put in and sent themselves
+ * (content/typing.ts); this holds back anything else in the tab that sends
+ * logins over and over, to learn from the banner whether a password is the
+ * saved one.
  */
 class RateLimit {
   private readonly tabs = new Map<number, { tokens: number; at: number }>();

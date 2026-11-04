@@ -35,7 +35,9 @@ real `~/.ssh`. Its modules:
 - `perms`
   - Unix: checks and fixes file modes.
   - Windows: checks and fixes ACLs, using locale-independent SIDs through PowerShell and
-    `icacls`.
+    `icacls`. It also creates files meant for plain-text secrets (the CSV export) with a
+    protected access list already in place, through Win32 (`perms/private_file.rs`, the
+    crate's only `unsafe` code).
 - `audit`: pure rules over the data above. Findings carry machine-readable kinds and
   parameters, so the UI can localise them.
 - `vault`: the password vault, two files side by side.
@@ -72,7 +74,8 @@ real `~/.ssh`. Its modules:
   - `protocol` is the messages. Contacts live in the vault's custom data
     (`vault::contacts`), and so do the user's own devices (`vault::own_devices`).
   - `own` tells whether two computers have the same vault (a proof bound to the
-    session) and makes the names own devices announce themselves under.
+    session) and makes the names own devices announce themselves under, both from a
+    random key the vault keeps (`sshkm.own.key`).
   - Large values (a vault file, a long manifest) go as their size and SHA-256, then
     in parts, so a message never passes 1 MiB.
 
@@ -194,7 +197,9 @@ translates.
   shadow root (on a plain `div` popover, so a page can't define the element), fills the
   one picked and passes sent login forms to the background, which offers to save them in
   a banner on the next page (naming only the site, if that page is another site's). It
-  reacts only to trusted events, and a menu item or banner button counts only once the
+  reacts only to trusted events, opens the menu only on the user's own click, Tab or
+  Down Arrow, and passes on only logins whose password the user typed (or the extension
+  filled) and that the user sent. A menu item or banner button counts only once the
   surface has been shown, uncovered and untouched by the page, for half a second.
 - The popup shows the connection state; the connect page pairs the browser. Keys stay in
   IndexedDB as non-extractable WebCrypto keys.

@@ -5,17 +5,26 @@
 //! A hosts file group is not written when it comes: it waits here
 //! ([`ReceivedGroup`]) until the Hosts file page shows the change, which the
 //! user saves with the administrator password.
+//!
+//! A host never takes over a name `ssh` reaches on this computer already: an
+//! alias that the config (or a file it includes) has, that a block leading
+//! names elsewhere may cover, or that `known_hosts` trusts a key for gets a
+//! number; and the server's keys go in only for a host `known_hosts` trusts
+//! nothing for.
 
-use std::path::Path;
+use std::ffi::OsStr;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use ssh_key::{HashAlg, PublicKey};
 use sshkm_core::ErrorCode;
-use sshkm_core::config::{HostEdit, HostKind, HostOption, SshConfig};
+use sshkm_core::config::{HostEdit, HostEntry, HostKind, HostOption, Risk, SshConfig};
 use sshkm_core::hosts_file::{HostsChange, HostsEntryEdit, HostsFile, is_system_name};
 use sshkm_core::keys;
-use sshkm_core::known_hosts::KnownHosts;
+use sshkm_core::known_hosts::{HostMarker, KnownHosts};
 use sshkm_core::p2p::protocol::{HostKey, HostsEntry, Item};
+use sshkm_core::paths::{SshPaths, expand_tilde_in};
 use sshkm_core::vault::{EntryInput, EntryKind, SecretField};
 use sshkm_core::{ExposeSecret, SecretString};
 use tauri::AppHandle;
@@ -222,7 +231,7 @@ pub fn store(
                 })?;
             Ok((title.clone(), false))
         }
-        Item::Host { .. } => store_host(&state, item).map_err(not_saved),
+        Item::Host { .. } => store_host(&state.paths, &state.backup_dir, item).map_err(not_saved),
         Item::HostsGroup { name, entries } => {
             let group =
                 group_draft(&state.hosts_file, id, peer, name, entries).map_err(not_saved)?;
@@ -309,9 +318,12 @@ fn save_key(
     Ok(keys::add_public(dir, name, from, &key)?.name)
 }
 
-fn store_host(state: &AppState, item: &Item) -> AppResult<(String, bool)> {
+/// Saves a received host in the config at `paths`, and its server's keys
+/// in `known_hosts`. Returns the alias it got and whether the keys differ
+/// from the ones trusted here.
+fn store_host(paths: &SshPaths, backup_dir: &Path, item: &Item) -> AppResult<(String, bool)> {
     let Item::Host {
-        alias,
+        alias: sent,
         host_name,
         user,
         port,
@@ -321,8 +333,15 @@ fn store_host(state: &AppState, item: &Item) -> AppResult<(String, bool)> {
     else {
         return Err(AppError::invalid("not a host"));
     };
-    let before = SshConfig::load(&state.paths.config)?;
-    let alias = free_alias(&before, alias);
+    let before = SshConfig::load(&paths.config)?;
+    let mut known = KnownHosts::load(&paths.known_hosts)?;
+    let mut configs = included(&before, paths);
+    configs.push(before.clone());
+    let alias = free_alias(&configs, &known, sent, port.unwrap_or(22));
+    // A host that got a number still leads where the sender's alias did.
+    let host_name = host_name
+        .as_deref()
+        .or_else(|| (alias != *sent).then_some(sent.as_str()));
     let mut options = Vec::new();
     if let Some(host_name) = host_name {
         options.push(HostOption::new("HostName", host_name));
@@ -342,50 +361,192 @@ fn store_host(state: &AppState, item: &Item) -> AppResult<(String, bool)> {
         patterns: vec![alias.clone()],
         options,
     })?;
-    // Nothing that runs a program comes from another computer.
-    if !config.added_risky_directives(&before).is_empty() {
+    // Nothing that runs a program, opens this computer to a server or checks
+    // servers less strictly comes from another computer. Where the host
+    // leads is what the user saw and accepted, so a `ForwardAgent` of a
+    // `Host *` block reaching it is no reason to refuse it.
+    if config
+        .added_risky_directives(&before)
+        .iter()
+        .any(|directive| directive.risk != Risk::Destination)
+    {
         return Err(AppError::invalid("the host would run a program"));
     }
-    config.save(&state.paths.config, &state.backup_dir)?;
+    config.save(&paths.config, backup_dir)?;
 
-    // The server's keys are trusted only for a host this computer has none
-    // for: keys of its own are never joined by another computer's.
-    let address = host_name.as_deref().unwrap_or(&alias);
+    // The server's keys are trusted only for a host this computer trusts
+    // nothing for: keys of its own, or a certificate authority's, are never
+    // joined by another computer's.
+    let address = host_name.unwrap_or(&alias);
     let port = port.unwrap_or(22);
-    let mut known = KnownHosts::load(&state.paths.known_hosts)?;
     let mine = known.keys_for(address, port);
     let theirs: Vec<(String, String)> = host_keys
         .iter()
         .map(|key| (key.key_type.clone(), key.key.clone()))
         .collect();
-    let differ = !mine.is_empty() && theirs.iter().any(|key| !mine.contains(key));
-    if mine.is_empty() && !theirs.is_empty() {
+    let trusted = trusts(&known, address, port);
+    let differ = trusted && theirs.iter().any(|key| !mine.contains(key));
+    if !trusted && !theirs.is_empty() {
         let mut added = false;
         for (key_type, key) in &theirs {
             added |= known.add_key(address, port, key_type, key)?;
         }
         if added {
-            known.save(&state.paths.known_hosts, &state.backup_dir)?;
+            known.save(&paths.known_hosts, backup_dir)?;
         }
     }
     Ok((alias, differ))
 }
 
-/// `alias`, or `alias-2`, `alias-3`… if a host of the file has it already.
-fn free_alias(config: &SshConfig, alias: &str) -> String {
-    let taken = |name: &str| {
-        config
-            .hosts()
-            .iter()
-            .any(|host| host.patterns.iter().any(|p| p.eq_ignore_ascii_case(name)))
+/// `alias`, or `alias-2`, `alias-3`… if `ssh` takes it already on this
+/// computer: a `Host` line of `configs` (the config and the files it
+/// includes) names it, `known_hosts` trusts a key for it on `port` or 22,
+/// or a block that sets where names lead may lead it somewhere. A number
+/// makes a name this computer never used, so only the first two count for
+/// it.
+fn free_alias(configs: &[SshConfig], known: &KnownHosts, alias: &str, port: u16) -> String {
+    let hosts: Vec<HostEntry> = configs.iter().flat_map(SshConfig::hosts).collect();
+    let used = |name: &str| {
+        hosts.iter().any(|host| {
+            host.kind == HostKind::Host
+                && host.patterns.iter().any(|p| p.eq_ignore_ascii_case(name))
+        }) || trusts(known, name, port)
+            || trusts(known, name, 22)
     };
-    if !taken(alias) {
+    let led = hosts.iter().any(|host| leads(host, alias));
+    if !used(alias) && !led {
         return alias.to_owned();
     }
     (2..1000)
         .map(|n| format!("{alias}-{n}"))
-        .find(|name| !taken(name))
+        .find(|name| !used(name))
         .unwrap_or_else(|| format!("{alias}-new"))
+}
+
+/// Whether `host` sets where `name` leads (`HostName` or `HostKeyAlias`).
+/// What a `Match` block applies to is not worked out here: one that sets
+/// either may apply to any name.
+fn leads(host: &HostEntry, name: &str) -> bool {
+    let sets = host.options.iter().any(|option| {
+        option.key.eq_ignore_ascii_case("hostname")
+            || option.key.eq_ignore_ascii_case("hostkeyalias")
+    });
+    sets && match host.kind {
+        HostKind::Host => covers(&host.patterns, name),
+        HostKind::Match => true,
+    }
+}
+
+/// Whether a `Host` line's patterns apply to `name`, as `ssh` reads them:
+/// one of them fits it and none that starts with `!` does.
+fn covers(patterns: &[String], name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    let mut fit = false;
+    for pattern in patterns {
+        let pattern = pattern.to_ascii_lowercase();
+        match pattern.strip_prefix('!') {
+            Some(negated) if fits(negated, &name) => return false,
+            Some(_) => {}
+            None => fit |= fits(&pattern, &name),
+        }
+    }
+    fit
+}
+
+/// Whether `name` fits `pattern`, in which `*` stands for any run of
+/// characters and `?` for one.
+fn fits(pattern: &str, name: &str) -> bool {
+    let (pattern, name) = (pattern.as_bytes(), name.as_bytes());
+    let (mut p, mut n) = (0, 0);
+    // Where the last `*` was, and how much of the name it took so far.
+    let mut star: Option<(usize, usize)> = None;
+    while n < name.len() {
+        if p < pattern.len() && (pattern[p] == b'?' || pattern[p] == name[n]) {
+            p += 1;
+            n += 1;
+        } else if p < pattern.len() && pattern[p] == b'*' {
+            star = Some((p, n));
+            p += 1;
+        } else if let Some((at, took)) = star {
+            p = at + 1;
+            n = took + 1;
+            star = Some((at, took + 1));
+        } else {
+            return false;
+        }
+    }
+    pattern[p..].iter().all(|&c| c == b'*')
+}
+
+/// Whether `known_hosts` trusts a key for `host` on `port`: a key of its
+/// own, or a certificate authority's. A revoked key trusts nothing.
+fn trusts(known: &KnownHosts, host: &str, port: u16) -> bool {
+    known
+        .matches(host, port)
+        .iter()
+        .any(|entry| entry.marker != HostMarker::Revoked)
+}
+
+/// Most files [`included`] reads, and how deep it follows `Include`s.
+const MAX_INCLUDED: usize = 64;
+const INCLUDE_DEPTH: usize = 4;
+
+/// The files `config` includes, and those they include, as `ssh` finds
+/// them: a relative path in the `.ssh` folder, `*` and `?` in a file's
+/// name. A file that can't be read is left out.
+fn included(config: &SshConfig, paths: &SshPaths) -> Vec<SshConfig> {
+    let mut found = Vec::new();
+    let mut pending: Vec<(String, usize)> = config
+        .includes()
+        .into_iter()
+        .map(|path| (path, 1))
+        .collect();
+    while let Some((include, depth)) = pending.pop() {
+        for path in include_paths(&include, paths) {
+            if found.len() == MAX_INCLUDED {
+                return found;
+            }
+            let Ok(file) = SshConfig::load(&path) else {
+                continue;
+            };
+            if depth < INCLUDE_DEPTH {
+                pending.extend(file.includes().into_iter().map(|path| (path, depth + 1)));
+            }
+            found.push(file);
+        }
+    }
+    found
+}
+
+/// The files one `Include` argument names.
+fn include_paths(include: &str, paths: &SshPaths) -> Vec<PathBuf> {
+    let path = expand_tilde_in(include, &paths.home);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        paths.dir.join(path)
+    };
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(OsStr::to_str)) else {
+        return Vec::new();
+    };
+    if !name.contains(['*', '?']) {
+        return vec![path];
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry.file_name().to_str().is_some_and(|file| {
+                (!file.starts_with('.') || name.starts_with('.')) && fits(name, file)
+            })
+        })
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .collect();
+    files.sort();
+    files
 }
 
 #[cfg(test)]
@@ -397,12 +558,177 @@ mod tests {
 
     use super::*;
 
+    const KEY_HERE: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIBIZFNq0hlvHGZ/oas65Ba4jkcFEy3dX/aRZy70M73oL";
+    const KEY_THEIRS: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIFR8U3VxsN3V7MFbnGqYVNCEWbAVE2k5oNMYoprkbtE8";
+
+    fn ed25519(key: &str) -> Vec<(String, String)> {
+        vec![("ssh-ed25519".to_owned(), key.to_owned())]
+    }
+
     #[test]
     fn taken_aliases_get_a_number() {
         let config = SshConfig::parse("Host prod\n  HostName a\nHost prod-2 staging\n  User b\n");
-        assert_eq!(free_alias(&config, "new"), "new");
-        assert_eq!(free_alias(&config, "prod"), "prod-3");
-        assert_eq!(free_alias(&config, "STAGING"), "STAGING-2");
+        let none = KnownHosts::parse("");
+        let free = |alias| free_alias(std::slice::from_ref(&config), &none, alias, 22);
+        assert_eq!(free("new"), "new");
+        assert_eq!(free("prod"), "prod-3");
+        assert_eq!(free("STAGING"), "STAGING-2");
+
+        // A name known_hosts trusts a key for, on port 22 or the host's.
+        let known = KnownHosts::parse(&format!(
+            "github.com ssh-ed25519 {KEY_HERE}\n\
+             [git.example.com]:2222 ssh-ed25519 {KEY_HERE}\n\
+             @cert-authority *.corp.example.com ssh-ed25519 {KEY_HERE}\n\
+             @revoked * ssh-ed25519 {KEY_THEIRS}\n"
+        ));
+        let empty = [SshConfig::default()];
+        let free = |alias, port| free_alias(&empty, &known, alias, port);
+        assert_eq!(free("GitHub.com", 2222), "GitHub.com-2");
+        assert_eq!(free("git.example.com", 2222), "git.example.com-2");
+        assert_eq!(free("git.example.com", 22), "git.example.com");
+        assert_eq!(free("db.corp.example.com", 22), "db.corp.example.com-2");
+        // A revoked key trusts nothing.
+        assert_eq!(free("other", 22), "other");
+
+        // A block that leads names elsewhere may lead this one there.
+        let config =
+            SshConfig::parse("Host *.lab !gw.lab\n  HostName %h.example.com\nHost *\n  User me\n");
+        let free = |alias| free_alias(std::slice::from_ref(&config), &none, alias, 22);
+        assert_eq!(free("db.lab"), "db.lab-2");
+        assert_eq!(free("gw.lab"), "gw.lab");
+        assert_eq!(free("prod"), "prod");
+        let config = SshConfig::parse("Match host x exec \"true\"\n  HostKeyAlias y\n");
+        assert_eq!(free_alias(&[config], &none, "prod", 22), "prod-2");
+    }
+
+    #[test]
+    fn patterns_fit_as_ssh_reads_them() {
+        assert!(fits("*", ""));
+        assert!(fits("*.lab", "db.lab"));
+        assert!(!fits("*.lab", "db.lab2"));
+        assert!(fits("db?", "db1"));
+        assert!(fits("a*b*c", "aXXbYc"));
+        assert!(!fits("a*b*c", "aXXbY"));
+        let patterns = ["*.lab".to_owned(), "!gw.lab".to_owned()];
+        assert!(covers(&patterns, "db.LAB"));
+        assert!(!covers(&patterns, "gw.lab"));
+        assert!(!covers(&patterns[1..], "db.lab"));
+    }
+
+    /// A home folder with this `~/.ssh/config` and `known_hosts`.
+    fn ssh_dir(config: &str, known: &str) -> (tempfile::TempDir, SshPaths) {
+        let home = tempfile::tempdir().unwrap();
+        let paths = SshPaths::from_dir(home.path().join(".ssh"));
+        fs::create_dir_all(&paths.dir).unwrap();
+        fs::write(&paths.config, config).unwrap();
+        fs::write(&paths.known_hosts, known).unwrap();
+        (home, paths)
+    }
+
+    fn received(alias: &str, host_name: Option<&str>) -> Item {
+        Item::Host {
+            alias: alias.into(),
+            host_name: host_name.map(str::to_owned),
+            user: Some("git".into()),
+            port: None,
+            proxy_jump: None,
+            host_keys: vec![HostKey {
+                key_type: "ssh-ed25519".into(),
+                key: KEY_THEIRS.into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn a_received_host_never_takes_over_a_name_trusted_here() {
+        let (home, paths) = ssh_dir(
+            "Host *\n  ServerAliveInterval 60\n",
+            &format!("github.com ssh-ed25519 {KEY_HERE}\n"),
+        );
+        let backups = home.path().join("backups");
+        let item = received("github.com", Some("192.168.1.66"));
+        let (alias, differ) = store_host(&paths, &backups, &item).unwrap();
+        assert_eq!((alias.as_str(), differ), ("github.com-2", false));
+        let hosts = SshConfig::load(&paths.config).unwrap().hosts();
+        assert!(hosts.iter().all(|host| host.patterns != ["github.com"]));
+        let added = hosts.iter().find(|host| host.patterns == ["github.com-2"]);
+        assert_eq!(
+            added.and_then(|host| host.host_name.as_deref()),
+            Some("192.168.1.66")
+        );
+        // github.com keeps its key alone; the new name's server has the
+        // sender's.
+        let known = KnownHosts::load(&paths.known_hosts).unwrap();
+        assert_eq!(known.keys_for("github.com", 22), ed25519(KEY_HERE));
+        assert_eq!(known.keys_for("192.168.1.66", 22), ed25519(KEY_THEIRS));
+
+        // Without a HostName, the host with a number leads where the
+        // sender's alias did, and the key trusted for that here stays the
+        // only one.
+        let item = received("github.com", None);
+        let (alias, differ) = store_host(&paths, &backups, &item).unwrap();
+        assert_eq!((alias.as_str(), differ), ("github.com-3", true));
+        let hosts = SshConfig::load(&paths.config).unwrap().hosts();
+        let added = hosts.iter().find(|host| host.patterns == ["github.com-3"]);
+        assert_eq!(
+            added.and_then(|host| host.host_name.as_deref()),
+            Some("github.com")
+        );
+        let known = KnownHosts::load(&paths.known_hosts).unwrap();
+        assert_eq!(known.keys_for("github.com", 22), ed25519(KEY_HERE));
+    }
+
+    /// Agent forwarding for every host doesn't keep a host from coming in:
+    /// where it leads is what the user saw and accepted.
+    #[test]
+    fn a_host_is_taken_under_agent_forwarding_for_every_host() {
+        let (home, paths) = ssh_dir("Host *\n  ForwardAgent yes\n", "");
+        let backups = home.path().join("backups");
+        let item = received("build", Some("192.168.1.66"));
+        let (alias, _) = store_host(&paths, &backups, &item).unwrap();
+        assert_eq!(alias, "build");
+        let hosts = SshConfig::load(&paths.config).unwrap().hosts();
+        assert!(hosts.iter().any(|host| host.patterns == ["build"]));
+    }
+
+    #[test]
+    fn a_host_a_certificate_authority_vouches_for_gets_no_key() {
+        let known = format!("@cert-authority *.corp.example.com ssh-ed25519 {KEY_HERE}\n");
+        let (home, paths) = ssh_dir("", &known);
+        let item = received("db", Some("db.corp.example.com"));
+        let (alias, differ) = store_host(&paths, &home.path().join("backups"), &item).unwrap();
+        assert_eq!((alias.as_str(), differ), ("db", true));
+        assert_eq!(fs::read_to_string(&paths.known_hosts).unwrap(), known);
+    }
+
+    #[test]
+    fn names_in_included_files_are_taken_too() {
+        let (_home, paths) = ssh_dir(
+            "Include config.d/*\n\nHost *\n  HostName %h.corp.example.com\n",
+            "",
+        );
+        fs::create_dir_all(paths.dir.join("config.d")).unwrap();
+        fs::write(
+            paths.dir.join("config.d/work"),
+            "Host jump\n  HostName 10.0.0.1\nInclude ~/.ssh/more\n",
+        )
+        .unwrap();
+        fs::write(paths.dir.join("config.d/.hidden"), "Host hidden\n").unwrap();
+        fs::write(paths.dir.join("more"), "Host deep\n  User me\n").unwrap();
+        let config = SshConfig::load(&paths.config).unwrap();
+        let mut configs = included(&config, &paths);
+        let names: Vec<String> = configs
+            .iter()
+            .flat_map(SshConfig::hosts)
+            .flat_map(|host| host.patterns)
+            .collect();
+        assert_eq!(names, ["jump", "deep"]);
+        configs.push(config);
+        let none = KnownHosts::parse("");
+        assert_eq!(free_alias(&configs, &none, "jump", 22), "jump-2");
+        assert_eq!(free_alias(&configs, &none, "deep", 22), "deep-2");
+        // `Host *` leads every name elsewhere: a received one gets a number.
+        assert_eq!(free_alias(&configs, &none, "build", 22), "build-2");
     }
 
     const HOSTS: &str = "\

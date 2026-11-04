@@ -91,18 +91,21 @@ To publish a release:
    git tag v0.2.0 && git push origin v0.2.0
    ```
 
-3. Wait for the workflow. The release stays a draft while the three platforms build, and
-   is published once all of them have succeeded. Installed apps then offer the update
-   within a few hours: they read `latest.json` from the latest release. If a build fails,
-   the release stays a draft. Fix the problem and re-run the failed jobs, or delete the
-   draft and the tag and push the tag again.
+3. Wait for the workflow. The three platforms build first. Then the `sign` job, after
+   approval in the `release` environment, signs the update bundles and creates the draft
+   release, and the release is published. Installed apps then offer the update within a
+   few hours: they read `latest.json` from the latest release. If a build fails, nothing
+   is released: fix the problem and re-run the failed jobs, or delete the tag and push it
+   again.
 4. Publish the extension: run `pnpm extension:package` on the release commit and upload
    the zip to the Chrome Web Store item (**Package → Upload new package**, then
    **Submit for review**). [extension/store/README.md](extension/store/README.md) has
    the details.
 
 Releases are signed for the in-app updater. The workflow needs the `TAURI_SIGNING_PRIVATE_KEY`
-secret (plus `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if the key has a password): the private
+secret of the `release` environment (Settings → Environments → release; not a repository
+secret, so only the signing job can read it), plus `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if
+the key has a password: the private
 half of `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`. If that key is lost,
 installed apps can no longer update themselves, so keep a backup. The updater bundles are
 only built with `--config src-tauri/tauri.release.conf.json`, so `pnpm app:build` works

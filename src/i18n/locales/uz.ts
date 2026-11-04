@@ -97,6 +97,7 @@ const uz = {
       publicKey: 'Ochiq kalit',
       entries_one: '{{count}} ta yozuv',
       entries_other: '{{count}} ta yozuv',
+      via: '{{jump}} orqali',
     },
     send: {
       title: '«{{name}}»ni yuborish',
@@ -140,6 +141,13 @@ const uz = {
       openPasswords: '«Parollar»ni ochish',
       openKeys: '«Kalitlar»ni ochish',
       anotherComputer: 'boshqa kompyuter',
+      mismatchTitle: 'Shu kompyutermi?',
+      mismatch:
+        'Javob bergan kompyuter — {{peer}}, u sizda allaqachon ulangan, lekin endi oʻzini «{{announced}}» deb ataydi.',
+      mismatchHint:
+        'Faqat aynan shuni nazarda tutgan boʻlsangiz, yuboring: bu tarmoqda istalgan kompyuter oʻzini istalgan nom bilan atashi mumkin. Unga hali hech narsa yuborilmadi.',
+      dontSend: 'Yubormaslik',
+      sendAnyway: 'Baribir yuborish',
     },
     join: {
       waiting: 'Boshqa kompyuteringiz kutilmoqda · {{time}} qoldi',
@@ -1152,7 +1160,6 @@ const uz = {
       '{{from}} dan {{count}} ta yozuv «{{name}}» guruhida. Saqlashdan oldin u qayerga olib borishini tekshiring.',
     received_other:
       '{{from}} dan {{count}} ta yozuv «{{name}}» guruhida. Saqlashdan oldin ular qayerga olib borishini tekshiring.',
-    authPrompt: 'SSH Key Manager hosts faylini yangilamoqchi.',
     entryAddTitle: 'Yangi yozuv',
     entryEditTitle: 'Yozuvni tahrirlash',
     entryDescription:
@@ -1696,6 +1703,8 @@ const uz = {
     },
     failed: {
       openFailed: 'ssh ni ishga tushirib boʻlmadi',
+      aliasRefused:
+        'ssh faqat harflar, raqamlar va . _ - @ : [ ] dan iborat xost nomlari bilan ishga tushiriladi, shunda hech bir nom buyruq sifatida bajarilmaydi. Ulanish uchun «{{alias}}» nomini Xostlar boʻlimida oʻzgartiring.',
       passwordRejected: 'Server parolni qabul qilmadi',
       passwordRejectedDetail: '{{user}} parolini tekshiring va qayta urinib koʻring.',
       passwordRejectedSavedDetail:
@@ -1786,6 +1795,12 @@ const uz = {
       hostKeyExtraLabel: 'ssh nima deyapti',
       hostKeyNote:
         'Kalit ~/.ssh/known_hosts ga qoʻshiladi, xuddi ssh da «yes» deb javob bergandek.',
+      hostKeyUnverifiedTitle: 'ssh yoki server xost kalitiga ishonishni soʻramoqda',
+      hostKeyUnverified:
+        'OpenSSH versiyangiz 8.5 dan eski, shuning uchun xuddi shu savolni server ham yuborishi mumkin. ssh uni faqat serverga birinchi marta ulanganda beradi: faqat shuni kutayotgan boʻlsangiz, kalitga ishoning va barmoq izini administrator bergani bilan solishtiring.',
+      hostKeyUnverifiedExtraLabel: 'Savolda yana nima deyilgan',
+      hostKeyUnverifiedNote:
+        'Agar ssh soʻragan boʻlsa, kalit ~/.ssh/known_hosts ga qoʻshiladi. Agar server soʻragan boʻlsa, u faqat «yes» javobini oladi.',
       dontConnect: 'Ulanmaslik',
       trust: 'Ishonish va ulanish',
       otherTitle: '{{account}} javob soʻramoqda',
@@ -1916,6 +1931,8 @@ const uz = {
       exportedKdbx: 'Ombor {{file}} ga nusxalandi',
       badTarget:
         'Boshqa joy tanlang. Eksport omborning oʻzini almashtira olmaydi va uni SSH papkasiga saqlab boʻlmaydi.',
+      privateDriveOnly:
+        'Bu diskda faylni faqat sizga ochiq qilib boʻlmaydi — fleshkalar, xotira kartalari va tarmoq disklarida koʻpincha shunday. Kompyuterning oʻz diskidagi papkani tanlang.',
     },
     location: {
       title: 'Ombor fayli',
@@ -1983,6 +2000,8 @@ const uz = {
     problem: 'Brauzerlar ilovaga ulana olmayapti: {{error}}',
     temporary:
       'Brauzerlar sozlanmadi: SSH Key Manager vaqtinchalik jilddan ({{path}}) ishga tushirilgan, u ilova yopilganda yoʻqoladi. Ilovani (AppImage uchun .AppImage faylining oʻzini) doimiy jildga koʻchiring va uni oʻsha yerdan oching.',
+    mounted:
+      'Brauzerlar sozlanmadi: SSH Key Manager Applications jildidan emas, oʻz disk obrazidan, boshqa diskdan yoki yuklab olingan joyidan ({{path}}) ishga tushirilgan. Ilovani Applications jildiga koʻchiring va uni oʻsha yerdan oching.',
     pairTitle: '{{browser}} ulansinmi?',
     pairText:
       'SSH Key Manager kengaytmasi omboringizdagi parollarni toʻldirish va saqlashga ruxsat soʻramoqda.',

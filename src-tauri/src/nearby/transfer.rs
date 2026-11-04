@@ -1,10 +1,12 @@
-//! Sending one item to a contact, after [`converse`] made sure the two
+//! Sending one item to a contact, after [`conversation`] made sure the two
 //! know each other.
 //!
 //! The side that connected offers the item: what it is, nothing secret. The
 //! other user accepts or turns it down; only after a yes does the item go
 //! over, and the receiver checks that it is what was offered and that every
 //! field is something it may save before it saves it.
+//!
+//! [`conversation`]: super::pairing::conversation
 
 use std::net::TcpStream;
 use std::time::Duration;
@@ -12,34 +14,13 @@ use std::time::Duration;
 use sshkm_core::p2p::protocol::Item;
 use sshkm_core::p2p::{Message, Session};
 
-use super::pairing::{
-    ANSWER_TIMEOUT, PairingFailure, PairingPhase, Side, broken, converse, wait_for_answer,
-};
+use super::pairing::{ANSWER_TIMEOUT, PairingFailure, PairingPhase, Side, broken, wait_for_answer};
 
 /// How long the side that was connected to waits for an offer after
 /// pairing; a side that only paired hangs up at once.
 const OFFER_WAIT: Duration = Duration::from_secs(10);
 /// How long a step takes once both users have answered.
-const STEP_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// The whole conversation on one side: pairing, then sending `item` (the
-/// side that connected, if it has one) or receiving one (the other side).
-pub fn exchange(
-    session: &mut Session<TcpStream>,
-    side: &impl Side,
-    outgoing: bool,
-    item: Option<&Item>,
-) -> PairingPhase {
-    let end = converse(session, side);
-    if !matches!(end, PairingPhase::Paired | PairingPhase::Known) {
-        return end;
-    }
-    match (outgoing, item) {
-        (true, Some(item)) => send(session, side, item),
-        (true, None) => end,
-        (false, _) => receive(session, side).unwrap_or(end),
-    }
-}
+pub(super) const STEP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Offers `item` and sends it once the other user accepts.
 pub fn send(session: &mut Session<TcpStream>, side: &impl Side, item: &Item) -> PairingPhase {
@@ -139,6 +120,7 @@ mod tests {
     use sshkm_core::p2p::protocol::{HostKey, HostsEntry, ItemSummary, VERSION};
     use sshkm_core::p2p::{Identity, accept, connect};
 
+    use super::super::pairing::conversation;
     use super::super::script::{Script, codes, run};
     use super::*;
 
@@ -289,7 +271,7 @@ mod tests {
             let mut session = accept(stream, &Identity::generate().unwrap()).unwrap();
             let mut side = Script::new("bob", Some(true));
             side.knows = true;
-            (exchange(&mut session, &side, false, None), side)
+            (conversation(&mut session, &side, None), side)
         });
         // A sender that offers a password, then sends a host.
         let stream = TcpStream::connect(address).unwrap();
@@ -298,6 +280,7 @@ mod tests {
             version: VERSION,
             name: "mallory".into(),
             known: true,
+            own: None,
         };
         session.send(&hello).unwrap();
         assert!(matches!(session.recv().unwrap(), Message::Hello { .. }));
@@ -323,7 +306,7 @@ mod tests {
             let mut session = accept(stream, &Identity::generate().unwrap()).unwrap();
             let mut side = Script::new("bob", Some(true));
             side.knows = true;
-            (exchange(&mut session, &side, false, None), side)
+            (conversation(&mut session, &side, None), side)
         });
         let stream = TcpStream::connect(address).unwrap();
         let mut session = connect(stream, &Identity::generate().unwrap()).unwrap();
@@ -332,6 +315,7 @@ mod tests {
                 version: VERSION,
                 name: "mallory".into(),
                 known: true,
+                own: None,
             })
             .unwrap();
         assert!(matches!(session.recv().unwrap(), Message::Hello { .. }));

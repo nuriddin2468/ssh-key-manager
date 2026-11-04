@@ -1,4 +1,16 @@
-import { Eye, EyeOff, Laptop, Lock, Pencil, Plug, Radar, Trash2 } from 'lucide-react';
+import {
+  Download,
+  Eye,
+  EyeOff,
+  Laptop,
+  Lock,
+  MoreHorizontal,
+  Pencil,
+  Plug,
+  Radar,
+  Trash2,
+  UserPlus,
+} from 'lucide-react';
 import { type FormEvent, useEffect, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
@@ -17,16 +29,19 @@ import {
   DialogHeader,
 } from '@/components/ui/Dialog';
 import { IconButton } from '@/components/ui/IconButton';
+import { Menu, MenuContent, MenuItem, MenuTrigger } from '@/components/ui/Menu';
 import { Spinner } from '@/components/ui/Spinner';
 import { TextField } from '@/components/ui/TextField';
 import { Tile } from '@/components/ui/Tile';
 import { formatDate } from '@/lib/format';
+import { MyDevices } from './MyDevices';
 import { clock, isActive, isAddress, secondsLeft } from './model';
 import { setStatus, useContacts, useNearby } from './queries';
 
 /**
  * Other copies of the app on the local network: this device's name and
- * visibility, the devices found, and the contacts pairing made.
+ * visibility, the devices found, the user's own devices and the contacts
+ * pairing made. A computer without a vault waits here to be given one.
  */
 export function NearbyPage() {
   const { t, i18n } = useTranslation();
@@ -57,7 +72,9 @@ export function NearbyPage() {
   const visibility = useAppMutation((on: boolean) => api.nearbySetVisible(on), {
     onSuccess: setStatus,
   });
+  const join = useAppMutation((on: boolean) => api.nearbyJoin(on), { onSuccess: setStatus });
   const pair = useAppMutation((target: string) => api.nearbyPair(target));
+  const addDevice = useAppMutation((target: string) => api.nearbyAddDevice(target));
   const remove = useAppMutation((contact: Contact) => api.nearbyRemoveContact(contact.key), {
     success: (_, contact) => t('nearby.contacts.removed', { name: contact.name }),
     onSuccess: () => setToRemove(null),
@@ -65,7 +82,8 @@ export function NearbyPage() {
 
   const data = status.data;
   const visible = left !== null && left > 0;
-  const busy = isActive(data?.pairing) || pair.isPending;
+  const joining = visible && (data?.joining ?? false);
+  const busy = isActive(data?.pairing) || pair.isPending || addDevice.isPending;
   const devices = data?.devices ?? [];
 
   return (
@@ -79,6 +97,17 @@ export function NearbyPage() {
             <p className="min-w-[240px] flex-1 text-[13px] leading-5 text-fg-2">
               {vault === 'missing' ? t('nearby.vaultMissing') : t('nearby.vaultLocked')}
             </p>
+            {vault === 'missing' && !joining ? (
+              <Button
+                size="sm"
+                variant="primary"
+                loading={join.isPending}
+                icon={<Download aria-hidden="true" className="size-3.5" strokeWidth={2} />}
+                onClick={() => join.mutate(true)}
+              >
+                {t('nearby.getVault')}
+              </Button>
+            ) : null}
             <Button size="sm" onClick={() => navigate({ page: 'passwords' })}>
               {t('nearby.openPasswords')}
             </Button>
@@ -114,7 +143,9 @@ export function NearbyPage() {
               </div>
             )}
             <p className="text-[12.5px] leading-[18px] text-muted">
-              {visible ? (
+              {joining ? (
+                t('nearby.join.waiting', { time: clock(left) })
+              ) : visible ? (
                 <>
                   {t('nearby.visibleFor', { time: clock(left) })}
                   {data?.address ? (
@@ -129,23 +160,36 @@ export function NearbyPage() {
               )}
             </p>
           </div>
-          <Button
-            size="lg"
-            variant={visible ? 'secondary' : 'primary'}
-            disabled={!unlocked && !visible}
-            loading={visibility.isPending}
-            icon={
-              visible ? (
-                <EyeOff aria-hidden="true" className="size-4" strokeWidth={2} />
-              ) : (
-                <Eye aria-hidden="true" className="size-4" strokeWidth={2} />
-              )
-            }
-            onClick={() => visibility.mutate(!visible)}
-          >
-            {visible ? t('nearby.hide') : t('nearby.show')}
-          </Button>
+          {joining ? (
+            <Button size="lg" loading={join.isPending} onClick={() => join.mutate(false)}>
+              {t('nearby.join.stop')}
+            </Button>
+          ) : (
+            <Button
+              size="lg"
+              variant={visible ? 'secondary' : 'primary'}
+              disabled={!unlocked && !visible}
+              loading={visibility.isPending}
+              icon={
+                visible ? (
+                  <EyeOff aria-hidden="true" className="size-4" strokeWidth={2} />
+                ) : (
+                  <Eye aria-hidden="true" className="size-4" strokeWidth={2} />
+                )
+              }
+              onClick={() => visibility.mutate(!visible)}
+            >
+              {visible ? t('nearby.hide') : t('nearby.show')}
+            </Button>
+          )}
+          {joining ? (
+            <p className="w-full rounded-xl border border-orange-400/20 bg-black/10 px-3.5 py-2.5 text-[13px] leading-5 text-fg-2">
+              {t('nearby.join.steps', { name: data?.name ?? '' })}
+            </p>
+          ) : null}
         </section>
+
+        {unlocked ? <MyDevices status={data} /> : null}
 
         <section aria-labelledby="nearby-found" className="flex flex-col gap-2.5">
           <div className="flex flex-wrap items-baseline gap-2">
@@ -165,16 +209,48 @@ export function NearbyPage() {
                     <Laptop className="size-4" strokeWidth={2} />
                   </Tile>
                   <span className="min-w-0 flex-1 truncate font-medium">{device.name}</span>
-                  <Button
-                    size="sm"
-                    variant="soft"
-                    disabled={!unlocked || busy}
-                    icon={<Plug aria-hidden="true" className="size-3.5" strokeWidth={2} />}
-                    aria-label={t('nearby.pairWith', { name: device.name })}
-                    onClick={() => pair.mutate(device.id)}
-                  >
-                    {t('nearby.pair')}
-                  </Button>
+                  {device.joining ? (
+                    <Button
+                      size="sm"
+                      variant="soft"
+                      disabled={!unlocked || busy}
+                      icon={<UserPlus aria-hidden="true" className="size-3.5" strokeWidth={2} />}
+                      aria-label={t('nearby.devices.addWith', { name: device.name })}
+                      onClick={() => addDevice.mutate(device.id)}
+                    >
+                      {t('nearby.devices.add')}
+                    </Button>
+                  ) : (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="soft"
+                        disabled={!unlocked || busy}
+                        icon={<Plug aria-hidden="true" className="size-3.5" strokeWidth={2} />}
+                        aria-label={t('nearby.pairWith', { name: device.name })}
+                        onClick={() => pair.mutate(device.id)}
+                      >
+                        {t('nearby.pair')}
+                      </Button>
+                      <Menu>
+                        <MenuTrigger asChild>
+                          <IconButton
+                            label={t('nearby.devices.more', { name: device.name })}
+                            icon={<MoreHorizontal className="size-4" strokeWidth={2} />}
+                            disabled={!unlocked || busy}
+                          />
+                        </MenuTrigger>
+                        <MenuContent align="end">
+                          <MenuItem
+                            icon={<UserPlus className="size-4" strokeWidth={2} />}
+                            onSelect={() => addDevice.mutate(device.id)}
+                          >
+                            {t('nearby.devices.add')}
+                          </MenuItem>
+                        </MenuContent>
+                      </Menu>
+                    </>
+                  )}
                 </li>
               ))}
             </ul>

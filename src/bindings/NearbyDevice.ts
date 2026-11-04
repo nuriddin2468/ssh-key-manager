@@ -7,4 +7,8 @@ export type NearbyDevice = {
 /**
  * What `nearby_pair` takes to reach it.
  */
-id: string, name: string, };
+id: string, name: string, 
+/**
+ * It has no vault and waits to be given one.
+ */
+joining: boolean, };

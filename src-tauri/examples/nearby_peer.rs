@@ -1,5 +1,5 @@
 //! A stand-in for another computer on the network, to try Nearby with one
-//! machine. It saves nothing and answers on the terminal.
+//! machine. It answers on the terminal.
 //!
 //! ```text
 //! cargo run -p sshkm-app --example nearby_peer -- "Test peer"
@@ -7,27 +7,79 @@
 //! cargo run -p sshkm-app --example nearby_peer -- "Test peer" --send host
 //! cargo run -p sshkm-app --example nearby_peer -- "Test peer" --send group
 //! cargo run -p sshkm-app --example nearby_peer -- "Test peer" --send key
+//! cargo run -p sshkm-app --example nearby_peer -- "Test peer" --join /tmp/peer
+//! cargo run -p sshkm-app --example nearby_peer -- "Test peer" --sync /tmp/peer
 //! ```
 //!
-//! Without `--send` it shows itself as the app does after "Show for 10
-//! minutes" and waits: pair with it or send it something from the app, and
-//! it prints the pairing code and what it got. With `--send` it looks for the
-//! app (click "Show for 10 minutes" there first) and sends it a sample login,
-//! host, hosts file group or public key. It does one exchange and exits.
+//! - Without an option it shows itself as the app does after "Show for 10
+//!   minutes" and waits: pair with it or send it something from the app,
+//!   and it prints the pairing code and what it got. It saves nothing.
+//! - With `--send` it looks for the app (click "Show for 10 minutes" there
+//!   first) and sends it a sample login, host, hosts file group or public
+//!   key.
+//! - With `--join <dir>` it is a new computer without a vault: in the app,
+//!   click "Add as my device" next to it. It keeps the vault it gets in
+//!   `<dir>`, with a master password typed here, and its device key in
+//!   `<dir>/identity`.
+//! - With `--sync <dir>` it is that computer later: it unlocks the vault in
+//!   `<dir>`, announces itself to the user's devices, and answers a sync
+//!   from the app with `<dir>/ssh/config` and `<dir>/ssh/known_hosts`.
+//!
+//! It does one conversation and exits.
 
 use std::io::{self, BufRead, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-use std::time::{Duration, Instant};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
-use sshkm_app_lib::nearby::SERVICE_TYPE;
-use sshkm_app_lib::nearby::pairing::{PairingFailure, PairingPhase, Side};
-use sshkm_app_lib::nearby::transfer::exchange;
-use sshkm_core::p2p::protocol::{HostKey, HostsEntry, Item, ItemSummary};
+use sshkm_app_lib::nearby::pairing::{PairingFailure, PairingPhase, Purpose, Side, conversation};
+use sshkm_app_lib::nearby::sync::{SyncLocal, SyncState, SyncWrite};
+use sshkm_app_lib::nearby::{BASE_LABEL, OWN_SERVICE_TYPE, SERVICE_TYPE};
+use sshkm_core::config::SshConfig;
+use sshkm_core::known_hosts::KnownHosts;
+use sshkm_core::p2p::own::window;
+use sshkm_core::p2p::protocol::{
+    HostKey, HostsEntry, Intent, Item, ItemSummary, SecretText, VaultState,
+};
 use sshkm_core::p2p::{self, Identity, PeerKey};
+use sshkm_core::sync::Hasher;
+use sshkm_core::vault::{Vault, VaultPaths, check_shared};
+use sshkm_core::{ExposeSecret, SecretString};
+use zeroize::Zeroizing;
 
 struct Terminal {
     name: String,
+    identity: Identity,
+    mode: Mode,
+}
+
+enum Mode {
+    Plain,
+    /// Waits to be given a vault, to keep in this folder.
+    Join(PathBuf),
+    /// One of the user's devices, with its vault and `ssh` files here.
+    Own {
+        dir: PathBuf,
+        vault: Box<Mutex<Vault>>,
+    },
+}
+
+impl Terminal {
+    fn with_vault<T>(&self, work: impl FnOnce(&mut Vault) -> T) -> Option<T> {
+        match &self.mode {
+            Mode::Own { vault, .. } => Some(work(&mut vault.lock().unwrap())),
+            _ => None,
+        }
+    }
+
+    fn dir(&self) -> Option<&Path> {
+        match &self.mode {
+            Mode::Own { dir, .. } => Some(dir),
+            _ => None,
+        }
+    }
 }
 
 impl Side for Terminal {
@@ -35,8 +87,8 @@ impl Side for Terminal {
         self.name.clone()
     }
 
-    fn knows(&self, _: PeerKey) -> Result<bool, PairingFailure> {
-        Ok(false)
+    fn knows(&self, peer: PeerKey) -> Result<bool, PairingFailure> {
+        Ok(self.is_own(peer))
     }
 
     fn save(&self, peer: PeerKey, name: &str) -> Result<(), PairingFailure> {
@@ -58,6 +110,10 @@ impl Side for Terminal {
             PairingPhase::Offered { item } => {
                 ask(&format!("The app sends {}. Accept?", describe(item)));
             }
+            PairingPhase::Approving => println!("Waiting for {peer} to confirm with Touch ID…"),
+            PairingPhase::Transfer { done, total } => println!("Got {done} of {total} bytes."),
+            PairingPhase::Syncing => println!("Syncing with {peer}…"),
+            PairingPhase::Synced { summary } => println!("Synced: {summary:?}"),
             _ => {}
         }
     }
@@ -127,6 +183,142 @@ impl Side for Terminal {
                 Ok((name.clone(), false))
             }
         }
+    }
+
+    fn vault(&self, hash: &[u8], initiator: bool) -> Option<VaultState> {
+        match &self.mode {
+            Mode::Plain => None,
+            Mode::Join(_) => Some(VaultState::Missing),
+            Mode::Own { vault, .. } => Some(VaultState::Open {
+                proof: vault.lock().unwrap().own_key().proof(hash, initiator),
+            }),
+        }
+    }
+
+    fn same_vault(&self, hash: &[u8], initiator: bool, proof: &str) -> bool {
+        self.with_vault(|vault| vault.own_key().verify(hash, initiator, proof))
+            .unwrap_or(false)
+    }
+
+    fn is_own(&self, peer: PeerKey) -> bool {
+        self.with_vault(|vault| vault.is_own_device(&peer))
+            .unwrap_or(false)
+    }
+
+    fn takes(&self, intent: Option<Intent>) -> Result<(), PairingFailure> {
+        match (&self.mode, intent) {
+            (Mode::Join(_), Some(Intent::AddDevice)) | (Mode::Own { .. }, Some(Intent::Sync)) => {
+                Ok(())
+            }
+            (Mode::Plain, _) => Ok(()),
+            _ => Err(PairingFailure::NotOwn),
+        }
+    }
+
+    fn add_device(&self, peer: PeerKey, name: &str) -> Result<(), PairingFailure> {
+        println!("{name} ({peer}) is one of your devices now.");
+        Ok(())
+    }
+
+    fn take_vault(
+        &self,
+        file: Zeroizing<Vec<u8>>,
+        secret: SecretText,
+    ) -> Result<(), PairingFailure> {
+        let Mode::Join(dir) = &self.mode else {
+            return Err(PairingFailure::NotSaved);
+        };
+        let secret = SecretString::from(secret.expose().to_owned());
+        check_shared(&file, &secret).map_err(|_| PairingFailure::NotSaved)?;
+        print!(
+            "The vault came ({} bytes). Master password for this computer: ",
+            file.len()
+        );
+        let _ = io::stdout().flush();
+        let mut master = String::new();
+        io::stdin()
+            .lock()
+            .read_line(&mut master)
+            .map_err(|_| PairingFailure::Cancelled)?;
+        let master = SecretString::from(master.trim().to_owned());
+        let vault = Vault::join(
+            &VaultPaths::new(dir.join("vault.kdbx")),
+            &file,
+            &secret,
+            &master,
+        )
+        .map_err(|error| {
+            println!("Not saved: {error}");
+            PairingFailure::NotSaved
+        })?;
+        println!(
+            "Saved in {}. Your devices: {:?}",
+            dir.display(),
+            vault
+                .own_devices()
+                .into_iter()
+                .map(|d| d.name)
+                .collect::<Vec<_>>()
+        );
+        Ok(())
+    }
+
+    fn sync_load(&self, peer: PeerKey) -> Result<SyncLocal, PairingFailure> {
+        let (config, known) = self.files().ok_or(PairingFailure::NotOwn)?;
+        let state_file = self.dir().ok_or(PairingFailure::NotOwn)?.join(format!(
+            "sync-{}.json",
+            peer.to_string().replace(['/', '+', '='], "_")
+        ));
+        Ok(SyncLocal {
+            config: SshConfig::load(&config).map_err(|_| PairingFailure::NotSaved)?,
+            known: KnownHosts::load(&known).map_err(|_| PairingFailure::NotSaved)?,
+            devices: self
+                .with_vault(|vault| vault.device_records())
+                .unwrap_or_default(),
+            state: std::fs::read(state_file)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or_default(),
+            hasher: Hasher::new(self.identity.derive_key(BASE_LABEL)),
+        })
+    }
+
+    fn sync_write(&self, _: PeerKey, write: &SyncWrite) -> Result<(), PairingFailure> {
+        let (config, known) = self.files().ok_or(PairingFailure::NotOwn)?;
+        let backups = self.dir().ok_or(PairingFailure::NotOwn)?.join("backups");
+        if let Some(new) = &write.config {
+            new.save(&config, &backups)
+                .map_err(|_| PairingFailure::NotSaved)?;
+            println!("Wrote {}.", config.display());
+        }
+        if let Some(new) = &write.known {
+            new.save(&known, &backups)
+                .map_err(|_| PairingFailure::NotSaved)?;
+            println!("Wrote {}.", known.display());
+        }
+        self.with_vault(|vault| {
+            if vault.merge_own_devices(&write.devices).unwrap_or(false) {
+                let _ = vault.save(&backups);
+            }
+        });
+        Ok(())
+    }
+
+    fn sync_keep(&self, peer: PeerKey, state: &SyncState) -> Result<(), PairingFailure> {
+        let dir = self.dir().ok_or(PairingFailure::NotOwn)?;
+        let file = dir.join(format!(
+            "sync-{}.json",
+            peer.to_string().replace(['/', '+', '='], "_")
+        ));
+        let json = serde_json::to_vec_pretty(state).map_err(|_| PairingFailure::NotSaved)?;
+        std::fs::write(file, json).map_err(|_| PairingFailure::NotSaved)
+    }
+}
+
+impl Terminal {
+    fn files(&self) -> Option<(PathBuf, PathBuf)> {
+        let ssh = self.dir()?.join("ssh");
+        Some((ssh.join("config"), ssh.join("known_hosts")))
     }
 }
 
@@ -222,34 +414,58 @@ fn find_app(daemon: &ServiceDaemon) -> Result<SocketAddr, Box<dyn std::error::Er
     Err("the app did not show up within a minute".into())
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let send = args.iter().position(|arg| arg == "--send").map(|i| {
-        args.get(i + 1)
-            .cloned()
-            .unwrap_or_else(|| "password".into())
-    });
-    let name = args
-        .iter()
-        .find(|arg| !arg.starts_with("--") && Some(*arg) != send.as_ref())
-        .cloned()
-        .unwrap_or_else(|| "Test peer".into());
+/// The device key kept in `dir`, or a new one kept there.
+fn identity_in(dir: &Path) -> Result<Identity, Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join("identity");
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        return Ok(Identity::from_secret(&SecretString::from(
+            text.trim().to_owned(),
+        ))?);
+    }
     let identity = Identity::generate()?;
-    let daemon = ServiceDaemon::new()?;
-    let side = Terminal { name: name.clone() };
+    std::fs::write(&path, identity.to_secret().expose_secret())?;
+    Ok(identity)
+}
 
-    let end = if let Some(kind) = send {
-        let address = find_app(&daemon)?;
-        let stream = TcpStream::connect_timeout(&address, Duration::from_secs(5))?;
-        stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-        let mut session = p2p::connect(stream, &identity)?;
-        exchange(&mut session, &side, true, Some(&sample(&kind, &name)))
+fn option(args: &[String], name: &str) -> Option<String> {
+    let i = args.iter().position(|arg| arg == name)?;
+    Some(args.get(i + 1).cloned().unwrap_or_default())
+}
+
+/// How this side shows itself on `port`: to the user's devices with a vault,
+/// else as the app does after "Show for 10 minutes".
+fn announcement(side: &Terminal, port: u16) -> Result<ServiceInfo, Box<dyn std::error::Error>> {
+    let name = side.name.as_str();
+    let info = if let Some(instance) = side.with_vault(|vault| {
+        let seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        vault
+            .own_key()
+            .presence_name(&side.identity.public(), window(seconds))
+    }) {
+        println!("Announced to your devices on port {port}. Click \"Sync now\" in Nearby.");
+        ServiceInfo::new(
+            OWN_SERVICE_TYPE,
+            &instance,
+            &format!("{instance}.local."),
+            (),
+            port,
+            &[("v", "1")][..],
+        )?
     } else {
-        let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))?;
-        let port = listener.local_addr()?.port();
         let instance = format!("test-peer-{port}");
-        let properties = [("v", "1"), ("name", name.as_str())];
-        let info = ServiceInfo::new(
+        let mut properties = vec![("v", "1"), ("name", name)];
+        if matches!(side.mode, Mode::Join(_)) {
+            properties.push(("join", "1"));
+            println!("Waiting for a vault as \"{name}\": click \"Add as my device\" in Nearby.");
+        } else {
+            println!(
+                "Shown as \"{name}\" on port {port}. Pair with it, or send it something, in Nearby."
+            );
+        }
+        ServiceInfo::new(
             SERVICE_TYPE,
             &instance,
             &format!("{instance}.local."),
@@ -257,16 +473,79 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             port,
             &properties[..],
         )?
-        .enable_addr_auto();
-        daemon.register(info)?;
-        println!(
-            "Shown as \"{name}\" on port {port}. Pair with it, or send it something, in Nearby."
-        );
+    };
+    Ok(info)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let send = option(&args, "--send").map(|kind| {
+        if kind.is_empty() {
+            "password".into()
+        } else {
+            kind
+        }
+    });
+    let join = option(&args, "--join").map(PathBuf::from);
+    let own = option(&args, "--sync").map(PathBuf::from);
+    let values: Vec<String> = [
+        &send,
+        &join.as_ref().map(|p| p.display().to_string()),
+        &own.as_ref().map(|p| p.display().to_string()),
+    ]
+    .into_iter()
+    .flatten()
+    .cloned()
+    .collect();
+    let name = args
+        .iter()
+        .find(|arg| !arg.starts_with("--") && !values.contains(arg))
+        .cloned()
+        .unwrap_or_else(|| "Test peer".into());
+    let daemon = ServiceDaemon::new()?;
+    let (identity, mode) = if let Some(dir) = join {
+        (identity_in(&dir)?, Mode::Join(dir))
+    } else if let Some(dir) = own {
+        print!("Master password of the vault in {}: ", dir.display());
+        io::stdout().flush()?;
+        let mut master = String::new();
+        io::stdin().lock().read_line(&mut master)?;
+        let vault = Vault::unlock(
+            &VaultPaths::new(dir.join("vault.kdbx")),
+            &SecretString::from(master.trim().to_owned()),
+        )?;
+        (
+            identity_in(&dir)?,
+            Mode::Own {
+                dir,
+                vault: Box::new(Mutex::new(vault)),
+            },
+        )
+    } else {
+        (Identity::generate()?, Mode::Plain)
+    };
+    let side = Terminal {
+        name: name.clone(),
+        identity,
+        mode,
+    };
+
+    let end = if let Some(kind) = send {
+        let address = find_app(&daemon)?;
+        let stream = TcpStream::connect_timeout(&address, Duration::from_secs(5))?;
+        stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+        let mut session = p2p::connect(stream, &side.identity)?;
+        let item = sample(&kind, &name);
+        conversation(&mut session, &side, Some(Purpose::Send(&item)))
+    } else {
+        let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+        let port = listener.local_addr()?.port();
+        daemon.register(announcement(&side, port)?.enable_addr_auto())?;
         let (stream, from) = listener.accept()?;
         println!("{from} connected.");
         stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-        let mut session = p2p::accept(stream, &identity)?;
-        exchange(&mut session, &side, false, None)
+        let mut session = p2p::accept(stream, &side.identity)?;
+        conversation(&mut session, &side, None)
     };
     println!("Result: {end:?}");
     let _ = daemon.shutdown();

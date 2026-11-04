@@ -27,6 +27,7 @@ mod generator;
 mod import;
 mod kdf;
 mod location;
+mod own_devices;
 mod recovery;
 mod slots;
 #[cfg(test)]
@@ -48,11 +49,13 @@ pub use self::contacts::Contact;
 pub use self::generator::{GenerateOptions, Strength, generate, strength};
 pub use self::import::{CsvFormat, ImportPreview, ImportRow};
 pub use self::location::{check_database, copy_files, remove_files};
+pub use self::own_devices::{DeviceRecord, MAX_RECORDS, OwnDevice, check_records};
 use self::slots::KeySlots;
+use crate::p2p::own::OwnKey;
 use crate::{Error, Result, fsutil};
 
-/// Largest database file that is opened.
-const MAX_DATABASE_SIZE: u64 = 256 * 1024 * 1024;
+/// Largest database file that is opened, or taken from another computer.
+pub const MAX_DATABASE_SIZE: u64 = 256 * 1024 * 1024;
 /// Largest value of a single field.
 const MAX_FIELD_LEN: usize = 64 * 1024;
 
@@ -125,6 +128,16 @@ pub struct VaultFiles {
     pub device_slots: Vec<String>,
     /// Random id of the vault; names its item in the OS credential store.
     pub vault_id: Option<String>,
+}
+
+/// Checks that `database` is a vault `secret` opens, with sane key
+/// derivation settings: what a computer does before it takes a vault
+/// another one sent.
+pub fn check_shared(database: &[u8], secret: &SecretString) -> Result<()> {
+    if u64::try_from(database.len()).unwrap_or(u64::MAX) > MAX_DATABASE_SIZE {
+        return Err(Error::invalid("the vault is too large"));
+    }
+    parse_database(database, secret).map(drop)
 }
 
 /// Looks at the vault's files without decrypting anything.
@@ -380,6 +393,36 @@ impl Vault {
         Ok(vault)
     }
 
+    /// Sets up the vault another of the user's computers sent — its
+    /// database file and its secret — with this computer's own master
+    /// password. Fails if a database is there already.
+    pub fn join(
+        paths: &VaultPaths,
+        database: &[u8],
+        secret: &SecretString,
+        master: &SecretString,
+    ) -> Result<Self> {
+        check_master(master)?;
+        if paths.database.exists() {
+            return Err(Error::AlreadyExists(paths.database.display().to_string()));
+        }
+        let db = parse_database(database, secret)?;
+        let mut slots = KeySlots::new();
+        slots.set_password(secret, master)?;
+        // The keys first, as in `create`; a stray keys file without its
+        // database opens nothing and is replaced.
+        let keys_hash = slots.save(&paths.keys)?;
+        fsutil::write_new(&paths.database, database, 0o600)?;
+        Ok(Self {
+            paths: paths.clone(),
+            db,
+            secret: duplicate(secret),
+            slots,
+            disk_hash: sha256(database),
+            keys_hash: Some(keys_hash),
+        })
+    }
+
     fn open(
         paths: &VaultPaths,
         secret: SecretString,
@@ -418,6 +461,27 @@ impl Vault {
     /// Ids of the device slots, one per computer with device unlock.
     pub fn device_slots(&self) -> Vec<String> {
         self.slots.device_ids()
+    }
+
+    /// The key the user's own devices share (see [`crate::p2p::own`]).
+    pub fn own_key(&self) -> OwnKey {
+        OwnKey::from_secret(&self.secret)
+    }
+
+    /// The vault secret, to give a new own device along with the database
+    /// file; for nothing else.
+    pub fn share_secret(&self) -> SecretString {
+        duplicate(&self.secret)
+    }
+
+    /// The database file as saved, for a new own device. Fails with
+    /// [`Error::Conflict`] if it changed on disk since it was read here.
+    pub fn saved_bytes(&self) -> Result<Zeroizing<Vec<u8>>> {
+        let bytes = Zeroizing::new(read_database(&self.paths.database)?);
+        if sha256(&bytes) != self.disk_hash {
+            return Err(Error::Conflict(self.paths.database.display().to_string()));
+        }
+        Ok(bytes)
     }
 
     /// Re-reads the files that another program or computer changed. Returns

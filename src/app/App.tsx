@@ -15,6 +15,7 @@ import { KnownHostsPage } from '@/features/known/KnownHostsPage';
 import { NearbyPage } from '@/features/nearby/NearbyPage';
 import { PairingDialog } from '@/features/nearby/PairingDialog';
 import { useNearbyEvents } from '@/features/nearby/queries';
+import { SyncDialog } from '@/features/nearby/SyncDialog';
 import { OverviewPage } from '@/features/overview/OverviewPage';
 import { useVaultFileEvents } from '@/features/passwords/files';
 import { PasswordsPage } from '@/features/passwords/PasswordsPage';
@@ -100,6 +101,7 @@ function Shell() {
       </main>
       <BrowserPairing />
       <PairingDialog />
+      <SyncDialog />
     </div>
   );
 }

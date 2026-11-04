@@ -27,6 +27,7 @@
 //!   generator.
 //! - [`p2p`]: two copies of the app talking over the local network: device
 //!   keys, the encrypted session and its pairing code.
+//! - [`sync`]: three-way merges that keep the user's own computers in step.
 //! - [`browser`]: what the browser extension may see of the vault: which
 //!   logins belong to a page, and the encrypted channel to the extension.
 //!
@@ -53,6 +54,7 @@ pub mod known_hosts;
 pub mod p2p;
 pub mod paths;
 pub mod perms;
+pub mod sync;
 mod text;
 pub mod vault;
 

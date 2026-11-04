@@ -1,29 +1,54 @@
-// Mock Nearby for `pnpm dev`: two computers turn up a moment after the page
-// starts looking; pairing with the first goes through the code, the second
-// can't be reached. `?nearby=incoming` makes a third one ask to pair a few
-// seconds after this one is shown, and send a login; `&item=group` or
-// `&item=key` makes it send a hosts file group or a public key instead.
+// Mock Nearby for `pnpm dev`. Computers turn up a moment after the page
+// starts looking:
+// - pairing with the first goes through the code;
+// - the second can't be reached;
+// - the third has no vault and waits to be added as one of the user's
+//   devices.
+// The user's devices are this computer and an iMac on the network.
+//
+// URL switches:
+// - `?nearby=incoming`: a fourth computer asks to pair a few seconds after
+//   this one is shown, and sends a login; `&item=group` or `&item=key` makes
+//   it send a hosts file group or a public key instead.
+// - `?vault=missing&nearby=join`: another computer gives this one its vault
+//   a few seconds after "Get it from my other computer".
+// - `?nearby=sync`: "Sync" brings a conflict, a risky host and many
+//   deletions to decide on.
 
 import type { Contact } from '@/bindings/Contact';
+import type { ConversationKind } from '@/bindings/ConversationKind';
 import type { ItemSummary } from '@/bindings/ItemSummary';
+import type { MyDevice } from '@/bindings/MyDevice';
 import type { NearbyDevice } from '@/bindings/NearbyDevice';
 import type { NearbyStatus } from '@/bindings/NearbyStatus';
 import type { Pairing } from '@/bindings/Pairing';
 import type { ReceivedGroup } from '@/bindings/ReceivedGroup';
+import type { Review } from '@/bindings/Review';
 import type { SendRequest } from '@/bindings/SendRequest';
+import type { SyncDecisions } from '@/bindings/SyncDecisions';
+import type { SyncSummary } from '@/bindings/SyncSummary';
 import type { VaultStatus } from '@/bindings/VaultStatus';
-import { MOCK_CHANGED_EVENT, MOCK_CONTACTS_EVENT } from '@/features/nearby/queries';
+import {
+  MOCK_CHANGED_EVENT,
+  MOCK_CONTACTS_EVENT,
+  MOCK_DEVICES_EVENT,
+} from '@/features/nearby/queries';
 import { hostsFileInfo } from './hostsFile';
 import { vaultHandlers } from './vault';
 
 const FOUND: NearbyDevice[] = [
-  { id: 'aziz', name: 'MacBook Aziza' },
-  { id: 'office-pc', name: 'office-pc' },
+  { id: 'aziz', name: 'MacBook Aziza', joining: false },
+  { id: 'office-pc', name: 'office-pc', joining: false },
+  { id: 'thinkpad', name: 'ThinkPad X1', joining: true },
 ];
 const CODE = '482913';
+const IMAC = 'bW9jay1pbWFj';
+const SWITCH = new URLSearchParams(window.location.search).get('nearby');
 
 let name = 'macbook-pro';
 let visibleUntil: string | null = null;
+let joining = false;
+let reachable = true;
 let devices: NearbyDevice[] = [];
 let pairing: Pairing | null = null;
 let nextId = 1;
@@ -107,6 +132,24 @@ function receivedName(item: ItemSummary, peer: string): string {
 const contacts: Contact[] = [
   { key: 'bW9jay1ib2J1cg==', name: 'ThinkPad Bobura', paired: '2026-10-21T09:12:00Z' },
 ];
+const mine: MyDevice[] = [
+  {
+    key: 'bW9jay10aGlz',
+    name,
+    added: '2026-09-02T08:00:00Z',
+    this: true,
+    lastSync: null,
+    reachable: false,
+  },
+  {
+    key: IMAC,
+    name: 'iMac at home',
+    added: '2026-09-02T08:05:00Z',
+    this: false,
+    lastSync: new Date(Date.now() - 2 * 3600_000).toISOString(),
+    reachable: true,
+  },
+];
 
 const fail = (code: string, message: string) => Promise.reject({ code, message });
 
@@ -115,6 +158,10 @@ function status(): NearbyStatus {
     name,
     visibleUntil,
     address: visibleUntil ? '192.168.1.24:48213' : null,
+    joining,
+    reachable,
+    present: reachable && !locked(),
+    ownFound: reachable && !locked() ? [IMAC] : [],
     devices: [...devices].sort((a, b) => a.name.localeCompare(b.name)),
     pairing,
   };
@@ -130,9 +177,12 @@ function later(ms: number, step: () => void) {
   timers.push(window.setTimeout(step, ms));
 }
 
+function vaultState(): VaultStatus['state'] | undefined {
+  return (vaultHandlers.vault_status?.({}) as VaultStatus | undefined)?.state;
+}
+
 function locked(): boolean {
-  const vault = vaultHandlers.vault_status?.({}) as VaultStatus | undefined;
-  return vault?.state !== 'unlocked';
+  return vaultState() !== 'unlocked';
 }
 
 /** Moves pairing `id` on, if it is still the one going on. */
@@ -142,9 +192,14 @@ function update(id: number, next: Partial<Pairing>) {
   changed();
 }
 
-function start(outgoing: boolean, peer: string, reachable: boolean): number {
+function start(
+  outgoing: boolean,
+  peer: string,
+  reachable: boolean,
+  kind: ConversationKind = 'pair',
+): number {
   const id = nextId++;
-  pairing = { id, peer: null, outgoing, phase: { type: 'connecting' } };
+  pairing = { id, peer: null, outgoing, kind, phase: { type: 'connecting' } };
   changed();
   later(800, () =>
     update(
@@ -157,9 +212,20 @@ function start(outgoing: boolean, peer: string, reachable: boolean): number {
   return id;
 }
 
-const active = () =>
-  pairing !== null &&
-  ['connecting', 'compare', 'waiting', 'offering', 'offered'].includes(pairing.phase.type);
+const ACTIVE = [
+  'connecting',
+  'compare',
+  'waiting',
+  'offering',
+  'offered',
+  'authorize',
+  'approving',
+  'transfer',
+  'setMaster',
+  'syncing',
+  'decide',
+];
+const active = () => pairing !== null && ACTIVE.includes(pairing.phase.type);
 
 /** After pairing (or straight away, between contacts): send or receive. */
 function afterPairing(id: number) {
@@ -178,6 +244,107 @@ function afterPairing(id: number) {
   }
 }
 
+/** The vault goes over in a few steps, then `done`. */
+function transfer(id: number, done: () => void) {
+  const total = 2_400_000;
+  for (const [step, share] of [0.25, 0.6, 1].entries()) {
+    later(500 * (step + 1), () =>
+      update(id, { phase: { type: 'transfer', done: total * share, total } }),
+    );
+  }
+  later(1900, done);
+}
+
+/** After the codes matched, adding a device goes on. */
+function afterCompare(id: number) {
+  const current = pairing;
+  if (!current) return;
+  if (current.outgoing) {
+    const vault = devices.find((device) => device.name === current.peer)?.joining ?? false;
+    update(id, { phase: { type: 'authorize', vault } });
+  } else {
+    update(id, { phase: { type: 'approving' } });
+    later(2500, () => transfer(id, () => update(id, { phase: { type: 'setMaster' } })));
+  }
+}
+
+function addMine(peer: string) {
+  mine.push({
+    key: btoa(`mock-${peer}`),
+    name: peer,
+    added: new Date().toISOString(),
+    this: false,
+    lastSync: null,
+    reachable: false,
+  });
+  window.dispatchEvent(new CustomEvent(MOCK_DEVICES_EVENT));
+}
+
+const REVIEW: Review = {
+  conflicts: [
+    {
+      id: 'prod-api',
+      mine: {
+        id: 'prod-api',
+        fields: [
+          { key: 'HostName', values: ['10.0.4.12'] },
+          { key: 'User', values: ['deploy'] },
+        ],
+      },
+      theirs: {
+        id: 'prod-api',
+        fields: [
+          { key: 'HostName', values: ['10.0.4.40'] },
+          { key: 'User', values: ['deploy'] },
+          { key: 'Port', values: ['2222'] },
+        ],
+      },
+    },
+  ],
+  risky: [
+    {
+      id: 'lab-gpu',
+      lines: [{ key: 'ProxyCommand', value: 'ssh -W %h:%p lab-gateway' }],
+    },
+  ],
+  deletions: ['old-ci-1', 'old-ci-2', 'old-ci-3', 'old-ci-4', 'old-ci-5', 'old-ci-6', 'old-vpn'],
+};
+
+function syncSummary(decisions: SyncDecisions | null): SyncSummary {
+  return {
+    added: 2 + (decisions?.apply.length ?? 0),
+    changed: 1 + (decisions?.theirs.length ?? 0),
+    removed: decisions?.delete ? REVIEW.deletions.length : 0,
+    keysAdded: 3,
+    keysDiffer: [
+      {
+        host: 'legacy-nas',
+        port: 22,
+        here: ['SHA256:Zr2sJ1mJ8m9cGQh3yV2G4k1Xb0n1Lp0b3uYbW7bS5aQ'],
+        there: ['SHA256:9pQ4o0wq7L2yKcH8u3tN6a1Jm5fVbX2rZsE4dW8gT1c'],
+      },
+    ],
+    deferred: decisions
+      ? REVIEW.risky.length -
+        decisions.apply.length -
+        decisions.decline.length +
+        (decisions.delete ? 0 : REVIEW.deletions.length)
+      : 0,
+    deferredThere: 1,
+    conflicts: decisions
+      ? REVIEW.conflicts.length - decisions.mine.length - decisions.theirs.length
+      : 0,
+    failed: 0,
+  };
+}
+
+function synced(id: number, decisions: SyncDecisions | null) {
+  update(id, { phase: { type: 'synced', summary: syncSummary(decisions) } });
+  const imac = mine.find((device) => device.key === IMAC);
+  if (imac) imac.lastSync = new Date().toISOString();
+  window.dispatchEvent(new CustomEvent(MOCK_DEVICES_EVENT));
+}
+
 export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   nearby_status: status,
   nearby_set_name: ({ name: next }) => {
@@ -187,19 +354,37 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
     return changed();
   },
   nearby_set_visible: ({ visible }) => {
+    joining = false;
     if (!visible) {
       visibleUntil = null;
       return changed();
     }
     if (locked()) return fail('vault_locked', 'the vault is locked');
     visibleUntil = new Date(Date.now() + 10 * 60_000).toISOString();
-    if (new URLSearchParams(window.location.search).get('nearby') === 'incoming') {
+    if (SWITCH === 'incoming') {
       later(3000, () => {
         if (active()) return;
         sending = null;
         const kind = new URLSearchParams(window.location.search).get('item') ?? 'password';
         receiving = INCOMING[kind] ?? INCOMING.password ?? null;
         start(false, 'ThinkPad Sardora', true);
+      });
+    }
+    return changed();
+  },
+  nearby_join: ({ on }) => {
+    if (!on) {
+      joining = false;
+      visibleUntil = null;
+      return changed();
+    }
+    if (vaultState() !== 'missing')
+      return fail('already_exists', 'this computer has a vault already');
+    joining = true;
+    visibleUntil = new Date(Date.now() + 10 * 60_000).toISOString();
+    if (SWITCH === 'join') {
+      later(3000, () => {
+        if (!active()) start(false, 'MacBook Pro', true, 'device');
       });
     }
     return changed();
@@ -226,6 +411,94 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
     receiving = null;
     return start(true, found?.name ?? String(target), target === 'aziz');
   },
+  nearby_add_device: ({ target }) => {
+    if (locked()) return fail('vault_locked', 'the vault is locked');
+    if (active()) return fail('conflict', 'another pairing is going on');
+    const found = devices.find((device) => device.id === target);
+    if (found && !found.joining) {
+      // The colleague's MacBook has a vault of its own.
+      const id = nextId++;
+      pairing = { id, peer: null, outgoing: true, kind: 'device', phase: { type: 'connecting' } };
+      changed();
+      later(800, () =>
+        update(id, { peer: found.name, phase: { type: 'failed', reason: 'otherVault' } }),
+      );
+      return id;
+    }
+    return start(true, found?.name ?? String(target), target !== 'office-pc', 'device');
+  },
+  nearby_authorize: ({ id: raw, master }) => {
+    const id = Number(raw);
+    if (pairing?.id !== id || pairing.phase.type !== 'authorize') {
+      return fail('not_found', 'nothing to confirm');
+    }
+    if (master === 'wrong') return fail('wrong_passphrase', 'wrong passphrase');
+    const vault = pairing.phase.vault;
+    const peer = pairing.peer ?? '?';
+    const done = () => {
+      update(id, { phase: { type: 'added', vault } });
+      addMine(peer);
+    };
+    if (vault) transfer(id, done);
+    else later(600, done);
+    return undefined;
+  },
+  nearby_finish_join: ({ id: raw, master }) => {
+    const id = Number(raw);
+    if (pairing?.id !== id || pairing.phase.type !== 'setMaster') {
+      return fail('not_found', 'no vault waits here');
+    }
+    const created = vaultHandlers.vault_create?.({ master });
+    if (created instanceof Promise) return created;
+    joining = false;
+    visibleUntil = null;
+    addMine(pairing.peer ?? '?');
+    update(id, { phase: { type: 'joined' } });
+    return undefined;
+  },
+  nearby_devices: () => {
+    if (locked()) return fail('vault_locked', 'the vault is locked');
+    const found = status().ownFound;
+    return mine.map((device) => ({
+      ...device,
+      name: device.this ? name : device.name,
+      reachable: found.includes(device.key),
+    }));
+  },
+  nearby_remove_device: ({ key }) => {
+    const index = mine.findIndex((device) => device.key === key && !device.this);
+    if (index < 0) return fail('not_found', 'that device is not one of yours');
+    mine.splice(index, 1);
+    window.dispatchEvent(new CustomEvent(MOCK_DEVICES_EVENT));
+    return undefined;
+  },
+  nearby_set_reachable: ({ reachable: on }) => {
+    reachable = Boolean(on);
+    return changed();
+  },
+  nearby_sync: () => {
+    if (locked()) return fail('vault_locked', 'the vault is locked');
+    if (active()) return fail('conflict', 'another pairing is going on');
+    if (status().ownFound.length === 0) return fail('not_found', 'no device of yours is reachable');
+    const id = nextId++;
+    pairing = { id, peer: null, outgoing: true, kind: 'sync', phase: { type: 'connecting' } };
+    changed();
+    later(600, () => update(id, { peer: 'iMac at home', phase: { type: 'syncing' } }));
+    later(1600, () => {
+      if (SWITCH === 'sync') update(id, { phase: { type: 'decide', review: REVIEW } });
+      else synced(id, null);
+    });
+    return undefined;
+  },
+  nearby_decide: ({ id: raw, decisions }) => {
+    const id = Number(raw);
+    if (pairing?.id !== id || pairing.phase.type !== 'decide') {
+      return fail('not_found', 'the pairing has ended');
+    }
+    update(id, { phase: { type: 'syncing' } });
+    later(900, () => synced(id, decisions as SyncDecisions));
+    return undefined;
+  },
   nearby_send: ({ target, item }) => {
     if (locked()) return fail('vault_locked', 'the vault is locked');
     if (active()) return fail('conflict', 'another pairing is going on');
@@ -238,7 +511,7 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
     }
     // Contacts already: straight to the offer.
     const id = nextId++;
-    pairing = { id, peer: null, outgoing: true, phase: { type: 'connecting' } };
+    pairing = { id, peer: null, outgoing: true, kind: 'pair', phase: { type: 'connecting' } };
     changed();
     later(700, () => {
       update(id, { peer });
@@ -285,6 +558,10 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
     later(1800, () => {
       const current = pairing;
       if (current?.id !== id || current.phase.type !== 'waiting') return;
+      if (current.kind === 'device') {
+        afterCompare(id);
+        return;
+      }
       contacts.push({
         key: btoa(`mock-${current.peer}`),
         name: current.peer ?? '?',
@@ -297,8 +574,9 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
   },
   nearby_close: ({ id }) => {
     if (pairing?.id !== id) return undefined;
-    if (active()) update(Number(id), { phase: { type: 'failed', reason: 'cancelled' } });
-    else {
+    if (active() && pairing?.phase.type !== 'setMaster') {
+      update(Number(id), { phase: { type: 'failed', reason: 'cancelled' } });
+    } else {
       pairing = null;
       changed();
     }

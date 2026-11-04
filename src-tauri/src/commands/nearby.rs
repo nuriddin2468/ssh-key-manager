@@ -1,17 +1,18 @@
 //! The Nearby page: this device on the local network, the others found
-//! there, pairing with them, and the contacts pairing made (see
-//! [`crate::nearby`]).
+//! there, pairing with them, the contacts pairing made, and the user's own
+//! devices and syncing with them (see [`crate::nearby`]).
 
 use std::sync::Arc;
 
-use sshkm_core::ErrorCode;
 use sshkm_core::vault::Contact;
+use sshkm_core::{ErrorCode, SecretString};
 use tauri::{AppHandle, State};
 
 use super::{Shared, blocking};
 use crate::error::{AppError, AppResult};
 use crate::nearby::items::{ReceivedGroup, SendRequest};
-use crate::nearby::{Nearby, NearbyStatus, SharedNearby};
+use crate::nearby::sync::SyncDecisions;
+use crate::nearby::{MyDevice, Nearby, NearbyStatus, SharedNearby};
 
 async fn on_nearby<T, F>(nearby: &SharedNearby, work: F) -> AppResult<T>
 where
@@ -84,6 +85,82 @@ pub async fn nearby_answer(
     matched: bool,
 ) -> AppResult<()> {
     nearby.answer(id, matched)
+}
+
+/// Makes this computer, which has no vault, visible for ten minutes to be
+/// given one by another of the user's computers; or hides it.
+#[tauri::command]
+pub async fn nearby_join(nearby: State<'_, SharedNearby>, on: bool) -> AppResult<NearbyStatus> {
+    on_nearby(&nearby, move |nearby| nearby.join(on)).await
+}
+
+/// Makes a device found nearby (its id) or at an address one of the user's
+/// devices, giving it the vault if it has none. Returns the conversation's
+/// id; the rest comes as events.
+#[tauri::command]
+pub async fn nearby_add_device(nearby: State<'_, SharedNearby>, target: String) -> AppResult<u32> {
+    on_nearby(&nearby, move |nearby| nearby.add_device(&target)).await
+}
+
+/// The user's yes to adding a device: with the master password, or with
+/// Touch ID / Windows Hello when there is none.
+#[tauri::command]
+pub async fn nearby_authorize(
+    nearby: State<'_, SharedNearby>,
+    id: u32,
+    master: Option<SecretString>,
+) -> AppResult<()> {
+    on_nearby(&nearby, move |nearby| nearby.authorize(id, master.as_ref())).await
+}
+
+/// Sets up the vault another computer gave, with this computer's own
+/// master password, and unlocks it.
+#[tauri::command]
+pub async fn nearby_finish_join(
+    nearby: State<'_, SharedNearby>,
+    id: u32,
+    master: SecretString,
+) -> AppResult<()> {
+    on_nearby(&nearby, move |nearby| nearby.finish_join(id, &master)).await
+}
+
+/// The user's devices, this computer among them.
+#[tauri::command]
+pub async fn nearby_devices(nearby: State<'_, SharedNearby>) -> AppResult<Vec<MyDevice>> {
+    on_nearby(&nearby, |nearby| nearby.my_devices()).await
+}
+
+/// Removes one of the user's devices.
+#[tauri::command]
+pub async fn nearby_remove_device(nearby: State<'_, SharedNearby>, key: String) -> AppResult<()> {
+    on_nearby(&nearby, move |nearby| nearby.remove_device(&key)).await
+}
+
+/// Whether this computer is announced to the user's devices while the
+/// vault is unlocked.
+#[tauri::command]
+pub async fn nearby_set_reachable(
+    nearby: State<'_, SharedNearby>,
+    reachable: bool,
+) -> AppResult<NearbyStatus> {
+    on_nearby(&nearby, move |nearby| nearby.set_reachable(reachable)).await
+}
+
+/// Syncs with one of the user's devices (its key), or with every one
+/// reachable when there is none. The results come as events.
+#[tauri::command]
+pub async fn nearby_sync(nearby: State<'_, SharedNearby>, key: Option<String>) -> AppResult<()> {
+    on_nearby(&nearby, move |nearby| nearby.sync(key.as_deref())).await
+}
+
+/// The user's decisions on what a sync brings.
+#[tauri::command]
+pub async fn nearby_decide(
+    nearby: State<'_, SharedNearby>,
+    id: u32,
+    decisions: SyncDecisions,
+) -> AppResult<()> {
+    nearby.decide(id, decisions)
 }
 
 /// Cancels a pairing, or forgets one that is over.

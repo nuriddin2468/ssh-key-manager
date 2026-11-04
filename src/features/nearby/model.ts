@@ -1,7 +1,11 @@
-// Small pure helpers for the Nearby page and the pairing dialog.
+// Small pure helpers for the Nearby page, the pairing dialog and the sync
+// dialog.
 
+import type { TFunction } from 'i18next';
+import type { Conflict } from '@/bindings/Conflict';
 import type { Pairing } from '@/bindings/Pairing';
 import type { PairingFailure } from '@/bindings/PairingFailure';
+import type { SyncSummary } from '@/bindings/SyncSummary';
 
 /** Seconds left until `until` (RFC 3339), never below zero; `null` without one. */
 export function secondsLeft(until: string | null, now: number = Date.now()): number | null {
@@ -21,18 +25,70 @@ export function clock(seconds: number): string {
 export function isActive(pairing: Pairing | null | undefined): boolean {
   if (!pairing) return false;
   const { type } = pairing.phase;
-  return (
-    type === 'connecting' ||
-    type === 'compare' ||
-    type === 'waiting' ||
-    type === 'offering' ||
-    type === 'offered'
-  );
+  return ACTIVE.has(type);
 }
+
+const ACTIVE = new Set([
+  'connecting',
+  'compare',
+  'waiting',
+  'offering',
+  'offered',
+  'authorize',
+  'approving',
+  'transfer',
+  'setMaster',
+  'syncing',
+  'decide',
+]);
 
 /** Failures the user should try again after, as opposed to a decision. */
 export function canRetry(reason: PairingFailure): boolean {
-  return !['declined', 'peerDeclined', 'cancelled', 'refused', 'turned'].includes(reason);
+  return ![
+    'declined',
+    'peerDeclined',
+    'cancelled',
+    'refused',
+    'turned',
+    'otherVault',
+    'notOwn',
+  ].includes(reason);
+}
+
+/** Whole percent of `done` out of `total`; 0 without a total. */
+export function percent(done: number, total: number): number {
+  if (total <= 0) return 0;
+  return Math.min(100, Math.floor((done / total) * 100));
+}
+
+/** One line for what a sync changed here, e.g. "2 added, 1 changed". */
+export function summaryLine(t: TFunction, summary: SyncSummary): string {
+  const parts = [
+    summary.added ? t('nearby.sync.added', { count: summary.added }) : null,
+    summary.changed ? t('nearby.sync.changed', { count: summary.changed }) : null,
+    summary.removed ? t('nearby.sync.removed', { count: summary.removed }) : null,
+    summary.keysAdded ? t('nearby.sync.keysAdded', { count: summary.keysAdded }) : null,
+  ].filter((part) => part !== null);
+  return parts.length > 0 ? parts.join(', ') : t('nearby.sync.nothing');
+}
+
+/** The fields of a conflict's two versions, key by key, with where they differ. */
+export function conflictRows(
+  conflict: Conflict,
+): { key: string; mine: string | null; theirs: string | null; differs: boolean }[] {
+  const keys: string[] = [];
+  for (const field of [...(conflict.mine?.fields ?? []), ...(conflict.theirs?.fields ?? [])]) {
+    if (!keys.some((key) => key.toLowerCase() === field.key.toLowerCase())) keys.push(field.key);
+  }
+  const value = (side: Conflict['mine'], key: string) =>
+    side?.fields
+      .find((field) => field.key.toLowerCase() === key.toLowerCase())
+      ?.values.join(', ') ?? null;
+  return keys.map((key) => {
+    const mine = value(conflict.mine, key);
+    const theirs = value(conflict.theirs, key);
+    return { key, mine, theirs, differs: mine !== theirs };
+  });
 }
 
 /** A `host:port` the backend can try: a host and a port from 1 to 65535. */

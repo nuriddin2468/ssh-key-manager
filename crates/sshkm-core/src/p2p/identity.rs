@@ -102,6 +102,17 @@ impl Identity {
     pub(crate) fn private(&self) -> &[u8] {
         self.private.as_slice()
     }
+
+    /// A key for something of this device's own, named by `label`, derived
+    /// from the private key: the same every time, and telling nothing
+    /// about it.
+    pub fn derive_key(&self, label: &[u8]) -> Zeroizing<[u8; 32]> {
+        let hkdf = hkdf::Hkdf::<sha2::Sha256>::new(Some(b"sshkm device"), self.private.as_slice());
+        let mut key = Zeroizing::new([0; 32]);
+        hkdf.expand(label, key.as_mut())
+            .unwrap_or_else(|_| unreachable!("32 bytes is a valid length"));
+        key
+    }
 }
 
 impl fmt::Debug for Identity {
@@ -132,6 +143,13 @@ mod tests {
         let text = identity.public().to_string();
         assert_eq!(PeerKey::from_base64(&text).unwrap(), identity.public());
         assert!(!format!("{identity:?}").contains(&Base64::encode_string(identity.private())));
+
+        assert_eq!(again.derive_key(b"a"), identity.derive_key(b"a"));
+        assert_ne!(identity.derive_key(b"a"), identity.derive_key(b"b"));
+        assert_ne!(
+            Identity::generate().unwrap().derive_key(b"a"),
+            identity.derive_key(b"a")
+        );
     }
 
     #[test]

@@ -1,13 +1,11 @@
-import { AlertTriangle, Code2, KeyRound, LockKeyhole, Plus, Server } from 'lucide-react';
+import { Code2, Plus, Server } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useConfig, useVaultEntries } from '@/api/queries';
+import { useConfig, useConnectionHistory, useEnvironment, useVaultEntries } from '@/api/queries';
 import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
 import { useFindShortcut } from '@/app/useAppEvents';
-import type { HostEntry } from '@/bindings/HostEntry';
 import { PageBody, Toolbar } from '@/components/layout/Toolbar';
-import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Dialog } from '@/components/ui/Dialog';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -15,10 +13,14 @@ import { IconButton } from '@/components/ui/IconButton';
 import { SearchField } from '@/components/ui/SearchField';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
+import { useTerminals } from '@/features/terminal/TerminalProvider';
 import { cn } from '@/lib/cn';
+import { withViewTransition } from '@/lib/viewTransition';
+import { HostCard } from './HostCard';
 import { HostEditor } from './HostEditor';
-import { hostLabel, hostMethod, hostMonogram, hostTarget, type SignInMethod } from './model';
+import { hostLabel, hostMethod } from './model';
 import { RawConfigDialog } from './RawConfigDialog';
+import { hostEvents } from './status';
 import { findHostEntry, hostAliases } from './vault';
 
 export function HostsPage({ hostId }: { hostId?: number }) {
@@ -44,7 +46,31 @@ export function HostsPage({ hostId }: { hostId?: number }) {
       (host.hostName ?? '').toLowerCase().includes(needle) ||
       (host.user ?? '').toLowerCase().includes(needle),
   );
-  const selected = hosts.find((h) => h.id === hostId) ?? visible[0] ?? null;
+  const selected = hosts.find((h) => h.id === hostId) ?? null;
+  const history = useConnectionHistory().data;
+  const { tabs } = useTerminals();
+  const liveTabs = tabs.map((tab) => ({ key: tab.key, alias: tab.alias, phase: tab.state.phase }));
+  const sshMissing = useEnvironment().data?.opensshVersion === null;
+  const list = useRef<HTMLUListElement>(null);
+  const card = (id: number) => document.querySelector<HTMLElement>(`[data-host="${id}"]`);
+  // Opening and closing the editor animate: the cards move between the grid
+  // and the column, the editor slides. Going from host to host doesn't.
+  const openEditor = (id: number) => {
+    const show = () => navigate({ page: 'hosts', hostId: id });
+    if (selected) show();
+    else animate(list.current, show, () => card(id)?.scrollIntoView({ block: 'nearest' }));
+  };
+  // Focus goes back to the host's card, as the close button goes away.
+  const closeEditor = (id: number) => {
+    animate(
+      list.current,
+      () => navigate({ page: 'hosts' }),
+      () => {
+        card(id)?.focus({ preventScroll: true });
+        card(id)?.scrollIntoView({ block: 'nearest' });
+      },
+    );
+  };
   const issues = config.data?.view.issues.length ?? 0;
   const includes = config.data?.view.includes ?? [];
 
@@ -99,21 +125,29 @@ export function HostsPage({ hostId }: { hostId?: number }) {
           <div className="flex min-h-0 flex-1 items-stretch gap-4">
             <section
               aria-label={t('hosts.listLabel')}
-              className="glass flex w-[300px] shrink-0 flex-col overflow-hidden rounded-2xl"
+              // With a host open the cards make one column and the editor takes the rest.
+              className={cn(
+                'flex min-w-0 flex-col gap-3',
+                selected ? 'w-[300px] shrink-0' : 'flex-1',
+              )}
             >
-              <div className="p-2.5">
-                <SearchField
-                  ref={search}
-                  value={query}
-                  onChange={setQuery}
-                  label={t('hosts.filterLabel')}
-                  placeholder={t('hosts.filterPlaceholder')}
-                  className="h-9 w-full rounded-[10px]"
-                />
-              </div>
-              <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-1.5 pb-2">
+              <SearchField
+                ref={search}
+                value={query}
+                onChange={setQuery}
+                label={t('hosts.filterLabel')}
+                placeholder={t('hosts.filterPlaceholder')}
+                className="h-9 w-full max-w-[340px] shrink-0 rounded-[10px] [view-transition-name:host-search]"
+              />
+              <ul
+                ref={list}
+                className={cn(
+                  'grid min-h-0 flex-1 content-start gap-3 overflow-y-auto pb-1',
+                  selected ? 'grid-cols-1' : 'grid-cols-[repeat(auto-fill,minmax(250px,1fr))]',
+                )}
+              >
                 {visible.map((host) => (
-                  <HostRow
+                  <HostCard
                     method={hostMethod(
                       host,
                       findHostEntry(vaultEntries, hostAliases(host)) !== undefined,
@@ -122,15 +156,20 @@ export function HostsPage({ hostId }: { hostId?: number }) {
                     host={host}
                     selected={host.id === selected?.id}
                     broken={missing.has(host.id)}
-                    onSelect={() => navigate({ page: 'hosts', hostId: host.id })}
+                    events={hostEvents(history, hostAliases(host))}
+                    tabs={liveTabs}
+                    blocked={sshMissing ? t('hosts.editor.noSsh') : null}
+                    onSelect={() => openEditor(host.id)}
                   />
                 ))}
                 {visible.length === 0 ? (
-                  <p className="px-3 py-8 text-center text-subtle">{t('hosts.noMatches')}</p>
+                  <li className="col-span-full px-3 py-8 text-center text-subtle">
+                    {t('hosts.noMatches')}
+                  </li>
                 ) : null}
-              </div>
+              </ul>
               {issues > 0 || includes.length > 0 ? (
-                <div className="flex flex-col gap-1 border-t border-white/[0.06] px-3.5 py-2.5 text-[12px] text-subtle">
+                <div className="flex shrink-0 flex-col gap-1 text-[12px] text-subtle">
                   {includes.length > 0 ? (
                     <p>{t('hosts.includes', { files: includes.join(', ') })}</p>
                   ) : null}
@@ -142,16 +181,15 @@ export function HostsPage({ hostId }: { hostId?: number }) {
             </section>
 
             {selected ? (
-              <HostEditor
-                key={`${selected.id}-${selected.lineStart}`}
-                host={selected}
-                hosts={hosts}
-              />
-            ) : (
-              <div className="glass grid flex-1 place-items-center rounded-2xl text-subtle">
-                {t('hosts.selectPrompt')}
+              <div className="flex min-w-0 flex-1 [view-transition-name:host-editor]">
+                <HostEditor
+                  key={`${selected.id}-${selected.lineStart}`}
+                  host={selected}
+                  hosts={hosts}
+                  onClose={() => closeEditor(selected.id)}
+                />
               </div>
-            )}
+            ) : null}
           </div>
         )}
       </PageBody>
@@ -163,74 +201,25 @@ export function HostsPage({ hostId }: { hostId?: number }) {
   );
 }
 
-interface HostRowProps {
-  host: HostEntry;
-  method: SignInMethod | null;
-  selected: boolean;
-  broken: boolean;
-  onSelect: () => void;
-}
-
-function HostRow({ host, method, selected, broken, onSelect }: HostRowProps) {
-  const { t } = useTranslation();
-  const mono = hostMonogram(host);
-  const isDefaults = host.kind === 'host' && host.patterns.length === 1 && host.patterns[0] === '*';
-  return (
-    <button
-      type="button"
-      aria-current={selected ? 'true' : undefined}
-      onClick={onSelect}
-      className={cn(
-        'pressable-soft flex w-full items-center gap-[11px] rounded-xl px-2.5 py-2 text-left active:bg-white/[0.06]',
-        selected ? 'selected-row' : 'hover:bg-white/[0.04]',
-      )}
-    >
-      <Tile tone={mono.tone} size={34}>
-        <span className="font-mono text-[12px] font-semibold">{mono.text}</span>
-      </Tile>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="flex items-center gap-1.5">
-          <span className="truncate font-mono text-[13px] font-medium">{hostLabel(host)}</span>
-          {isDefaults ? (
-            <Badge pill className="text-fg-2">
-              {t('hosts.defaults')}
-            </Badge>
-          ) : null}
-          {broken ? (
-            <AlertTriangle
-              role="img"
-              aria-label={t('hosts.missingKey')}
-              className="size-3.5 shrink-0 text-warning"
-              strokeWidth={2}
-            />
-          ) : null}
-        </span>
-        <span className="truncate text-[12px] leading-[18px] text-subtle">
-          {isDefaults
-            ? t('hosts.appliesToAll')
-            : broken
-              ? t('hosts.missingKey')
-              : hostTarget(host, (jump) => t('hosts.via', { jump }))}
-        </span>
-      </span>
-      {method ? <MethodIcons method={method} /> : null}
-    </button>
-  );
-}
-
-/** The sign-in method as small icons: a key, a lock, or both. */
-function MethodIcons({ method }: { method: SignInMethod }) {
-  const { t } = useTranslation();
-  const label = t('hosts.signIn.listLabel', { method: t(`hosts.signIn.${method}`) });
-  return (
-    <span title={label} className="flex shrink-0 items-center gap-1 text-subtle">
-      {method !== 'password' ? (
-        <KeyRound aria-hidden="true" className="size-3.5" strokeWidth={1.9} />
-      ) : null}
-      {method !== 'key' ? (
-        <LockKeyhole aria-hidden="true" className="size-3.5" strokeWidth={1.9} />
-      ) : null}
-      <span className="sr-only">{label}</span>
-    </span>
-  );
+/**
+ * A view transition in which only the cards in view move. Moving cards are
+ * drawn above the page, so ones scrolled out of the list would show over the
+ * toolbar; those just appear in their new place.
+ */
+function animate(list: HTMLUListElement | null, update: () => void, after: () => void) {
+  const bounds = list?.getBoundingClientRect();
+  const hidden = [...(list?.children ?? [])]
+    .filter((item): item is HTMLElement => item instanceof HTMLElement)
+    .filter((item) => {
+      const box = item.getBoundingClientRect();
+      return !bounds || box.bottom <= bounds.top || box.top >= bounds.bottom;
+    })
+    .map((item) => [item, item.style.viewTransitionName] as const);
+  for (const [item] of hidden) item.style.viewTransitionName = 'none';
+  const restore = () => {
+    for (const [item, name] of hidden) item.style.viewTransitionName = name;
+  };
+  const transition = withViewTransition(update, after);
+  if (transition) void transition.finished.finally(restore);
+  else restore();
 }

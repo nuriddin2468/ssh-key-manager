@@ -35,11 +35,8 @@ import { cn } from '@/lib/cn';
 import { formatDate, formatRelative, shortFingerprint } from '@/lib/format';
 import { avatar, openableUrl } from './model';
 import { OtpCode } from './OtpCode';
+import { MASK, REVEAL_MS } from './SavedSecret';
 import { toastVaultError, useSecretCall, useVaultEntry, useVaultMutation } from './vault';
-
-/** A revealed password hides itself again after this long. */
-const REVEAL_MS = 30_000;
-const MASK = '••••••••••••';
 
 const COPIED = {
   username: 'passwords.copiedUsername',

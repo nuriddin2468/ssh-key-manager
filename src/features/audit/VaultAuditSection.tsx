@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
 import { useVaultEntries, useVaultStatus } from '@/api/queries';
+import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
 import type { VaultFinding } from '@/bindings/VaultFinding';
 import { Button } from '@/components/ui/Button';
@@ -30,6 +31,7 @@ interface VaultAuditSectionProps {
 export function VaultAuditSection({ ignored, onIgnore }: VaultAuditSectionProps) {
   const { t, i18n } = useTranslation();
   const { navigate } = useRouter();
+  const dialogs = useDialogs();
   const state = useVaultStatus().data?.state;
   // Keyed by the state, so locking or unlocking the vault checks again.
   const audit = useQuery({
@@ -81,8 +83,11 @@ export function VaultAuditSection({ ignored, onIgnore }: VaultAuditSectionProps)
             <span className="font-semibold">{t('audit.vault.lockedTitle')}</span>
             <span className="text-[12.5px] text-muted">{t('audit.vault.lockedText')}</span>
           </span>
-          <Button size="sm" onClick={() => navigate({ page: 'passwords' })}>
-            {t('audit.vault.open')}
+          <Button
+            size="sm"
+            onClick={() => dialogs.unlockVault({ description: t('audit.vault.lockedText') })}
+          >
+            {t('passwords.unlock')}
           </Button>
         </div>
       ) : open.length === 0 ? (

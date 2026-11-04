@@ -24,6 +24,7 @@ export const keys = {
   audit: ['audit'] as const,
   vaultStatus: ['vault', 'status'] as const,
   vaultEntries: ['vault', 'entries'] as const,
+  connectionHistory: ['connection-history'] as const,
 };
 
 /** Everything derived from files in `~/.ssh`, the hosts file or the agent. */
@@ -48,6 +49,13 @@ export const useKnownHosts = () => useQuery({ queryKey: keys.knownHosts, queryFn
 export const useHostsFile = () => useQuery({ queryKey: keys.hostsFile, queryFn: api.hostsFile });
 
 export const useAudit = () => useQuery({ queryKey: keys.audit, queryFn: api.audit });
+
+export const useConnectionHistory = () =>
+  useQuery({ queryKey: keys.connectionHistory, queryFn: api.connectionHistory });
+
+/** Checks and terminal sessions add to the history as they end. */
+export const refreshConnectionHistory = () =>
+  queryClient.invalidateQueries({ queryKey: keys.connectionHistory });
 
 export const useVaultStatus = () =>
   useQuery({ queryKey: keys.vaultStatus, queryFn: api.vaultStatus });

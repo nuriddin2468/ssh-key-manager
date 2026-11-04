@@ -8,6 +8,7 @@ import {
   SquareTerminal,
   Terminal,
   Trash2,
+  X,
 } from 'lucide-react';
 import {
   type FormEvent,
@@ -25,10 +26,8 @@ import { useConfig, useEnvironment } from '@/api/queries';
 import { toastError, useAppMutation } from '@/api/useAppMutation';
 import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
-import type { ConnectionTest } from '@/bindings/ConnectionTest';
 import type { HostEdit } from '@/bindings/HostEdit';
 import type { HostEntry } from '@/bindings/HostEntry';
-import type { KeyView } from '@/bindings/KeyView';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Dialog } from '@/components/ui/Dialog';
@@ -38,20 +37,18 @@ import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { HostResolution } from '@/features/hostsFile/HostResolution';
-import { useVaultKey } from '@/features/keys/vaultKey';
 import { CheckHostKeyDialog } from '@/features/known/CheckHostKeyDialog';
 import type { KnownHostsRemoval } from '@/features/known/removal';
 import { SendDialog } from '@/features/nearby/SendDialog';
 import { useConnect } from '@/features/terminal/connect';
 import { copyText } from '@/lib/clipboard';
 import { displayPath } from '@/lib/format';
-import { AppError } from '@/lib/ipc';
 import { configChangeError, fileChangeError } from './fileErrors';
-import { ConfigPreview, ServerFields, useHostErrors, useKeyForFile } from './HostFields';
+import { HistorySection } from './HistorySection';
+import { ConfigPreview, ServerFields, useHostErrors } from './HostFields';
 import { HostPasswordDialog } from './HostPasswordDialog';
-import { KeyCheckDialog } from './KeyCheckDialog';
 import { LoginResult } from './LoginResult';
-import type { MessageAction, RunContext } from './login';
+import type { MessageAction } from './login';
 import {
   changedLines,
   chooseKey,
@@ -75,6 +72,7 @@ import { ServerKeysDialog } from './ServerKeysDialog';
 import { SignInSection } from './SignIn';
 import { SwitchToKeyDialog } from './SwitchToKeyDialog';
 import { useDialog } from './useDialog';
+import { useHostCheck } from './useHostCheck';
 import { useUnlockFix } from './useUnlockFix';
 import {
   type EntryFollowUp,
@@ -88,9 +86,11 @@ import {
 interface HostEditorProps {
   host: HostEntry;
   hosts: HostEntry[];
+  /** Closes the editor; Escape does too while nothing is unsaved. */
+  onClose: () => void;
 }
 
-export function HostEditor({ host, hosts }: HostEditorProps) {
+export function HostEditor({ host, hosts, onClose }: HostEditorProps) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const dialogs = useDialogs();
@@ -148,7 +148,10 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
   }
 
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [test, setTest] = useState<{ run: ConnectionTest; context: RunContext } | null>(null);
+  const check = useHostCheck(host, {
+    form: { identityFile: form.identityFile, method: form.method },
+  });
+  const test = check.result;
   // Dialogs opened from the sign-in section give focus back to it when the
   // button that opened them is gone (the password was saved, the switch ended).
   const signIn = useRef<HTMLFieldSetElement>(null);
@@ -159,10 +162,6 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
   const [passwordOpen, openPassword, closePassword] = useDialog<'edit' | 'otp'>(sectionButton);
   const [hostKeyOpen, openHostKey, closeHostKey] = useDialog<true>();
   const [sending, openSend, closeSend] = useDialog<true>();
-  const [keyCheck, openKeyCheck, closeKeyCheck] = useDialog<{
-    key: KeyView;
-    context: RunContext;
-  }>();
   // Captured when it opens, so it keeps signing in the same way if the vault locks.
   const [serverKeys, openServerKeys, closeServerKeys] = useDialog<{
     withVault: boolean;
@@ -255,23 +254,6 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
       return true;
     },
   });
-  // With the vault open the check signs in with what it saved for the host;
-  // otherwise only keys ssh can use by itself get in (ones in ssh-agent, or
-  // without a passphrase).
-  const check = useAppMutation(
-    async (vars: { withVault: boolean; context: RunContext }) => ({
-      run: vars.withVault ? await api.vaultTestConnection(alias) : await api.testConnection(alias),
-      context: vars.context,
-    }),
-    {
-      onSuccess: setTest,
-      onError: (error) => {
-        if (AppError.from(error).code !== 'vault_locked') return false;
-        toast.error(vaultErrorMessage(t, error));
-        return true;
-      },
-    },
-  );
   const removeKnown = useAppMutation(api.removeKnownHosts, {
     success: (_, { lines }) => t('known.removed', { line: lines.join(', ') }),
     onSuccess: () => setToRemove(null),
@@ -289,27 +271,9 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
     if (readOnly || invalid || save.isPending || !dirty) return;
     save.mutate({ edit, followUp });
   };
-  const checkContext: RunContext = passwordSaved ? 'vaultTest' : 'test';
-  const checkNow = () => check.mutate({ withVault, context: checkContext });
-  // The host's key, if ssh cannot open it by itself: it has a passphrase that
-  // neither ssh-agent nor the open vault holds. The check asks for it first.
-  const hostKey = useKeyForFile(form.identityFile).key;
-  const hostKeyVault = useVaultKey(hostKey?.fingerprint);
-  const lockedKey =
-    form.method !== 'password' &&
-    hostKey?.encrypted &&
-    !hostKey.inAgent &&
-    !hostKey.hardware &&
-    !(hostKeyVault.vault === 'unlocked' && hostKeyVault.entry)
-      ? hostKey
-      : undefined;
-  const runCheck = () => {
-    if (check.isPending) return;
-    if (lockedKey) openKeyCheck({ key: lockedKey, context: checkContext });
-    else checkNow();
-  };
+  const runCheck = check.run;
   // Unlocking the key ssh could not open checks again.
-  const unlockFix = useUnlockFix(checkNow);
+  const unlockFix = useUnlockFix(() => void check.checkNow());
   const copyCommand = async () => {
     try {
       await copyText(`ssh ${alias}`);
@@ -369,6 +333,18 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
   return (
     <form
       onSubmit={submit}
+      // Dialogs and menus render elsewhere in the page, so their Escape is not
+      // inside the form; edits would be lost, so it waits for them.
+      onKeyDown={(event) => {
+        if (
+          event.key === 'Escape' &&
+          !dirty &&
+          !event.defaultPrevented &&
+          event.currentTarget.contains(event.target as Node)
+        ) {
+          onClose();
+        }
+      }}
       aria-labelledby="host-title"
       // `clip`, not `hidden`: the glow sticks out on the right, and a hidden
       // overflow would let focus scroll the whole editor sideways.
@@ -378,14 +354,11 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
         aria-hidden="true"
         className="soft-glow absolute -top-[215px] -right-[165px] h-[430px] w-[530px] [--glow-color:rgb(37_99_235/0.32)]"
       />
-      <div
-        ref={header}
-        className="relative flex flex-wrap items-center gap-3 px-5 pt-[18px] pb-3.5"
-      >
+      <div ref={header} className="relative flex items-center gap-3 px-5 pt-[18px] pb-3.5">
         <Tile tone={mono.tone} size={44}>
           <span className="font-mono text-[14px] font-semibold">{mono.text}</span>
         </Tile>
-        <div className="min-w-[200px] flex-1">
+        <div className="min-w-0 flex-1">
           <h2
             id="host-title"
             title={hostLabel(host)}
@@ -400,7 +373,7 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
           <ActionButton
             data-check=""
             reason={runReason}
-            busy={check.isPending}
+            busy={check.running}
             icon={<PlugZap className="size-4" strokeWidth={2} />}
             onClick={runCheck}
           >
@@ -478,6 +451,12 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
             </MenuItem>
           </MenuContent>
         </Menu>
+        <IconButton
+          label={t('hosts.panel.close')}
+          className="size-9 rounded-[10px]"
+          icon={<X className="size-4" strokeWidth={2} />}
+          onClick={onClose}
+        />
       </div>
 
       {/* Mounted before any result, so screen readers announce each one. */}
@@ -492,7 +471,7 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
             vaultLocked={vault.vault === 'locked'}
             onAction={{ ...fixes, ...unlockFix(test.run) }}
             onClose={() => {
-              setTest(null);
+              check.clearResult();
               header.current
                 ?.querySelector<HTMLElement>(git ? '[data-check]' : '[data-more]')
                 ?.focus();
@@ -547,6 +526,8 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
             ) : null}
 
             <MoreSection form={form} set={set} hosts={hosts} hostId={host.id} />
+
+            {concrete ? <HistorySection aliases={hostAliases(host)} /> : null}
           </div>
         )}
 
@@ -625,16 +606,7 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
           />
         ) : null}
       </Dialog>
-      <Dialog open={keyCheck !== null} onOpenChange={(open) => open || closeKeyCheck()}>
-        {keyCheck ? (
-          <KeyCheckDialog
-            alias={alias}
-            keyView={keyCheck.key}
-            onChecked={(run) => setTest({ run, context: keyCheck.context })}
-            onDone={closeKeyCheck}
-          />
-        ) : null}
-      </Dialog>
+      {check.dialog}
       <Dialog open={sending !== null} onOpenChange={(open) => open || closeSend()}>
         {sending ? (
           <SendDialog what={{ type: 'host', alias }} name={alias} onStarted={closeSend} />

@@ -7,6 +7,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -19,6 +20,7 @@ import { UnlockDialog } from '@/features/agent/UnlockDialog';
 import { AddHostDialog } from '@/features/hosts/AddHostDialog';
 import { GenerateKeyDialog } from '@/features/keys/GenerateKeyDialog';
 import { PassphraseDialog } from '@/features/keys/PassphraseDialog';
+import { UnlockVaultDialog } from '@/features/passwords/UnlockVaultDialog';
 import { useSettings } from '@/lib/settings';
 import { useRouter } from './router';
 
@@ -28,6 +30,11 @@ type Open =
   | { kind: 'passphrase'; key: KeyView; suggest: boolean }
   | { kind: 'unlock'; key: KeyView; lifetime: number | null; onUnlocked?: () => void }
   | null;
+
+interface VaultUnlock {
+  description?: string;
+  onUnlocked?: () => void;
+}
 
 interface DialogsValue {
   generateKey: () => void;
@@ -41,6 +48,12 @@ interface DialogsValue {
    * calls `onUnlocked`.
    */
   unlockKey: (key: KeyView, lifetime?: number | null, onUnlocked?: () => void) => void;
+  /**
+   * Opens the vault in a dialog, on whatever page or dialog is showing (it
+   * opens above the others), then calls `onUnlocked`. `description` says what
+   * it is opened for.
+   */
+  unlockVault: (options?: VaultUnlock) => void;
   importKey: () => Promise<void>;
 }
 
@@ -54,6 +67,22 @@ export function DialogsProvider({ children }: { children: ReactNode }) {
   const environment = useEnvironment();
   const [open, setOpen] = useState<Open>(null);
   const close = useCallback(() => setOpen(null), []);
+  // Its own state, so it opens above another of these dialogs instead of
+  // replacing it. It opens from code, not a Radix trigger, so focus goes back
+  // by hand.
+  const [vault, setVault] = useState<VaultUnlock | null>(null);
+  const vaultOpener = useRef<HTMLElement | null>(null);
+  const showVault = useCallback((next: VaultUnlock) => {
+    const active = document.activeElement;
+    vaultOpener.current = active instanceof HTMLElement && active !== document.body ? active : null;
+    setVault(next);
+  }, []);
+  const closeVault = useCallback(() => {
+    const element = vaultOpener.current;
+    vaultOpener.current = null;
+    setVault(null);
+    requestAnimationFrame(() => setTimeout(() => element?.isConnected && element.focus(), 0));
+  }, []);
 
   // `pnpm dev` only: `?open=generate` or `?open=addHost` shows a dialog on load.
   useEffect(() => {
@@ -83,6 +112,7 @@ export function DialogsProvider({ children }: { children: ReactNode }) {
         if (key.encrypted) setOpen({ kind: 'unlock', key, lifetime, onUnlocked });
         else addPlain.mutate({ key, lifetime }, { onSuccess: () => onUnlocked?.() });
       },
+      unlockVault: (options) => showVault(options ?? {}),
       importKey: async () => {
         try {
           const source = isTauri()
@@ -99,7 +129,7 @@ export function DialogsProvider({ children }: { children: ReactNode }) {
         }
       },
     }),
-    [settings.defaultLifetime, addPlain, importMutation, environment.data, t],
+    [settings.defaultLifetime, addPlain, importMutation, environment.data, t, showVault],
   );
 
   return (
@@ -119,6 +149,15 @@ export function DialogsProvider({ children }: { children: ReactNode }) {
             lifetime={open.lifetime}
             onDone={close}
             onUnlocked={open.onUnlocked}
+          />
+        ) : null}
+      </Dialog>
+      <Dialog open={vault !== null} onOpenChange={(next) => (next ? undefined : closeVault())}>
+        {vault ? (
+          <UnlockVaultDialog
+            description={vault.description}
+            onUnlocked={vault.onUnlocked}
+            onDone={closeVault}
           />
         ) : null}
       </Dialog>

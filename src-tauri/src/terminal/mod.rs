@@ -25,7 +25,7 @@
 pub mod bridge;
 mod external;
 mod store;
-mod text;
+pub(crate) mod text;
 pub mod types;
 
 use std::collections::HashMap;
@@ -54,6 +54,7 @@ use self::types::{OpenOptions, Phase, PromptAnswer, SessionState, TerminalEvent,
 use crate::askpass::{Connection, PromptAccount, Session};
 use crate::commands::remote::check_alias;
 use crate::error::{AppError, AppResult};
+use crate::history::{ConnectionEvent, History, Outcome, Via};
 use crate::process;
 use crate::state::AppState;
 
@@ -95,6 +96,8 @@ impl Sink for Channel<InvokeResponseBody> {
 pub struct Terminals {
     next_id: AtomicU32,
     sessions: Mutex<HashMap<u32, Arc<Terminal>>>,
+    /// Where sessions record signing in and failing; `None` in tests.
+    history: Option<Arc<History>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -102,6 +105,13 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Terminals {
+    pub fn new(history: Arc<History>) -> Self {
+        Self {
+            history: Some(history),
+            ..Self::default()
+        }
+    }
+
     /// Starts `ssh` to `alias` in a `cols`×`rows` terminal.
     pub fn open(
         self: &Arc<Self>,
@@ -303,6 +313,9 @@ pub struct Terminal {
     /// Closed by the user: ends as "ended", whatever the exit status.
     closing: AtomicBool,
     progress: Mutex<Progress>,
+    /// The list it is in, which also keeps the connection history; empty
+    /// for detached sessions.
+    terminals: std::sync::Weak<Terminals>,
 }
 
 struct Progress {
@@ -361,6 +374,7 @@ impl Terminal {
                 connected_at: None,
                 tail: Vec::new(),
             }),
+            terminals,
         });
 
         thread::Builder::new()
@@ -379,7 +393,7 @@ impl Terminal {
             move || {
                 let status = terminal.wait(child);
                 terminal.finish(status.as_ref(), &reader_finished, askpass);
-                if let Some(terminals) = terminals.upgrade() {
+                if let Some(terminals) = terminal.terminals.upgrade() {
                     terminals.remove(lock(&terminal.info).id);
                 }
             }
@@ -465,6 +479,7 @@ impl Terminal {
             progress.tail = Vec::new();
         }
         lock(&self.info).phase = Phase::Connected;
+        self.record(Outcome::SignedIn);
         let sign_in = if signed_in {
             self.bridge.signed_in()
         } else {
@@ -543,7 +558,43 @@ impl Terminal {
         };
         lock(&self.progress).phase = state.phase();
         lock(&self.info).phase = state.phase();
+        match &state {
+            SessionState::Ended { duration_secs, .. } => {
+                if let Some(history) = self.history() {
+                    let info = lock(&self.info).clone();
+                    let _ = history.session_ended(&info.alias, &info.started_at, *duration_secs);
+                }
+            }
+            SessionState::Failed { failure } => {
+                if let Some(outcome) = Outcome::of_failure(failure.reason) {
+                    self.record(outcome);
+                }
+            }
+            SessionState::Connecting | SessionState::Connected { .. } => {}
+        }
         self.sink.event(&TerminalEvent::State { state });
+    }
+
+    fn history(&self) -> Option<Arc<History>> {
+        self.terminals.upgrade()?.history.clone()
+    }
+
+    /// Records what became of the session, as of when it started. A history
+    /// that cannot be written only misses it.
+    fn record(&self, outcome: Outcome) {
+        let Some(history) = self.history() else {
+            return;
+        };
+        let info = lock(&self.info).clone();
+        let _ = history.record(
+            &info.alias,
+            ConnectionEvent {
+                at: info.started_at,
+                via: Via::Terminal,
+                outcome,
+                duration_secs: None,
+            },
+        );
     }
 }
 

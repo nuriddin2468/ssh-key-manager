@@ -1,9 +1,12 @@
 import { Check } from 'lucide-react';
 import { type ReactNode, useId } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
+import { OtpCode } from '@/features/passwords/OtpCode';
+import { SavedSecret } from '@/features/passwords/SavedSecret';
 import type { HostVault } from './vault';
 
 /** A card of the sign-in answer (the key, the password): a title over its controls. */
@@ -45,6 +48,7 @@ interface PasswordCardProps {
 export function PasswordCard({ vault, user, onEdit }: PasswordCardProps) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
+  const dialogs = useDialogs();
   const openPasswords = () => navigate({ page: 'passwords' });
 
   let body: ReactNode;
@@ -68,9 +72,13 @@ export function PasswordCard({ vault, user, onEdit }: PasswordCardProps) {
     case 'locked':
       body = (
         <State text={t('hosts.signIn.locked')} hint={t('hosts.signIn.lockedHint')}>
-          {/* The vault's own accent, as on the Passwords page it leads to. */}
+          {/* The vault's own accent, as in the dialog it opens. */}
           <div data-section="passwords" className="self-start">
-            <Button size="sm" variant="primary" onClick={openPasswords}>
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => dialogs.unlockVault({ description: t('hosts.signIn.unlockReason') })}
+            >
               {t('hosts.signIn.unlock')}
             </Button>
           </div>
@@ -95,13 +103,28 @@ export function PasswordCard({ vault, user, onEdit }: PasswordCardProps) {
       const otp = entry.hasOtp ? t('hosts.signIn.otpOn') : t('hosts.signIn.otpOff');
       body = (
         <>
-          <div className="flex h-[34px] items-center gap-2 rounded-[10px] border border-ok/25 bg-ok/[0.08] px-2.5 text-teal-200">
-            <Check aria-hidden="true" className="size-[15px] text-ok" strokeWidth={2.4} />
-            {t('hosts.signIn.saved')}
-          </div>
-          <p className="text-[12px] text-muted">
+          <p className="flex items-center gap-1.5 text-[12px] text-muted">
+            <Check aria-hidden="true" className="size-3.5 shrink-0 text-ok" strokeWidth={2.4} />
             {user ? `${t('hosts.signIn.savedFor', { user })} · ${otp}` : otp}
           </p>
+          <SavedSecret
+            id={`host:${entry.id}`}
+            entryId={entry.id}
+            locked={false}
+            unlockReason={t('hosts.signIn.unlockReason')}
+            labels={{
+              show: t('passwords.showPassword'),
+              hide: t('passwords.hidePassword'),
+              copy: t('passwords.copyPassword'),
+              copied: t('passwords.copiedPassword'),
+            }}
+          />
+          {entry.hasOtp ? (
+            <div className="flex items-center gap-2.5 text-[12px] text-muted">
+              {t('hosts.signIn.otpCode')}
+              <OtpCode entryId={entry.id} />
+            </div>
+          ) : null}
           <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
@@ -115,13 +138,6 @@ export function PasswordCard({ vault, user, onEdit }: PasswordCardProps) {
                 {t('hosts.signIn.addOtp')}
               </Button>
             )}
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => navigate({ page: 'passwords', entryId: entry.id })}
-            >
-              {t('hosts.vault.openInPasswords')}
-            </Button>
           </div>
         </>
       );

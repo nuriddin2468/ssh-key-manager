@@ -34,6 +34,7 @@ import { Tile, TONES } from '@/components/ui/Tile';
 import { findingText, findingTitle } from '@/features/audit/model';
 import { fixLabelKey, useFix } from '@/features/audit/useFix';
 import { SendDialog } from '@/features/nearby/SendDialog';
+import { SavedSecret } from '@/features/passwords/SavedSecret';
 import { copyText } from '@/lib/clipboard';
 import { cn } from '@/lib/cn';
 import { displayPath } from '@/lib/format';
@@ -69,8 +70,8 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
   const keysById = new Map((keys.data?.keys ?? []).map((k) => [k.id, k]));
   const { fix } = useFix(keysById);
   const vault = useVaultKey(key.fingerprint);
-  // While the vault is locked the entry is unknown; the Passwords page then
-  // asks to unlock it first.
+  // While the vault is locked the entry is unknown; showing the passphrase
+  // opens the vault first.
   const savedIn =
     vault.vault === 'unlocked' && vault.entry
       ? { entry: vault.entry }
@@ -272,18 +273,23 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
           <dd className="flex flex-col gap-1">
             <span className={cn(isPlain(key) && 'text-warning')}>{passLabel}</span>
             {savedIn ? (
-              <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-fg-2">
-                <span className="inline-flex items-center gap-1.5">
+              <span className="flex min-w-0 flex-col gap-1.5">
+                <span className="inline-flex items-center gap-1.5 text-fg-2">
                   <VaultIcon className="size-3.5 text-[var(--accent-text)]" />
                   {t('keys.savedInVault')}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => navigate({ page: 'passwords', entryId: savedIn.entry?.id })}
-                  className="inline-flex h-[22px] items-center rounded-md border border-[rgb(var(--accent-rgb)/0.3)] bg-[rgb(var(--accent-rgb)/0.12)] px-2 text-[11.5px] text-[var(--accent-text)] hover:bg-[rgb(var(--accent-rgb)/0.2)]"
-                >
-                  {t('keys.openInPasswords')}
-                </button>
+                <SavedSecret
+                  id={`key:${key.fingerprint ?? key.id}`}
+                  entryId={savedIn.entry?.id}
+                  locked={vault.vault === 'locked'}
+                  unlockReason={t('keys.unlockToShow', { name: key.name })}
+                  labels={{
+                    show: t('keys.showPassphrase'),
+                    hide: t('keys.hidePassphrase'),
+                    copy: t('keys.copyPassphrase'),
+                    copied: t('keys.passphraseCopied'),
+                  }}
+                />
               </span>
             ) : null}
           </dd>

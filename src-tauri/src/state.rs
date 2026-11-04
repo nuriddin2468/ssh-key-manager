@@ -7,6 +7,7 @@ use sshkm_core::paths::SshPaths;
 use time::OffsetDateTime;
 
 use crate::askpass::{self, Interactive, Responder, Session};
+use crate::history::History;
 use crate::terminal::Terminals;
 use crate::vault::VaultRuntime;
 
@@ -26,6 +27,8 @@ pub struct AppState {
     askpass: Mutex<Option<askpass::Server>>,
     /// The in-app terminal's sessions.
     pub terminals: Arc<Terminals>,
+    /// What became of checks and terminal sessions, by host.
+    pub history: Arc<History>,
 }
 
 impl AppState {
@@ -37,15 +40,17 @@ impl AppState {
         backup_dir: PathBuf,
         data_dir: PathBuf,
     ) -> Self {
+        let history = Arc::new(History::new(&data_dir));
         Self {
             paths,
             hosts_file,
             backup_dir,
             lifetimes: Mutex::new(HashMap::new()),
             openssh_version: OnceLock::new(),
+            history: Arc::clone(&history),
             vault: Arc::new(VaultRuntime::new(data_dir)),
             askpass: Mutex::new(None),
-            terminals: Arc::new(Terminals::default()),
+            terminals: Arc::new(Terminals::new(history)),
         }
     }
 

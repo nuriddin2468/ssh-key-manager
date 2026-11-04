@@ -19,26 +19,30 @@ import { type CSSProperties, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
-import { useEnvironment, useKeys } from '@/api/queries';
+import { useConfig, useEnvironment, useKeys } from '@/api/queries';
 import { toastError, useAppMutation } from '@/api/useAppMutation';
 import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
 import type { Finding } from '@/bindings/Finding';
+import type { HostEntry } from '@/bindings/HostEntry';
 import type { KeyView } from '@/bindings/KeyView';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Dialog } from '@/components/ui/Dialog';
 import { IconButton } from '@/components/ui/IconButton';
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '@/components/ui/Menu';
+import { Popover, PopoverTrigger } from '@/components/ui/Popover';
 import { Tile, TONES } from '@/components/ui/Tile';
 import { findingText, findingTitle } from '@/features/audit/model';
 import { fixLabelKey, useFix } from '@/features/audit/useFix';
+import { HostPreview } from '@/features/hosts/HostPreview';
 import { SendDialog } from '@/features/nearby/SendDialog';
+import { SavedSecret } from '@/features/passwords/SavedSecret';
 import { copyText } from '@/lib/clipboard';
 import { cn } from '@/lib/cn';
 import { displayPath } from '@/lib/format';
 import { fileManagerName } from '@/lib/platform';
-import { algorithmDescription, hasPrivate, isPlain, keyTone } from './model';
+import { algorithmDescription, hasPrivate, isPlain, keyTone, passphraseLabel } from './model';
 import { VaultIcon } from './VaultControls';
 import { useVaultKey } from './vaultKey';
 
@@ -62,6 +66,7 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
   const dialogs = useDialogs();
   const environment = useEnvironment();
   const keys = useKeys();
+  const hosts = useConfig().data?.view.hosts ?? [];
   const [confirmTrash, setConfirmTrash] = useState(false);
   const [sending, setSending] = useState(false);
   const home = environment.data?.paths.home;
@@ -69,8 +74,8 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
   const keysById = new Map((keys.data?.keys ?? []).map((k) => [k.id, k]));
   const { fix } = useFix(keysById);
   const vault = useVaultKey(key.fingerprint);
-  // While the vault is locked the entry is unknown; the Passwords page then
-  // asks to unlock it first.
+  // While the vault is locked the entry is unknown; showing the passphrase
+  // opens the vault first.
   const savedIn =
     vault.vault === 'unlocked' && vault.entry
       ? { entry: vault.entry }
@@ -111,13 +116,8 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
   };
 
   const path = key.privatePath ?? key.publicPath ?? '';
-  const passLabel = !hasPrivate(key)
-    ? '—'
-    : key.hardware
-      ? t('keys.passHardware')
-      : key.encrypted
-        ? t('keys.passProtected')
-        : t('keys.passNone');
+  const pass = passphraseLabel(key);
+  const passLabel = pass ? t(pass) : '—';
   const perms = key.permissions;
   const permsLabel = perms.ok
     ? t('keys.permsOk')
@@ -272,18 +272,23 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
           <dd className="flex flex-col gap-1">
             <span className={cn(isPlain(key) && 'text-warning')}>{passLabel}</span>
             {savedIn ? (
-              <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-fg-2">
-                <span className="inline-flex items-center gap-1.5">
+              <span className="flex min-w-0 flex-col gap-1.5">
+                <span className="inline-flex items-center gap-1.5 text-fg-2">
                   <VaultIcon className="size-3.5 text-[var(--accent-text)]" />
                   {t('keys.savedInVault')}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => navigate({ page: 'passwords', entryId: savedIn.entry?.id })}
-                  className="inline-flex h-[22px] items-center rounded-md border border-[rgb(var(--accent-rgb)/0.3)] bg-[rgb(var(--accent-rgb)/0.12)] px-2 text-[11.5px] text-[var(--accent-text)] hover:bg-[rgb(var(--accent-rgb)/0.2)]"
-                >
-                  {t('keys.openInPasswords')}
-                </button>
+                <SavedSecret
+                  id={`key:${key.fingerprint ?? key.id}`}
+                  entryId={savedIn.entry?.id}
+                  locked={vault.vault === 'locked'}
+                  unlockReason={t('keys.unlockToShow', { name: key.name })}
+                  labels={{
+                    show: t('keys.showPassphrase'),
+                    hide: t('keys.hidePassphrase'),
+                    copy: t('keys.copyPassphrase'),
+                    copied: t('keys.passphraseCopied'),
+                  }}
+                />
               </span>
             ) : null}
           </dd>
@@ -301,14 +306,12 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
               <span className="text-subtle">{t('keys.noHosts')}</span>
             ) : (
               key.usedBy.map((usage) => (
-                <button
+                <UsedByChip
                   key={`${usage.hostId}-${usage.patterns.join(' ')}`}
-                  type="button"
-                  onClick={() => navigate({ page: 'hosts', hostId: usage.hostId ?? undefined })}
-                  className="inline-flex h-[22px] items-center rounded-md border border-blue-400/30 bg-blue-400/12 px-2 font-mono text-[11.5px] text-blue-200 hover:bg-blue-400/20"
-                >
-                  {usage.patterns.join(' ') || '*'}
-                </button>
+                  label={usage.patterns.join(' ') || '*'}
+                  host={hosts.find((h) => h.id === usage.hostId)}
+                  onOpenHosts={() => navigate({ page: 'hosts' })}
+                />
               ))
             )}
           </dd>
@@ -400,5 +403,36 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       </h3>
       {children}
     </section>
+  );
+}
+
+/**
+ * A host that uses the key: its preview, or for an `IdentityFile` that
+ * applies to every host (no host block), the Hosts page.
+ */
+function UsedByChip({
+  label,
+  host,
+  onOpenHosts,
+}: {
+  label: string;
+  host: HostEntry | undefined;
+  onOpenHosts: () => void;
+}) {
+  const chip = (
+    <button
+      type="button"
+      onClick={host ? undefined : onOpenHosts}
+      className="inline-flex h-[22px] items-center rounded-md border border-blue-400/30 bg-blue-400/12 px-2 font-mono text-[11.5px] text-blue-200 hover:bg-blue-400/20 data-[state=open]:bg-blue-400/20"
+    >
+      {label}
+    </button>
+  );
+  if (!host) return chip;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>{chip}</PopoverTrigger>
+      <HostPreview host={host} />
+    </Popover>
   );
 }

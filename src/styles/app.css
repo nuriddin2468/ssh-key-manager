@@ -389,6 +389,38 @@
   }
 }
 
+/*
+ * View transitions (only the hosts page starts them): the editor slides in
+ * from the right and back out, the cards move between the grid and the
+ * column. The rest of the page swaps without a cross-fade.
+ */
+::view-transition-group(*) {
+  animation-duration: 300ms;
+  animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+}
+::view-transition-new(host-editor) {
+  animation: editor-in 300ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+::view-transition-old(host-editor) {
+  animation: editor-out 180ms ease-in both;
+}
+@keyframes editor-in {
+  from {
+    opacity: 0;
+    transform: translateX(40px);
+  }
+}
+@keyframes editor-out {
+  to {
+    opacity: 0;
+    transform: translateX(40px);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

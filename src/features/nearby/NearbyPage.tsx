@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
 import { useVaultStatus } from '@/api/queries';
 import { useAppMutation } from '@/api/useAppMutation';
+import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
 import type { Contact } from '@/bindings/Contact';
 import { PageBody, Toolbar } from '@/components/layout/Toolbar';
@@ -46,6 +47,7 @@ import { setStatus, useContacts, useNearby } from './queries';
 export function NearbyPage() {
   const { t, i18n } = useTranslation();
   const { navigate } = useRouter();
+  const dialogs = useDialogs();
   const status = useNearby();
   const contacts = useContacts();
   const vault = useVaultStatus().data?.state;
@@ -108,9 +110,18 @@ export function NearbyPage() {
                 {t('nearby.getVault')}
               </Button>
             ) : null}
-            <Button size="sm" onClick={() => navigate({ page: 'passwords' })}>
-              {t('nearby.openPasswords')}
-            </Button>
+            {vault === 'locked' ? (
+              <Button
+                size="sm"
+                onClick={() => dialogs.unlockVault({ description: t('nearby.vaultLocked') })}
+              >
+                {t('passwords.unlock')}
+              </Button>
+            ) : (
+              <Button size="sm" onClick={() => navigate({ page: 'passwords' })}>
+                {t('nearby.openPasswords')}
+              </Button>
+            )}
           </section>
         ) : null}
 

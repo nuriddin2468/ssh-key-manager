@@ -6,6 +6,7 @@ import type { AgentView } from '@/bindings/AgentView';
 import type { AuditReport } from '@/bindings/AuditReport';
 import type { BrowserStatus } from '@/bindings/BrowserStatus';
 import type { ConfigFile } from '@/bindings/ConfigFile';
+import type { ConnectionEvent } from '@/bindings/ConnectionEvent';
 import type { ConnectionTest } from '@/bindings/ConnectionTest';
 import type { Contact } from '@/bindings/Contact';
 import type { CopyField } from '@/bindings/CopyField';
@@ -105,6 +106,9 @@ export const api = {
   /** `typed`: the passphrase of a key ssh cannot open by itself; `wrong_passphrase` if it doesn't open it. */
   testConnection: (alias: string, typed?: TypedPassphrase) =>
     call<ConnectionTest>('test_connection', { alias, ...typedArgs(typed) }),
+  /** Checks and in-app terminal sessions by alias, newest first. */
+  connectionHistory: () => call<Record<string, ConnectionEvent[]>>('connection_history'),
+  clearConnectionHistory: (alias: string) => call<void>('clear_connection_history', { alias }),
   installPublicKey: (alias: string, keyId: string) =>
     call<KeyInstall>('install_public_key', { alias, keyId }),
   /** Reads the host's `~/.ssh/authorized_keys` after the change, if any, in one sign-in. */

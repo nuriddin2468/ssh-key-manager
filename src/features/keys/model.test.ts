@@ -7,6 +7,7 @@ import {
   isWeak,
   keyTone,
   keyTypeBadge,
+  passphraseLabel,
   passphraseStrength,
   suggestFileName,
 } from './model';
@@ -84,5 +85,14 @@ describe('passphraseStrength', () => {
     expect(passphraseStrength('abcdefgh')).toBe(1);
     expect(passphraseStrength('tandem-orbit-cactus-violet')).toBeGreaterThanOrEqual(3);
     expect(passphraseStrength('Tandem-Orbit-Cactus-7')).toBe(4);
+  });
+});
+
+describe('passphraseLabel', () => {
+  it('names how the private half is protected', () => {
+    expect(passphraseLabel(key({}))).toBe('keys.passProtected');
+    expect(passphraseLabel(key({ encrypted: false }))).toBe('keys.passNone');
+    expect(passphraseLabel(key({ hardware: true, encrypted: false }))).toBe('keys.passHardware');
+    expect(passphraseLabel(key({ privatePath: null }))).toBeNull();
   });
 });

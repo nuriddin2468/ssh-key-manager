@@ -8,6 +8,7 @@ import { BrowserAutofillSection } from './BrowserAutofillSection';
 
 const api = vi.hoisted(() => ({ browserStatus: vi.fn() }));
 vi.mock('@/api/commands', () => ({ api }));
+vi.mock('@/app/dialogs', () => ({ useDialogs: () => ({ unlockVault: vi.fn() }) }));
 
 function status(extra: Partial<BrowserStatus> = {}): BrowserStatus {
   return {

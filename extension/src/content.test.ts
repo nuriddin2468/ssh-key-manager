@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { click, fireTrusted, press, type } from './test/user';
 import './content';
 
@@ -60,6 +60,10 @@ afterEach(() => {
   document.body.innerHTML = '';
   world.sent.length = 0;
 });
+
+// A field that loses focus hides the menu 150 ms later. Let the last such
+// timer run while the document is still there.
+afterAll(() => new Promise((resolve) => setTimeout(resolve, 200)));
 
 describe('events a page makes up', () => {
   it('open no menu', async () => {

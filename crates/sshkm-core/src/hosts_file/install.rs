@@ -4,7 +4,8 @@
 //! file it writes the new text to a private temporary file and asks the system
 //! to run one short, fixed script elevated: `osascript … with administrator
 //! privileges` on macOS, `pkexec` on Linux, a UAC prompt on Windows. The
-//! script copies the text somewhere the user cannot change it, checks its
+//! script copies the text somewhere only an administrator can read or change
+//! (a root-only file on macOS and Linux, memory on Windows), checks its
 //! length and SHA-256 against the text the user approved, and only then puts
 //! it in place, so another program cannot swap the temporary file in between.
 //! Right before that it checks that the hosts file is still the revision the
@@ -114,8 +115,11 @@ fn failure(message: &str) -> Error {
 
 /// The elevated step on macOS and Linux: `sh -c <script> sshkm <source>
 /// <target> <sha256> <length> <revision> <flush 0|1>`. It reads one byte
-/// more than the approved text at most, and only from a regular file. Exit 2:
-/// a bad length; 3: the source is not the approved text; 4: the target is a
+/// more than the approved text at most, and only from a regular file. The
+/// copy it checks is readable by root alone until it has passed: another
+/// program can swap the source for a link to a file only root may read, and
+/// that file must not become readable next to the hosts file. Exit 2: a bad
+/// length; 3: the source is not the approved text; 4: the target is a
 /// symbolic link (managed by another tool); 6 ([`STALE`]): the target is no
 /// longer `revision`.
 #[cfg_attr(windows, allow(dead_code))]
@@ -128,7 +132,7 @@ sha256() {{ if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum
 if [ -L "$dst" ]; then echo "$dst is a symbolic link" >&2; exit 4; fi
 if [ ! -f "$src" ] || [ -L "$src" ]; then echo "$src is not a regular file" >&2; exit 3; fi
 staged="$dst.sshkm-new"
-umask 022
+umask 077
 rm -f "$staged"
 head -c "$((size + 1))" "$src" > "$staged"
 got=$(sha256 < "$staged")
@@ -595,6 +599,35 @@ mod tests {
                 .unwrap()
                 .code();
             assert_eq!(code, Some(2));
+            assert_eq!(fs::read_to_string(&dst).unwrap(), "old\n");
+        }
+
+        #[test]
+        fn keeps_the_unchecked_copy_private() {
+            let dir = tempfile::tempdir().unwrap();
+            let (src, dst) = (dir.path().join("new"), dir.path().join("hosts"));
+            fs::write(&src, "10.0.0.1 box\n").unwrap();
+            fs::write(&dst, "old\n").unwrap();
+            // A checksum program that fails stops the script right after it
+            // made the copy, and leaves the copy behind to look at.
+            let bin = dir.path().join("bin");
+            fs::create_dir(&bin).unwrap();
+            fs::write(bin.join("sha256sum"), "#!/bin/sh\nexit 1\n").unwrap();
+            fs::set_permissions(bin.join("sha256sum"), fs::Permissions::from_mode(0o755)).unwrap();
+            let path = std::env::var_os("PATH").unwrap_or_default();
+            let path =
+                std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&path)))
+                    .unwrap();
+            let old = revision_of(b"old\n");
+            let status = Command::new("/bin/sh")
+                .args(["-c", &posix_script("echo flushed"), "sshkm"])
+                .args(step(&src, &dst, b"10.0.0.1 box\n", &old).posix_args())
+                .env("PATH", path)
+                .status()
+                .unwrap();
+            assert!(!status.success());
+            let staged = fs::metadata(dir.path().join("hosts.sshkm-new")).unwrap();
+            assert_eq!(staged.permissions().mode() & 0o777, 0o600);
             assert_eq!(fs::read_to_string(&dst).unwrap(), "old\n");
         }
 

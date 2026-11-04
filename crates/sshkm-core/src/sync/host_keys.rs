@@ -7,6 +7,12 @@
 //! has another key of the same type for, it keeps its own and reports
 //! both: one of them may be a server pretending, and only the user can
 //! tell which.
+//!
+//! A host this computer trusts through an `@cert-authority` line has a key
+//! here too, even with no plain one: nothing is added for it, since `ssh`
+//! would then take the sender's key without a certificate, and a key the
+//! sender has that this computer doesn't is reported. A key this computer
+//! marked `@revoked` for the host is never added, and reported.
 
 use std::collections::BTreeSet;
 
@@ -112,8 +118,9 @@ pub(crate) fn is_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'))
 }
 
-/// Adds the other computer's keys for hosts this one has none for, and
-/// reports the hosts the two trust different keys of one type for.
+/// Adds the other computer's keys for hosts this one has none for (plain
+/// or through a CA), never one it revoked, and reports the hosts the two
+/// trust different keys for.
 pub fn merge(known: &mut KnownHosts, theirs: &[HostKeys]) -> KeysMerge {
     let mut merge = KeysMerge::default();
     for host in theirs {
@@ -121,8 +128,20 @@ pub fn merge(known: &mut KnownHosts, theirs: &[HostKeys]) -> KeysMerge {
             continue;
         }
         let mine = known.keys_for(&host.host, host.port);
-        if mine.is_empty() {
-            for key in &host.keys {
+        let marked = |marker: HostMarker| -> Vec<String> {
+            known
+                .matches(&host.host, host.port)
+                .into_iter()
+                .filter(|entry| entry.marker == marker)
+                .map(|entry| entry.fingerprint)
+                .collect()
+        };
+        let authorities = marked(HostMarker::CertAuthority);
+        let revoked = marked(HostMarker::Revoked);
+        let is_revoked =
+            |key: &HostKey| fingerprint(&key.key).is_some_and(|f| revoked.contains(&f));
+        let differs = if mine.is_empty() && authorities.is_empty() {
+            for key in host.keys.iter().filter(|key| !is_revoked(key)) {
                 if known
                     .add_key(&host.host, host.port, &key.key_type, &key.key)
                     .unwrap_or(false)
@@ -130,21 +149,29 @@ pub fn merge(known: &mut KnownHosts, theirs: &[HostKeys]) -> KeysMerge {
                     merge.added += 1;
                 }
             }
-            continue;
-        }
-        let differs = host.keys.iter().any(|key| {
-            let same_type: Vec<&String> = mine
-                .iter()
-                .filter(|(kind, _)| *kind == key.key_type)
-                .map(|(_, blob)| blob)
-                .collect();
-            !same_type.is_empty() && !same_type.contains(&&key.key)
-        });
+            host.keys.iter().any(is_revoked)
+        } else {
+            host.keys.iter().any(|key| {
+                let same_type: Vec<&String> = mine
+                    .iter()
+                    .filter(|(kind, _)| *kind == key.key_type)
+                    .map(|(_, blob)| blob)
+                    .collect();
+                let unknown = !mine.iter().any(|(_, blob)| *blob == key.key);
+                is_revoked(key)
+                    || (!same_type.is_empty() && !same_type.contains(&&key.key))
+                    || (!authorities.is_empty() && unknown)
+            })
+        };
         if differs {
             merge.differ.push(KeysDiffer {
                 host: host.host.clone(),
                 port: host.port,
-                here: mine.iter().filter_map(|(_, k)| fingerprint(k)).collect(),
+                here: mine
+                    .iter()
+                    .filter_map(|(_, k)| fingerprint(k))
+                    .chain(authorities)
+                    .collect(),
                 there: host
                     .keys
                     .iter()
@@ -271,6 +298,68 @@ mod tests {
         // The same keys again: nothing to add, nothing differs.
         let again = super::merge(&mut known, &theirs[..1]);
         assert_eq!(again, KeysMerge::default());
+    }
+
+    #[test]
+    fn a_host_trusted_through_a_ca_gets_no_plain_key() {
+        let ca = format!("@cert-authority *.corp.example.com ssh-ed25519 {ED_A}\n");
+        let mut known = KnownHosts::parse(&ca);
+        let theirs = HostKeys {
+            host: "prod.corp.example.com".into(),
+            port: 22,
+            keys: vec![key("ssh-ed25519", ED_B)],
+        };
+        let merge = merge(&mut known, std::slice::from_ref(&theirs));
+        assert_eq!(merge.added, 0);
+        assert_eq!(known.to_string(), ca);
+        assert_eq!(
+            merge.differ,
+            [KeysDiffer {
+                host: "prod.corp.example.com".into(),
+                port: 22,
+                here: vec![fingerprint(ED_A).unwrap()],
+                there: vec![fingerprint(ED_B).unwrap()],
+            }]
+        );
+        // A host the CA doesn't cover gets the key as before.
+        let mut other = theirs;
+        other.host = "prod.example.com".into();
+        assert_eq!(super::merge(&mut known, &[other]).added, 1);
+    }
+
+    #[test]
+    fn a_revoked_key_is_never_added() {
+        let revoked = format!("@revoked * ssh-ed25519 {ED_B}\n");
+        let mut known = KnownHosts::parse(&revoked);
+        let merge = merge(
+            &mut known,
+            &[HostKeys {
+                host: "new.example.com".into(),
+                port: 22,
+                keys: vec![key("ssh-ed25519", ED_B), key(NISTP256, ECDSA)],
+            }],
+        );
+        // The other key goes in; the revoked one is reported.
+        assert_eq!(merge.added, 1);
+        assert_eq!(
+            known.keys_for("new.example.com", 22),
+            [(NISTP256.to_owned(), ECDSA.to_owned())]
+        );
+        assert_eq!(merge.differ.len(), 1);
+        assert_eq!(merge.differ[0].here, Vec::<String>::new());
+
+        // Revoked here, trusted there, for a host with a key of another type
+        // here: reported all the same.
+        let mut known = KnownHosts::parse(&format!("{revoked}prod {NISTP256} {ECDSA}\n"));
+        let merge = super::merge(
+            &mut known,
+            &[HostKeys {
+                host: "prod".into(),
+                port: 22,
+                keys: vec![key("ssh-ed25519", ED_B)],
+            }],
+        );
+        assert_eq!((merge.added, merge.differ.len()), (0, 1));
     }
 
     #[test]

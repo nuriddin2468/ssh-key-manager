@@ -14,10 +14,15 @@ use crate::{Error, Result};
 const MAX_MEMORY_KIB: u64 = 2 * 1024 * 1024;
 /// Most Argon2 passes accepted.
 const MAX_ITERATIONS: u64 = 1000;
-/// Most Argon2 lanes: Argon2's own maximum. Lanes add neither memory nor
-/// work, and KeePassXC uses one per processor thread (128 and more on big
-/// workstations); Argon2 also needs 8 KiB of memory per lane.
-const MAX_LANES: u64 = (1 << 24) - 1;
+/// Most Argon2 lanes accepted. Lanes add no work to the hashing itself, but
+/// rust-argon2, which derives the key slots' keys and the KeePass reader's,
+/// starts a thread per lane for each quarter of every pass. With 65 536
+/// lanes one pass took two minutes; at 256 lanes × [`MAX_ITERATIONS`] the
+/// thread starts take about 10 seconds, less than the memory × passes
+/// maximum allows anyway. KeePassXC uses one lane per processor thread, so
+/// even a 192-thread workstation stays below. Argon2 also needs 8 KiB of
+/// memory per lane.
+const MAX_LANES: u64 = 256;
 /// Most memory × passes accepted, in KiB: e.g. 1 GiB × 64 or 64 MiB × 1000.
 const MAX_WORK_KIB: u64 = 64 * 1024 * 1024;
 /// Most AES-KDF rounds accepted (KDBX 3 and some KDBX 4 files): about a
@@ -207,6 +212,17 @@ mod tests {
         bytes
     }
 
+    /// The same for a 32-bit value, such as the lanes (`P`).
+    fn patch_u32(mut bytes: Vec<u8>, key: u8, value: u32) -> Vec<u8> {
+        let at = bytes
+            .windows(6)
+            .position(|w| w == [VARIANT_U32, 1, 0, 0, 0, key])
+            .unwrap();
+        let start = at + 1 + 4 + 1 + 4;
+        bytes[start..start + 4].copy_from_slice(&value.to_le_bytes());
+        bytes
+    }
+
     #[test]
     fn argon2_costs_have_maxima() {
         assert!(check_argon2(128 * 1024, 3, 4).is_ok());
@@ -214,6 +230,8 @@ mod tests {
         assert!(check_argon2(64 * 1024, 1000, 2).is_ok());
         // KeePassXC on a 128-thread workstation.
         assert!(check_argon2(64 * 1024, 10, 128).is_ok());
+        // The most threads: 256 lanes, every pass allowed.
+        assert!(check_argon2(64 * 1024, 1000, 256).is_ok());
         for (memory, iterations, lanes) in [
             (4 * 1024 * 1024 * 1024, 1, 1),
             (128 * 1024, 1_000_000, 4),
@@ -221,6 +239,12 @@ mod tests {
             (2 * 1024 * 1024, 100, 4),
             (0, 1, 1),
             (1024, 0, 1),
+            (1024, 1, 0),
+            // Enough memory for every lane and within the work maximum, but
+            // a thread per lane each quarter pass: hours (tampered files).
+            (512 * 1024, 128, 65_536),
+            (2 * 1024 * 1024, 32, 262_144),
+            (64 * 1024, 1, 257),
         ] {
             assert!(
                 matches!(
@@ -260,6 +284,27 @@ mod tests {
         assert!(matches!(check_kdbx(&endless), Err(Error::Unsupported(_))));
         let aes = patch(kdbx(KdfConfig::Aes { rounds: 1000 }), b'R', u64::MAX);
         assert!(matches!(check_kdbx(&aes), Err(Error::Unsupported(_))));
+    }
+
+    #[test]
+    fn a_header_asking_for_a_thread_per_lane_for_hours_is_refused() {
+        let bytes = kdbx(KdfConfig::Argon2id {
+            iterations: 2,
+            memory: 1024 * 1024,
+            parallelism: 1,
+            version: argon2::Version::Version13,
+        });
+        // 512 MiB, 128 passes, 65 536 lanes: within the memory and work
+        // maxima, and about four hours of thread starts.
+        let bytes = patch(bytes, b'M', 512 << 20);
+        let bytes = patch(bytes, b'I', 128);
+        let many_lanes = patch_u32(bytes.clone(), b'P', 65_536);
+        assert!(matches!(
+            check_kdbx(&many_lanes),
+            Err(Error::Unsupported(_))
+        ));
+        let few_lanes = patch_u32(bytes, b'P', 8);
+        assert!(check_kdbx(&few_lanes).is_ok());
     }
 
     #[test]

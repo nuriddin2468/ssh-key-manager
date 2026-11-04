@@ -49,4 +49,18 @@ describe('browser autofill settings', () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Set up again' })).not.toBeInTheDocument();
   });
+
+  it('asks to move a copy on a disk image to Applications', async () => {
+    show(
+      status({
+        mountedLocation: '/Volumes/SSH Key Manager/SSH Key Manager.app/Contents/MacOS/sshkm-app',
+      }),
+    );
+    expect(
+      await screen.findByText(
+        /disk image.*\(\/Volumes\/SSH Key Manager\/.*Move the app to the Applications folder/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set up again' })).not.toBeInTheDocument();
+  });
 });

@@ -15,6 +15,10 @@
 //! - **To sync** with one of the user's devices: each checks that the other
 //!   has the same vault and is one of the user's devices, then [`sync`].
 //!
+//! Each side shows a device it knows by the name it keeps for it, whatever
+//! name the device gives in its `Hello`; only a device it doesn't know yet
+//! is shown by its own.
+//!
 //! [`transfer`]: super::transfer
 //! [`own`]: super::own
 //! [`sync`]: super::sync
@@ -57,6 +61,14 @@ pub enum PairingPhase {
     Paired,
     /// Both were each other's contacts already.
     Known,
+    /// The device the user picked to send to, under the name `announced`,
+    /// is a contact (or one of the user's devices) this vault knows by
+    /// another name, the conversation's `peer`: this user says whether to
+    /// send it the item all the same. Nothing has gone to it yet, not even
+    /// the offer.
+    NameMismatch {
+        announced: String,
+    },
     /// This side offered `item`; the other user hasn't answered yet.
     Offering {
         item: ItemSummary,
@@ -178,12 +190,14 @@ pub enum PairingFailure {
 pub trait Side {
     /// This device's name, for the other user to read.
     fn name(&self) -> String;
-    /// Whether `peer` is a contact, or one of the user's devices, already.
-    fn knows(&self, peer: PeerKey) -> Result<bool, PairingFailure>;
+    /// The name this side keeps for `peer`, if it is a contact or one of
+    /// the user's devices already.
+    fn knows(&self, peer: PeerKey) -> Result<Option<String>, PairingFailure>;
     /// Saves `peer` as a contact named `name`.
     fn save(&self, peer: PeerKey, name: &str) -> Result<(), PairingFailure>;
     /// Shows the user where the conversation is; `peer` once the other
-    /// device gave its name.
+    /// device said who it is: the name this side keeps for it, or for a
+    /// device it doesn't know, the name it gave.
     fn show(&self, peer: Option<&str>, phase: &PairingPhase);
     /// The user's answer if one comes within `wait`; `Err(Cancelled)` once
     /// the user cancelled.
@@ -211,6 +225,13 @@ pub trait Side {
     /// devices only syncs.
     fn takes(&self, _intent: Option<Intent>) -> Result<(), PairingFailure> {
         Ok(())
+    }
+    /// Whether this user confirmed, within `wait`, making the other computer
+    /// one of their devices: with Touch ID / Windows Hello or the master
+    /// password, never with a plain yes. `Err(Cancelled)` once the user
+    /// cancelled.
+    fn authorized(&self, _wait: Duration) -> Result<bool, PairingFailure> {
+        Err(PairingFailure::Cancelled)
     }
     /// Records this computer and `peer`, named `name`, as the user's devices.
     fn add_device(&self, _peer: PeerKey, _name: &str) -> Result<(), PairingFailure> {
@@ -245,6 +266,11 @@ pub trait Side {
     fn decisions(&self, _wait: Duration) -> Result<Option<SyncDecisions>, PairingFailure> {
         Err(PairingFailure::Cancelled)
     }
+    /// Whether this user allows, in a system dialog that a script in the
+    /// page can't answer, the risky changes of a sync they chose to make.
+    fn allow_risky(&self, _changes: &[sync::RiskyChange]) -> bool {
+        false
+    }
 }
 
 /// What the side that connected came for.
@@ -252,8 +278,9 @@ pub trait Side {
 pub enum Purpose<'a> {
     /// To pair only.
     Pair,
-    /// To pair if need be, then send the item.
-    Send(&'a Item),
+    /// To pair if need be, then send `item`; `to` is the name the device
+    /// was picked under, when the user picked it from the devices found.
+    Send { item: &'a Item, to: Option<&'a str> },
     /// To make the other computer one of the user's devices.
     AddDevice,
     /// To sync with one of the user's devices.
@@ -277,9 +304,11 @@ pub fn conversation(
         Err(reason) => return PairingPhase::Failed { reason },
     };
     match (met, purpose) {
-        (Met::Contacts(_), Some(Purpose::Send(item))) => transfer::send(session, side, item),
-        (Met::Contacts(end), Some(_)) => end,
-        (Met::Contacts(end), None) => transfer::receive(session, side).unwrap_or(end),
+        (Met::Contacts(_, known), Some(Purpose::Send { item, to })) => {
+            transfer::send(session, side, item, known.as_deref(), to)
+        }
+        (Met::Contacts(end, _), Some(_)) => end,
+        (Met::Contacts(end, _), None) => transfer::receive(session, side).unwrap_or(end),
         (Met::AddDevice { peer, name, joins }, _) => own::add(session, side, peer, &name, joins),
         (Met::Sync { peer }, _) => sync::run(session, side, peer),
     }
@@ -287,8 +316,9 @@ pub fn conversation(
 
 /// How two sides met.
 enum Met {
-    /// As contacts: `Paired` or `Known`.
-    Contacts(PairingPhase),
+    /// As contacts: `Paired` or `Known`, with the name this side kept for
+    /// the other before, if it knew it.
+    Contacts(PairingPhase, Option<String>),
     /// To make one the other's device; with `joins`, the side that
     /// answered gets the vault.
     AddDevice {
@@ -316,7 +346,7 @@ fn meet(
         .send(&Message::Hello {
             version: VERSION,
             name: side.name(),
-            known,
+            known: known.is_some(),
             own: mine.clone(),
         })
         .map_err(|_| PairingFailure::Broken)?;
@@ -332,8 +362,11 @@ fn meet(
     if version != VERSION {
         return Err(PairingFailure::Version);
     }
-    let peer = Some(clean_name(&name)).filter(|name| !name.is_empty());
-    let peer_name = peer.clone().unwrap_or_else(|| "?".to_owned());
+    let announced = Some(clean_name(&name)).filter(|name| !name.is_empty());
+    let peer_name = announced.clone().unwrap_or_else(|| "?".to_owned());
+    // A device this side knows goes by the name it keeps for it, since any
+    // device may give any name; only one it doesn't know yet by its own.
+    let peer = known.clone().or(announced);
     side.show(peer.as_deref(), &PairingPhase::Connecting);
     let intent = if initiator {
         intent
@@ -343,12 +376,15 @@ fn meet(
     side.takes(intent)?;
 
     let Some(intent) = intent else {
-        if known && they_know {
-            return Ok(Met::Contacts(PairingPhase::Known));
+        if known.is_some() && they_know {
+            return Ok(Met::Contacts(PairingPhase::Known, known));
         }
         compare_codes(session, side, peer.as_deref())?;
-        side.save(peer_key, &peer_name)?;
-        return Ok(Met::Contacts(PairingPhase::Paired));
+        // A device known here already stays as it is, name and all.
+        if known.is_none() {
+            side.save(peer_key, &peer_name)?;
+        }
+        return Ok(Met::Contacts(PairingPhase::Paired, known));
     };
     let (Some(mine), Some(theirs)) = (mine, theirs) else {
         return Err(PairingFailure::Version);
@@ -492,7 +528,9 @@ pub(super) fn broken(error: sshkm_core::Error) -> PairingFailure {
 mod tests {
     use std::time::Duration;
 
-    use super::super::script::{Script, codes, pair};
+    use sshkm_core::p2p::Identity;
+
+    use super::super::script::{Script, codes, pair, peers, talk_as};
     use super::*;
 
     #[test]
@@ -574,5 +612,41 @@ mod tests {
             (left_end, right_end),
             (PairingPhase::Paired, PairingPhase::Paired)
         );
+    }
+
+    #[test]
+    fn a_contact_goes_by_the_name_kept_here_not_the_one_it_gives() {
+        // Alice has Bob and Carol as contacts; Carol calls herself Bob.
+        let alice = Identity::generate().unwrap();
+        let bob = Identity::generate().unwrap();
+        let carol = Identity::generate().unwrap();
+        let mut left = Script::new("Alice", Some(true));
+        left.contacts = vec![(bob.public(), "Bob's MacBook"), (carol.public(), "Carol")];
+        let mut right = Script::new("Bob's MacBook", Some(true));
+        right.contacts = vec![(alice.public(), "Alice")];
+        let ((left_end, left), (right_end, right)) =
+            talk_as((left, alice), (right, carol), Purpose::Pair);
+        assert_eq!(
+            (left_end, right_end),
+            (PairingPhase::Known, PairingPhase::Known)
+        );
+        assert_eq!(peers(&left), ["Carol"]);
+        assert_eq!(peers(&right), ["Alice"]);
+
+        // Carol, who says she doesn't know Alice, is still Carol there
+        // while the two compare the code, and stays Carol after.
+        let mut left = Script::new("Alice", Some(true));
+        left.knows = true;
+        left.known_as = "Carol";
+        let ((left_end, left), (right_end, right)) =
+            pair(left, Script::new("Bob's MacBook", Some(true)));
+        assert_eq!(
+            (left_end, right_end),
+            (PairingPhase::Paired, PairingPhase::Paired)
+        );
+        assert_eq!(codes(&left).len(), 1);
+        assert_eq!(peers(&left), ["Carol"]);
+        assert!(left.saved.lock().unwrap().is_empty());
+        assert_eq!(*right.saved.lock().unwrap(), ["Alice"]);
     }
 }

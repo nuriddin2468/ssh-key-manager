@@ -111,9 +111,13 @@ export function cycle(tabs: Tab[], active: string | null, step: 1 | -1): string 
   return tabs[(index + step + tabs.length) % tabs.length]?.key ?? null;
 }
 
-/** Names `ssh` can connect to: one word, not a pattern, not an option. */
+/**
+ * Names the app runs `ssh` with: letters, digits and `. _ - @ : [ ]`, not an
+ * option. Patterns and anything a shell treats specially are left out; the
+ * backend refuses them too (`check_alias`).
+ */
 export function isConnectable(alias: string): boolean {
-  return alias.length > 0 && !alias.startsWith('-') && !/[\s*?!]/.test(alias);
+  return /^[A-Za-z0-9._@:[\]-]+$/.test(alias) && !alias.startsWith('-');
 }
 
 /** The aliases of the config's host blocks that `ssh` can be run with. */

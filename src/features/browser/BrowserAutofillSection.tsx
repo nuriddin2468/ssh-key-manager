@@ -36,9 +36,11 @@ export function BrowserAutofillSection() {
 
   const name = (browser: PairedBrowser) =>
     t('browser.connectedOn', { browser: browser.browser, computer: browser.computer });
-  // Setting up again can't help a copy in a temporary folder.
+  // Setting up again can't help a copy in a temporary folder or on a mounted volume.
   const unregistered =
-    !status.temporaryLocation && status.browsers.some((browser) => !browser.registered);
+    !status.temporaryLocation &&
+    !status.mountedLocation &&
+    status.browsers.some((browser) => !browser.registered);
 
   return (
     <section aria-labelledby={titleId} className="flex flex-col gap-2">
@@ -79,6 +81,13 @@ export function BrowserAutofillSection() {
               <div className="px-4 py-3">
                 <Callout tone="warning" icon={TriangleAlert}>
                   {t('browser.temporary', { path: status.temporaryLocation })}
+                </Callout>
+              </div>
+            ) : null}
+            {status.mountedLocation ? (
+              <div className="px-4 py-3">
+                <Callout tone="warning" icon={TriangleAlert}>
+                  {t('browser.mounted', { path: status.mountedLocation })}
                 </Callout>
               </div>
             ) : null}

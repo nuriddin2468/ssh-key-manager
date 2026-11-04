@@ -14,6 +14,8 @@
 //   a few seconds after "Get it from my other computer".
 // - `?nearby=sync`: "Sync" brings a conflict, a risky host and many
 //   deletions to decide on.
+// - `?nearby=renamed`: whatever computer the user sends to, a contact
+//   answers that calls itself by that computer's name.
 
 import type { Contact } from '@/bindings/Contact';
 import type { ConversationKind } from '@/bindings/ConversationKind';
@@ -87,7 +89,13 @@ const GROUP_ENTRIES = [
 function summary(request: SendRequest): ItemSummary {
   switch (request.type) {
     case 'host':
-      return { type: 'host', alias: request.alias, address: 'ubuntu@10.0.4.12', hostKeys: 1 };
+      return {
+        type: 'host',
+        alias: request.alias,
+        address: 'ubuntu@10.0.4.12',
+        proxyJump: null,
+        hostKeys: 1,
+      };
     case 'password':
       return { type: 'password', title: 'prod-api', username: 'deploy', url: '', otp: request.otp };
     case 'hostsGroup': {
@@ -216,6 +224,7 @@ const ACTIVE = [
   'connecting',
   'compare',
   'waiting',
+  'nameMismatch',
   'offering',
   'offered',
   'authorize',
@@ -506,6 +515,18 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
     sending = summary(item as SendRequest);
     const found = devices.find((device) => device.id === target);
     const peer = found?.name ?? String(target);
+    if (SWITCH === 'renamed') {
+      const id = nextId++;
+      pairing = { id, peer: null, outgoing: true, kind: 'pair', phase: { type: 'connecting' } };
+      changed();
+      later(700, () =>
+        update(id, {
+          peer: contacts[0]?.name ?? '?',
+          phase: { type: 'nameMismatch', announced: peer },
+        }),
+      );
+      return id;
+    }
     if (!contacts.some((contact) => contact.name === peer)) {
       return start(true, peer, target === 'aziz');
     }
@@ -521,6 +542,11 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
   },
   nearby_answer: ({ id: raw, matched }) => {
     const id = Number(raw);
+    if (pairing?.id === id && pairing.phase.type === 'nameMismatch') {
+      if (matched) afterPairing(id);
+      else update(id, { phase: { type: 'failed', reason: 'cancelled' } });
+      return undefined;
+    }
     if (pairing?.id === id && pairing.phase.type === 'offered') {
       const item = pairing.phase.item;
       const peer = pairing.peer ?? '?';

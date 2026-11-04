@@ -229,9 +229,9 @@ pub fn remove() {
     }
 }
 
-/// Removes the registrations that name a program in a temporary folder
-/// ([`super::HostProgram::Temporary`]), such as an `AppImage`'s mount, which
-/// earlier versions registered.
+/// Removes the registrations that name a program somewhere that doesn't last
+/// ([`super::is_temporary`]), such as an `AppImage`'s mount or a disk image on
+/// macOS, which earlier versions registered.
 pub fn remove_temporary() {
     for target in targets() {
         if registered_program(&target).is_some_and(|program| super::is_temporary(&program)) {

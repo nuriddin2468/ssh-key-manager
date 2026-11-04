@@ -6,7 +6,14 @@
 // Nothing is filled on its own: a page can't make the extension fill a
 // field without the user choosing a login in the menu. Events a page script
 // makes up (`isTrusted` false) open nothing, move nothing into the menu and
-// send no login to the background.
+// send no login to the background. Some a page script causes are marked as
+// trusted all the same, so more is asked of them:
+// - focus: `focus()` and `autofocus` open no menu. The menu opens when the
+//   user clicks a field, moves to it with Tab, or presses Down Arrow in it.
+// - sending: `requestSubmit()` sends a form with a trusted `submit` event.
+//   A login goes to the background only with a password the user put in
+//   themselves (content/typing.ts), and only when the user sent it: with
+//   Enter, a click, or a `submit` right after their own key press or click.
 
 import {
   fill,
@@ -19,6 +26,7 @@ import {
   typedIn,
 } from './content/fields';
 import { LoginMenu, SaveBanner, type SaveOffer } from './content/surfaces';
+import { Typing } from './content/typing';
 import type { Problem } from './shared/client';
 import { ext } from './shared/ext';
 import { type Key, t } from './shared/i18n';
@@ -35,6 +43,13 @@ const MARK = '__sshkmAutofill';
 const CONFIRM_NOTICE_AFTER = 400;
 /** How long the menu says why nothing was filled. */
 const NOTICE_FOR = 4000;
+/**
+ * How soon after the user's own click on a field, or Tab key press, focus
+ * coming to it opens the menu; and how soon after their own key press or
+ * click a sent form counts as sent by them. Either follows within the same
+ * moment, as the browser handles the press.
+ */
+const USER_WITHIN = 1000;
 
 /** What the menu says when the app filled nothing. */
 const NOT_FILLED: Partial<Record<Problem, Key>> = {
@@ -53,6 +68,26 @@ function start(): void {
   /** Bumped when the user types: a menu asked for before then stays closed. */
   let keystrokes = 0;
   let lastCapture = { at: 0, key: '' };
+  const typing = new Typing();
+  /** When the user last pressed a key or a pointer button, outside the menu and the banner. */
+  let pressedAt = Number.NEGATIVE_INFINITY;
+  /** The field the user last pressed a pointer button on, before it has focus. */
+  let pointed: { input: HTMLInputElement; at: number } | null = null;
+  /** When the user last pressed Tab, outside the menu and the banner. */
+  let tabbedAt = Number.NEGATIVE_INFINITY;
+
+  /**
+   * Whether focus came to `target` by the user's own click on it, or Tab key
+   * press. Each press counts for the one focus change that follows it.
+   */
+  function focusedByUser(target: EventTarget | null): boolean {
+    const now = performance.now();
+    const clicked = pointed !== null && pointed.input === target && now - pointed.at < USER_WITHIN;
+    const tabbed = now - tabbedAt < USER_WITHIN;
+    pointed = null;
+    tabbedAt = Number.NEGATIVE_INFINITY;
+    return clicked || tabbed;
+  }
 
   const menu = new LoginMenu({
     onPick: (login) => void pick(login.id),
@@ -120,7 +155,10 @@ function start(): void {
     }
     const { username, password } = current.fields;
     if (username && reply.username) fill(username, reply.username);
-    if (password) fill(password, reply.password);
+    if (password) {
+      fill(password, reply.password);
+      typing.filled(password);
+    }
     menu.hide();
     (password ?? username)?.focus();
   }
@@ -137,7 +175,7 @@ function start(): void {
   }
 
   function capture(scope: ParentNode): void {
-    const typed = typedIn(scope);
+    const typed = typedIn(scope, (input) => typing.byUser(input));
     if (!typed) return;
     // A click on the button and the submit event that follows are one login.
     const key = `${typed.username}\n${typed.password.length}`;
@@ -158,7 +196,8 @@ function start(): void {
       if (!event.isTrusted) return;
       const target = event.target;
       if (menu.contains(target) || banner.contains(target)) return;
-      if (target instanceof HTMLInputElement) void offer(target);
+      // A page's own `focus()` is trusted too: it opens nothing.
+      if (focusedByUser(target) && target instanceof HTMLInputElement) void offer(target);
       else menu.hide();
     },
     true,
@@ -185,10 +224,15 @@ function start(): void {
       if (!event.isTrusted) return;
       const target = event.target;
       if (menu.contains(target)) return;
-      // A click into the field that already has focus opens the menu again.
-      if (target instanceof HTMLInputElement && target === document.activeElement) {
-        if (!menu.shown) void offer(target);
-        return;
+      if (!banner.contains(target)) pressedAt = performance.now();
+      if (target instanceof HTMLInputElement) {
+        // A click into the field that already has focus opens the menu again.
+        if (target === document.activeElement) {
+          if (!menu.shown) void offer(target);
+          return;
+        }
+        // Focus comes next, as the browser handles the press.
+        pointed = { input: target, at: performance.now() };
       }
       menu.hide();
     },
@@ -199,7 +243,12 @@ function start(): void {
     'keydown',
     (event) => {
       const target = event.target;
-      if (!event.isTrusted || !(target instanceof HTMLInputElement)) return;
+      if (!event.isTrusted) return;
+      typing.observe(event);
+      if (menu.contains(target) || banner.contains(target)) return;
+      pressedAt = performance.now();
+      if (event.key === 'Tab') tabbedAt = pressedAt;
+      if (!(target instanceof HTMLInputElement)) return;
       if (menu.shown && target === active?.input) {
         if (event.key === 'ArrowDown') {
           event.preventDefault();
@@ -207,16 +256,37 @@ function start(): void {
         } else if (event.key === 'Escape') {
           menu.hide();
         }
+      } else if (
+        event.key === 'ArrowDown' &&
+        !event.shiftKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        target === document.activeElement
+      ) {
+        // The keyboard's way to the menu of a field the page focused.
+        void offer(target);
       }
       if (event.key === 'Enter' && isPassword(target)) capture(scopeOf(target));
     },
     true,
   );
 
+  // What the user puts into fields, for `typing`.
+  for (const type of ['paste', 'drop', 'compositionstart', 'compositionend']) {
+    document.addEventListener(
+      type,
+      (event) => {
+        if (event.isTrusted) typing.observe(event);
+      },
+      true,
+    );
+  }
+
   document.addEventListener(
     'input',
     (event) => {
       if (!event.isTrusted) return;
+      typing.observe(event);
       keystrokes += 1;
       if (event.target === active?.input) menu.hide();
     },
@@ -226,7 +296,10 @@ function start(): void {
   document.addEventListener(
     'submit',
     (event) => {
-      if (event.isTrusted && event.target instanceof HTMLFormElement) capture(event.target);
+      // `requestSubmit()` sends a trusted `submit` too: count one only right
+      // after the user's own key press or click.
+      if (!event.isTrusted || !(event.target instanceof HTMLFormElement)) return;
+      if (performance.now() - pressedAt < USER_WITHIN) capture(event.target);
     },
     true,
   );

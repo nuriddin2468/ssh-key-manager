@@ -94,6 +94,7 @@ const en = {
       publicKey: 'Public key',
       entries_one: '{{count}} entry',
       entries_other: '{{count}} entries',
+      via: 'via {{jump}}',
     },
     send: {
       title: 'Send “{{name}}”',
@@ -136,6 +137,13 @@ const en = {
       openPasswords: 'Open Passwords',
       openKeys: 'Open Keys',
       anotherComputer: 'another computer',
+      mismatchTitle: 'Is this who you meant?',
+      mismatch:
+        'The computer that answered is {{peer}}, which you paired with before, but it now calls itself “{{announced}}”.',
+      mismatchHint:
+        'Send only if it’s the one you meant: any computer on this network can call itself anything. Nothing has gone to it yet.',
+      dontSend: 'Don’t send',
+      sendAnyway: 'Send anyway',
     },
     join: {
       waiting: 'Waiting for your other computer · {{time}} left',
@@ -1061,7 +1069,6 @@ const en = {
       '{{count}} entry from {{from}} is in the group “{{name}}”. Check where it leads before you save.',
     received_other:
       '{{count}} entries from {{from}} are in the group “{{name}}”. Check where they lead before you save.',
-    authPrompt: 'SSH Key Manager wants to update the hosts file.',
     entryAddTitle: 'Add an entry',
     entryEditTitle: 'Edit entry',
     entryDescription:
@@ -1603,6 +1610,8 @@ const en = {
     },
     failed: {
       openFailed: 'Couldn’t start ssh',
+      aliasRefused:
+        'ssh is run only with host names made of letters, digits and . _ - @ : [ ], so that no name can run as a command. Rename “{{alias}}” in Hosts to connect to it.',
       passwordRejected: 'The server didn’t accept the password',
       passwordRejectedDetail: 'Check the password for {{user}} and try again.',
       passwordRejectedSavedDetail:
@@ -1691,6 +1700,12 @@ const en = {
       hostKeyExtra: 'ssh has more to say about this key. Read it before you trust it.',
       hostKeyExtraLabel: 'What ssh says',
       hostKeyNote: 'Trusting adds the key to ~/.ssh/known_hosts, as answering yes in ssh would.',
+      hostKeyUnverifiedTitle: 'ssh or a server asks to trust a host key',
+      hostKeyUnverified:
+        'Your OpenSSH is older than 8.5, so a server can send this same question. ssh asks it only the first time it connects to a server: trust the key only if you expect that, and compare the fingerprint with the one your administrator gave you.',
+      hostKeyUnverifiedExtraLabel: 'What else the question says',
+      hostKeyUnverifiedNote:
+        'If ssh asked, trusting adds the key to ~/.ssh/known_hosts. If a server did, it only gets the answer “yes”.',
       dontConnect: 'Don’t connect',
       trust: 'Trust and connect',
       otherTitle: '{{account}} asks for input',
@@ -1818,6 +1833,8 @@ const en = {
       exportedKdbx: 'Vault copied to {{file}}',
       badTarget:
         'Choose another place. An export can’t replace the vault itself or go into the SSH folder.',
+      privateDriveOnly:
+        'This drive can’t keep the file private to you, as is often the case with USB sticks, memory cards and network drives. Choose a folder on your computer’s own drive.',
     },
     location: {
       title: 'Vault file',
@@ -1885,6 +1902,8 @@ const en = {
     problem: 'Browsers can’t reach the app: {{error}}',
     temporary:
       'Browsers aren’t set up: SSH Key Manager is running from a temporary folder ({{path}}), which goes away when the app quits. Move the app (for an AppImage, the .AppImage file) to a permanent folder and open it from there.',
+    mounted:
+      'Browsers aren’t set up: SSH Key Manager is running from its disk image, another drive or where it was downloaded ({{path}}), not from Applications. Move the app to the Applications folder and open it from there.',
     pairTitle: 'Connect {{browser}}?',
     pairText: 'The SSH Key Manager extension wants to fill and save passwords from your vault.',
     pairCode: 'Code in the browser',

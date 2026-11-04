@@ -66,6 +66,8 @@ export function ExportDialog({ onDone }: ExportDialogProps) {
         return showFileError(t, error, {
           invalid_input: t('vaultFiles.export.badTarget'),
           vault_locked: t('vaultFiles.export.unlockFirst'),
+          // Windows: a drive that keeps no access lists (FAT, exFAT, some shares).
+          unsupported: t('vaultFiles.export.privateDriveOnly'),
         });
       },
     },

@@ -39,6 +39,7 @@ const hostKey = {
   keyType: 'ED25519',
   fingerprint: 'SHA256:Ka7Sd1Fg5Hj9',
   extra: [],
+  unverified: false,
 } as const satisfies PromptAsk;
 
 describe('the host key dialog', () => {
@@ -63,6 +64,29 @@ describe('the host key dialog', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: 'Don’t connect' }));
     expect(onAnswer).toHaveBeenCalledWith({ type: 'trust', trust: false });
+  });
+
+  it('says when a server may have sent the question, and quotes it', async () => {
+    const onAnswer = show({
+      ...hostKey,
+      host: 'bank.example (203.0.113.9)',
+      extra: ['Your bank asks you to trust this key.'],
+      unverified: true,
+    });
+    // The host the text names is not in the app's own words.
+    expect(screen.queryByRole('heading', { name: /bank\.example/ })).toBeNull();
+    expect(
+      screen.getByRole('heading', { name: 'ssh or a server asks to trust a host key' }),
+    ).toBeVisible();
+    expect(screen.getByText(/older than 8\.5/)).toBeVisible();
+    expect(screen.getByText('The question as sent')).toBeVisible();
+    expect(screen.getByText('bank.example (203.0.113.9)')).toBeVisible();
+    expect(screen.getByText('What else the question says')).toBeVisible();
+    expect(screen.queryByText(/^Trusting adds the key/)).toBeNull();
+    expect(screen.getByText(/If a server did, it only gets the answer/)).toBeVisible();
+    // "Trust" still answers ssh's question, if it was ssh's.
+    await userEvent.click(screen.getByRole('button', { name: 'Trust and connect' }));
+    expect(onAnswer).toHaveBeenCalledWith({ type: 'trust', trust: true });
   });
 });
 

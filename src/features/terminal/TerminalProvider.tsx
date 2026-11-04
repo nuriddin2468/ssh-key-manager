@@ -172,10 +172,13 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
           if (generations.current.get(key) !== generation) return;
           const failure = { reason: 'openFailed' as const, message: errorMessage(t, error) };
           const appError = AppError.from(error);
+          // The only input `terminal_open` refuses is the alias.
           const detail =
-            appError.code === 'not_found' || appError.code === 'unsupported'
-              ? appError.message
-              : failure.message;
+            appError.code === 'invalid_input'
+              ? t('terminal.failed.aliasRefused', { alias })
+              : appError.code === 'not_found' || appError.code === 'unsupported'
+                ? appError.message
+                : failure.message;
           update(key, (tab) => ({
             ...tab,
             state: { phase: 'failed', failure: { ...failure, message: detail } },

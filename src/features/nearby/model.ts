@@ -32,6 +32,7 @@ const ACTIVE = new Set([
   'connecting',
   'compare',
   'waiting',
+  'nameMismatch',
   'offering',
   'offered',
   'authorize',

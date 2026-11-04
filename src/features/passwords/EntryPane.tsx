@@ -106,7 +106,7 @@ export function EntryPane({ entry, onEdit, onGone }: EntryPaneProps) {
 
   const reveal = useSecretCall(api.vaultReveal);
   const show = () => {
-    if (reveal.pending) return;
+    if (reveal.pending || entry.kind === 'key') return;
     reveal
       .call(entry.id, 'password')
       .then(setRevealed)
@@ -331,22 +331,25 @@ export function EntryPane({ entry, onEdit, onGone }: EntryPaneProps) {
                     </>
                   )}
                 </span>
-                <IconButton
-                  label={
-                    revealed === null ? t('passwords.showPassword') : t('passwords.hidePassword')
-                  }
-                  icon={
-                    revealed === null ? (
-                      <Eye className="size-[15px]" strokeWidth={1.75} />
-                    ) : (
-                      <EyeOff className="size-[15px]" strokeWidth={1.75} />
-                    )
-                  }
-                  onClick={() => {
-                    if (revealed !== null) setRevealed(null);
-                    else show();
-                  }}
-                />
+                {/* A saved key passphrase is never sent to the page; it can only be copied. */}
+                {entry.kind === 'key' ? null : (
+                  <IconButton
+                    label={
+                      revealed === null ? t('passwords.showPassword') : t('passwords.hidePassword')
+                    }
+                    icon={
+                      revealed === null ? (
+                        <Eye className="size-[15px]" strokeWidth={1.75} />
+                      ) : (
+                        <EyeOff className="size-[15px]" strokeWidth={1.75} />
+                      )
+                    }
+                    onClick={() => {
+                      if (revealed !== null) setRevealed(null);
+                      else show();
+                    }}
+                  />
+                )}
                 {copyButton('password', t('passwords.copyPassword'))}
               </>
             ) : (

@@ -14,6 +14,12 @@ otp: boolean, } | { "type": "host", alias: string,
  */
 address: string, 
 /**
+ * The jump hosts the connection goes through (`ProxyJump`), if
+ * any. Versions before it leave it out: then a host with one
+ * doesn't match its summary and is refused.
+ */
+proxyJump: string | null, 
+/**
  * How many of the server's keys come with it.
  */
 hostKeys: number, } | { "type": "hostsGroup", name: string, 

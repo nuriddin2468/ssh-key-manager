@@ -139,12 +139,14 @@ describe('visibility', () => {
 });
 
 describe('typed logins', () => {
+  const all = () => true;
+
   it('reads the username and password of a sent form', () => {
     page(`<form>
       <input id="user" type="text" value=" alice ">
       <input id="pass" type="password" value="hunter2">
     </form>`);
-    expect(typedIn(input('#user').form as HTMLFormElement)).toEqual({
+    expect(typedIn(input('#user').form as HTMLFormElement, all)).toEqual({
       username: 'alice',
       password: 'hunter2',
     });
@@ -157,7 +159,7 @@ describe('typed logins', () => {
       <input type="password" autocomplete="new-password" value="new1">
       <input type="password" autocomplete="new-password" value="new1">
     </form>`);
-    expect(typedIn(input('#user').form as HTMLFormElement)).toEqual({
+    expect(typedIn(input('#user').form as HTMLFormElement, all)).toEqual({
       username: 'bob@example.com',
       password: 'new1',
     });
@@ -165,7 +167,22 @@ describe('typed logins', () => {
 
   it('ignores forms without a typed password', () => {
     page(`<form><input id="user" value="x"><input type="password"></form>`);
-    expect(typedIn(input('#user').form as HTMLFormElement)).toBeNull();
+    expect(typedIn(input('#user').form as HTMLFormElement, all)).toBeNull();
+  });
+
+  it('reads only passwords the user put in', () => {
+    page(`<form>
+      <input id="user" type="email" value="bob@example.com">
+      <input id="typed" type="password" autocomplete="current-password" value="hunter2">
+      <input id="set" type="password" autocomplete="new-password" value="guess">
+    </form>`);
+    const form = input('#user').form as HTMLFormElement;
+    expect(typedIn(form, all)?.password).toBe('guess');
+    expect(typedIn(form, (field) => field.id === 'typed')).toEqual({
+      username: 'bob@example.com',
+      password: 'hunter2',
+    });
+    expect(typedIn(form, () => false)).toBeNull();
   });
 });
 

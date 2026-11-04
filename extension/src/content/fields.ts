@@ -190,12 +190,16 @@ export function fill(input: HTMLInputElement, value: string): void {
 
 /**
  * What the user typed into the login or sign-up form in `scope`, when it is
- * sent. A new password wins over the current one (a sign-up or a password
- * change).
+ * sent. Only password fields that `byUser` says hold what the user put in
+ * count (see `Typing`), not ones a page script filled. A new password wins
+ * over the current one (a sign-up or a password change).
  */
-export function typedIn(scope: ParentNode): Typed | null {
+export function typedIn(
+  scope: ParentNode,
+  byUser: (input: HTMLInputElement) => boolean,
+): Typed | null {
   const passwords = [...scope.querySelectorAll('input')].filter(
-    (input) => isPassword(input) && input.value !== '' && isVisible(input),
+    (input) => isPassword(input) && input.value !== '' && isVisible(input) && byUser(input),
   );
   if (passwords.length === 0) return null;
   const password = passwords.filter(isNewPassword).at(-1) ?? passwords[0];

@@ -5222,6 +5222,7 @@ dependencies = [
  "ts-rs",
  "url",
  "uuid",
+ "windows 0.62.2",
  "zeroize",
  "zxcvbn",
 ]

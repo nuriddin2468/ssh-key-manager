@@ -42,7 +42,9 @@ export function PromptDialog({ tab, ask, onAnswer }: PromptDialogProps) {
 /**
  * "Trust this key?", titled with the host the key is for (a jump host's key
  * names the jump host). Anything ssh says besides the plain question shows
- * as a warning, and "Don't connect" becomes the main button.
+ * as a warning, and "Don't connect" becomes the main button. When a server
+ * may have sent the question (OpenSSH before 8.5), the dialog says so and
+ * quotes the host and fingerprint instead of naming them in its title.
  */
 function HostKeyDialog({
   ask,
@@ -53,6 +55,15 @@ function HostKeyDialog({
 }) {
   const { t } = useTranslation();
   const warning = ask.extra.length > 0;
+  const key = (
+    <div className="selectable rounded-[11px] border border-white/[0.07] bg-terminal px-3 py-2.5 font-mono text-[12px] leading-[1.6] break-all">
+      <span className="text-subtle">{ask.host}</span>
+      <br />
+      <span className="text-subtle">{ask.keyType}</span>
+      <br />
+      <span className="text-fg">{ask.fingerprint}</span>
+    </div>
+  );
   return (
     <DialogContent section="terminal" className="max-w-[480px]" dismissible={false}>
       <EscapeIs onEscape={() => onAnswer({ type: 'trust', trust: false })} />
@@ -62,29 +73,48 @@ function HostKeyDialog({
             <ShieldQuestion className="size-5" strokeWidth={2} />
           </Tile>
         }
-        title={t('terminal.prompt.hostKeyTitle', { host: hostKeyHost(ask.host) })}
-        description={warning ? t('terminal.prompt.hostKeyExtra') : t('terminal.prompt.hostKeyText')}
+        title={
+          ask.unverified
+            ? t('terminal.prompt.hostKeyUnverifiedTitle')
+            : t('terminal.prompt.hostKeyTitle', { host: hostKeyHost(ask.host) })
+        }
+        description={
+          ask.unverified
+            ? t('terminal.prompt.hostKeyUnverified')
+            : warning
+              ? t('terminal.prompt.hostKeyExtra')
+              : t('terminal.prompt.hostKeyText')
+        }
         closable={false}
       />
       <DialogBody>
-        <div className="selectable rounded-[11px] border border-white/[0.07] bg-terminal px-3 py-2.5 font-mono text-[12px] leading-[1.6] break-all">
-          <span className="text-subtle">{ask.host}</span>
-          <br />
-          <span className="text-subtle">{ask.keyType}</span>
-          <br />
-          <span className="text-fg">{ask.fingerprint}</span>
-        </div>
+        {ask.unverified ? (
+          <figure className="flex flex-col gap-1.5">
+            <figcaption className="text-[12px] text-muted">
+              {t('terminal.prompt.otherQuote')}
+            </figcaption>
+            {key}
+          </figure>
+        ) : (
+          key
+        )}
         {warning ? (
           <figure className="flex flex-col gap-1.5">
             <figcaption className="text-[12px] font-medium text-critical">
-              {t('terminal.prompt.hostKeyExtraLabel')}
+              {ask.unverified
+                ? t('terminal.prompt.hostKeyUnverifiedExtraLabel')
+                : t('terminal.prompt.hostKeyExtraLabel')}
             </figcaption>
             <pre className="selectable max-h-[180px] overflow-auto rounded-[11px] border border-critical-solid/30 bg-critical-solid/10 px-3 py-2.5 font-mono text-[12px] leading-[1.6] break-all whitespace-pre-wrap text-fg">
               {ask.extra.join('\n')}
             </pre>
           </figure>
         ) : null}
-        <p className="text-[12px] text-muted">{t('terminal.prompt.hostKeyNote')}</p>
+        <p className="text-[12px] text-muted">
+          {ask.unverified
+            ? t('terminal.prompt.hostKeyUnverifiedNote')
+            : t('terminal.prompt.hostKeyNote')}
+        </p>
       </DialogBody>
       <DialogFooter>
         <Button

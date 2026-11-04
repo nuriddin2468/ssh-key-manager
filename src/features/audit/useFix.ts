@@ -78,7 +78,6 @@ export function useFix(keysById: ReadonlyMap<string, KeyView>) {
               },
             ],
             flushDns: true,
-            prompt: t('hostsFile.authPrompt'),
           });
           if (result.outcome === 'applied')
             toast.success(t('hostsFile.turnedOff', { name: entry.names[0] ?? entry.address }));

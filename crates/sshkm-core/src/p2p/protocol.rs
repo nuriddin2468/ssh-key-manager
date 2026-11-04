@@ -127,7 +127,8 @@ pub enum VaultState {
     Missing,
     Locked,
     /// Unlocked. `proof` shows the peer which vault it is, if it has the
-    /// same one, and tells it nothing otherwise ([`super::own::OwnKey`]).
+    /// same one, and tells it nothing otherwise ([`super::own::OwnKey`]);
+    /// empty while the vault has no key for own devices yet.
     Open {
         proof: String,
     },
@@ -247,6 +248,11 @@ pub enum ItemSummary {
         alias: String,
         /// `user@host:port`, as far as the block says.
         address: String,
+        /// The jump hosts the connection goes through (`ProxyJump`), if
+        /// any. Versions before it leave it out: then a host with one
+        /// doesn't match its summary and is refused.
+        #[serde(default)]
+        proxy_jump: Option<String>,
         /// How many of the server's keys come with it.
         host_keys: u32,
     },
@@ -305,8 +311,8 @@ impl Item {
                 host_name,
                 user,
                 port,
+                proxy_jump,
                 host_keys,
-                ..
             } => {
                 let mut address = String::new();
                 if let Some(user) = user {
@@ -320,6 +326,7 @@ impl Item {
                 ItemSummary::Host {
                     alias: alias.clone(),
                     address,
+                    proxy_jump: proxy_jump.clone(),
                     host_keys: count(host_keys.len()),
                 }
             }
@@ -664,9 +671,17 @@ mod tests {
             ItemSummary::Host {
                 alias: "prod".into(),
                 address: "deploy@10.0.4.12:2222".into(),
+                proxy_jump: Some("bastion".into()),
                 host_keys: 1,
             }
         );
+        // An older version's summary, without the jump host, is not this
+        // host's.
+        let older: ItemSummary = serde_json::from_str(
+            r#"{"type":"host","alias":"prod","address":"deploy@10.0.4.12:2222","hostKeys":1}"#,
+        )
+        .unwrap();
+        assert_ne!(older, host().summary());
     }
 
     #[test]

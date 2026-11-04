@@ -87,8 +87,15 @@ impl Side for Terminal {
         self.name.clone()
     }
 
-    fn knows(&self, peer: PeerKey) -> Result<bool, PairingFailure> {
-        Ok(self.is_own(peer))
+    fn knows(&self, peer: PeerKey) -> Result<Option<String>, PairingFailure> {
+        Ok(self
+            .with_vault(|vault| {
+                vault
+                    .is_own_device(&peer)
+                    .then(|| vault.known_name(&peer))
+                    .flatten()
+            })
+            .flatten())
     }
 
     fn save(&self, peer: PeerKey, name: &str) -> Result<(), PairingFailure> {
@@ -190,14 +197,23 @@ impl Side for Terminal {
             Mode::Plain => None,
             Mode::Join(_) => Some(VaultState::Missing),
             Mode::Own { vault, .. } => Some(VaultState::Open {
-                proof: vault.lock().unwrap().own_key().proof(hash, initiator),
+                proof: vault
+                    .lock()
+                    .unwrap()
+                    .own_key()
+                    .map(|key| key.proof(hash, initiator))
+                    .unwrap_or_default(),
             }),
         }
     }
 
     fn same_vault(&self, hash: &[u8], initiator: bool, proof: &str) -> bool {
-        self.with_vault(|vault| vault.own_key().verify(hash, initiator, proof))
-            .unwrap_or(false)
+        self.with_vault(|vault| {
+            vault
+                .own_key()
+                .is_some_and(|key| key.verify(hash, initiator, proof))
+        })
+        .unwrap_or(false)
     }
 
     fn is_own(&self, peer: PeerKey) -> bool {
@@ -437,14 +453,17 @@ fn option(args: &[String], name: &str) -> Option<String> {
 /// else as the app does after "Show for 10 minutes".
 fn announcement(side: &Terminal, port: u16) -> Result<ServiceInfo, Box<dyn std::error::Error>> {
     let name = side.name.as_str();
-    let info = if let Some(instance) = side.with_vault(|vault| {
-        let seconds = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        vault
-            .own_key()
-            .presence_name(&side.identity.public(), window(seconds))
-    }) {
+    let info = if let Some(instance) = side
+        .with_vault(|vault| {
+            let seconds = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            vault
+                .own_key()
+                .map(|key| key.presence_name(&side.identity.public(), window(seconds)))
+        })
+        .flatten()
+    {
         println!("Announced to your devices on port {port}. Click \"Sync now\" in Nearby.");
         ServiceInfo::new(
             OWN_SERVICE_TYPE,
@@ -536,7 +555,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         stream.set_read_timeout(Some(Duration::from_secs(10)))?;
         let mut session = p2p::connect(stream, &side.identity)?;
         let item = sample(&kind, &name);
-        conversation(&mut session, &side, Some(Purpose::Send(&item)))
+        conversation(
+            &mut session,
+            &side,
+            Some(Purpose::Send {
+                item: &item,
+                to: None,
+            }),
+        )
     } else {
         let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))?;
         let port = listener.local_addr()?.port();

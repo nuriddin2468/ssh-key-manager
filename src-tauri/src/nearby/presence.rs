@@ -7,7 +7,8 @@
 //! TXT record has nothing but the version. Others see a name that changes
 //! and says nothing; the user's devices can tell whose it is. On that port
 //! only a sync is taken, and only from one of the user's devices: anyone
-//! else is turned away right after the handshake.
+//! else is turned away right after the handshake, before this computer
+//! says anything about its vault.
 //!
 //! The app also browses for the same service, to tell the user which of
 //! their devices are reachable and to have their addresses for a sync.
@@ -22,6 +23,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mdns_sd::{ServiceEvent, ServiceInfo};
+use sshkm_core::ErrorCode;
 use sshkm_core::p2p::PeerKey;
 use sshkm_core::p2p::own::{OwnKey, window};
 
@@ -104,30 +106,62 @@ impl Nearby {
     }
 
     /// The key and the devices, if this computer is one of the user's
-    /// devices and there is another.
+    /// devices and there is another. A vault without the key own devices
+    /// share gets one now.
     fn wanted(&self) -> Option<Wanted> {
         let me = self.identity().ok()?.public();
         let state = self.state().ok()?;
         let app = self.app().ok()?;
-        state
+        let read = || {
+            state
+                .vault
+                .with_quietly(app, |vault| {
+                    let devices: Vec<PeerKey> = vault
+                        .own_devices()
+                        .iter()
+                        .filter_map(|device| PeerKey::from_base64(&device.key).ok())
+                        .filter(|key| *key != me)
+                        .collect();
+                    Ok((vault.is_own_device(&me) && !devices.is_empty())
+                        .then(|| (vault.own_key(), devices)))
+                })
+                .ok()
+                .flatten()
+        };
+        let (mut key, devices) = read()?;
+        if key.is_none() {
+            self.ensure_own_key().ok()?;
+            key = read()?.0;
+        }
+        Some(Wanted {
+            key: key?,
+            me,
+            devices,
+        })
+    }
+
+    /// Makes the key the user's own devices share and saves the vault, if it
+    /// has none yet. When another computer that shares the file saved one
+    /// first, the write fails, and that one is read instead.
+    pub(super) fn ensure_own_key(&self) -> AppResult<()> {
+        let state = self.state()?;
+        let app = self.app()?;
+        match state
             .vault
-            .with_quietly(app, |vault| {
-                let devices: Vec<PeerKey> = vault
-                    .own_devices()
-                    .iter()
-                    .filter_map(|device| PeerKey::from_base64(&device.key).ok())
-                    .filter(|key| *key != me)
-                    .collect();
-                Ok(
-                    (vault.is_own_device(&me) && !devices.is_empty()).then(|| Wanted {
-                        key: vault.own_key(),
-                        me,
-                        devices,
-                    }),
-                )
-            })
-            .ok()
-            .flatten()
+            .with_quietly(app, |vault| Ok(vault.make_own_key(&state.backup_dir)?))
+        {
+            Ok(_) => Ok(()),
+            // Re-read: the other computer's key is in the file now.
+            Err(error)
+                if error.code() == ErrorCode::Conflict
+                    && state
+                        .vault
+                        .with_quietly(app, |vault| Ok(vault.own_key().is_some()))? =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Announces this computer under the name for `window`: on a new port

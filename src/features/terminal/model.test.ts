@@ -139,8 +139,23 @@ describe('connectable hosts', () => {
     ({ id, kind, patterns, isWildcard: patterns.some((p) => /[*?]/.test(p)) }) as HostEntry;
 
   it('skips patterns, negations and Match blocks', () => {
-    expect(isConnectable('prod-api')).toBe(true);
-    for (const alias of ['', '*', 'web-*', '!bad', 'a b', '-oProxyCommand=x']) {
+    for (const alias of ['prod-api', 'web_01', 'git@github.com', '10.0.4.12', '[::1]:22']) {
+      expect(isConnectable(alias)).toBe(true);
+    }
+    for (const alias of [
+      '',
+      '*',
+      'web-*',
+      '!bad',
+      'a b',
+      '-oProxyCommand=x',
+      "x';id;'.internal",
+      'a$(id)',
+      'a`id`',
+      'a|b',
+      'a,b',
+      'сервер',
+    ]) {
       expect(isConnectable(alias)).toBe(false);
     }
     const hosts = [

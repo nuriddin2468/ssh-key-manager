@@ -10,7 +10,6 @@
 //! `/System/Volumes/Data/Users/…` can't lead around the check.
 
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 
 use keepass::db::fields;
@@ -242,18 +241,24 @@ pub(super) fn resolve(path: &Path) -> PathBuf {
 
 /// Writes atomically with mode 0600, also when replacing an existing file
 /// (whose mode is tightened first, as the write keeps it). On Windows, where
-/// modes mean nothing, the file's access list is then cut down to the user,
-/// SYSTEM and Administrators, as for a private key.
+/// modes mean nothing, the temporary file is created with an access list
+/// for nobody but the user, SYSTEM and Administrators, as for a private key,
+/// before anything is written to it; a drive that can't keep one (FAT,
+/// exFAT, some network shares) is refused and nothing is left behind.
 fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(_) => fsutil::set_mode(path, 0o600)?,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-        Err(e) => return Err(Error::io(e, path)),
-    }
-    fsutil::atomic_write(path, bytes, 0o600)?;
     #[cfg(windows)]
-    crate::perms::fix(path, crate::perms::PermKind::PrivateKey)?;
-    Ok(())
+    {
+        fsutil::atomic_write_private(path, bytes)
+    }
+    #[cfg(not(windows))]
+    {
+        match fs::symlink_metadata(path) {
+            Ok(_) => fsutil::set_mode(path, 0o600)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(Error::io(e, path)),
+        }
+        fsutil::atomic_write(path, bytes, 0o600)
+    }
 }
 
 fn csv_error(error: &csv::Error) -> Error {

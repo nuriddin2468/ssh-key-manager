@@ -55,7 +55,7 @@ export function ReviewDialog({
 }: ReviewDialogProps) {
   const { t } = useTranslation();
   const [flushDns, setFlushDns] = useState(true);
-  const { apply, prompt } = useHostsApply();
+  const { apply } = useHostsApply();
   const preview = useQuery({
     queryKey: ['hosts-file', 'preview', revision, changes],
     queryFn: () => api.previewHostsChanges(revision, changes),
@@ -73,7 +73,7 @@ export function ReviewDialog({
 
   const submit = () =>
     apply.mutate(
-      { revision, changes, flushDns, prompt },
+      { revision, changes, flushDns },
       {
         onSuccess: (result) => {
           if (result.outcome === 'applied') onApplied();

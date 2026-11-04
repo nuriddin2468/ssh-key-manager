@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::time::Duration;
 
-use sshkm_core::config::{HostEdit, RiskyDirective, SshConfig};
+use sshkm_core::config::{HostEdit, Risk, RiskyDirective, SshConfig, validate_text};
 use sshkm_core::paths::display_path;
 use sshkm_core::{ErrorCode, SecretString, fsutil, keys};
 use tauri::{AppHandle, State};
@@ -107,7 +107,10 @@ pub async fn read_config_raw(state: State<'_, Shared>) -> AppResult<String> {
 }
 
 /// Replaces the whole file. Directives that run code and are not in the
-/// current file need the user's approval in a native dialog.
+/// current file need the user's approval in a native dialog. Text with a
+/// control character other than a tab or a line's final carriage return
+/// fails with `invalid_input`: `ssh` may read such a line differently from
+/// the app.
 #[tauri::command]
 pub async fn write_config_raw(
     app: AppHandle,
@@ -115,6 +118,7 @@ pub async fn write_config_raw(
     text: String,
 ) -> AppResult<ConfigFile> {
     blocking(&state, move |state| {
+        validate_text(&text)?;
         fsutil::ensure_private_dir(&state.paths.dir)?;
         // A file that cannot be read (not UTF-8, too large) counts as empty,
         // so everything in the new text that runs code is asked about.
@@ -227,9 +231,10 @@ fn load_at(state: &AppState, revision: &str) -> AppResult<SshConfig> {
 }
 
 /// Asks the user to approve, in a native dialog the page cannot click, the
-/// directives that run or load code which `after` adds to `before`. Returns
-/// whether it asked (the file may have changed meanwhile); fails with
-/// `cancelled` if the user said no.
+/// directives that run or load code, give a server access to this computer,
+/// say which server gets it, or check servers less strictly, which `after`
+/// adds to `before` (see [`Risk`]). Returns whether it asked (the file may
+/// have changed meanwhile); fails with `cancelled` if the user said no.
 pub(crate) fn confirm_added(
     app: &AppHandle,
     state: &AppState,
@@ -237,35 +242,45 @@ pub(crate) fn confirm_added(
     before: &SshConfig,
 ) -> AppResult<bool> {
     let added = after.added_risky_directives(before);
-    if added.is_empty() {
+    let Some(worst) = Risk::ALL
+        .into_iter()
+        .find(|risk| added.iter().any(|d| d.risk == *risk))
+    else {
         return Ok(false);
-    }
+    };
     let file = display_path(&state.paths.config);
-    let en = directive_list(&added, "all hosts", |n| format!("…and {n} more"));
-    let ru = directive_list(&added, "все хосты", |n| format!("…и ещё {n}"));
-    let uz = directive_list(&added, "barcha xostlar", |n| format!("…va yana {n} ta"));
+    let en = directive_list(
+        &added,
+        "all hosts",
+        |risk| heading(risk).en,
+        |n| format!("…and {n} more"),
+    );
+    let ru = directive_list(
+        &added,
+        "все хосты",
+        |risk| heading(risk).ru,
+        |n| format!("…и ещё {n}"),
+    );
+    let uz = directive_list(
+        &added,
+        "barcha xostlar",
+        |risk| heading(risk).uz,
+        |n| format!("…va yana {n} ta"),
+    );
     confirm::require(
         app,
-        &Localized::new(
-            "Allow ssh to run this?",
-            "Разрешить ssh запускать это?",
-            "ssh buni ishga tushirsinmi?",
-        ),
+        &title(worst),
         &Localized::new(
             format!(
-                "With this change to {file}, ssh runs programs, loads code or lets the server \
-                 use this computer each time you connect:\n\n{en}\n\n\
+                "This change to {file} takes effect each time you connect.\n\n{en}\n\n\
                  Allow it only if you made this change yourself."
             ),
             format!(
-                "После этого изменения в {file} ssh при каждом подключении запускает \
-                 программы, загружает код или даёт серверу доступ к этому компьютеру:\n\n{ru}\n\n\
+                "Это изменение в {file} действует при каждом подключении.\n\n{ru}\n\n\
                  Разрешайте, только если это изменение сделали вы сами."
             ),
             format!(
-                "{file} dagi bu oʻzgarishdan soʻng ssh har safar ulanganda dasturlarni ishga \
-                 tushiradi, kod yuklaydi yoki serverga bu kompyuterdan foydalanishga ruxsat \
-                 beradi:\n\n{uz}\n\n\
+                "{file} dagi bu oʻzgarish har safar ulanganda amal qiladi.\n\n{uz}\n\n\
                  Faqat bu oʻzgarishni oʻzingiz qilgan boʻlsangiz, ruxsat bering."
             ),
         ),
@@ -278,18 +293,71 @@ pub(crate) fn confirm_added(
     Ok(true)
 }
 
-/// One line per directive (`• Host prod: ProxyCommand …`), at most
-/// [`SHOWN_DIRECTIVES`] of them. `everywhere` names the hosts of directives
-/// before the first block; `more` says how many were left out.
+/// The confirmation's title, for the worst kind of directive in it.
+fn title(risk: Risk) -> Localized {
+    match risk {
+        Risk::RunsCode => Localized::new(
+            "Allow ssh to run this?",
+            "Разрешить ssh запускать это?",
+            "ssh buni ishga tushirsinmi?",
+        ),
+        Risk::ServerAccess | Risk::Destination => Localized::new(
+            "Give a server access to this computer?",
+            "Дать серверу доступ к этому компьютеру?",
+            "Serverga bu kompyuterdan foydalanishga ruxsat berilsinmi?",
+        ),
+        Risk::HostKeys => Localized::new(
+            "Check servers less strictly?",
+            "Проверять серверы менее строго?",
+            "Serverlar kamroq qatʼiy tekshirilsinmi?",
+        ),
+    }
+}
+
+/// What directives of one kind do, above their list in the confirmation.
+fn heading(risk: Risk) -> Localized {
+    match risk {
+        Risk::RunsCode => Localized::new(
+            "ssh runs programs or loads code:",
+            "ssh запускает программы или загружает код:",
+            "ssh dasturlarni ishga tushiradi yoki kod yuklaydi:",
+        ),
+        Risk::ServerAccess => Localized::new(
+            "The server can use this computer:",
+            "Сервер может пользоваться этим компьютером:",
+            "Server bu kompyuterdan foydalana oladi:",
+        ),
+        Risk::Destination => Localized::new(
+            "The server that gets access to this computer:",
+            "Сервер, который получает доступ к этому компьютеру:",
+            "Bu kompyuterdan foydalana oladigan server:",
+        ),
+        Risk::HostKeys => Localized::new(
+            "ssh checks less strictly that the server is genuine:",
+            "ssh менее строго проверяет подлинность сервера:",
+            "ssh server haqiqiyligini kamroq qatʼiy tekshiradi:",
+        ),
+    }
+}
+
+/// The directives by kind ([`Risk::ALL`] order), each kind under its
+/// `heading`, with one line per directive (`• Host prod: ProxyCommand …`)
+/// and at most [`SHOWN_DIRECTIVES`] of them. `everywhere` names the hosts of
+/// directives before the first block; `more` says how many were left out.
 fn directive_list(
     added: &[RiskyDirective],
     everywhere: &str,
+    heading: impl Fn(Risk) -> String,
     more: impl Fn(usize) -> String,
 ) -> String {
-    let mut lines: Vec<String> = added
-        .iter()
-        .take(SHOWN_DIRECTIVES)
-        .map(|d| {
+    let mut sections = Vec::new();
+    for risk in Risk::ALL {
+        let of_kind: Vec<&RiskyDirective> = added.iter().filter(|d| d.risk == risk).collect();
+        if of_kind.is_empty() {
+            continue;
+        }
+        let mut lines = vec![heading(risk)];
+        lines.extend(of_kind.iter().take(SHOWN_DIRECTIVES).map(|d| {
             let directive = format!("{} {}", d.key, shown(&d.value));
             match &d.block {
                 // `Match … exec` or an odd `Host` pattern is its own block line.
@@ -302,12 +370,13 @@ fn directive_list(
                 Some(block) => format!("• {}: {directive}", shown(block)),
                 None => format!("• {everywhere}: {directive}"),
             }
-        })
-        .collect();
-    if added.len() > SHOWN_DIRECTIVES {
-        lines.push(more(added.len() - SHOWN_DIRECTIVES));
+        }));
+        if of_kind.len() > SHOWN_DIRECTIVES {
+            lines.push(more(of_kind.len() - SHOWN_DIRECTIVES));
+        }
+        sections.push(lines.join("\n"));
     }
-    lines.join("\n")
+    sections.join("\n\n")
 }
 
 /// `text` as the dialog shows it: control characters and invisible or
@@ -349,7 +418,12 @@ mod tests {
             block: block.map(str::to_owned),
             key: key.to_owned(),
             value: value.to_owned(),
+            risk: Risk::RunsCode,
         }
+    }
+
+    fn en(risk: Risk) -> String {
+        heading(risk).en
     }
 
     #[test]
@@ -360,17 +434,58 @@ mod tests {
             directive(Some("Match exec \"true\""), "Match", "exec \"true\""),
         ];
         assert_eq!(
-            directive_list(&added, "all hosts", |n| format!("+{n}")),
-            "• all hosts: Include ~/.ssh/extra\n\
+            directive_list(&added, "all hosts", en, |n| format!("+{n}")),
+            "ssh runs programs or loads code:\n\
+             • all hosts: Include ~/.ssh/extra\n\
              • Host prod: ProxyCommand ssh -W %h:%p jump\n\
              • Match exec \"true\""
         );
         let many: Vec<_> = (0..11)
             .map(|i| directive(Some("Host x"), "LocalCommand", &format!("run {i}")))
             .collect();
-        let list = directive_list(&many, "all hosts", |n| format!("…and {n} more"));
-        assert_eq!(list.lines().count(), SHOWN_DIRECTIVES + 1);
+        let list = directive_list(&many, "all hosts", en, |n| format!("…and {n} more"));
+        assert_eq!(list.lines().count(), SHOWN_DIRECTIVES + 2);
         assert!(list.ends_with("…and 3 more"), "{list}");
+    }
+
+    #[test]
+    fn groups_directives_by_what_they_let_happen() {
+        let config = SshConfig::parse(
+            "Host work\n  HostName evil.example\n  ForwardAgent yes\n  \
+             StrictHostKeyChecking no\n  LocalCommand \"none\"\n",
+        );
+        let added = config.added_risky_directives(&SshConfig::default());
+        assert_eq!(
+            directive_list(&added, "all hosts", en, |n| format!("+{n}")),
+            "ssh runs programs or loads code:\n\
+             • Host work: LocalCommand \"none\"\n\
+             \n\
+             The server can use this computer:\n\
+             • Host work: ForwardAgent yes\n\
+             \n\
+             The server that gets access to this computer:\n\
+             • Host work: HostName evil.example\n\
+             \n\
+             ssh checks less strictly that the server is genuine:\n\
+             • Host work: StrictHostKeyChecking no"
+        );
+        // Every kind is worded in every language.
+        for risk in Risk::ALL {
+            for text in [heading(risk), title(risk)] {
+                assert!(
+                    [&text.en, &text.ru, &text.uz].iter().all(|t| !t.is_empty()),
+                    "{risk:?}"
+                );
+            }
+        }
+        // A line `ssh` may read otherwise is shown whole, control
+        // characters visible.
+        let odd = SshConfig::parse("Host *\n  HostName foo\r#$(id)\n");
+        let added = odd.added_risky_directives(&SshConfig::default());
+        assert_eq!(
+            directive_list(&added, "all hosts", en, |n| format!("+{n}")),
+            "ssh runs programs or loads code:\n• Host *: HostName foo<U+000D>#$(id)"
+        );
     }
 
     #[test]

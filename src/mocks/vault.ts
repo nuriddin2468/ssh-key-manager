@@ -358,7 +358,11 @@ export const vaultHandlers: Record<string, (args: Record<string, unknown>) => un
   vault_reveal: ({ id, field }) => {
     const target = find(id);
     if (!target) return requireUnlocked() ?? fail('not_found', `entry ${id}`);
-    return requireUnlocked() ?? ((field as SecretField) === 'otp' ? target.otp : target.password);
+    // As the backend: only a login's or host's password is ever shown.
+    if ((field as SecretField) !== 'password' || target.detail.kind === 'key') {
+      return requireUnlocked() ?? fail('invalid_input', 'not a secret the interface may show');
+    }
+    return requireUnlocked() ?? target.password;
   },
   vault_copy: async ({ id, field }): Promise<CopyResult> => {
     await requireUnlocked();

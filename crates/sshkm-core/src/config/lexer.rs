@@ -1,13 +1,30 @@
-//! Line-level lexing of `ssh_config`, following OpenSSH's `readconf.c` and
-//! `argv_split()` (quotes, backslash escapes, `#` comments at token starts).
+//! Line-level lexing of `ssh_config`, following OpenSSH's `readconf.c`
+//! (`process_config_line()`), `strdelim()` and `argv_split()`: quotes,
+//! backslash escapes, `#` comments at token starts.
+//!
+//! Only spaces and tabs separate arguments and come before an inline
+//! comment. A carriage return or form feed inside a line is an ordinary
+//! character to `ssh` (`HostName a\r#b` is the name `a\r#b`); only at the
+//! end of the line is it whitespace, which `ssh` strips before reading it.
 
-/// Whitespace as OpenSSH sees it inside a line.
-pub(crate) fn is_ws(c: char) -> bool {
-    matches!(c, ' ' | '\t' | '\r' | '\x0c')
+/// Separates arguments, as in `argv_split()`.
+fn is_ws(c: char) -> bool {
+    matches!(c, ' ' | '\t')
 }
 
 fn is_ws_byte(b: u8) -> bool {
-    matches!(b, b' ' | b'\t' | b'\r' | b'\x0c')
+    matches!(b, b' ' | b'\t')
+}
+
+/// Whitespace around the keyword (`WHITESPACE` of `strdelim()`).
+fn is_key_ws(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\r' | '\n')
+}
+
+/// What `process_config_line()` strips from the end of a line before it
+/// reads the line.
+pub(crate) fn is_trailing_ws(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\r' | '\n' | '\x0c')
 }
 
 /// How the value of a keyword is interpreted.
@@ -50,12 +67,16 @@ pub(crate) fn value_style(key_lower: &str) -> ValueStyle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Directive<'a> {
     pub(crate) indent: &'a str,
+    /// The keyword as written, quotes included (see [`keyword`]).
     pub(crate) key: &'a str,
     pub(crate) sep: &'a str,
     /// The value without trailing whitespace and without an inline comment.
     pub(crate) value: &'a str,
     /// Trailing whitespace and inline comment.
     pub(crate) tail: &'a str,
+    /// How the value is read: by the keyword as `ssh` reads it, so
+    /// `"ProxyCommand"` takes the rest of the line like `ProxyCommand`.
+    pub(crate) style: ValueStyle,
 }
 
 impl Directive<'_> {
@@ -63,9 +84,14 @@ impl Directive<'_> {
         self.key.to_ascii_lowercase()
     }
 
+    /// The keyword as `ssh` reads it (see [`keyword`]).
+    pub(crate) fn keyword(&self) -> Option<String> {
+        keyword(self.key)
+    }
+
     /// The value as the read view shows it (see [`ValueStyle`]).
     pub(crate) fn logical_value(&self) -> String {
-        match value_style(&self.key_lower()) {
+        match self.style {
             ValueStyle::Single => split_args(self.value).0.join(" "),
             ValueStyle::RestOfLine | ValueStyle::Raw => self.value.to_owned(),
         }
@@ -76,7 +102,7 @@ impl Directive<'_> {
     pub(crate) fn with_value(&self, value: &str) -> String {
         let sep = if self.sep.is_empty() { " " } else { self.sep };
         // A tail of only whitespace is dropped; an inline comment is kept.
-        let tail = if self.tail.trim_matches(is_ws).is_empty() {
+        let tail = if self.tail.trim_matches(is_trailing_ws).is_empty() {
             ""
         } else {
             self.tail
@@ -95,37 +121,80 @@ pub(crate) enum LineKind<'a> {
 
 /// Lexes one line (without its terminator). Total.
 pub(crate) fn lex(text: &str) -> LineKind<'_> {
-    let after_bom = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let body = after_bom.trim_start_matches(is_ws);
-    if body.trim_end_matches(is_ws).is_empty() {
+    let bom = text.len() - text.strip_prefix('\u{feff}').unwrap_or(text).len();
+    // `ssh` strips trailing whitespace before anything else, so neither the
+    // keyword nor the value reaches into it.
+    let line = text[bom..].trim_end_matches(is_trailing_ws);
+    let line_end = bom + line.len();
+    let body = line.trim_start_matches(is_key_ws);
+    if body.is_empty() {
         return LineKind::Blank;
     }
     if body.starts_with('#') {
         return LineKind::Comment;
     }
-    let key_start = text.len() - body.len();
-    let key_len = body
-        .find(|c: char| is_ws(c) || c == '=')
-        .unwrap_or(body.len());
-    let after_key = &body[key_len..];
-    let r = after_key.trim_start_matches(is_ws);
-    let r = r.strip_prefix('=').unwrap_or(r);
-    let r = r.trim_start_matches(is_ws);
-    let value_start = key_start + key_len + (after_key.len() - r.len());
-    let key = &body[..key_len];
-    let value_region = &text[value_start..];
-    let value_len = if value_style(&key.to_ascii_lowercase()) == ValueStyle::RestOfLine {
-        value_region.trim_end_matches(is_ws).len()
+    let key_start = line_end - body.len();
+    let key = &body[..keyword_len(body)];
+    let style = keyword(key).map_or(ValueStyle::Raw, |k| value_style(&k));
+    // `strdelim()` skips whitespace after the keyword, and a single `=` with
+    // whitespace around it unless the keyword ended in a quote. A command
+    // then skips any more whitespace and `=`.
+    let r = body[key.len()..].trim_start_matches(is_key_ws);
+    let r = match r.strip_prefix('=') {
+        Some(after) if !key.contains('"') => after.trim_start_matches(is_key_ws),
+        _ => r,
+    };
+    let r = if style == ValueStyle::RestOfLine {
+        r.trim_start_matches(|c| is_key_ws(c) || c == '=')
     } else {
-        value_len_without_comment(value_region)
+        r
+    };
+    let value_start = line_end - r.len();
+    let value_len = if style == ValueStyle::RestOfLine {
+        r.len()
+    } else {
+        value_len_without_comment(r)
     };
     LineKind::Directive(Directive {
         indent: &text[..key_start],
         key,
-        sep: &text[key_start + key_len..value_start],
-        value: &value_region[..value_len],
-        tail: &value_region[value_len..],
+        sep: &text[key_start + key.len()..value_start],
+        value: &r[..value_len],
+        tail: &text[value_start + value_len..],
+        style,
     })
+}
+
+/// Length of the keyword at the start of `body`, as `strdelim()` cuts it:
+/// up to whitespace or `=`, or up to the closing quote of a quoted part
+/// (`"ProxyCommand"`, `Proxy"Command"`). An unclosed quote runs to the end
+/// of the line, which `ssh` then ignores.
+fn keyword_len(body: &str) -> usize {
+    for (i, b) in body.bytes().enumerate() {
+        match b {
+            b' ' | b'\t' | b'\r' | b'\n' | b'=' => return i,
+            b'"' => {
+                return body[i + 1..]
+                    .find('"')
+                    .map_or(body.len(), |close| i + 1 + close + 1);
+            }
+            _ => {}
+        }
+    }
+    body.len()
+}
+
+/// The keyword as `ssh` reads it, in lower case: `key` (as [`lex`] cut it)
+/// without the quotes `strdelim()` takes out. `None` unless that leaves
+/// letters and digits, as every keyword is: `ssh` either rejects such a line
+/// or reads it in a way this lexer does not follow (`=ProxyCommand …`).
+pub(crate) fn keyword(key: &str) -> Option<String> {
+    let unquoted = match key.split_once('"') {
+        Some((before, quoted)) => format!("{before}{}", quoted.strip_suffix('"')?),
+        None => key.to_owned(),
+    };
+    (!unquoted.is_empty() && unquoted.chars().all(|c| c.is_ascii_alphanumeric()))
+        .then(|| unquoted.to_ascii_lowercase())
 }
 
 /// Length of `s` up to the end of the last argument before an inline comment
@@ -216,10 +285,14 @@ pub(crate) fn quote_arg(v: &str) -> String {
     let has_escape = chars
         .windows(2)
         .any(|w| w[0] == '\\' && matches!(w[1], '\\' | '"' | '\'' | ' '));
+    // A control character is quoted too: at the end of a line `ssh` would
+    // strip a form feed or carriage return.
     let special = v.is_empty()
         || v.starts_with('#')
         || has_escape
-        || chars.iter().any(|&c| is_ws(c) || c == '"' || c == '\'');
+        || chars
+            .iter()
+            .any(|&c| is_ws(c) || c.is_control() || c == '"' || c == '\'');
     if !special {
         return v.to_owned();
     }
@@ -303,6 +376,115 @@ mod tests {
         assert_eq!(lex(""), LineKind::Blank);
         assert_eq!(lex("  # c"), LineKind::Comment);
         assert_eq!(lex("#"), LineKind::Comment);
+    }
+
+    #[test]
+    fn carriage_returns_and_form_feeds_are_ordinary_inside_a_line() {
+        // What `ssh -G` (OpenSSH 9.9) reads for each line.
+        for (line, key, value, tail) in [
+            ("HostName foo\r#$(id)", "HostName", "foo\r#$(id)", ""),
+            ("HostName foo\x0c#bar", "HostName", "foo\x0c#bar", ""),
+            (
+                "Match host *,x\r#y exec \"z\"",
+                "Match",
+                "host *,x\r#y exec \"z\"",
+                "",
+            ),
+            ("User a #b", "User", "a", " #b"),
+            ("User a\t#b", "User", "a", "\t#b"),
+            // Stripped at the end of the line, before anything is read.
+            (
+                "ProxyCommand x\x0c \x0c\r",
+                "ProxyCommand",
+                "x",
+                "\x0c \x0c\r",
+            ),
+            ("Host foo #c\x0c", "Host", "foo", " #c\x0c"),
+            ("User\x0c", "User", "", "\x0c"),
+            // Whitespace before and after the keyword.
+            ("\rProxyCommand x", "ProxyCommand", "x", ""),
+            ("ProxyCommand\rx", "ProxyCommand", "x", ""),
+            ("User\r=\rbob", "User", "bob", ""),
+            ("User=\x0cbob", "User", "\x0cbob", ""),
+        ] {
+            let d = directive(line);
+            assert_eq!((d.key, d.value, d.tail), (key, value, tail), "{line:?}");
+            assert_eq!(rebuild(&d), line);
+        }
+        assert_eq!(split_args("a\rb\x0cc d").0, ["a\rb\x0cc", "d"]);
+        assert_eq!(split_args("foo\r#$(id)").0, ["foo\r#$(id)"]);
+        assert_eq!(lex(" \t\r\x0c"), LineKind::Blank);
+        assert_eq!(lex("\r# c"), LineKind::Comment);
+    }
+
+    #[test]
+    fn keywords_are_cut_and_unquoted_like_strdelim() {
+        // Keyword, value and how the value is read; `ssh -G` reads the same.
+        for (line, key, value, style) in [
+            (
+                "\"ProxyCommand\" none\r#$(id)",
+                Some("proxycommand"),
+                "none\r#$(id)",
+                ValueStyle::RestOfLine,
+            ),
+            (
+                "Proxy\"Command\"x foo",
+                Some("proxycommand"),
+                "x foo",
+                ValueStyle::RestOfLine,
+            ),
+            (
+                "\"ProxyCommand\"=none",
+                Some("proxycommand"),
+                "none",
+                ValueStyle::RestOfLine,
+            ),
+            (
+                "ProxyCommand = =none",
+                Some("proxycommand"),
+                "none",
+                ValueStyle::RestOfLine,
+            ),
+            (
+                "\"ProxyCommand\"\x0cnone",
+                Some("proxycommand"),
+                "\x0cnone",
+                ValueStyle::RestOfLine,
+            ),
+            // After a quoted keyword `=` is part of the value.
+            ("\"User\"=bob", Some("user"), "=bob", ValueStyle::Single),
+            (
+                "\"HostName\" a #b",
+                Some("hostname"),
+                "a",
+                ValueStyle::Single,
+            ),
+            // `ssh` reads `proxy` or nothing here; this lexer reads no keyword.
+            (
+                "Pro\"xy\"Command none",
+                Some("proxy"),
+                "Command none",
+                ValueStyle::Raw,
+            ),
+            ("\"Proxy Command\" x", None, "x", ValueStyle::Raw),
+            ("\"ProxyCommand x", None, "", ValueStyle::Raw),
+            (
+                "\"\"ProxyCommand x",
+                None,
+                "ProxyCommand x",
+                ValueStyle::Raw,
+            ),
+            ("=ProxyCommand x", None, "ProxyCommand x", ValueStyle::Raw),
+            ("\x0cProxyCommand x", None, "x", ValueStyle::Raw),
+        ] {
+            let d = directive(line);
+            assert_eq!(
+                (d.keyword().as_deref(), d.value, d.style),
+                (key, value, style),
+                "{line:?}"
+            );
+            assert_eq!(rebuild(&d), line);
+        }
     }
 
     #[test]
@@ -393,6 +575,14 @@ mod tests {
             "a\u{a0}b",
             "IdentityFile \"a\\",
             "k \"\\\"",
+            "\"\"",
+            "\"a\"\"b\" c",
+            "a\"=b",
+            "=\"",
+            "\r",
+            "\x0c\"\r",
+            "\u{feff}\r\"\u{feff}",
+            "k\x0c\x0c=\r\"é",
         ] {
             let kind = lex(line);
             if let LineKind::Directive(d) = kind {

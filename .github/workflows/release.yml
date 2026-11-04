@@ -1,17 +1,23 @@
 name: Release
 
-# Builds installers for every platform when a version tag is pushed and
-# attaches them to a draft GitHub release, together with the signed update
-# bundles and the latest.json manifest that the in-app updater reads. Once every
-# platform has built, the release is published and installed apps offer the
-# update. If any build fails, the release stays a draft and nobody is offered it.
+# Builds installers for every platform when a version tag is pushed, signs
+# the update bundles and attaches everything to a draft GitHub release,
+# together with the latest.json manifest that the in-app updater reads. Then
+# the release is published and installed apps offer the update. If any build
+# fails, nothing is signed or released.
 #
 # Required: TAURI_SIGNING_PRIVATE_KEY (and TAURI_SIGNING_PRIVATE_KEY_PASSWORD if
-# the key has one), the private half of plugins.updater.pubkey in tauri.conf.json.
-# Only the tauri-action steps see it: they bundle and sign an app that the
-# steps before them have already compiled without it.
+# the key has one), the private half of plugins.updater.pubkey in tauri.conf.json,
+# as secrets of the `release` environment. Only the `sign` job uses that
+# environment. It runs on a fresh runner that never builds or installs the
+# app's code: it downloads the bundles the build jobs made, signs them with
+# the Tauri CLI from the lockfile (installed without running any package
+# scripts), and uploads them. Code that runs while building (build scripts,
+# proc macros, npm packages) never shares a machine with the key.
 #
-# Optional code signing needs these secrets:
+# Optional code signing needs these secrets, as repository secrets, since the
+# build jobs don't use the `release` environment. Apple code signing and
+# notarization run in the macOS build job:
 #   macOS:   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
 #            APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
 #   Windows: configure signing in tauri.conf.json (bundle.windows) or Azure Trusted Signing
@@ -26,25 +32,17 @@ permissions:
 
 jobs:
   build:
-    # Secrets and protection rules (required reviewers, v* tags only) set on
-    # this environment apply to these jobs alone. GitHub creates it, without
-    # rules, on the first run.
-    environment: release
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: macos-latest
-            args: --target universal-apple-darwin
+            target: universal-apple-darwin
           - platform: ubuntu-22.04
-            args: ""
+            target: ""
           - platform: windows-latest
-            args: ""
+            target: ""
     runs-on: ${{ matrix.platform }}
-    env:
-      HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -65,70 +63,194 @@ jobs:
           targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: pnpm install --frozen-lockfile
-      # The frontend build and the compile (build scripts and proc macros of
-      # every crate) run here, before the signing key is in the environment.
-      # tauri-action then runs the same `tauri build`, finds the app compiled
-      # and only bundles, signs and uploads it. The extra config stops it from
-      # building the frontend again; both builds need the same config, or
-      # Cargo would compile the app a second time.
-      # tauri-cli would set this for the frontend build; the Vite config
-      # picks the JavaScript target from it.
-      - run: pnpm build
-        env:
-          TAURI_ENV_PLATFORM: ${{ runner.os == 'Windows' && 'windows' || runner.os == 'macOS' && 'darwin' || 'linux' }}
-      - name: Compile
+      # With createUpdaterArtifacts on, `tauri build` signs the update bundles
+      # itself and fails without a key, after bundling. It gets a throwaway
+      # key; its signatures are left here, and the sign job signs the bundles
+      # again with the real one.
+      - name: Make a throwaway updater key
+        shell: bash
+        run: pnpm tauri signer generate --ci -w "$RUNNER_TEMP/throwaway.key"
+      - name: Build
         shell: bash
         env:
-          ARGS: ${{ matrix.args }}
+          TARGET: ${{ matrix.target }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
         run: |
-          echo '{ "build": { "beforeBuildCommand": "" } }' > src-tauri/tauri.prebuilt.conf.json
-          pnpm tauri build $ARGS --config src-tauri/tauri.release.conf.json --config src-tauri/tauri.prebuilt.conf.json --no-bundle
-      # Tauri signs and notarizes as soon as APPLE_CERTIFICATE is set, even to
-      # an empty string, so the signing variables are only passed when the
-      # secrets exist.
-      - name: Bundle, sign and upload (signed)
-        if: runner.os == 'macOS' && env.HAS_APPLE_SIGNING == 'true'
-        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+          # Tauri signs and notarizes as soon as APPLE_CERTIFICATE is set, even
+          # to an empty string, so the variables stay only when the secret exists.
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+              APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+          fi
+          TAURI_SIGNING_PRIVATE_KEY="$RUNNER_TEMP/throwaway.key" \
+            pnpm tauri build ${TARGET:+--target "$TARGET"} --config src-tauri/tauri.release.conf.json
+      # The files to release, named as tauri-action named the release assets:
+      # GitHub turns spaces into dots, and the macOS update bundle carries its
+      # architecture. The throwaway signatures stay behind.
+      - name: Collect the installers
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          out="$RUNNER_TEMP/release"
+          mkdir "$out"
+          bundle="target/${TARGET:+$TARGET/}release/bundle"
+          for file in "$bundle"/dmg/*.dmg "$bundle"/macos/*.app.tar.gz "$bundle"/msi/*.msi \
+            "$bundle"/nsis/*-setup.exe "$bundle"/deb/*.deb "$bundle"/rpm/*.rpm \
+            "$bundle"/appimage/*.AppImage; do
+            [ -f "$file" ] || continue
+            name=$(basename "$file")
+            case $name in
+              *.app.tar.gz) name="${name%.app.tar.gz}_${TARGET%%-*}.app.tar.gz" ;;
+            esac
+            cp "$file" "$out/${name// /.}"
+          done
+          ls -l "$out"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ runner.os }}
+          path: ${{ runner.temp }}/release
+          if-no-files-found: error
+          retention-days: 7
+
+  sign:
+    needs: build
+    runs-on: ubuntu-latest
+    # The only job in the release environment, so the only one that can read
+    # the signing key. Required reviewers set on the environment approve it
+    # once every platform has built.
+    environment: release
+    permissions:
+      contents: write
+    env:
+      NOTES: |-
+        Which file to download: see [Download](https://github.com/nuriddin2468/ssh-key-manager#download) in the README.
+
+        [Code signing policy](https://github.com/nuriddin2468/ssh-key-manager#code-signing-policy)
+    steps:
+      # For the app's version and the lockfile; nothing in it is built or run.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      # No cache: the build jobs could have written one.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      # The lockfile pins @tauri-apps/cli and its checksum. Of what this
+      # installs, only the CLI ever runs, and no package's install scripts do.
+      - name: Install the Tauri CLI
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/release
+      # The files come from the build jobs, so only regular files with plain
+      # names of the expected kinds go on to commands, URLs and the manifest.
+      - name: Sign the update bundles
+        shell: python3 -I {0}
+        env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: SSH Key Manager ${{ github.ref_name }}
-          releaseBody: |
-            Which file to download: see [Download](https://github.com/nuriddin2468/ssh-key-manager#download) in the README.
+        run: |
+          import base64, json, os, re, subprocess, sys
 
-            [Code signing policy](https://github.com/nuriddin2468/ssh-key-manager#code-signing-policy)
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json --config src-tauri/tauri.prebuilt.conf.json
-      - name: Bundle, sign and upload
-        if: runner.os != 'macOS' || env.HAS_APPLE_SIGNING != 'true'
-        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+          with open("src-tauri/tauri.conf.json", encoding="utf-8") as file:
+              config = json.load(file)
+
+
+          def key_id(text):
+              """The ID of a minisign key or signature: bytes 2 to 9 of its second line."""
+              line = base64.b64decode(text).decode().splitlines()[1]
+              return base64.b64decode(line)[2:10]
+
+
+          trusted = key_id(config["plugins"]["updater"]["pubkey"])
+          folder = os.path.join(os.environ["RUNNER_TEMP"], "release")
+          updates = (".app.tar.gz", ".AppImage", ".deb", ".rpm", ".msi", "-setup.exe")
+          for name in sorted(os.listdir(folder)):
+              path = os.path.join(folder, name)
+              if (
+                  not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name)
+                  or os.path.islink(path)
+                  or not os.path.isfile(path)
+                  or not name.endswith(updates + (".dmg",))
+              ):
+                  sys.exit(f"unexpected file from a build: {name!r}")
+              if not name.endswith(updates):
+                  continue
+              subprocess.run(
+                  ["pnpm", "exec", "tauri", "signer", "sign", "--app-version", config["version"], path],
+                  check=True,
+              )
+              # Installed apps would refuse a signature by another key.
+              with open(path + ".sig", encoding="ascii") as sig:
+                  if key_id(sig.read()) != trusted:
+                      sys.exit(f"{name}.sig is not by the key in plugins.updater.pubkey")
+      # The manifest as tauri-action wrote it. The updater looks up
+      # `{os}-{arch}-{installer}` first, then `{os}-{arch}`.
+      - name: Write latest.json
+        shell: python3 -I {0}
+        run: |
+          import fnmatch, json, os, re, sys, time
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          if not re.fullmatch(r"v[0-9A-Za-z._-]+", tag):
+              sys.exit(f"unexpected tag: {tag}")
+          with open("src-tauri/tauri.conf.json", encoding="utf-8") as file:
+              version = json.load(file)["version"]
+          base = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{tag}"
+          folder = os.path.join(os.environ["RUNNER_TEMP"], "release")
+          files = os.listdir(folder)
+          targets = {
+              "*_universal.app.tar.gz": [
+                  "darwin-aarch64", "darwin-x86_64", "darwin-aarch64-app", "darwin-x86_64-app",
+              ],
+              "*_amd64.AppImage": ["linux-x86_64", "linux-x86_64-appimage"],
+              "*_amd64.deb": ["linux-x86_64-deb"],
+              "*.x86_64.rpm": ["linux-x86_64-rpm"],
+              "*_x64_*.msi": ["windows-x86_64", "windows-x86_64-msi"],
+              "*_x64-setup.exe": ["windows-x86_64-nsis"],
+          }
+          platforms = {}
+          for pattern, keys in targets.items():
+              found = fnmatch.filter(files, pattern)
+              if len(found) != 1:
+                  sys.exit(f"expected one {pattern}, found {found}")
+              with open(os.path.join(folder, found[0] + ".sig"), encoding="ascii") as sig:
+                  signature = sig.read()
+              for key in keys:
+                  platforms[key] = {"signature": signature, "url": f"{base}/{found[0]}"}
+          manifest = {
+              "version": version,
+              "notes": os.environ["NOTES"],
+              "pub_date": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+              "platforms": platforms,
+          }
+          with open(os.path.join(folder, "latest.json"), "w", encoding="utf-8") as out:
+              json.dump(manifest, out, indent=2)
+          print(json.dumps(manifest, indent=2))
+      - name: Upload to a draft release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: SSH Key Manager ${{ github.ref_name }}
-          releaseBody: |
-            Which file to download: see [Download](https://github.com/nuriddin2468/ssh-key-manager#download) in the README.
-
-            [Code signing policy](https://github.com/nuriddin2468/ssh-key-manager#code-signing-policy)
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json --config src-tauri/tauri.prebuilt.conf.json
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd "$RUNNER_TEMP/release"
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber ./*
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
+              --title "SSH Key Manager $GITHUB_REF_NAME" --notes "$NOTES" ./*
+          fi
 
   publish:
-    needs: build
+    needs: sign
     runs-on: ubuntu-latest
     permissions:
       contents: write

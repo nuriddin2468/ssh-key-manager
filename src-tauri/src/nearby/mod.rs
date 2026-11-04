@@ -58,7 +58,7 @@ use self::items::{ReceivedGroup, SendRequest};
 use self::pairing::{PairingFailure, PairingPhase, Purpose, Side, conversation};
 pub use self::presence::OWN_SERVICE_TYPE;
 use self::presence::{OwnFound, Presence};
-use self::sync::{SyncDecisions, SyncLocal, SyncState, SyncWrite};
+use self::sync::{RiskyChange, SyncDecisions, SyncLocal, SyncState, SyncWrite};
 use crate::commands::Shared;
 use crate::confirm::Localized;
 use crate::error::{AppError, AppResult};
@@ -126,7 +126,9 @@ pub struct NearbyDevice {
 #[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = crate::types::BINDINGS))]
 pub struct Pairing {
     pub id: u32,
-    /// The other device's name, once it said it.
+    /// The other device's name once it said who it is: for a contact or
+    /// one of the user's devices the one the vault keeps for it, else the
+    /// one it gave.
     pub peer: Option<String>,
     /// This side connected.
     pub outgoing: bool,
@@ -230,12 +232,40 @@ struct Found {
     addresses: Vec<SocketAddr>,
 }
 
-/// What the user answers a conversation.
-enum Answer {
-    /// Yes or no: the codes match, the item is welcome, the device added.
+/// What the user answered a conversation, and the step it was asked at: an
+/// answer meant for an earlier step (a second click on "Codes match") is
+/// dropped, never taken for the next question.
+struct Answer {
+    at: PairingPhase,
+    said: Said,
+}
+
+enum Said {
+    /// Yes or no to the question shown: the codes match, the item is
+    /// welcome.
     Yes(bool),
+    /// The user confirmed adding the device with Touch ID / Windows Hello
+    /// or the master password. Only [`Nearby::authorize`] says it, after
+    /// checking; the page can't.
+    Authorized,
     /// What to do with the changes of a sync.
     Decided(SyncDecisions),
+}
+
+impl Said {
+    /// Whether this answers what `phase` asks.
+    fn fits(&self, phase: &PairingPhase) -> bool {
+        match self {
+            Self::Yes(_) => matches!(
+                phase,
+                PairingPhase::Compare { .. }
+                    | PairingPhase::Offered { .. }
+                    | PairingPhase::NameMismatch { .. }
+            ),
+            Self::Authorized => matches!(phase, PairingPhase::Authorize { .. }),
+            Self::Decided(_) => matches!(phase, PairingPhase::Decide { .. }),
+        }
+    }
 }
 
 /// A vault another computer gave, until the user sets its master password.
@@ -505,13 +535,23 @@ impl Nearby {
     pub fn send(self: &Arc<Self>, target: &str, request: &SendRequest) -> AppResult<u32> {
         let state = self.state()?;
         let item = items::build(&state, self.app()?, request)?;
-        self.start(target, Goal::Send(item))
+        // The name it was picked under, to hold against the one the vault
+        // keeps for the device that answers.
+        let to = self
+            .lock()
+            .devices
+            .get(target)
+            .map(|found| found.name.clone());
+        self.start(target, Goal::Send { item, to })
     }
 
     /// Makes a device found on the network (or at an address) one of the
     /// user's devices, giving it the vault if it has none. The result comes
     /// as events.
     pub fn add_device(self: &Arc<Self>, target: &str) -> AppResult<u32> {
+        // The other computer gets the key own devices share with the vault
+        // file, or reads it from the file the two already share.
+        self.ensure_own_key()?;
         self.start(target, Goal::AddDevice)
     }
 
@@ -604,14 +644,14 @@ impl Nearby {
     }
 
     /// The user's answer: whether the codes match, or whether to accept an
-    /// item.
+    /// item. Taken only while the conversation asks one of those.
     pub fn answer(&self, id: u32, matched: bool) -> AppResult<()> {
-        self.tell(id, Answer::Yes(matched))
+        self.tell(id, Said::Yes(matched))
     }
 
     /// The user's decisions on what a sync brings.
     pub fn decide(&self, id: u32, decisions: SyncDecisions) -> AppResult<()> {
-        self.tell(id, Answer::Decided(decisions))
+        self.tell(id, Said::Decided(decisions))
     }
 
     /// The user's yes to making the other computer one of their devices,
@@ -636,7 +676,7 @@ impl Nearby {
                 format!("{peer} qurilmasini qurilmalaringizga qoʻshish"),
             ))?,
         }
-        self.answer(id, true)
+        self.tell(id, Said::Authorized)
     }
 
     /// Sets up the vault another of the user's computers gave, with this
@@ -681,16 +721,27 @@ impl Nearby {
         }
     }
 
-    fn tell(&self, id: u32, answer: Answer) -> AppResult<()> {
+    /// Gives the conversation an answer to the step it is at. One that
+    /// doesn't fit the step (a click that came late) is dropped.
+    fn tell(&self, id: u32, said: Said) -> AppResult<()> {
         let inner = self.lock();
-        let sender = inner
+        let slot = inner
             .pairing
             .as_ref()
             .filter(|slot| slot.view.id == id)
-            .and_then(|slot| slot.answer.as_ref())
             .ok_or_else(|| AppError::not_found("the pairing has ended"))?;
+        let sender = slot
+            .answer
+            .as_ref()
+            .ok_or_else(|| AppError::not_found("the pairing has ended"))?;
+        if !said.fits(&slot.view.phase) {
+            return Ok(());
+        }
         sender
-            .send(answer)
+            .send(Answer {
+                at: slot.view.phase.clone(),
+                said,
+            })
             .map_err(|_| AppError::not_found("the pairing has ended"))
     }
 
@@ -917,7 +968,14 @@ impl Nearby {
                     cancelled,
                     only_sync: matches!(role, Role::Answers { only_sync: true }),
                 };
+                // A sync is only ever with one of the user's devices: anyone
+                // else is turned away before the `Hello`, which would carry
+                // this vault's proof.
+                let sync = side.only_sync || matches!(role, Role::Connects(Goal::Sync));
                 match role {
+                    _ if sync && !side.is_own(session.remote()) => PairingPhase::Failed {
+                        reason: PairingFailure::NotOwn,
+                    },
                     Role::Connects(goal) => conversation(&mut session, &side, Some(goal.purpose())),
                     Role::Answers { .. } => conversation(&mut session, &side, None),
                 }
@@ -1056,7 +1114,12 @@ impl Nearby {
 /// What the side that connects came for.
 enum Goal {
     Pair,
-    Send(Item),
+    /// Send `item` to the device picked under the name `to`, or reached by
+    /// its address.
+    Send {
+        item: Item,
+        to: Option<String>,
+    },
     AddDevice,
     Sync,
 }
@@ -1064,7 +1127,7 @@ enum Goal {
 impl Goal {
     fn kind(&self) -> ConversationKind {
         match self {
-            Self::Pair | Self::Send(_) => ConversationKind::Pair,
+            Self::Pair | Self::Send { .. } => ConversationKind::Pair,
             Self::AddDevice => ConversationKind::Device,
             Self::Sync => ConversationKind::Sync,
         }
@@ -1073,7 +1136,10 @@ impl Goal {
     fn purpose(&self) -> Purpose<'_> {
         match self {
             Self::Pair => Purpose::Pair,
-            Self::Send(item) => Purpose::Send(item),
+            Self::Send { item, to } => Purpose::Send {
+                item,
+                to: to.as_deref(),
+            },
             Self::AddDevice => Purpose::AddDevice,
             Self::Sync => Purpose::Sync,
         }
@@ -1162,16 +1228,24 @@ impl AppSide<'_> {
             .is_some_and(|visible| visible.join)
     }
 
-    fn receive(&self, wait: Duration) -> Result<Option<Answer>, PairingFailure> {
+    /// The user's answer to the step the conversation is at, if one comes
+    /// within `wait`; one given at another step is dropped.
+    fn receive(&self, wait: Duration) -> Result<Option<Said>, PairingFailure> {
         if self.cancelled.load(Ordering::SeqCst) {
             return Err(PairingFailure::Cancelled);
         }
         let answers = self.answers.lock().unwrap_or_else(PoisonError::into_inner);
-        match answers.recv_timeout(wait) {
-            Ok(answer) => Ok(Some(answer)),
-            Err(RecvTimeoutError::Timeout) => Ok(None),
-            Err(RecvTimeoutError::Disconnected) => Err(PairingFailure::Cancelled),
-        }
+        let answer = match answers.recv_timeout(wait) {
+            Ok(answer) => answer,
+            Err(RecvTimeoutError::Timeout) => return Ok(None),
+            Err(RecvTimeoutError::Disconnected) => return Err(PairingFailure::Cancelled),
+        };
+        let now = self
+            .nearby
+            .slot(self.id)
+            .as_mut()
+            .map(|slot| slot.view.phase.clone());
+        Ok((now.as_ref() == Some(&answer.at)).then_some(answer.said))
     }
 }
 
@@ -1180,11 +1254,11 @@ impl Side for AppSide<'_> {
         self.nearby.lock().name.clone()
     }
 
-    fn knows(&self, peer: PeerKey) -> Result<bool, PairingFailure> {
+    fn knows(&self, peer: PeerKey) -> Result<Option<String>, PairingFailure> {
         if self.joining() {
-            return Ok(false);
+            return Ok(None);
         }
-        self.read(|vault| vault.contact(&peer).is_some() || vault.is_own_device(&peer))
+        self.read(|vault| vault.known_name(&peer))
     }
 
     fn save(&self, peer: PeerKey, name: &str) -> Result<(), PairingFailure> {
@@ -1223,24 +1297,38 @@ impl Side for AppSide<'_> {
 
     fn answer(&self, wait: Duration) -> Result<Option<bool>, PairingFailure> {
         Ok(match self.receive(wait)? {
-            Some(Answer::Yes(yes)) => Some(yes),
-            Some(Answer::Decided(_)) | None => None,
+            Some(Said::Yes(yes)) => Some(yes),
+            Some(Said::Authorized | Said::Decided(_)) | None => None,
         })
+    }
+
+    fn authorized(&self, wait: Duration) -> Result<bool, PairingFailure> {
+        Ok(matches!(self.receive(wait)?, Some(Said::Authorized)))
     }
 
     fn vault(&self, hash: &[u8], initiator: bool) -> Option<VaultState> {
         if self.joining() {
             return Some(VaultState::Missing);
         }
+        // A vault with no key for own devices yet proves nothing: empty.
         Some(
-            self.read(|vault| vault.own_key().proof(hash, initiator))
-                .map_or(VaultState::Locked, |proof| VaultState::Open { proof }),
+            self.read(|vault| {
+                vault
+                    .own_key()
+                    .map(|key| key.proof(hash, initiator))
+                    .unwrap_or_default()
+            })
+            .map_or(VaultState::Locked, |proof| VaultState::Open { proof }),
         )
     }
 
     fn same_vault(&self, hash: &[u8], initiator: bool, proof: &str) -> bool {
-        self.read(|vault| vault.own_key().verify(hash, initiator, proof))
-            .unwrap_or(false)
+        self.read(|vault| {
+            vault
+                .own_key()
+                .is_some_and(|key| key.verify(hash, initiator, proof))
+        })
+        .unwrap_or(false)
     }
 
     fn is_own(&self, peer: PeerKey) -> bool {
@@ -1338,12 +1426,26 @@ impl Side for AppSide<'_> {
         store::save(&self.nearby.data_dir, &peer, state).map_err(|_| PairingFailure::NotSaved)
     }
 
+    fn allow_risky(&self, changes: &[RiskyChange]) -> bool {
+        let Ok((state, app)) = self.context() else {
+            return false;
+        };
+        let peer = self
+            .nearby
+            .slot(self.id)
+            .as_mut()
+            .and_then(|slot| slot.view.peer.clone())
+            .unwrap_or_default();
+        let file = state.paths.config.display().to_string();
+        let (title, body, approve) = sync::risky_prompt(&peer, &file, changes);
+        crate::confirm::require(app, &title, &body, &approve).is_ok()
+    }
+
     fn decisions(&self, wait: Duration) -> Result<Option<SyncDecisions>, PairingFailure> {
-        match self.receive(wait)? {
-            Some(Answer::Decided(decisions)) => Ok(Some(decisions)),
-            Some(Answer::Yes(false)) => Err(PairingFailure::Cancelled),
-            Some(Answer::Yes(true)) | None => Ok(None),
-        }
+        Ok(match self.receive(wait)? {
+            Some(Said::Decided(decisions)) => Some(decisions),
+            Some(Said::Yes(_) | Said::Authorized) | None => None,
+        })
     }
 }
 
@@ -1438,6 +1540,98 @@ fn random_hex() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The side that reads the answers of conversation `id`, with no app
+    /// behind it.
+    fn side<'a>(
+        nearby: &'a Nearby,
+        id: u32,
+        answers: Receiver<Answer>,
+        cancelled: &'a AtomicBool,
+    ) -> AppSide<'a> {
+        AppSide {
+            nearby,
+            id,
+            answers: Mutex::new(answers),
+            cancelled,
+            only_sync: false,
+        }
+    }
+
+    fn at(nearby: &Nearby, id: u32, phase: PairingPhase) {
+        nearby.slot(id).as_mut().unwrap().view.phase = phase;
+    }
+
+    const WAIT: Duration = Duration::from_millis(10);
+
+    #[test]
+    fn only_the_app_confirms_adding_a_device() {
+        let nearby = Nearby::new(std::env::temp_dir().join("sshkm-no-nearby"));
+        let (id, answers, cancelled) = nearby.claim(true, ConversationKind::Device).unwrap();
+        let side = side(&nearby, id, answers, &cancelled);
+        at(
+            &nearby,
+            id,
+            PairingPhase::Compare {
+                code: "123456".into(),
+            },
+        );
+        // "Codes match", clicked twice before the step changed.
+        nearby.answer(id, true).unwrap();
+        nearby.answer(id, true).unwrap();
+        assert_eq!(side.answer(WAIT), Ok(Some(true)));
+
+        at(&nearby, id, PairingPhase::Authorize { vault: true });
+        // The second click is dropped, and a yes now is not taken at all.
+        nearby.answer(id, true).unwrap();
+        assert_eq!(side.authorized(WAIT), Ok(false));
+        assert_eq!(side.authorized(WAIT), Ok(false));
+        // Decisions don't fit this step either.
+        nearby.decide(id, SyncDecisions::default()).unwrap();
+        assert_eq!(side.authorized(WAIT), Ok(false));
+        // What `authorize` says after its check does.
+        nearby.tell(id, Said::Authorized).unwrap();
+        assert_eq!(side.authorized(WAIT), Ok(true));
+    }
+
+    #[test]
+    fn an_answer_counts_only_for_the_step_it_was_given_at() {
+        let nearby = Nearby::new(std::env::temp_dir().join("sshkm-no-nearby"));
+        let (id, answers, cancelled) = nearby.claim(true, ConversationKind::Sync).unwrap();
+        let side = side(&nearby, id, answers, &cancelled);
+        // Nothing asked yet: nothing taken.
+        nearby.answer(id, true).unwrap();
+        assert_eq!(side.answer(WAIT), Ok(None));
+
+        at(
+            &nearby,
+            id,
+            PairingPhase::Compare {
+                code: "123456".into(),
+            },
+        );
+        nearby.answer(id, false).unwrap();
+        at(
+            &nearby,
+            id,
+            PairingPhase::Compare {
+                code: "654321".into(),
+            },
+        );
+        assert_eq!(side.answer(WAIT), Ok(None), "given at another step");
+
+        let review = sync::Review::default();
+        at(&nearby, id, PairingPhase::Decide { review });
+        nearby.answer(id, false).unwrap();
+        nearby.tell(id, Said::Authorized).unwrap();
+        assert_eq!(side.decisions(WAIT), Ok(None));
+        let decisions = SyncDecisions {
+            delete: true,
+            ..SyncDecisions::default()
+        };
+        nearby.decide(id, decisions.clone()).unwrap();
+        assert_eq!(side.decisions(WAIT), Ok(Some(decisions)));
+    }
 
     #[test]
     fn instance_names_are_random_hex() {

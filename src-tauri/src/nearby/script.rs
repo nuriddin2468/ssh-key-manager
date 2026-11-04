@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use sshkm_core::SecretString;
+use sha2::{Digest, Sha256};
 use sshkm_core::config::SshConfig;
 use sshkm_core::known_hosts::KnownHosts;
 use sshkm_core::p2p::own::OwnKey;
@@ -19,7 +19,7 @@ use sshkm_core::vault::DeviceRecord;
 use zeroize::Zeroizing;
 
 use super::pairing::{PairingFailure, PairingPhase, Purpose, Side, conversation};
-use super::sync::{SyncDecisions, SyncLocal, SyncState, SyncWrite};
+use super::sync::{RiskyChange, SyncDecisions, SyncLocal, SyncState, SyncWrite};
 
 /// The vault a script has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,7 +29,8 @@ pub enum Vault {
     /// None yet: it waits to be given one.
     Missing,
     Locked,
-    /// Unlocked, with this secret.
+    /// Unlocked, with this secret; `""`: one with no key for own devices
+    /// yet.
     Open(&'static str),
 }
 
@@ -38,9 +39,18 @@ pub const VAULT_FILE: &[u8] = b"the vault file";
 
 /// A side whose user gives `answers` in turn (`None`: cancels), each after
 /// `delay`, then repeats the last one.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each is one thing the scripted user or computer does"
+)]
 pub struct Script {
     pub name: &'static str,
+    /// The other side is a contact (or one of the user's devices) here,
+    /// kept as `known_as`.
     pub knows: bool,
+    pub known_as: &'static str,
+    /// Contacts here by device key, for a test that knows the keys.
+    pub contacts: Vec<(PeerKey, &'static str)>,
     pub delay: Duration,
     /// `store` fails with this.
     pub store_fails: Option<PairingFailure>,
@@ -52,6 +62,15 @@ pub struct Script {
     pub stored: Mutex<Vec<Item>>,
 
     pub vault: Vault,
+    /// This user confirms adding a device (Touch ID or the master
+    /// password); `false`: cancels instead.
+    pub authorizes: bool,
+    /// How many times this side asked its user to confirm adding a device.
+    pub asked_to_authorize: Mutex<u32>,
+    /// This user allows the risky changes of a sync in the system dialog.
+    pub allows_risky: bool,
+    /// The risky changes the system dialog asked about.
+    pub asked_risky: Mutex<Vec<RiskyChange>>,
     /// The other side is one of the user's devices here.
     pub own_peer: bool,
     /// Announced to own devices: only a sync is taken.
@@ -78,6 +97,8 @@ impl Script {
         Self {
             name,
             knows: false,
+            known_as: "a contact",
+            contacts: Vec::new(),
             delay: Duration::ZERO,
             store_fails: None,
             answers: Mutex::new(answers.iter().copied().collect()),
@@ -87,6 +108,10 @@ impl Script {
             saved: Mutex::default(),
             stored: Mutex::default(),
             vault: Vault::Unknown,
+            authorizes: true,
+            asked_to_authorize: Mutex::default(),
+            allows_risky: true,
+            asked_risky: Mutex::default(),
             own_peer: false,
             only_sync: false,
             decisions: SyncDecisions::default(),
@@ -112,9 +137,13 @@ impl Script {
         self.config.lock().unwrap().to_string()
     }
 
+    /// The key of the vault: one per secret, as if each vault had made its
+    /// own.
     fn own_key(&self) -> Option<OwnKey> {
         match self.vault {
-            Vault::Open(secret) => Some(OwnKey::from_secret(&SecretString::from(secret))),
+            Vault::Open(secret) if !secret.is_empty() => {
+                Some(OwnKey::from_seed(&Sha256::digest(secret).into()))
+            }
             _ => None,
         }
     }
@@ -124,8 +153,11 @@ impl Side for Script {
     fn name(&self) -> String {
         self.name.into()
     }
-    fn knows(&self, _: PeerKey) -> Result<bool, PairingFailure> {
-        Ok(self.knows)
+    fn knows(&self, peer: PeerKey) -> Result<Option<String>, PairingFailure> {
+        if let Some((_, name)) = self.contacts.iter().find(|(key, _)| *key == peer) {
+            return Ok(Some((*name).to_owned()));
+        }
+        Ok(self.knows.then(|| self.known_as.to_owned()))
     }
     fn save(&self, _: PeerKey, name: &str) -> Result<(), PairingFailure> {
         self.saved.lock().unwrap().push(name.into());
@@ -167,8 +199,11 @@ impl Side for Script {
             Vault::Unknown => None,
             Vault::Missing => Some(VaultState::Missing),
             Vault::Locked => Some(VaultState::Locked),
-            Vault::Open(_) => self.own_key().map(|key| VaultState::Open {
-                proof: key.proof(hash, initiator),
+            Vault::Open(_) => Some(VaultState::Open {
+                proof: self
+                    .own_key()
+                    .map(|key| key.proof(hash, initiator))
+                    .unwrap_or_default(),
             }),
         }
     }
@@ -187,6 +222,14 @@ impl Side for Script {
             return Err(PairingFailure::VaultLocked);
         }
         Ok(())
+    }
+    fn authorized(&self, _: Duration) -> Result<bool, PairingFailure> {
+        *self.asked_to_authorize.lock().unwrap() += 1;
+        if self.authorizes {
+            Ok(true)
+        } else {
+            Err(PairingFailure::Cancelled)
+        }
     }
     fn add_device(&self, _: PeerKey, name: &str) -> Result<(), PairingFailure> {
         self.added.lock().unwrap().push(name.into());
@@ -232,6 +275,10 @@ impl Side for Script {
     fn decisions(&self, _: Duration) -> Result<Option<SyncDecisions>, PairingFailure> {
         Ok(Some(self.decisions.clone()))
     }
+    fn allow_risky(&self, changes: &[RiskyChange]) -> bool {
+        self.asked_risky.lock().unwrap().extend_from_slice(changes);
+        self.allows_risky
+    }
 }
 
 /// Runs `left` as the side that connects, for `purpose`, and `right` as
@@ -241,28 +288,59 @@ pub fn talk(
     right: Script,
     purpose: Purpose<'_>,
 ) -> ((PairingPhase, Script), (PairingPhase, Script)) {
+    talk_as(
+        (left, Identity::generate().unwrap()),
+        (right, Identity::generate().unwrap()),
+        purpose,
+    )
+}
+
+/// [`talk`], each side with the device key given.
+pub fn talk_as(
+    (left, left_key): (Script, Identity),
+    (right, right_key): (Script, Identity),
+    purpose: Purpose<'_>,
+) -> ((PairingPhase, Script), (PairingPhase, Script)) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let other = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let mut session = accept(stream, &Identity::generate().unwrap()).unwrap();
+        let mut session = accept(stream, &right_key).unwrap();
         (conversation(&mut session, &right, None), right)
     });
     let stream = TcpStream::connect(address).unwrap();
-    let mut session = connect(stream, &Identity::generate().unwrap()).unwrap();
+    let mut session = connect(stream, &left_key).unwrap();
     let mine = (conversation(&mut session, &left, Some(purpose)), left);
     drop(session);
     (mine, other.join().unwrap())
 }
 
-/// Runs `left` as the side that connects, sending `item` if there is one,
-/// and `right` as the other; returns how each ended.
+/// The names a side showed for the other device.
+pub fn peers(side: &Script) -> Vec<String> {
+    let mut peers: Vec<String> = side
+        .shown
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|(peer, _)| peer.clone())
+        .collect();
+    peers.dedup();
+    peers
+}
+
+/// Runs `left` as the side that connects, sending `item` if there is one
+/// (to a device reached by its address), and `right` as the other; returns
+/// how each ended.
 pub fn run(
     left: Script,
     right: Script,
     item: Option<&Item>,
 ) -> ((PairingPhase, Script), (PairingPhase, Script)) {
-    talk(left, right, item.map_or(Purpose::Pair, Purpose::Send))
+    talk(
+        left,
+        right,
+        item.map_or(Purpose::Pair, |item| Purpose::Send { item, to: None }),
+    )
 }
 
 /// Runs `left` against `right`, pairing only.

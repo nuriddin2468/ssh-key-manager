@@ -35,6 +35,7 @@ pub async fn vault_test_connection(
     passphrase: Option<SecretString>,
 ) -> AppResult<ConnectionTest> {
     blocking(&state, move |state| {
+        check_alias(&alias)?;
         let secrets = saved_secrets(state, &app, &alias)?;
         let secrets = with_typed_passphrase(state, secrets, key_id, passphrase)?;
         connection_test(state, &alias, secrets)
@@ -52,6 +53,7 @@ pub async fn vault_install_public_key(
     key_id: String,
 ) -> AppResult<KeyInstall> {
     blocking(&state, move |state| {
+        check_alias(&alias)?;
         let secrets = saved_secrets(state, &app, &alias)?;
         install_key(state, &alias, &key_id, secrets)
     })
@@ -68,6 +70,7 @@ pub async fn vault_server_keys(
     action: ServerKeysAction,
 ) -> AppResult<ServerKeys> {
     blocking(&state, move |state| {
+        check_alias(&alias)?;
         let secrets = saved_secrets(state, &app, &alias)?;
         read_server_keys(state, &alias, &action, secrets)
     })

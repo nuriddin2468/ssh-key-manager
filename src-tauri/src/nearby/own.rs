@@ -2,21 +2,25 @@
 //! (see [`conversation`]).
 //!
 //! The side that connected has the vault. Its user confirms with Touch ID
-//! or the master password; then it records both computers as the user's
-//! devices and says so ([`Message::Added`]). If the other computer has no
-//! vault yet, the vault file follows in parts, then its secret. The other
-//! computer checks that the secret opens the file and keeps both in memory
-//! until its user sets a master password of its own. If it has the same
-//! vault already (a synced folder), it only records both as well.
+//! or the master password ([`Side::authorized`]: only the app's check of
+//! either says so, never the page's yes to the code); then it records both
+//! computers as the user's devices and says so ([`Message::Added`]). If the
+//! other computer has no vault yet, the vault file follows in parts, then
+//! its secret. The other computer checks that the secret opens the file and
+//! keeps both in memory until its user sets a master password of its own.
+//! If it has the same vault already (a synced folder), it only records both
+//! as well; the two tell that by the key own devices share, which is in the
+//! file ([`sshkm_core::p2p::own`]).
 //!
 //! [`conversation`]: super::pairing::conversation
 
 use std::net::TcpStream;
+use std::time::Instant;
 
 use sshkm_core::p2p::{Message, PeerKey, Session};
 use sshkm_core::vault::MAX_DATABASE_SIZE;
 
-use super::pairing::{ANSWER_TIMEOUT, PairingFailure, PairingPhase, Side, broken, wait_for_answer};
+use super::pairing::{ANSWER_TIMEOUT, POLL, PairingFailure, PairingPhase, Side, broken, waiting};
 use super::transfer::STEP_TIMEOUT;
 
 /// The rest of the conversation: giving (the side that connected) or
@@ -44,10 +48,9 @@ fn give(
     joins: bool,
 ) -> Result<PairingPhase, PairingFailure> {
     side.show(None, &PairingPhase::Authorize { vault: joins });
-    let (yes, _) = wait_for_answer(session, side)?;
-    if !yes {
+    if let Err(reason) = wait_for_authorization(session, side) {
         let _ = session.send(&Message::Confirm { matched: false });
-        return Err(PairingFailure::Declined);
+        return Err(reason);
     }
     side.add_device(peer, name)?;
     session
@@ -72,6 +75,28 @@ fn give(
         Message::Received { saved: true } => Ok(PairingPhase::Added { vault: joins }),
         Message::Received { saved: false } => Err(PairingFailure::NotSaved),
         _ => Err(PairingFailure::Broken),
+    }
+}
+
+/// Waits for this user to confirm with Touch ID / Windows Hello or the
+/// master password ([`Side::authorized`]); a yes or no meant for the code
+/// doesn't count. The other side says nothing meanwhile, so anything from
+/// it is it hanging up.
+fn wait_for_authorization(
+    session: &mut Session<TcpStream>,
+    side: &impl Side,
+) -> Result<(), PairingFailure> {
+    let started = Instant::now();
+    loop {
+        if side.authorized(POLL)? {
+            return Ok(());
+        }
+        if waiting(session.stream()).map_err(|_| PairingFailure::Broken)? {
+            return Err(PairingFailure::PeerLeft);
+        }
+        if started.elapsed() > ANSWER_TIMEOUT {
+            return Err(PairingFailure::TimedOut);
+        }
     }
 }
 
@@ -123,10 +148,11 @@ mod tests {
     }
 
     /// The computer with the vault: its user says the codes match, then
-    /// confirms (`yes`).
+    /// confirms with Touch ID or the master password (`yes`), or cancels.
     fn giver(yes: bool) -> Script {
-        let mut side = Script::answering("MacBook", &[Some(true), Some(yes)]);
+        let mut side = Script::new("MacBook", Some(true));
         side.vault = Vault::Open("the secret");
+        side.authorizes = yes;
         side
     }
 
@@ -190,6 +216,18 @@ mod tests {
     }
 
     #[test]
+    fn a_vault_without_the_key_of_own_devices_is_another_one() {
+        // Such as the same file in a synced folder that hasn't synced the
+        // key yet: nothing is merged, and adding again later works.
+        let mut other = Script::new("iMac", Some(true));
+        other.vault = Vault::Open("");
+        let ((left_end, left), (right_end, right)) = talk(giver(true), other, Purpose::AddDevice);
+        assert_eq!(left_end, failed(PairingFailure::OtherVault));
+        assert_eq!(right_end, failed(PairingFailure::OtherVault));
+        assert_eq!(codes(&left).len() + codes(&right).len(), 0);
+    }
+
+    #[test]
     fn a_locked_vault_or_an_older_version_says_so() {
         let mut locked = Script::new("iMac", Some(true));
         locked.vault = Vault::Locked;
@@ -203,13 +241,31 @@ mod tests {
     }
 
     #[test]
-    fn without_the_users_yes_nothing_is_added_or_given() {
+    fn without_the_users_confirmation_nothing_is_added_or_given() {
         let ((left_end, left), (right_end, right)) =
             talk(giver(false), newcomer(), Purpose::AddDevice);
-        assert_eq!(left_end, failed(PairingFailure::Declined));
+        assert_eq!(left_end, failed(PairingFailure::Cancelled));
         assert_eq!(right_end, failed(PairingFailure::PeerDeclined));
         assert_eq!(left.added.lock().unwrap().len(), 0);
         assert_eq!(*right.taken.lock().unwrap(), None);
+    }
+
+    #[test]
+    fn a_yes_to_the_code_is_not_the_confirmation() {
+        // "Codes match" twice, and the yes repeats: still no confirmation.
+        let mut left = Script::answering("MacBook", &[Some(true), Some(true), Some(true)]);
+        left.vault = Vault::Open("the secret");
+        left.authorizes = false;
+        let ((left_end, left), (_, right)) = talk(left, newcomer(), Purpose::AddDevice);
+        assert_eq!(left_end, failed(PairingFailure::Cancelled));
+        assert_eq!(*left.asked_to_authorize.lock().unwrap(), 1);
+        assert_eq!(left.added.lock().unwrap().len(), 0);
+        assert_eq!(*right.taken.lock().unwrap(), None);
+
+        // The side that is added confirms nothing; the one that adds, once.
+        let ((_, left), (_, right)) = talk(giver(true), newcomer(), Purpose::AddDevice);
+        assert_eq!(*left.asked_to_authorize.lock().unwrap(), 1);
+        assert_eq!(*right.asked_to_authorize.lock().unwrap(), 0);
     }
 
     #[test]

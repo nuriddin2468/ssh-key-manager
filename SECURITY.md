@@ -29,8 +29,10 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     dropped when the vault locks: on request, after inactivity, after sleep, and
     optionally when the window is minimised. Showing an entry or its 2FA code doesn't
     count as activity, so it doesn't keep the vault open. Lists and details sent to the
-    interface carry no passwords or 2FA secrets; a password reaches the interface only
-    when you choose to reveal it.
+    interface carry no passwords or 2FA secrets; a login's or host's password reaches
+    the interface only when you choose to reveal it. A 2FA secret never does (only the
+    current code, computed in the Rust process), and neither does a saved key
+    passphrase.
   - Copying a password, a 2FA code or the recovery key goes from Rust straight to the
     clipboard, marked so clipboard history (and Windows' cloud clipboard) skip it, and
     is cleared after 30 seconds by default if nothing else was copied. Locking the vault
@@ -40,8 +42,12 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     so the daily key change doesn't push out the backups taken before real changes. A
     write over a change made elsewhere is refused and saved as a separate copy; a write
     over key slots changed elsewhere is refused.
-  - Key derivation settings read from `vault.keys` or a `.kdbx` header are capped
-    before use, so a tampered file can't make unlocking run for hours.
+  - Key derivation settings read from `vault.keys` or a `.kdbx` header (memory, passes
+    and lanes; each lane is a thread started for every quarter of every pass) are
+    capped before use, so a tampered file can't make unlocking run for hours.
+  - A 2FA secret the app can't make codes for (HOTP, a period of 0 or over 5 minutes,
+    fewer than 6 or more than 10 digits), from an import, a contact or a KeePass file,
+    is refused or kept as unreadable instead of crashing the app.
   - A new recovery key re-encrypts the app's backups and conflict copies, so the old key
     stops opening them. Exports, cloud versions and Time Machine copies made before still
     open with the old key. Changing the master password doesn't change the recovery
@@ -49,9 +55,11 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     new recovery key if the password may have leaked.
   - Turning off or loosening auto-lock, lock on sleep, screen lock or minimise, or
     clipboard clearing; turning off device unlock; and moving the vault or switching to
-    another file are each confirmed in a system dialog, which the page can't answer.
+    another file are each confirmed in a system dialog, which the page can't answer or
+    slip under a key press (see "Standard files only").
   - A saved key passphrase goes from the vault straight to `ssh-agent` or `ssh` inside
-    the Rust process; the interface never receives it. To say "saved, but the vault is
+    the Rust process; the interface never receives it and can't show it. Copying it goes
+    from Rust straight to the clipboard, like a password. To say "saved, but the vault is
     locked", the interface remembers the fingerprints (public) of keys with saved
     passphrases in its local storage.
   - Touch ID / Windows Hello adds one slot per computer to `vault.keys`; a new recovery
@@ -76,12 +84,15 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     - **Linux**: not offered.
   - Exports: the file is chosen in a system dialog the app opens itself, and both
     exports need the master password. The KeePass copy stays encrypted (it opens with
-    the recovery key). The CSV export is plain text: it is readable only by you (mode
-    0600; on Windows by you, SYSTEM and Administrators), never written into `~/.ssh` or over the
-    vault's own files (compared by file identity, so links and firmlinks don't get
-    around it), and cells that a spreadsheet would run as a formula are defused, except
-    passwords. Files to import are also picked in a system dialog. Imported CSV files can
-    be moved to the Trash right after import.
+    the recovery key). The CSV export is plain text: it is readable only by you from the
+    moment it is created (mode 0600; on Windows the file is created with an access list
+    for you, SYSTEM and Administrators only, and no one else can open it while it is
+    written). On a drive that can't keep such an access list (FAT or exFAT USB sticks,
+    some network drives) both exports are refused and nothing is written. It is never
+    written into `~/.ssh` or over the vault's own files (compared by file identity, so
+    links and firmlinks don't get around it), and cells that a spreadsheet would run as
+    a formula are defused, except passwords. Files to import are also picked in a
+    system dialog. Imported CSV files can be moved to the Trash right after import.
 - **Answering `ssh` prompts.** To log in with a password or one-time code, the app acts
   as `ssh`'s askpass program.
   - The secret goes over a local socket only this user can reach (a private 0700
@@ -97,14 +108,20 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - Before OpenSSH 8.5 (Windows 10's built-in 8.1, Debian 11's 8.4) `ssh`'s own prompts
     and a server's look alike, so saved secrets are not filled in through a
     `ProxyJump` or `ProxyCommand`, and saved key passphrases are not filled in while
-    keyboard-interactive is on.
+    keyboard-interactive is on. The terminal then shows those prompts, and with
+    keyboard-interactive on any prompt that names another account, as the sender's
+    quoted text, never as the app's password or passphrase dialog.
   - The in-app terminal uses the same channel with an interactive session. A saved
     secret is given once and only to prompts for the host's own account; everything else
     (a secret not saved, a rejected one, a jump host's password) is asked of you in a
     dialog that names the account the prompt is for. Text that comes from `ssh` or a
     server is shown quoted and is never presented as the app's own question.
   - A new host key is trusted only when you choose "Trust" after seeing its
-    fingerprint, which answers `ssh`'s own question. A changed host key stops the
+    fingerprint, which answers `ssh`'s own question. Before OpenSSH 8.5, with
+    keyboard-interactive on or through a `ProxyJump` or `ProxyCommand`, a server can
+    send the same question: the dialog then says so and quotes the host and
+    fingerprint, and "Trust" only answers "yes", which trusts the key only if `ssh`
+    asked. A changed host key stops the
     connection, and so does a new key of another type for a host whose key is already
     known. Anything else `ssh` adds to the question is shown as a warning.
   - An answer you choose to save goes into the vault only after the session has signed
@@ -124,9 +141,15 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   built into the app (`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`).
   - The update check runs in Rust. The page can ask for a check or an install, but can't
     change the server, proxy or headers.
-  - Release builds use GitHub Actions pinned to commit SHAs. The signing key is only in
-    the environment of the steps that bundle and sign, after everything has been
-    compiled without it.
+  - Release builds use GitHub Actions pinned to commit SHAs. The updater signing key is
+    a secret of the `release` environment, which only the signing job uses. That job
+    runs on a fresh runner that never builds or installs the app's code: it downloads
+    the bundles the build jobs made, signs them with the Tauri CLI pinned in the
+    lockfile (installed without running any package scripts), checks that the
+    signatures are by the key the app trusts, and writes `latest.json`. Code that runs
+    while building (build scripts, proc macros, npm packages) never shares a machine
+    with the key, though it could still change what the build jobs produce. Apple code
+    signing and notarization, when set up, run in the macOS build job.
 - **Standard files only.** The app edits the OpenSSH files in place.
   - Writes are atomic (temp file plus rename), keep the file's permissions, and follow
     symlinks.
@@ -135,9 +158,24 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - A change that adds or alters a directive that runs a program, loads a library,
     includes another file, or gives the server access (`ProxyCommand`, `LocalCommand`,
     `KnownHostsCommand`, `Match exec`, `PKCS11Provider`, `SecurityKeyProvider`,
-    `Include`, `IdentityAgent`, `ForwardAgent`, `ForwardX11`, …), or a host name with
-    shell syntax, is confirmed in a system dialog that shows it. A script in the page
-    can't answer that dialog.
+    `Include`, `IdentityAgent`, `ForwardAgent`, `ForwardX11`, a dynamic
+    `RemoteForward`, …), a host name with shell syntax, a change of which server gets
+    such access (`HostName`, `Port`, `User`, `ProxyJump`, `HostKeyAlias` or the `Host`
+    line of a block it applies to), or one that checks servers less strictly
+    (`StrictHostKeyChecking no` or `accept-new`, `UserKnownHostsFile`,
+    `GlobalKnownHostsFile`, `VerifyHostKeyDNS yes`), is confirmed in a system dialog
+    that shows it. Lines are read as OpenSSH reads them (only spaces and tabs separate
+    words; quoted keywords count), and text with control characters other than tabs
+    and line ends is refused.
+  - A script in the page can't answer that dialog, and a yes given less than a second
+    after a dialog appeared doesn't count: the dialog is asked again (three times at
+    most, then the answer is no), so a script can't open one under a key press meant
+    for the page. This holds for every confirmation dialog in the app.
+  - Whatever the page asks, the app runs `ssh` (connection tests, key installs, the
+    in-app and system terminal) only with a host alias of letters, digits and
+    `. _ - @ : [ ]`. OpenSSH before 9.6 puts the name as it is into the commands that
+    `ProxyCommand`, `ProxyJump` and `Match exec` run through the shell, so a name with
+    shell syntax could run as a command.
   - Private keys are deliberately not backed up, because a backup taken before adding a
     passphrase would leave an unencrypted copy behind.
 - **Deletions are recoverable.** Removed keys go to the system Trash.
@@ -146,16 +184,22 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - Changes to the hosts file are collected first and shown as a diff. Saving writes the
     approved text to a private temporary file and asks the system to run one fixed
     script with administrator rights: `osascript … with administrator privileges` on
-    macOS, `pkexec` on Linux, a UAC prompt on Windows.
-  - The script copies the text somewhere only an administrator can change, checks its
-    length and SHA-256 against the text you approved and only then puts it in place, so
-    another program cannot swap the temporary file in between. It reads the temporary
+    macOS, `pkexec` on Linux, a UAC prompt on Windows. On macOS the text of the password
+    dialog is the app's own, never the page's: it says whether the file is being
+    updated or restored from a backup, and names the hosts whose address changes (the
+    first five, then how many more).
+  - The script copies the text somewhere only an administrator can read or change (a
+    file only root can read on macOS and Linux, memory on Windows), checks its length
+    and SHA-256 against the text you approved and only then puts it in place, so another
+    program cannot swap the temporary file in between, and whatever it swaps in is never
+    readable by anyone else. It reads the temporary
     file only if it is a regular file, and at most one byte more than the approved text.
   - Right before replacing the hosts file it checks that the file is still the one your
     changes were made on. If another program changed it while the password prompt was
     open, nothing is written and the app shows the changes again over the new file.
   - Nothing you type goes into the script: it receives only paths, the length and
-    checksums, as arguments on macOS and Linux (`quoted form of` on macOS) and as
+    checksums, as arguments on macOS and Linux (`quoted form of` on macOS, where the
+    dialog's text goes to `with prompt`, never to the shell) and as
     Base64 text decoded inside the script on Windows.
   - A hosts file that is a symbolic link (managed by `NixOS`, a container runtime and
     the like) or not UTF-8 is never written.
@@ -183,17 +227,20 @@ extension ──native messaging──▶ host (the app's executable) ──sock
 Turning on **Settings → Browser autofill** writes a native messaging manifest for each
 installed browser. The manifest names the app's executable and only this extension
 (by its Chrome ids and its Firefox add-on id). Turning it off removes the manifests and
-stops the listener. Nothing listens while it is off. A manifest never points into a
-temporary folder, where another user could later put a program of their own: an
-AppImage is registered by the AppImage file itself, and a copy running from a temporary
-folder isn't registered at all.
+stops the listener. Nothing listens while it is off. A manifest never points where
+another user could later put a program of their own: an AppImage is registered by the
+AppImage file itself, and a copy running from a temporary folder isn't registered at
+all, nor on macOS one running from a volume under `/Volumes` (its disk image, a USB
+drive, a network share: once it is ejected, anyone can mount another under the same
+name) or from where macOS runs a downloaded app until it is moved (App Translocation).
+Settings then asks to move the app to Applications.
 
 **What the extension can get.**
 
 - The app answers four questions, each about one page:
   - which logins belong to it: titles and usernames only;
   - the username and password of the one login the user picked there;
-  - whether a login typed there is new, changed or already saved;
+  - whether a login the user typed there is new, changed or already saved;
   - saving or updating that login.
 - One more question needs no pairing and carries nothing from the vault: whether two
   origins are the same site, by the same rules as below. The extension asks it to tell
@@ -224,8 +271,10 @@ folder isn't registered at all.
     wear the user down with questions.
 - Nothing is filled until the user picks a login in the menu with a real click or key
   press. Pages get no automatic fill on load.
-  - The menu opens and moves only on events the browser marks as the user's own; events
-    a page script makes up are ignored.
+  - The menu opens only when the user clicks a login field, moves to it with Tab or
+    presses Down Arrow in it, and moves only on events the browser marks as the user's
+    own. A page's own focus (`focus()`, `autofocus`) opens nothing, though the browser
+    marks it as trusted; events a page script makes up are ignored.
   - A pick counts only once the menu has been on screen for half a second, uncovered at
     the point clicked, and only while the page hasn't restyled, moved or hidden it, so
     a page can't slip it under a click or key press meant for something else. A layer
@@ -234,7 +283,8 @@ folder isn't registered at all.
   - In Chrome and Edge the browser also confirms that nothing covers the menu, not even
     a layer that lets clicks through. Firefox has no way to tell that, so there a
     script on the site could still lay a see-through decoy over the menu; the app's
-    question then still names the login before anything is filled.
+    question then names the login before it first fills that page. Later fills of that
+    login there in the same session aren't asked about.
   - Fields that are nearly transparent, smaller than 8 pixels, or outside the window get
     no menu.
 - Nothing else of the vault is reachable: not other entries, 2FA secrets, notes, key
@@ -251,8 +301,15 @@ for the banner in the background's `storage.session` (memory only). It is offere
 at most three minutes, dropped at the next page load after that or when the tab
 closes, and never goes back to a page. On a page of another site, for example after a
 sign-in that sends you on, the banner names only the site where it was typed, not the
-username or the saved login's title. A tab can send
-typed logins to check at most about once a second.
+username or the saved login's title. Only a login the user put in themselves is sent to
+be checked: its password typed, pasted or dropped into the field by the user (or filled
+by the extension) and not set or changed by a page script since, and the form sent by
+the user's own Enter, click or key press. A page that sets the values and calls
+`requestSubmit()` gets nothing checked. A tab can send typed logins to check at most
+about once a second. Whether the banner appears still tells the page whether the login
+the user just typed there is saved, which is about a password the page was given
+anyway; the banner's size is the same whether it offers to save or to update, whatever
+the saved login's title.
 
 **Pairing.**
 
@@ -304,7 +361,8 @@ typed logins to check at most about once a second.
   keep the vault from locking itself; filling and saving do.
 - A browser may check at most ten typed logins a minute. The answer tells whether a
   password is the saved one, so without the limit a program holding the extension's
-  keys could guess saved passwords through it.
+  keys, or a compromised renderer, could guess saved passwords through it. A page
+  script can't ask: the extension checks only logins the user typed and sent.
 
 **The local channel.**
 
@@ -334,7 +392,8 @@ typed logins to check at most about once a second.
   protects fully against malware running as the user.
 - A compromised browser renderer for a site can ask for that site's logins without a
   click, but no other site's, and gets a password only after the user allowed it in
-  the app.
+  the app. It can also have typed logins checked against that site's, at most ten a
+  minute, and learn from the banner whether one is saved.
 - A site you log in to sees the password you fill there, as it would if you typed it.
 
 ## Nearby
@@ -351,6 +410,10 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   each other another way (below).
 - **Device key.** Each computer has a Curve25519 key pair, made on first use and kept
   in the system's credential store. Paired computers know each other by the public key.
+  Each shows a computer it knows by the name it keeps for it in the vault, never by the
+  name that computer gives itself now; only a computer it doesn't know yet is shown by
+  its own name. Two contacts or devices of the same name are shown with the day each
+  was paired.
 - **Encrypted session.** Every connection starts with a `Noise_XX_25519_ChaChaPoly_SHA256`
   handshake (prologue `sshkm-p2p/1`): each side proves it holds its device key, and
   everything after is encrypted and authenticated. Messages are JSON of at most 1 MiB.
@@ -364,7 +427,8 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
 - **Both must agree.** A computer becomes a contact only when both users said the codes
   match. A "no", a cancel or a dropped connection on either side saves nothing.
   Contacts are kept in the vault (`sshkm.contact.<device key>` in its custom data), so
-  pairing needs it unlocked.
+  pairing needs it unlocked. A computer that was a contact already keeps the name it
+  has here when the two pair again.
 - **One at a time.** While a pairing, an adding or a sync goes on, other connections
   are closed at once.
   The users have three minutes to compare the codes.
@@ -372,13 +436,21 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   connected may send one item: a vault entry, a host, a hosts file group or a public
   key. The UI only names it; the backend reads it from the vault, `~/.ssh` or the
   hosts file. First goes a summary with nothing secret in it (title and username,
-  alias and address, a group's name, size and first names, or a key's name, type,
-  fingerprint and comment); the item itself goes only after the other user accepts.
-  The receiver checks that the item matches the summary and that every name in a
-  host is made of name characters only, refuses a host block that would add a
-  directive running a program, and gives a taken alias a number. It never adds a
-  server key for a host it already has keys for, since `ssh` would then accept the
-  sender's key next to its own; it keeps its own and warns instead. A 2FA secret
+  alias, address and jump host, a group's name, size and first names, or a key's name,
+  type, fingerprint and comment); the item itself goes only after the other user
+  accepts. Any computer can announce any name: when the user sends to a computer
+  picked from the list and the one that answers is a contact (or one of the user's
+  devices) the vault keeps under another name, the app asks whether to send to it all
+  the same before even the summary goes; on a no nothing goes. The receiver checks
+  that the item matches the summary and that every name in a host is made of name
+  characters only, refuses a host block that would add a directive running a program,
+  and gives an alias a number when `ssh` reaches that name already: a `Host` line of
+  the config or of a file it includes names it, `known_hosts` trusts a key for it (its
+  own or a certificate authority's), or a block that sets `HostName` or `HostKeyAlias`
+  may cover it. A host with a number still leads where the sender's alias did. It
+  never adds a server key for a host it already trusts a key for, its own or a
+  certificate authority's, since `ssh` would then accept the sender's key next to its
+  own; it keeps its own and warns instead. A 2FA secret
   goes only if the sender ticks it; a key's passphrase never goes.
 - **A hosts file group is never written on arrival.** The hosts file decides where
   names lead for every program, so a received group only becomes a change on the
@@ -400,17 +472,26 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
 - **Own devices.** The user's own computers are a separate, higher level of trust than
   contacts. They are listed in the vault (`sshkm.device.<device key>` in its custom
   data), this computer included, so every copy of the vault knows all of them; a
-  removed one stays as a tombstone so a sync doesn't bring it back. The "own device"
+  removed one stays as a tombstone, which is final: a sync never brings it back, only
+  adding it again on that computer does. Record times are checked as RFC 3339 UTC, and
+  a record dated more than five minutes ahead of this computer's clock is not taken.
+  The "own device"
   part of a conversation goes only to a peer whose `Hello` says it knows about own
   devices; older versions see nothing new.
-- **Same vault, without telling it.** In its `Hello` each side sends an HMAC-SHA256,
-  keyed with a key derived (HKDF) from the vault secret, over the session's handshake
-  hash and its role. A peer with the same vault checks it in constant time; any other
-  peer learns nothing from it, and it can't be replayed in another session. A new
-  recovery key changes the key, so a computer that is gone fails the check.
+- **Same vault, without telling it.** In its `Hello` each side sends an HMAC-SHA256
+  over the session's handshake hash and its role, keyed with a key derived (HKDF) from
+  32 random bytes the vault keeps in its encrypted custom data (`sshkm.own.key`). The
+  vault makes them when the user first adds a device, and they travel inside the vault
+  file. They never come from the vault secret or a password, so a peer learns nothing
+  from the proof, not even something to test a guessed KeePass password against. A
+  peer with the same vault checks it in constant time, and it can't be replayed in
+  another session. A new recovery key replaces the key, so a computer that is gone
+  fails the check.
 - **Adding a device.** The computer with the vault connects to the other. Both users
   compare the code, always, even between contacts; then the first user confirms with
-  Touch ID / Windows Hello or the master password. Only then does it record both
+  Touch ID / Windows Hello or the master password. Only the app's own check of either
+  counts: a yes from the page, or one left over from the code comparison, is never
+  taken for it. Only then does it record both
   computers as the user's devices. Two different vaults are never merged: the
   conversation stops before the code. If the other computer has no vault yet (it
   waits for one, `join=1` in its announcement, and takes nothing but being added),
@@ -425,7 +506,8 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   current ten-minute window, with nothing else in the record. The name changes and
   says nothing to others; the user's devices recognise it. On that port only a sync
   is taken, and only from a device that is one of the user's and proves it has the
-  vault: anyone else is turned away right after the handshake.
+  vault: anyone else is turned away right after the handshake, before this computer
+  sends anything about its vault.
 - **Syncing hosts.** Only `Host` blocks for single names go: never `Match`, `Host *`
   and other patterns, options before the first block or `Include`. A block goes
   without what belongs to the computer (`IdentityFile`, `CertificateFile`,
@@ -435,17 +517,20 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   again, keeps its own options of the block where they are, and puts new blocks
   before `Host *`. What changed is told by a snapshot of each other device's last
   sync, kept as HMACs (keyed with a key derived from the device key) of each field,
-  never the values. A change that would add a directive that runs a program or
-  reaches beyond the host (the list under "Standard files only" above) and more than
-  five deletions at once are never made unasked: the user of the computer that started
-  the sync decides there, and the other computer puts them off until its own user
-  syncs from it. A change turned down is not asked about again until it changes. A
-  conflict is the user's choice too. Both files are backed up before a sync writes
-  them, and a file changed meanwhile is not written.
+  never the values. A change that would add a directive on the list under "Standard
+  files only" above and more than five deletions at once are never made unasked: the
+  user of the computer that started the sync decides there, and the other computer
+  puts them off until its own user syncs from it. A change that adds such a directive,
+  a conflict settled for the other computer's version included, is written only after
+  that user allows it in a system dialog that lists the hosts and directives; on a no
+  it waits for the next sync. A change turned down is not asked about again until it
+  changes. A conflict is the user's choice too. Both files are backed up before a sync
+  writes them, and a file changed meanwhile is not written.
 - **Syncing server keys.** `known_hosts` only grows: a computer adds the other's keys
-  for a host it has no key for. For a host it trusts another key of the same type
-  for, it keeps its own and shows both fingerprints: one of the two may have met a
-  server pretending.
+  for a host it has no key for, counting a matching `@cert-authority` line as one, and
+  never adds a key it marked `@revoked`; such keys are shown as a difference. For a
+  host it trusts another key of the same type for, it keeps its own and shows both
+  fingerprints: one of the two may have met a server pretending.
 
 ## Reporting a vulnerability
 

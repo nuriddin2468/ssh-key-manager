@@ -3,26 +3,17 @@
 use std::io;
 use std::process::{Command, Stdio};
 
-use crate::error::{AppError, AppResult};
+use crate::commands::remote::check_alias;
+use crate::error::AppResult;
 
 /// Opens a new window of the system terminal running `ssh -- <alias>`:
 /// Terminal.app on macOS, Windows Terminal (or a console window) on Windows,
 /// the desktop's terminal emulator on Linux.
 pub fn open_external(alias: &str) -> AppResult<()> {
-    // The alias reaches a shell or a terminal's own argument parser, so only
-    // host-name characters pass.
-    if !is_plain_alias(alias) {
-        return Err(AppError::invalid("not a host alias"));
-    }
+    // The alias reaches a shell or a terminal's own argument parser too, so
+    // only host-name characters pass.
+    check_alias(alias)?;
     platform::open(alias)
-}
-
-fn is_plain_alias(alias: &str) -> bool {
-    !alias.is_empty()
-        && !alias.starts_with('-')
-        && alias
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "._-@:[]".contains(c))
 }
 
 /// Starts `command` without waiting for it, reaping it in the background.
@@ -135,17 +126,10 @@ mod platform {
 mod tests {
     use super::*;
 
+    /// Refused before any terminal starts; what [`check_alias`] lets through
+    /// is tested with it.
     #[test]
     fn only_plain_aliases_go_out() {
-        for alias in [
-            "prod-api",
-            "bastion.example.net",
-            "git@github.com",
-            "[::1]:22",
-            "a_b",
-        ] {
-            assert!(is_plain_alias(alias), "{alias}");
-        }
         for alias in [
             "",
             "-oProxyCommand=x",
@@ -156,9 +140,9 @@ mod tests {
             "a|b",
             "$(x)",
             "a\"b",
+            "web-*",
         ] {
-            assert!(!is_plain_alias(alias), "{alias}");
-            assert!(open_external(alias).is_err());
+            assert!(open_external(alias).is_err(), "{alias}");
         }
     }
 }

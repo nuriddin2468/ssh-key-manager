@@ -195,3 +195,20 @@ describe('surfaces', () => {
     expect(logins.host.isConnected).toBe(true);
   });
 });
+
+describe('notices', () => {
+  it('take the place of the logins until the menu hides', () => {
+    const logins = menu();
+    const input = field(100);
+    logins.showLogins(input, [LOGIN]);
+    expect(logins.showsNotice).toBe(false);
+    logins.showNotice(input, 'Confirm in SSH Key Manager');
+    const root = inside(logins).root;
+    expect(root.querySelector('.notice')?.textContent).toBe('Confirm in SSH Key Manager');
+    expect(root.querySelector('.notice')?.getAttribute('role')).toBe('status');
+    expect(root.querySelectorAll('button.item')).toHaveLength(0);
+    expect(logins.showsNotice).toBe(true);
+    logins.hide();
+    expect(logins.showsNotice).toBe(false);
+  });
+});

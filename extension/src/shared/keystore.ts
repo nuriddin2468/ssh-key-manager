@@ -9,6 +9,8 @@ export interface Pairing extends ChannelKeys {
   clientId: string;
   /** Milliseconds since 1970. */
   pairedAt: number;
+  /** When the keys last changed, in milliseconds since 1970; `pairedAt` if never. */
+  keysAt?: number;
 }
 
 const DB = 'sshkm-autofill';

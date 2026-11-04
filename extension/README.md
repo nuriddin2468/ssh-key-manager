@@ -48,11 +48,11 @@ Installed apps in `/Applications` are not affected.
 
 ## End-to-end test
 
-`e2e.mjs` drives Chrome through pairing, filling, exact-site matching, saving,
-updating, the locked vault and disconnecting. It runs against
-`src-tauri/examples/autofill_bridge.rs`, a bridge over a throwaway vault that approves
-pairings by itself, with Chrome in a temporary profile: your browser profile and your
-vault are never touched. Quit the app first, since the bridge takes over its endpoint
+`e2e.mjs` drives Chrome through pairing, filling (and the app's question before it),
+exact-site matching, the daily key change, saving, updating, the locked vault and
+disconnecting. It runs against `src-tauri/examples/autofill_bridge.rs`, a bridge over a
+throwaway vault that approves pairings and fills by itself, with Chrome in a temporary
+profile: your browser profile and your vault are never touched. Quit the app first, since the bridge takes over its endpoint
 file while the test runs.
 
 ```bash

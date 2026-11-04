@@ -17,9 +17,21 @@
 //! - The one secret that leaves is the password of the login the user picked,
 //!   sealed for that browser. Listing and checking do not count as activity
 //!   for the auto-lock; filling and saving do.
+//! - A password leaves only once the user allowed that browser to fill that
+//!   login on that page, in a prompt the app shows and no other program can
+//!   answer ([`Env::confirm_fill`]). The answer lasts for the user's session
+//!   ([`Env::session`]), at most [`ALLOWED_FOR`]. So a program that copied
+//!   the browser's keys gets no password the user didn't just allow.
+//! - A browser may check [`MAX_CHECKS`] typed logins a minute and ask the
+//!   user [`MAX_PROMPTS`] times, so whoever holds its keys can neither guess
+//!   saved passwords by checking nor wear the user down with prompts.
+//! - A browser changes its keys now and then ([`Action::Rekey`]). Its old
+//!   keys are kept, retired; a request sealed with one after that shows that
+//!   someone else holds a copy, and the pairing is revoked at once
+//!   ([`Env::copied`]).
 
-use std::collections::{HashSet, VecDeque};
-use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rand_core::{OsRng, RngCore};
@@ -30,9 +42,10 @@ use sshkm_core::browser::channel::{
 };
 use sshkm_core::browser::protocol::{
     Action, CheckReply, Envelope, LoginsReply, MAX_MESSAGE, Message, Opened, PairRequest,
-    PairedInfo, Reply, ReplyError, SameSite, SavedReply, SealedRequest, StatusReply, VaultLock,
+    PairedInfo, RekeyReply, Reply, ReplyError, SameSite, SavedReply, SealedRequest, StatusReply,
+    VaultLock,
 };
-use sshkm_core::vault::{PairedBrowser, Vault};
+use sshkm_core::vault::{KeysUsed, PairedBrowser, Vault};
 use sshkm_core::{ErrorCode, ExposeSecret};
 use zeroize::Zeroizing;
 
@@ -40,6 +53,20 @@ use crate::error::{AppError, AppResult};
 
 /// How long a pairing waits for the user.
 pub const PAIRING_WAIT: Duration = Duration::from_secs(120);
+/// How long a fill waits for the user before the browser hears it expired.
+/// The prompt stays: a yes given later lets the next try fill at once.
+pub const FILL_WAIT: Duration = Duration::from_secs(60);
+/// How long the user's yes to a fill lasts at most, even in one session.
+pub const ALLOWED_FOR: Duration = Duration::from_secs(12 * 60 * 60);
+/// What [`MAX_CHECKS`] and [`MAX_PROMPTS`] count over.
+const LIMIT_WINDOW: Duration = Duration::from_secs(60);
+/// Typed logins a browser may check in [`LIMIT_WINDOW`]: a person signs in
+/// a few times a minute at most.
+pub const MAX_CHECKS: usize = 10;
+/// Times a browser may ask the user about fills in [`LIMIT_WINDOW`].
+pub const MAX_PROMPTS: usize = 5;
+/// Most characters of a login's title or username shown in a prompt.
+const SHOWN_CHARS: usize = 60;
 /// How far a request's clock may be from ours.
 const MAX_AGE: Duration = Duration::from_secs(120);
 /// How long a nonce is remembered, to refuse it again: longer than a request
@@ -62,6 +89,22 @@ pub struct PairingRequest {
     pub code: String,
 }
 
+/// What the user is asked before a browser fills a login. The texts come
+/// from the vault and the app, shortened and on one line; the page only
+/// picked the login.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FillPrompt {
+    /// The paired browser's name, e.g. "Chrome".
+    pub browser: String,
+    pub title: String,
+    pub username: String,
+    /// The page: `host[:port]`, with `http://` in front if it isn't https.
+    pub site: String,
+}
+
+/// The user's answer to a [`FillPrompt`], once they give it.
+pub type FillAnswer = Box<dyn FnOnce(bool) + Send>;
+
 /// What changed, for the UI to refetch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Changed {
@@ -79,6 +122,9 @@ pub trait Env {
     fn read<T>(&self, active: bool, work: impl FnOnce(&Vault) -> AppResult<T>) -> AppResult<T>;
     /// Runs `work` on the unlocked vault and saves it.
     fn write<T>(&self, work: impl FnOnce(&mut Vault) -> AppResult<T>) -> AppResult<T>;
+    /// Like [`Self::write`], without a backup of the previous file: for a
+    /// browser's new keys.
+    fn write_keys<T>(&self, work: impl FnOnce(&mut Vault) -> AppResult<T>) -> AppResult<T>;
     /// Shows the pairing dialog, or closes it with `None`.
     fn ask(&self, request: Option<&PairingRequest>);
     /// Brings the app forward on the vault, to unlock it.
@@ -87,10 +133,21 @@ pub trait Env {
     /// This computer's name, recorded with a pairing.
     fn computer(&self) -> String;
     fn version(&self) -> String;
+    /// The user's session at the computer, as a number that changes when it
+    /// ends: the vault locked by hand, the screen locked, the computer
+    /// asleep, the vault changed elsewhere or switched.
+    fn session(&self) -> u64;
+    /// Asks the user whether to fill a login, in a prompt no other program
+    /// can answer, and calls `answer` with their choice once they make it.
+    /// Returns at once.
+    fn confirm_fill(&self, prompt: FillPrompt, answer: FillAnswer);
+    /// Tells the user that someone else used a copy of `browser`'s keys, so
+    /// its pairing is gone.
+    fn copied(&self, browser: &PairedBrowser);
 }
 
 /// An environment shared with its owner.
-impl<E: Env> Env for std::sync::Arc<E> {
+impl<E: Env> Env for Arc<E> {
     fn vault_lock(&self) -> VaultLock {
         (**self).vault_lock()
     }
@@ -99,6 +156,9 @@ impl<E: Env> Env for std::sync::Arc<E> {
     }
     fn write<T>(&self, work: impl FnOnce(&mut Vault) -> AppResult<T>) -> AppResult<T> {
         (**self).write(work)
+    }
+    fn write_keys<T>(&self, work: impl FnOnce(&mut Vault) -> AppResult<T>) -> AppResult<T> {
+        (**self).write_keys(work)
     }
     fn ask(&self, request: Option<&PairingRequest>) {
         (**self).ask(request);
@@ -115,6 +175,15 @@ impl<E: Env> Env for std::sync::Arc<E> {
     fn version(&self) -> String {
         (**self).version()
     }
+    fn session(&self) -> u64 {
+        (**self).session()
+    }
+    fn confirm_fill(&self, prompt: FillPrompt, answer: FillAnswer) {
+        (**self).confirm_fill(prompt, answer);
+    }
+    fn copied(&self, browser: &PairedBrowser) {
+        (**self).copied(browser);
+    }
 }
 
 struct Pending {
@@ -127,6 +196,9 @@ pub struct Broker {
     decided: Condvar,
     seen: Mutex<Seen>,
     pairing_wait: Duration,
+    fills: Arc<Fills>,
+    fill_wait: Duration,
+    checks: Mutex<Limiter>,
 }
 
 impl Default for Broker {
@@ -145,7 +217,16 @@ impl Broker {
             decided: Condvar::new(),
             seen: Mutex::new(Seen::default()),
             pairing_wait,
+            fills: Arc::default(),
+            fill_wait: FILL_WAIT,
+            checks: Mutex::default(),
         }
+    }
+
+    /// The same, with fills waiting `fill_wait` for the user.
+    #[must_use]
+    pub fn with_fill_wait(self, fill_wait: Duration) -> Self {
+        Self { fill_wait, ..self }
     }
 
     /// Answers one message from the native host with the JSON reply.
@@ -291,13 +372,14 @@ impl Broker {
             VaultLock::Locked => return Err(ReplyError::Locked),
             VaultLock::Unlocked => {}
         }
+        let client_id = request.client_id.as_str();
         let keys = env
-            .read(false, |vault| Ok(vault.browser_keys(&request.client_id)))
+            .read(false, |vault| Ok(vault.browser_keys(client_id)))
             .map_err(|e| reply_error(&e))?
             .ok_or(ReplyError::UnknownClient)?;
-        let plain = keys
-            .open_request(&request.client_id, &nonce, &sealed)
-            .map_err(|_| ReplyError::Invalid)?;
+        let (plain, used) = keys
+            .open_request(client_id, &nonce, &sealed)
+            .ok_or(ReplyError::Invalid)?;
         let opened: Opened = serde_json::from_slice(&plain).map_err(|_| ReplyError::Invalid)?;
         drop(plain);
         if !fresh(opened.sent_at) {
@@ -306,8 +388,324 @@ impl Broker {
         if !lock(&self.seen).admit(nonce, opened.sent_at, Instant::now()) {
             return Err(ReplyError::Invalid);
         }
-        let answer = act(env, &request.client_id, opened.action)?;
-        seal(&keys, &request.client_id, &nonce, &answer)
+        match used {
+            // Sealed before the browser changed its keys: a late request of
+            // its own, which gets no answer.
+            KeysUsed::Retired { retired_at } if opened.sent_at <= retired_at => {
+                return Err(ReplyError::Invalid);
+            }
+            KeysUsed::Retired { .. } => {
+                self.revoke_copied(env, client_id);
+                return Err(ReplyError::Revoked);
+            }
+            KeysUsed::Next => {
+                env.write_keys(|vault| Ok(vault.promote_browser_keys(client_id, now_millis())?))
+                    .map_err(|e| reply_error(&e))?;
+            }
+            KeysUsed::Current => {}
+        }
+        let answering = keys.answering(used).ok_or(ReplyError::Invalid)?;
+        let answer = self.act(env, client_id, opened.action)?;
+        seal(answering, client_id, &nonce, &answer)
+    }
+
+    /// Someone else sealed a request with keys `client_id` gave up: forgets
+    /// the pairing and tells the user.
+    fn revoke_copied(&self, env: &impl Env, client_id: &str) {
+        log::warn!("browser: a copy of a paired browser's old keys was used; revoking it");
+        let browser = env
+            .read(false, |vault| Ok(vault.paired_browser(client_id)))
+            .ok()
+            .flatten();
+        match env.write(|vault| Ok(vault.remove_browser(client_id))) {
+            Ok(true) => env.changed(Changed::Browsers),
+            Ok(false) => {}
+            Err(error) => log::warn!("browser: cannot forget the pairing: {error}"),
+        }
+        self.fills.forget(client_id);
+        if let Some(browser) = browser {
+            env.copied(&browser);
+        }
+    }
+
+    /// Carries out a request; returns the JSON to seal.
+    fn act(
+        &self,
+        env: &impl Env,
+        client_id: &str,
+        action: Action,
+    ) -> Result<Zeroizing<Vec<u8>>, ReplyError> {
+        match action {
+            Action::Status => Ok(to_json(&StatusReply {
+                vault: VaultLock::Unlocked,
+            })),
+            Action::Disconnect => {
+                env.write(|vault| Ok(vault.remove_browser(client_id)))
+                    .map_err(|e| reply_error(&e))?;
+                self.fills.forget(client_id);
+                env.changed(Changed::Browsers);
+                Ok(to_json(&StatusReply {
+                    vault: VaultLock::Unlocked,
+                }))
+            }
+            Action::Logins { origin } => {
+                let page = page(&origin)?;
+                let logins = env
+                    .read(false, |vault| Ok(vault.logins_for(&page)))
+                    .map_err(|e| reply_error(&e))?;
+                Ok(to_json(&LoginsReply { logins }))
+            }
+            Action::Fill { origin, entry_id } => {
+                let page = page(&origin)?;
+                self.confirm_fill(env, client_id, &page, &entry_id)?;
+                let (username, password) = env
+                    .read(true, |vault| Ok(vault.fill_for(&page, &entry_id)?))
+                    .map_err(|e| reply_error(&e))?;
+                Ok(fill_json(&username, password.expose_secret()))
+            }
+            Action::Check {
+                origin,
+                username,
+                password,
+            } => {
+                let page = page(&origin)?;
+                if !lock(&self.checks).take(client_id, MAX_CHECKS, Instant::now()) {
+                    log::warn!("browser: too many logins checked; refusing");
+                    return Err(ReplyError::TooMany);
+                }
+                let check: CheckReply = env
+                    .read(false, |vault| {
+                        Ok(vault.check_login(&page, &username, &password))
+                    })
+                    .map_err(|e| reply_error(&e))?;
+                Ok(to_json(&check))
+            }
+            Action::Save {
+                origin,
+                username,
+                password,
+            } => {
+                let page = page(&origin)?;
+                let entry_id = env
+                    .write(|vault| Ok(vault.save_login(&page, &username, &password)?))
+                    .map_err(|e| reply_error(&e))?;
+                env.changed(Changed::Entries);
+                Ok(to_json(&SavedReply { entry_id }))
+            }
+            Action::Update {
+                origin,
+                entry_id,
+                password,
+            } => {
+                let page = page(&origin)?;
+                env.write(|vault| Ok(vault.update_login(&page, &entry_id, &password)?))
+                    .map_err(|e| reply_error(&e))?;
+                env.changed(Changed::Entries);
+                Ok(to_json(&SavedReply { entry_id }))
+            }
+            Action::Rekey { public_key } => {
+                let client_public =
+                    channel::decode(&public_key, 65).map_err(|_| ReplyError::Invalid)?;
+                let pairing =
+                    accept_pairing(client_id, &client_public).map_err(|_| ReplyError::Invalid)?;
+                env.write_keys(|vault| Ok(vault.set_next_browser_keys(client_id, &pairing.keys)?))
+                    .map_err(|e| reply_error(&e))?;
+                Ok(to_json(&RekeyReply {
+                    public_key: channel::encode(&pairing.app_public),
+                }))
+            }
+        }
+    }
+
+    /// Returns once the user allowed `client_id` to fill `entry_id` on
+    /// `page` in this session, asking them if they haven't: `Denied` if they
+    /// say no, `Expired` if they don't answer in time, `Busy` while they are
+    /// asked about another fill, `TooMany` if the browser asked too often.
+    fn confirm_fill(
+        &self,
+        env: &impl Env,
+        client_id: &str,
+        page: &Origin,
+        entry_id: &str,
+    ) -> Result<(), ReplyError> {
+        let key = FillKey {
+            client: client_id.to_owned(),
+            entry: entry_id.to_owned(),
+            page: page.to_string(),
+        };
+        let session = env.session();
+        let mut state = lock(&self.fills.state);
+        if state.allows(&key, session, Instant::now()) {
+            return Ok(());
+        }
+        match &state.asking {
+            Some(asking) if *asking != key => return Err(ReplyError::Busy),
+            // Picked again while the user is asked: the same answer will do.
+            Some(_) => {}
+            None => {
+                // Also checks that the login belongs to the page.
+                let prompt = fill_prompt(env, client_id, page, entry_id)?;
+                if !state.prompts.take(client_id, MAX_PROMPTS, Instant::now()) {
+                    log::warn!("browser: too many fills asked about; refusing");
+                    return Err(ReplyError::TooMany);
+                }
+                state.asking = Some(key.clone());
+                drop(state);
+                let fills = Arc::clone(&self.fills);
+                let asked = key.clone();
+                env.confirm_fill(
+                    prompt,
+                    Box::new(move |allowed| fills.answer(&asked, session, allowed)),
+                );
+                state = lock(&self.fills.state);
+            }
+        }
+        let deadline = Instant::now() + self.fill_wait;
+        while state.asking.as_ref() == Some(&key) {
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(ReplyError::Expired);
+            }
+            state = self
+                .fills
+                .answered
+                .wait_timeout(state, deadline - now)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+        if state.allows(&key, session, Instant::now()) {
+            Ok(())
+        } else {
+            Err(ReplyError::Denied)
+        }
+    }
+}
+
+/// What to ask before `client_id` fills `entry_id` on `page`. Fails with
+/// `NotFound` if the login does not belong to the page.
+fn fill_prompt(
+    env: &impl Env,
+    client_id: &str,
+    page: &Origin,
+    entry_id: &str,
+) -> Result<FillPrompt, ReplyError> {
+    let (offer, browser) = env
+        .read(false, |vault| {
+            Ok((
+                vault.offer_for(page, entry_id)?,
+                vault.paired_browser(client_id),
+            ))
+        })
+        .map_err(|e| reply_error(&e))?;
+    let address = page.to_string();
+    Ok(FillPrompt {
+        browser: browser.map_or_else(|| browser_name(""), |b| browser_name(&b.browser)),
+        title: shown(&offer.title),
+        username: shown(&offer.username),
+        site: address
+            .strip_prefix("https://")
+            .map_or_else(|| address.clone(), str::to_owned),
+    })
+}
+
+/// A text from the vault as a prompt shows it: on one line, without control
+/// characters, at most [`SHOWN_CHARS`] characters.
+fn shown(text: &str) -> String {
+    let line: String = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
+    if line.chars().count() > SHOWN_CHARS {
+        let cut: String = line.chars().take(SHOWN_CHARS - 1).collect();
+        format!("{}…", cut.trim_end())
+    } else {
+        line
+    }
+}
+
+/// A fill the user may allow: a browser, a login, a page.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct FillKey {
+    client: String,
+    entry: String,
+    /// The page's origin.
+    page: String,
+}
+
+/// The fills the user allowed, and the one they are asked about.
+#[derive(Default)]
+struct Fills {
+    state: Mutex<FillState>,
+    answered: Condvar,
+}
+
+#[derive(Default)]
+struct FillState {
+    /// In which session, and when, each fill was allowed.
+    allowed: HashMap<FillKey, (u64, Instant)>,
+    /// The fill the user is asked about now.
+    asking: Option<FillKey>,
+    /// When each browser asked the user lately.
+    prompts: Limiter,
+}
+
+impl FillState {
+    /// Whether the user allowed `key` in `session`, less than
+    /// [`ALLOWED_FOR`] ago. Forgets what no longer counts.
+    fn allows(&mut self, key: &FillKey, session: u64, now: Instant) -> bool {
+        self.allowed.retain(|_, (at_session, at)| {
+            *at_session == session && now.duration_since(*at) < ALLOWED_FOR
+        });
+        self.allowed.contains_key(key)
+    }
+}
+
+impl Fills {
+    /// Records the user's answer about `key`, asked in `session`.
+    fn answer(&self, key: &FillKey, session: u64, allowed: bool) {
+        let mut state = lock(&self.state);
+        if allowed {
+            state.allowed.insert(key.clone(), (session, Instant::now()));
+        }
+        if state.asking.as_ref() == Some(key) {
+            state.asking = None;
+        }
+        self.answered.notify_all();
+    }
+
+    /// Forgets what a browser was allowed: its pairing is gone.
+    fn forget(&self, client_id: &str) {
+        lock(&self.state)
+            .allowed
+            .retain(|key, _| key.client != client_id);
+    }
+}
+
+/// When each browser did something lately, to limit how often it may.
+#[derive(Default)]
+struct Limiter {
+    recent: HashMap<String, VecDeque<Instant>>,
+}
+
+impl Limiter {
+    /// Counts one more for `client_id`, unless it had `max` in the last
+    /// [`LIMIT_WINDOW`] already.
+    fn take(&mut self, client_id: &str, max: usize, now: Instant) -> bool {
+        let recent = self.recent.entry(client_id.to_owned()).or_default();
+        while recent
+            .front()
+            .is_some_and(|&at| now.duration_since(at) >= LIMIT_WINDOW)
+        {
+            recent.pop_front();
+        }
+        if recent.len() >= max {
+            return false;
+        }
+        recent.push_back(now);
+        true
     }
 }
 
@@ -360,73 +758,6 @@ impl Seen {
     }
 }
 
-/// Carries out a request; returns the JSON to seal.
-fn act(env: &impl Env, client_id: &str, action: Action) -> Result<Zeroizing<Vec<u8>>, ReplyError> {
-    match action {
-        Action::Status => Ok(to_json(&StatusReply {
-            vault: VaultLock::Unlocked,
-        })),
-        Action::Disconnect => {
-            env.write(|vault| Ok(vault.remove_browser(client_id)))
-                .map_err(|e| reply_error(&e))?;
-            env.changed(Changed::Browsers);
-            Ok(to_json(&StatusReply {
-                vault: VaultLock::Unlocked,
-            }))
-        }
-        Action::Logins { origin } => {
-            let page = page(&origin)?;
-            let logins = env
-                .read(false, |vault| Ok(vault.logins_for(&page)))
-                .map_err(|e| reply_error(&e))?;
-            Ok(to_json(&LoginsReply { logins }))
-        }
-        Action::Fill { origin, entry_id } => {
-            let page = page(&origin)?;
-            let (username, password) = env
-                .read(true, |vault| Ok(vault.fill_for(&page, &entry_id)?))
-                .map_err(|e| reply_error(&e))?;
-            Ok(fill_json(&username, password.expose_secret()))
-        }
-        Action::Check {
-            origin,
-            username,
-            password,
-        } => {
-            let page = page(&origin)?;
-            let check: CheckReply = env
-                .read(false, |vault| {
-                    Ok(vault.check_login(&page, &username, &password))
-                })
-                .map_err(|e| reply_error(&e))?;
-            Ok(to_json(&check))
-        }
-        Action::Save {
-            origin,
-            username,
-            password,
-        } => {
-            let page = page(&origin)?;
-            let entry_id = env
-                .write(|vault| Ok(vault.save_login(&page, &username, &password)?))
-                .map_err(|e| reply_error(&e))?;
-            env.changed(Changed::Entries);
-            Ok(to_json(&SavedReply { entry_id }))
-        }
-        Action::Update {
-            origin,
-            entry_id,
-            password,
-        } => {
-            let page = page(&origin)?;
-            env.write(|vault| Ok(vault.update_login(&page, &entry_id, &password)?))
-                .map_err(|e| reply_error(&e))?;
-            env.changed(Changed::Entries);
-            Ok(to_json(&SavedReply { entry_id }))
-        }
-    }
-}
-
 fn to_json(value: &impl Serialize) -> Zeroizing<Vec<u8>> {
     Zeroizing::new(serde_json::to_vec(value).unwrap_or_default())
 }
@@ -469,12 +800,17 @@ fn same_site(sites: &SameSite) -> bool {
 }
 
 fn fresh(sent_at: u64) -> bool {
-    let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
-        return false;
-    };
-    let now = u64::try_from(now.as_millis()).unwrap_or(u64::MAX);
+    let now = now_millis();
     let max = u64::try_from(MAX_AGE.as_millis()).unwrap_or(u64::MAX);
-    now.abs_diff(sent_at) <= max
+    now != 0 && now.abs_diff(sent_at) <= max
+}
+
+/// Milliseconds since 1970, as the extension stamps its requests; 0 if the
+/// clock is before then.
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |now| u64::try_from(now.as_millis()).unwrap_or(u64::MAX))
 }
 
 fn reply_error(error: &AppError) -> ReplyError {

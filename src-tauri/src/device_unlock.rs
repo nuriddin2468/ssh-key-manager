@@ -420,8 +420,9 @@ fn delete_store_item(link: &DeviceLink) -> AppResult<()> {
     sshkm_os::secret_store::delete(SERVICE, &link.account()).map_err(os_error)
 }
 
-/// Locks the vault whenever the screen locks, if the settings say so. On
-/// Windows registering can fail early after boot, so it is retried for a while.
+/// Locks the vault whenever the screen locks, if the settings say so, and
+/// ends the user's session either way. On Windows registering can fail early
+/// after boot, so it is retried for a while.
 pub fn watch_screen_lock(runtime: Arc<VaultRuntime>, app: AppHandle) {
     thread::spawn(move || {
         for attempt in 1..=10 {
@@ -430,6 +431,8 @@ pub fn watch_screen_lock(runtime: Arc<VaultRuntime>, app: AppHandle) {
             let on_lock = move || {
                 if runtime.settings().lock_on_screen_lock {
                     runtime.lock(&app, LockReason::ScreenLock);
+                } else {
+                    runtime.end_session();
                 }
             };
             match sshkm_os::screen_lock::watch(on_lock) {

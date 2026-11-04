@@ -36,8 +36,10 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     is cleared after 30 seconds by default if nothing else was copied. Locking the vault
     clears it at once.
   - Changes are written atomically and the previous file is backed up (20 copies,
-    still encrypted). A write over a change made elsewhere is refused and saved as a
-    separate copy; a write over key slots changed elsewhere is refused.
+    still encrypted). A change to nothing but a paired browser's keys takes no backup,
+    so the daily key change doesn't push out the backups taken before real changes. A
+    write over a change made elsewhere is refused and saved as a separate copy; a write
+    over key slots changed elsewhere is refused.
   - Key derivation settings read from `vault.keys` or a `.kdbx` header are capped
     before use, so a tampered file can't make unlocking run for hours.
   - A new recovery key re-encrypts the app's backups and conflict copies, so the old key
@@ -205,6 +207,21 @@ folder isn't registered at all.
   - IP addresses and single-label names must match exactly.
 - Look-alike and punycode domains get nothing. A login picked by its id is checked
   again, so a browser cannot ask for another site's password by naming its id.
+- Before a login first fills a page, the app asks the user: with Touch ID or Windows
+  Hello where the computer has it, otherwise in a native dialog. The question names
+  the browser, the login and the page, and its text comes from the vault and the app;
+  the page only picked the login. The system draws it outside the browser, so neither
+  a page nor a program holding the extension's keys can answer it. (A program running
+  as the user can click a plain dialog on Windows and under X11; macOS asks the user
+  before it lets one, and Wayland doesn't let one.)
+  - The answer covers that login on that page from that browser for the rest of the
+    user's session: until the vault is locked by hand, the screen locks, the computer
+    sleeps or the vault changes, and for at most 12 hours. Locking after inactivity or
+    on minimise doesn't end it.
+  - One question is open at a time. A browser waits at most a minute for the answer;
+    a yes given later lets the next pick fill at once.
+  - A browser may ask at most five times a minute, so a program holding its keys can't
+    wear the user down with questions.
 - Nothing is filled until the user picks a login in the menu with a real click or key
   press. Pages get no automatic fill on load.
   - The menu opens and moves only on events the browser marks as the user's own; events
@@ -216,7 +233,8 @@ folder isn't registered at all.
     starts again.
   - In Chrome and Edge the browser also confirms that nothing covers the menu, not even
     a layer that lets clicks through. Firefox has no way to tell that, so there a
-    script on the site could still lay a see-through decoy over the menu.
+    script on the site could still lay a see-through decoy over the menu; the app's
+    question then still names the login before anything is filled.
   - Fields that are nearly transparent, smaller than 8 pixels, or outside the window get
     no menu.
 - Nothing else of the vault is reachable: not other entries, 2FA secrets, notes, key
@@ -250,7 +268,18 @@ typed logins to check at most about once a second.
   (`sshkm.browser.<id>`), so it can only be checked while the vault is unlocked and it
   goes away with the vault.
 - The extension keeps its keys in its IndexedDB as non-extractable `CryptoKey`s.
-  Content scripts can't reach that database.
+  Content scripts can't reach that database. Non-extractable only keeps scripts from
+  reading them: they are in the browser profile on disk.
+- The keys change once a day. The extension makes a new key pair and runs ECDH with a
+  new key pair of the app over the sealed channel, as in pairing. The app keeps the new
+  keys alongside the current ones until the extension first uses them, then retires the
+  old ones; it keeps the last 30 retired keys. A request sealed with retired keys and
+  sent after they were retired means someone else holds a copy of them: the app forgets
+  the pairing at once and tells the user. One sent before (a late request of the
+  extension itself) is refused, nothing more. While the keys change, the extension
+  holds back its other requests (a Web Lock shared by its background and its pages),
+  so none goes out with the old keys afterwards. Key changes take no backup of the
+  vault.
 - **Settings → Browser autofill** lists paired browsers and can disconnect each one.
   The extension's own Disconnect also removes its pairing from the vault when the vault
   is unlocked; when it's locked, only the extension forgets its keys.
@@ -273,6 +302,9 @@ typed logins to check at most about once a second.
 - Logs never contain messages.
 - Listing logins and checking a typed login don't count as activity, so they don't
   keep the vault from locking itself; filling and saving do.
+- A browser may check at most ten typed logins a minute. The answer tells whether a
+  password is the saved one, so without the limit a program holding the extension's
+  keys could guess saved passwords through it.
 
 **The local channel.**
 
@@ -292,11 +324,17 @@ typed logins to check at most about once a second.
 **Outside this model.**
 
 - Malware running as the same user can read the browser profile, including the
-  extension's pairing keys, or the app's memory. It can also impersonate the user to
-  the app. Browser autofill does not protect against it, and neither does any password
-  manager's browser integration.
+  extension's pairing keys. With them, while the vault is open, it learns the titles
+  and usernames of the logins of any site it names, and gets the passwords the user
+  allowed that browser to fill in this session; any other password needs the user's
+  yes. Once the extension changed its keys, using the copy revokes the pairing. Where
+  it can read the app's memory (on Windows a program of the same user can; macOS
+  protects the signed app, and many Linux distributions allow it only to the app's
+  parent) or click the app's dialog, it gets more. No password manager's browser integration
+  protects fully against malware running as the user.
 - A compromised browser renderer for a site can ask for that site's logins without a
-  click, but no other site's.
+  click, but no other site's, and gets a password only after the user allowed it in
+  the app.
 - A site you log in to sees the password you fill there, as it would if you typed it.
 
 ## Reporting a vulnerability

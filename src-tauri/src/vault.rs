@@ -15,6 +15,7 @@
 //! unlocked by itself.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -87,6 +88,15 @@ pub enum LockReason {
     Changed,
 }
 
+impl LockReason {
+    /// Whether this lock means the user left the computer, or the vault is
+    /// another now, which ends their [session](VaultRuntime::session). Locks
+    /// after inactivity or on minimise don't.
+    fn ends_session(self) -> bool {
+        !matches!(self, Self::Idle | Self::Minimize)
+    }
+}
+
 /// The vault's runtime state, shared by all commands.
 pub struct VaultRuntime {
     data_dir: PathBuf,
@@ -94,6 +104,8 @@ pub struct VaultRuntime {
     unlocked: Mutex<Option<Vault>>,
     last_activity: Mutex<Instant>,
     clipboard: Mutex<ClipboardState>,
+    /// Bumped whenever a session ends.
+    session: AtomicU64,
 }
 
 #[derive(Default)]
@@ -181,7 +193,23 @@ impl VaultRuntime {
             unlocked: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
             clipboard: Mutex::new(ClipboardState::default()),
+            session: AtomicU64::new(0),
         }
+    }
+
+    /// The user's session at the computer, as a number that changes when it
+    /// ends: when the vault is locked by hand, the screen locks, the computer
+    /// sleeps (whatever the lock settings say), or the vault changed
+    /// elsewhere or is another file now. Locking after inactivity or on
+    /// minimise keeps it. What the user allowed browsers to fill lasts as
+    /// long as it does.
+    pub fn session(&self) -> u64 {
+        self.session.load(Ordering::SeqCst)
+    }
+
+    /// Ends the user's [session](Self::session).
+    pub fn end_session(&self) {
+        self.session.fetch_add(1, Ordering::SeqCst);
     }
 
     pub fn settings(&self) -> VaultSettings {
@@ -222,6 +250,7 @@ impl VaultRuntime {
     /// Points the settings at another database file and saves them. The
     /// default place is stored as `None`, so it follows the data folder.
     pub fn set_database(&self, database: &Path) -> AppResult<VaultSettings> {
+        self.end_session();
         let mut settings = self.settings();
         settings.database =
             (database != self.default_paths().database).then(|| database.to_path_buf());
@@ -250,6 +279,9 @@ impl VaultRuntime {
 
     /// Locks the vault, telling the UI why. Does nothing if it is locked.
     pub fn lock(&self, app: &AppHandle, reason: LockReason) {
+        if reason.ends_session() {
+            self.end_session();
+        }
         if self.lock_now() {
             log::info!("vault locked ({reason:?})");
             let _ = app.emit(LOCKED_EVENT, reason);
@@ -319,6 +351,7 @@ impl VaultRuntime {
             if error.code() == ErrorCode::WrongPassphrase {
                 guard.take();
                 drop(guard);
+                self.end_session();
                 self.clear_copied_secret();
                 on_changed();
                 return Err(locked());
@@ -340,9 +373,29 @@ impl VaultRuntime {
         backup_dir: &Path,
         work: impl FnOnce(&mut Vault) -> AppResult<T>,
     ) -> AppResult<T> {
+        self.change_then_save(app, work, |vault| vault.save(backup_dir))
+    }
+
+    /// Like [`Self::change`], without a backup of the previous file
+    /// ([`Vault::save_without_backup`]): for a browser's new keys.
+    pub fn change_without_backup<T>(
+        &self,
+        app: &AppHandle,
+        backup_dir: &Path,
+        work: impl FnOnce(&mut Vault) -> AppResult<T>,
+    ) -> AppResult<T> {
+        self.change_then_save(app, work, |vault| vault.save_without_backup(backup_dir))
+    }
+
+    fn change_then_save<T>(
+        &self,
+        app: &AppHandle,
+        work: impl FnOnce(&mut Vault) -> AppResult<T>,
+        save: impl FnOnce(&mut Vault) -> sshkm_core::Result<()>,
+    ) -> AppResult<T> {
         self.with(app, |vault| {
             let result = work(vault)?;
-            if let Err(error) = vault.save(backup_dir) {
+            if let Err(error) = save(vault) {
                 // Reload what is on disk, whatever happened to the write.
                 let _ = vault.refresh();
                 return Err(error.into());
@@ -428,6 +481,9 @@ impl VaultRuntime {
                     .duration_since(last_tick)
                     .is_ok_and(|gap| gap > SLEEP_GAP);
                 last_tick = now;
+                if slept {
+                    runtime.end_session();
+                }
                 if let Some(reason) = runtime.lock_due(slept) {
                     runtime.lock(&app, reason);
                 }
@@ -533,6 +589,28 @@ mod tests {
         work: impl FnOnce(&mut Vault) -> AppResult<T>,
     ) -> T {
         runtime.access_then(activity, work, || {}).unwrap()
+    }
+
+    #[test]
+    fn stepping_away_ends_the_session_and_idling_does_not() {
+        for reason in [LockReason::Idle, LockReason::Minimize] {
+            assert!(!reason.ends_session(), "{reason:?}");
+        }
+        for reason in [
+            LockReason::Manual,
+            LockReason::Sleep,
+            LockReason::ScreenLock,
+            LockReason::Changed,
+        ] {
+            assert!(reason.ends_session(), "{reason:?}");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = runtime(&dir.path().join("data"), &dir.path().join("vault.kdbx"));
+        let before = runtime.session();
+        runtime
+            .set_database(&dir.path().join("other.kdbx"))
+            .unwrap();
+        assert_ne!(runtime.session(), before, "another vault, another session");
     }
 
     #[test]

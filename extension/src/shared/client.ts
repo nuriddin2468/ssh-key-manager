@@ -1,6 +1,13 @@
 // Talks to SSH Key Manager through its native messaging host
 // (src-tauri/src/browser/host.rs). Everything but `hello`, `show`,
 // `sameSite`, `launch` and pairing is sealed with the keys from pairing.
+//
+// The keys change once a day (`Action::Rekey` in protocol.rs). The app
+// keeps the old ones, retired, and takes a request sealed with one after
+// that for a copy of them: it forgets the pairing. So no request may be
+// on its way with the old keys once the new ones are in use. A Web Lock,
+// which the background and the extension's pages share, keeps every
+// request out while the keys change.
 
 import {
   deriveKeyBytes,
@@ -15,9 +22,20 @@ import {
   toBase64,
 } from './channel';
 import { browserName, ext } from './ext';
-import { forgetPairing, loadPairing, savePairing } from './keystore';
+import { forgetPairing, loadPairing, type Pairing, savePairing } from './keystore';
 
 export const HOST = 'dev.sshkeymanager.autofill';
+
+/** The Web Lock held while the keys are used (shared) or change (exclusive). */
+const KEYS_LOCK = 'sshkm-autofill-keys';
+/** How old the keys get before they change. */
+const KEYS_LAST = 24 * 60 * 60_000;
+/** After a change failed (an older app, a locked vault), the next try waits this long. */
+const REKEY_RETRY = 60 * 60_000;
+let rekeyTried = 0;
+/** While requests are on their way, a change waits for them this many times, this long. */
+const RENEW_TRIES = 5;
+const RENEW_PAUSE = 2000;
 
 /** Why a request failed. The first ones come from the app (protocol.rs). */
 export type Problem =
@@ -30,6 +48,10 @@ export type Problem =
   | 'notFound'
   | 'invalid'
   | 'failed'
+  /** The app saw a copy of this browser's old keys in use, and forgot the pairing. */
+  | 'revoked'
+  /** Too many logins checked, or fills asked about, in the last minute. */
+  | 'tooMany'
   /** From the host: the app isn't running. */
   | 'notRunning'
   | 'launchFailed'
@@ -63,7 +85,8 @@ export type Action =
   | { fill: { origin: string; entryId: string } }
   | { check: { origin: string; username: string; password: string } }
   | { save: { origin: string; username: string; password: string } }
-  | { update: { origin: string; entryId: string; password: string } };
+  | { update: { origin: string; entryId: string; password: string } }
+  | { rekey: { publicKey: string } };
 
 type Reply = { type: string; code?: Problem; [key: string]: unknown };
 
@@ -115,10 +138,95 @@ export async function isPaired(): Promise<boolean> {
   return (await loadPairing()) !== null;
 }
 
-/** Sends a sealed request and opens the answer. */
+/** The Web Locks of the extension's origin; none in tests. */
+function locks(): LockManager | undefined {
+  return (globalThis.navigator as Navigator | undefined)?.locks;
+}
+
+/**
+ * Sends a sealed request and opens the answer. Changes the keys afterwards
+ * once they are a day old.
+ */
 export async function request<T>(action: Action): Promise<Result<T>> {
+  const sendNow = async () => {
+    const pairing = await loadPairing();
+    const result: Result<T> = pairing
+      ? await send<T>(pairing, action)
+      : { ok: false, problem: 'unpaired' };
+    return { pairing, result };
+  };
+  const manager = locks();
+  const { pairing, result } = manager
+    ? await manager.request(KEYS_LOCK, { mode: 'shared' }, sendNow)
+    : await sendNow();
+  if (!result.ok && result.problem === 'revoked') await forgetPairing();
+  if (result.ok && pairing && keysDue(pairing) && action !== 'disconnect') {
+    void renewKeys().catch(() => undefined);
+  }
+  return result;
+}
+
+function keysDue(pairing: Pairing, now = Date.now()): boolean {
+  return now - (pairing.keysAt ?? pairing.pairedAt) >= KEYS_LAST && now - rekeyTried >= REKEY_RETRY;
+}
+
+/** While this page is changing the keys, or waiting to. */
+let renewing = false;
+
+/**
+ * Changes the keys, if they are due, once no request uses them: it tries
+ * again a few times rather than hold up requests while one waits for the
+ * user. Without Web Locks it doesn't: another page could have a request on
+ * its way.
+ */
+async function renewKeys(): Promise<void> {
+  const manager = locks();
+  if (!manager || renewing) return;
+  renewing = true;
+  try {
+    for (let attempt = 0; attempt < RENEW_TRIES; attempt += 1) {
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, RENEW_PAUSE));
+      const done = await manager.request(
+        KEYS_LOCK,
+        { mode: 'exclusive', ifAvailable: true },
+        async (held) => {
+          if (held) await renewHeld();
+          return held !== null;
+        },
+      );
+      if (done) return;
+    }
+  } finally {
+    renewing = false;
+  }
+}
+
+/** Changes the keys, if they are still due; the exclusive lock is held. */
+async function renewHeld(): Promise<void> {
   const pairing = await loadPairing();
-  if (!pairing) return { ok: false, problem: 'unpaired' };
+  if (!pairing || !keysDue(pairing)) return;
+  rekeyTried = Date.now();
+  const { privateKey, publicKey } = await newKeyPair();
+  const reply = await send<{ publicKey: string }>(pairing, {
+    rekey: { publicKey: toBase64(publicKey) },
+  });
+  if (!reply.ok) return;
+  const keys = await importKeys(
+    await deriveKeyBytes(
+      privateKey,
+      pairing.clientId,
+      publicKey,
+      fromBase64(reply.value.publicKey),
+    ),
+  );
+  const renewed: Pairing = { ...pairing, ...keys, keysAt: Date.now() };
+  await savePairing(renewed);
+  // The first request with the new keys makes them the app's current ones.
+  await send(renewed, 'status');
+}
+
+/** Seals `action` with `pairing`'s keys, sends it and opens the answer. */
+async function send<T>(pairing: Pairing, action: Action): Promise<Result<T>> {
   const plain = new TextEncoder().encode(JSON.stringify({ sentAt: Date.now(), action }));
   const { nonce, sealed } = await sealRequest(pairing, pairing.clientId, plain);
   plain.fill(0);

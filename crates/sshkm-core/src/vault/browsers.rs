@@ -8,13 +8,19 @@
 //! The lookups take the page's [`Origin`] and only ever consider logins whose
 //! address [fits](Origin::fit) it; one picked by id is checked again, so a
 //! browser can't fill a page with another site's password by naming its id.
+//!
+//! A browser's keys change now and then ([`Vault::set_next_browser_keys`],
+//! [`Vault::promote_browser_keys`]). The keys it gave up are kept a while,
+//! retired: they open nothing any more, but a request sealed with one shows
+//! that someone else holds a copy of them ([`BrowserKeys::open_request`]).
 
 use keepass::db::{CustomDataItem, CustomDataValue, Times, Value, fields};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 use super::{EntryKind, Vault, check_field, parse_id, rfc3339};
-use crate::browser::channel::ChannelKeys;
+use crate::browser::channel::{ChannelKeys, MessageNonce};
 use crate::browser::origin::{Fit, Origin};
 use crate::browser::protocol::{CheckReply, LoginOffer};
 use crate::{Error, Result};
@@ -22,6 +28,9 @@ use crate::{Error, Result};
 const BROWSER_PREFIX: &str = "sshkm.browser.";
 /// Most logins offered on one page.
 const MAX_OFFERS: usize = 50;
+/// Most retired keys kept per browser: with keys changing once a day, about
+/// a month of them.
+const MAX_RETIRED: usize = 30;
 
 /// A paired browser, as the app lists it. Holds no keys.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -48,6 +57,91 @@ struct Stored {
     paired: String,
     request_key: String,
     response_key: String,
+    /// Keys the browser asked to change to, until it first uses them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    next: Option<StoredKeys>,
+    /// Keys the browser gave up, most recent first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    retired: Vec<RetiredKeys>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredKeys {
+    request_key: String,
+    response_key: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RetiredKeys {
+    request_key: String,
+    response_key: String,
+    /// When the browser gave them up, in milliseconds since 1970.
+    retired_at: u64,
+}
+
+/// The keys of a paired browser: the ones it uses, the ones it is changing
+/// to, and the ones it gave up.
+#[derive(Debug)]
+pub struct BrowserKeys {
+    current: ChannelKeys,
+    next: Option<ChannelKeys>,
+    /// With when each was given up, most recent first.
+    retired: Vec<(ChannelKeys, u64)>,
+}
+
+/// Which of a browser's keys sealed a request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeysUsed {
+    Current,
+    /// The keys it is changing to: from now on they are the current ones.
+    Next,
+    /// Keys it gave up at `retired_at` (milliseconds since 1970). A request
+    /// sent after that comes from someone else holding a copy of them.
+    Retired {
+        retired_at: u64,
+    },
+}
+
+impl BrowserKeys {
+    /// Opens a request with whichever of the keys sealed it.
+    pub fn open_request(
+        &self,
+        client_id: &str,
+        nonce: &MessageNonce,
+        sealed: &[u8],
+    ) -> Option<(Zeroizing<Vec<u8>>, KeysUsed)> {
+        let live = [
+            (Some(&self.current), KeysUsed::Current),
+            (self.next.as_ref(), KeysUsed::Next),
+        ];
+        let live = live
+            .into_iter()
+            .filter_map(|(keys, used)| Some((keys?, used)));
+        let retired = self.retired.iter().map(|(keys, retired_at)| {
+            (
+                keys,
+                KeysUsed::Retired {
+                    retired_at: *retired_at,
+                },
+            )
+        });
+        live.chain(retired).find_map(|(keys, used)| {
+            let plain = keys.open_request(client_id, nonce, sealed).ok()?;
+            Some((plain, used))
+        })
+    }
+
+    /// The keys that answer a request sealed with `used`: none for retired
+    /// keys, which get no answer.
+    pub fn answering(&self, used: KeysUsed) -> Option<&ChannelKeys> {
+        match used {
+            KeysUsed::Current => Some(&self.current),
+            KeysUsed::Next => self.next.as_ref(),
+            KeysUsed::Retired { .. } => None,
+        }
+    }
 }
 
 impl Vault {
@@ -73,15 +167,100 @@ impl Vault {
         browsers
     }
 
+    /// A paired browser.
+    pub fn paired_browser(&self, client_id: &str) -> Option<PairedBrowser> {
+        let stored = self.stored_browser(client_id)?;
+        Some(PairedBrowser {
+            id: client_id.to_owned(),
+            browser: stored.browser,
+            computer: stored.computer,
+            paired: stored.paired,
+        })
+    }
+
     /// The keys of a paired browser.
-    pub fn browser_keys(&self, client_id: &str) -> Option<ChannelKeys> {
+    pub fn browser_keys(&self, client_id: &str) -> Option<BrowserKeys> {
+        let stored = self.stored_browser(client_id)?;
+        let next = stored
+            .next
+            .and_then(|keys| ChannelKeys::from_base64(&keys.request_key, &keys.response_key).ok());
+        let retired = stored
+            .retired
+            .iter()
+            .filter_map(|keys| {
+                let channel = ChannelKeys::from_base64(&keys.request_key, &keys.response_key);
+                Some((channel.ok()?, keys.retired_at))
+            })
+            .collect();
+        Some(BrowserKeys {
+            current: ChannelKeys::from_base64(&stored.request_key, &stored.response_key).ok()?,
+            next,
+            retired,
+        })
+    }
+
+    /// Records the keys a paired browser asked to change to. They open its
+    /// requests alongside the current ones until it first uses them
+    /// ([`Self::promote_browser_keys`]); asking again replaces them.
+    pub fn set_next_browser_keys(&mut self, client_id: &str, keys: &ChannelKeys) -> Result<()> {
+        let (request_key, response_key) = keys.to_base64();
+        self.change_browser(client_id, |stored| {
+            stored.next = Some(StoredKeys {
+                request_key: request_key.to_string(),
+                response_key: response_key.to_string(),
+            });
+        })
+    }
+
+    /// Makes a browser's next keys its current ones, now that it used them,
+    /// and retires the old ones as of `now` (milliseconds since 1970).
+    pub fn promote_browser_keys(&mut self, client_id: &str, now: u64) -> Result<()> {
+        self.change_browser(client_id, |stored| {
+            let Some(next) = stored.next.take() else {
+                return;
+            };
+            let old_request = std::mem::replace(&mut stored.request_key, next.request_key);
+            let old_response = std::mem::replace(&mut stored.response_key, next.response_key);
+            stored.retired.insert(
+                0,
+                RetiredKeys {
+                    request_key: old_request,
+                    response_key: old_response,
+                    retired_at: now,
+                },
+            );
+            stored.retired.truncate(MAX_RETIRED);
+        })
+    }
+
+    fn stored_browser(&self, client_id: &str) -> Option<Stored> {
         let item = self
             .db
             .meta
             .custom_data
             .get(&format!("{BROWSER_PREFIX}{client_id}"))?;
-        let stored = stored(item)?;
-        ChannelKeys::from_base64(&stored.request_key, &stored.response_key).ok()
+        stored(item)
+    }
+
+    fn change_browser(&mut self, client_id: &str, change: impl FnOnce(&mut Stored)) -> Result<()> {
+        let mut stored = self
+            .stored_browser(client_id)
+            .ok_or_else(|| Error::NotFound(format!("browser {client_id}")))?;
+        change(&mut stored);
+        self.store_browser(client_id, &stored)
+    }
+
+    fn store_browser(&mut self, client_id: &str, stored: &Stored) -> Result<()> {
+        let json = serde_json::to_string(stored)
+            .map_err(|e| Error::Parse(format!("browser pairing: {e}")))?;
+        self.db.meta.custom_data.insert(
+            format!("{BROWSER_PREFIX}{client_id}"),
+            CustomDataItem {
+                value: Some(CustomDataValue::String(json)),
+                last_modification_time: Some(Times::now()),
+            },
+        );
+        Ok(())
     }
 
     /// Records a pairing the user approved, replacing one with the same id.
@@ -99,25 +278,18 @@ impl Vault {
             }
             check_field(value)?;
         }
-        let now = Times::now();
         let (request_key, response_key) = keys.to_base64();
         let stored = Stored {
             browser: browser.browser.clone(),
             computer: browser.computer.clone(),
             caller: caller.to_owned(),
-            paired: rfc3339(now),
+            paired: rfc3339(Times::now()),
             request_key: request_key.to_string(),
             response_key: response_key.to_string(),
+            next: None,
+            retired: Vec::new(),
         };
-        let json = serde_json::to_string(&stored)
-            .map_err(|e| Error::Parse(format!("browser pairing: {e}")))?;
-        self.db.meta.custom_data.insert(
-            format!("{BROWSER_PREFIX}{}", browser.id),
-            CustomDataItem {
-                value: Some(CustomDataValue::String(json)),
-                last_modification_time: Some(now),
-            },
-        );
+        self.store_browser(&browser.id, &stored)?;
         Ok(PairedBrowser {
             paired: stored.paired,
             ..browser.clone()
@@ -155,17 +327,27 @@ impl Vault {
         offers
     }
 
+    /// A login picked on a page, without its password: what to ask the user
+    /// about before filling it. Fails with `NotFound` if the login does not
+    /// belong to the page.
+    pub fn offer_for(&self, page: &Origin, id: &str) -> Result<LoginOffer> {
+        let entry = self.find(id)?;
+        let summary = self.summary(&entry);
+        let fit = fit_of(page, &summary)?;
+        Ok(LoginOffer {
+            id: summary.id,
+            title: summary.title,
+            username: summary.username,
+            exact: fit == Fit::Host,
+        })
+    }
+
     /// The username and password of a login picked on a page. Fails with
     /// `NotFound` if the login does not belong to the page.
     pub fn fill_for(&self, page: &Origin, id: &str) -> Result<(String, SecretString)> {
         let entry = self.find(id)?;
         let summary = self.summary(&entry);
-        let fits = summary.kind == EntryKind::Login
-            && !summary.in_trash
-            && page.fit(&summary.url).is_some();
-        if !fits {
-            return Err(Error::NotFound(format!("a login for {page}")));
-        }
+        fit_of(page, &summary)?;
         let password = SecretString::from(entry.get(fields::PASSWORD).unwrap_or_default());
         Ok((summary.username, password))
     }
@@ -241,6 +423,15 @@ impl Vault {
     }
 }
 
+/// How a login fits a page; `NotFound` if it is not a login of the page.
+fn fit_of(page: &Origin, summary: &super::EntrySummary) -> Result<Fit> {
+    if summary.kind != EntryKind::Login || summary.in_trash {
+        return Err(Error::NotFound(format!("a login for {page}")));
+    }
+    page.fit(&summary.url)
+        .ok_or_else(|| Error::NotFound(format!("a login for {page}")))
+}
+
 fn stored(item: &CustomDataItem) -> Option<Stored> {
     match item.value.as_ref()? {
         CustomDataValue::String(json) => serde_json::from_str(json).ok(),
@@ -304,15 +495,15 @@ mod tests {
 
         let paths = VaultPaths::new(dir.path().join("vault.kdbx"));
         let mut reopened = Vault::unlock(&paths, &s("master")).unwrap();
-        assert_eq!(reopened.paired_browsers(), vec![added]);
+        assert_eq!(reopened.paired_browsers(), vec![added.clone()]);
+        assert_eq!(
+            reopened.paired_browser("client-0123456789abcdef"),
+            Some(added)
+        );
         let keys = reopened.browser_keys("client-0123456789abcdef").unwrap();
-        let (nonce, sealed) = pairing
-            .keys
-            .seal_request("client-0123456789abcdef", b"hi")
-            .unwrap();
-        assert!(
-            keys.open_request("client-0123456789abcdef", &nonce, &sealed)
-                .is_ok()
+        assert_eq!(
+            used(&keys, &pairing.keys, "client-0123456789abcdef"),
+            Some(KeysUsed::Current)
         );
         assert!(reopened.browser_keys("someone-else-0123456").is_none());
 
@@ -332,6 +523,107 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    const CLIENT: &str = "client-0123456789abcdef";
+
+    fn new_keys() -> ChannelKeys {
+        let public = SecretKey::random(&mut OsRng)
+            .public_key()
+            .to_encoded_point(false);
+        accept_pairing(CLIENT, public.as_bytes()).unwrap().keys
+    }
+
+    /// Which of the stored keys opens a request sealed with `sealing`.
+    fn used(keys: &BrowserKeys, sealing: &ChannelKeys, client: &str) -> Option<KeysUsed> {
+        let (nonce, sealed) = sealing.seal_request(client, b"hi").unwrap();
+        keys.open_request(client, &nonce, &sealed)
+            .map(|(plain, used)| {
+                assert_eq!(plain.as_slice(), b"hi");
+                used
+            })
+    }
+
+    #[test]
+    fn keys_change_and_the_old_ones_stay_recognised() {
+        let (dir, mut vault) = vault();
+        let browser = PairedBrowser {
+            id: CLIENT.into(),
+            browser: "Chrome".into(),
+            computer: "laptop".into(),
+            paired: String::new(),
+        };
+        let first = new_keys();
+        vault.add_browser(&browser, "", &first).unwrap();
+        let second = new_keys();
+        vault.set_next_browser_keys(CLIENT, &second).unwrap();
+        let keys = vault.browser_keys(CLIENT).unwrap();
+        assert_eq!(used(&keys, &first, CLIENT), Some(KeysUsed::Current));
+        assert_eq!(used(&keys, &second, CLIENT), Some(KeysUsed::Next));
+        assert!(keys.answering(KeysUsed::Next).is_some());
+
+        // Once the browser uses them, the new keys are the current ones.
+        vault.promote_browser_keys(CLIENT, 1_000).unwrap();
+        vault.save(&dir.path().join("backups")).unwrap();
+        let paths = VaultPaths::new(dir.path().join("vault.kdbx"));
+        let mut vault = Vault::unlock(&paths, &s("master")).unwrap();
+        let keys = vault.browser_keys(CLIENT).unwrap();
+        assert_eq!(used(&keys, &second, CLIENT), Some(KeysUsed::Current));
+        let retired = KeysUsed::Retired { retired_at: 1_000 };
+        assert_eq!(used(&keys, &first, CLIENT), Some(retired));
+        assert!(keys.answering(retired).is_none());
+        assert_eq!(used(&keys, &new_keys(), CLIENT), None);
+        // Nothing to promote: nothing changes.
+        vault.promote_browser_keys(CLIENT, 2_000).unwrap();
+        let keys = vault.browser_keys(CLIENT).unwrap();
+        assert_eq!(used(&keys, &second, CLIENT), Some(KeysUsed::Current));
+        assert_eq!(used(&keys, &first, CLIENT), Some(retired));
+
+        // Only the most recent retired keys are kept.
+        for n in 0..MAX_RETIRED {
+            vault.set_next_browser_keys(CLIENT, &new_keys()).unwrap();
+            vault
+                .promote_browser_keys(CLIENT, 3_000 + n as u64)
+                .unwrap();
+        }
+        let keys = vault.browser_keys(CLIENT).unwrap();
+        assert_eq!(
+            used(&keys, &second, CLIENT),
+            Some(KeysUsed::Retired { retired_at: 3_000 })
+        );
+        assert_eq!(used(&keys, &first, CLIENT), None);
+
+        assert!(
+            vault
+                .set_next_browser_keys("someone-else-0123456", &new_keys())
+                .is_err()
+        );
+        assert!(
+            vault
+                .promote_browser_keys("someone-else-0123456", 1)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_pairing_saved_before_keys_changed_still_reads() {
+        let (_dir, mut vault) = vault();
+        let keys = new_keys();
+        let (request_key, response_key) = keys.to_base64();
+        let old = format!(
+            r#"{{"browser":"Firefox","computer":"pc","caller":"x","paired":"2026-01-01T00:00:00Z","requestKey":"{}","responseKey":"{}"}}"#,
+            *request_key, *response_key
+        );
+        vault.db.meta.custom_data.insert(
+            format!("{BROWSER_PREFIX}{CLIENT}"),
+            CustomDataItem {
+                value: Some(CustomDataValue::String(old)),
+                last_modification_time: None,
+            },
+        );
+        let stored = vault.browser_keys(CLIENT).unwrap();
+        assert_eq!(used(&stored, &keys, CLIENT), Some(KeysUsed::Current));
+        assert_eq!(vault.paired_browsers().len(), 1);
     }
 
     #[test]
@@ -391,6 +683,14 @@ mod tests {
             (username.as_str(), password.expose_secret()),
             ("alice", "s3cret")
         );
+        let offer = vault
+            .offer_for(&page("https://www.bank.example"), &id)
+            .unwrap();
+        assert_eq!(
+            (offer.title.as_str(), offer.username.as_str(), offer.exact),
+            ("Bank", "alice", false)
+        );
+        assert!(vault.offer_for(&page("https://evil.example"), &id).is_err());
         let wrong = vault
             .fill_for(&page("https://evil.example"), &id)
             .unwrap_err();

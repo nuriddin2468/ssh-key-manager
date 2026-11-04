@@ -1,6 +1,7 @@
 //! The browser autofill bridge over a throwaway vault, for trying the
-//! extension without the app's window. It approves every pairing by itself,
-//! so it is a development tool only: it never opens your own vault.
+//! extension without the app's window. It approves every pairing and every
+//! fill by itself, so it is a development tool only: it never opens your own
+//! vault.
 //!
 //! ```text
 //! cargo run -p sshkm-app --example autofill_bridge -- \
@@ -9,29 +10,33 @@
 //!
 //! `--login <url> <user> <password>` adds a login titled by its address;
 //! `--entry <title> <url> <user> <password>` gives it a title of its own.
-//! `--approve-after <ms>` waits that long before approving a pairing
-//! (default 300), to keep the code on screen for a screenshot.
+//! `--approve-after <ms>` waits that long before approving a pairing or a
+//! fill (default 300), to keep the code on screen for a screenshot.
 //!
 //! The browsers start the native host from the manifests the app writes, or
 //! from ones you write for a test profile (`extension/e2e.mjs` does). The
 //! bridge takes over the app's endpoint file while it runs and puts the old
 //! one back when it exits, so quit the app first.
 //!
-//! It prints JSON lines (`ready`, `pairing`, `changed`) and reads commands
-//! on stdin: `entries` prints the vault's logins, `lock` and `unlock` lock
-//! and unlock it, `quit` (or end of input) exits.
+//! It prints JSON lines (`ready`, `pairing`, `fill`, `keys`, `copied`,
+//! `changed`) and reads commands on stdin: `entries` prints the vault's
+//! logins, `lock` and `unlock` lock and unlock it (locking ends the session,
+//! so fills are asked about again), `quit` (or end of input) exits.
 
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
 use serde_json::json;
-use sshkm_app_lib::browser::broker::{Broker, Changed, Env, PairingRequest};
+use sshkm_app_lib::browser::broker::{
+    Broker, Changed, Env, FillAnswer, FillPrompt, PairingRequest,
+};
 use sshkm_app_lib::browser::{endpoint_file, serve};
 use sshkm_core::browser::protocol::VaultLock;
-use sshkm_core::vault::{EntryInput, SecretField, Vault, VaultPaths};
+use sshkm_core::vault::{EntryInput, PairedBrowser, SecretField, Vault, VaultPaths};
 use sshkm_core::{ErrorCode, ExposeSecret, SecretString};
 
 type AppResult<T> = Result<T, sshkm_app_lib::AppError>;
@@ -42,6 +47,7 @@ struct Harness {
     backups: PathBuf,
     vault: Mutex<Option<Vault>>,
     approve_after: Duration,
+    session: AtomicU64,
 }
 
 fn say(value: &serde_json::Value) {
@@ -81,6 +87,15 @@ impl Env for Harness {
         Ok(result)
     }
 
+    fn write_keys<T>(&self, work: impl FnOnce(&mut Vault) -> AppResult<T>) -> AppResult<T> {
+        let mut guard = self.vault.lock().unwrap_or_else(PoisonError::into_inner);
+        let vault = guard.as_mut().ok_or_else(locked)?;
+        let result = work(vault)?;
+        vault.save_without_backup(&self.backups)?;
+        say(&json!({ "event": "keys" }));
+        Ok(result)
+    }
+
     fn ask(&self, request: Option<&PairingRequest>) {
         let Some(request) = request.cloned() else {
             return;
@@ -112,6 +127,29 @@ impl Env for Harness {
 
     fn version(&self) -> String {
         env!("CARGO_PKG_VERSION").into()
+    }
+
+    fn session(&self) -> u64 {
+        self.session.load(Ordering::SeqCst)
+    }
+
+    fn confirm_fill(&self, prompt: FillPrompt, answer: FillAnswer) {
+        say(&json!({
+            "event": "fill",
+            "browser": prompt.browser,
+            "title": prompt.title,
+            "username": prompt.username,
+            "site": prompt.site,
+        }));
+        let wait = self.approve_after;
+        thread::spawn(move || {
+            thread::sleep(wait);
+            answer(true);
+        });
+    }
+
+    fn copied(&self, browser: &PairedBrowser) {
+        say(&json!({ "event": "copied", "browser": browser.browser }));
     }
 }
 
@@ -157,6 +195,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         backups,
         vault: Mutex::new(Some(vault)),
         approve_after: Duration::from_millis(approve_after),
+        session: AtomicU64::new(0),
     });
     let previous = std::fs::read_to_string(endpoint_file()?).ok();
     let serving = serve(broker, Arc::clone(&harness))?;
@@ -194,6 +233,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .take();
+                harness.session.fetch_add(1, Ordering::SeqCst);
                 say(&json!({ "event": "locked" }));
             }
             "unlock" => {

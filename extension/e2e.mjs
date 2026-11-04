@@ -136,6 +136,36 @@ async function popupText() {
   return text;
 }
 
+/**
+ * When the pairing's keys last changed, from the extension's IndexedDB;
+ * with `set`, first makes it that time.
+ */
+async function pairingKeysAt(set = undefined) {
+  // The connect page sends no sealed request, so it changes no keys itself.
+  const page = await extensionPage('connect.html');
+  const at = await page.evaluate(
+    (set) =>
+      new Promise((resolve, reject) => {
+        const open = indexedDB.open('sshkm-autofill', 1);
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const store = open.result.transaction('pairing', 'readwrite').objectStore('pairing');
+          const get = store.get('current');
+          get.onsuccess = () => {
+            const pairing = get.result;
+            if (set === null) return resolve(pairing.keysAt ?? pairing.pairedAt);
+            const put = store.put({ ...pairing, keysAt: set }, 'current');
+            put.onsuccess = () => resolve(set);
+            put.onerror = () => reject(put.error);
+          };
+        };
+      }),
+    set ?? null,
+  );
+  await page.close();
+  return at;
+}
+
 /** Waits until a menu or banner of the extension is on the page. */
 async function surface(page, timeout = 10_000) {
   try {
@@ -205,6 +235,12 @@ try {
     filled.join('/') === 'alice/s3cret',
     filled.join('/'),
   );
+  const asked = await next('fill');
+  check(
+    'the app asked before filling, naming the login and the page',
+    asked.site === site && asked.username === 'alice',
+    JSON.stringify(asked),
+  );
 
   // Nothing for another host, not even one that is the same machine.
   const other = await browser.newPage();
@@ -212,6 +248,28 @@ try {
   await other.focus('#password');
   check('another host gets no menu', !(await surface(other, 2500)));
   await other.close();
+
+  // Keys a day old change at the next request; filling goes on with the new ones.
+  const keysAt = await pairingKeysAt(Date.now() - 2 * 86_400_000);
+  await page.goto(`${site}/login`);
+  await sleep(11_000); // past the background's 10-second cache of logins
+  await page.focus('#password');
+  await next('keys'); // the app keeps the browser's next keys
+  await next('keys'); // and makes them its current ones on their first use
+  check('day-old keys change', (await pairingKeysAt()) > keysAt);
+  await page.goto(`${site}/login`);
+  await page.focus('#password');
+  check('the menu opens with the new keys', await surface(page));
+  await page.keyboard.press('ArrowDown');
+  await sleep(SETTLE);
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.querySelector('#password').value !== '', {
+    timeout: 10_000,
+  });
+  check(
+    'an allowed login fills again without asking',
+    !events.some((e) => e.event === 'fill' && !e.seen),
+  );
 
   // Saving a new login after the form is sent.
   await signIn(page, 'bob', 'newpass1');

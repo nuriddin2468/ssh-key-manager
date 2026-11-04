@@ -1,9 +1,12 @@
-import { CloudOff, FileKey, HardDrive, RectangleEllipsis } from 'lucide-react';
+import { CloudOff, Download, FileKey, HardDrive, RectangleEllipsis } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
 import { invalidateAll } from '@/api/queries';
+import { useAppMutation } from '@/api/useAppMutation';
+import { useRouter } from '@/app/router';
 import { Button } from '@/components/ui/Button';
+import { setStatus } from '@/features/nearby/queries';
 import { OpenExistingVaultButton } from './files';
 import { MasterPasswordFields, masterReady } from './MasterPasswordFields';
 import { RecoveryKeyPanel } from './RecoveryKeyPanel';
@@ -13,8 +16,16 @@ import { requestSearchFocus, setPendingRecoveryKey, toastVaultError, useSecretCa
 /** No vault yet: what it is, and a master password to create one. */
 export function CreateVault() {
   const { t } = useTranslation();
+  const { navigate } = useRouter();
   const [master, setMaster] = useState('');
   const [repeat, setRepeat] = useState('');
+  // Or the vault of the user's other computer, over the local network.
+  const join = useAppMutation(() => api.nearbyJoin(true), {
+    onSuccess: (status) => {
+      setStatus(status);
+      navigate({ page: 'nearby' });
+    },
+  });
 
   // The recovery key stays out of TanStack's caches, and must be in place
   // before the status refresh shows the unlocked vault.
@@ -77,7 +88,19 @@ export function CreateVault() {
           {t('passwords.create')}
         </Button>
       </form>
-      <OpenExistingVaultButton variant="ghost" size="sm" className="self-center" />
+      <div className="flex flex-wrap justify-center gap-1">
+        <OpenExistingVaultButton variant="ghost" size="sm" />
+        <Button
+          variant="ghost"
+          size="sm"
+          loading={join.isPending}
+          icon={<Download aria-hidden="true" className="size-3.5" strokeWidth={2} />}
+          title={t('nearby.join.hint')}
+          onClick={() => join.mutate(undefined)}
+        >
+          {t('nearby.getVault')}
+        </Button>
+      </div>
     </VaultCard>
   );
 }

@@ -19,10 +19,27 @@ visibleUntil: string | null,
  */
 address: string | null, 
 /**
+ * Visible to be given a vault by another of the user's computers.
+ */
+joining: boolean, 
+/**
+ * Reachable by the user's devices while the vault is unlocked: the
+ * setting.
+ */
+reachable: boolean, 
+/**
+ * Announced to the user's devices now.
+ */
+present: boolean, 
+/**
+ * The user's devices found on the network now, by device key.
+ */
+ownFound: Array<string>, 
+/**
  * Devices found on the network, by name.
  */
 devices: Array<NearbyDevice>, 
 /**
- * The pairing going on, or just over.
+ * The conversation going on, or just over.
  */
 pairing: Pairing | null, };

@@ -11,12 +11,19 @@
 //! itself go over ([`Message::Payload`]); the receiver says whether it saved
 //! it ([`Message::Received`]). The payload must be what was offered.
 //!
+//! Versions that know about the user's own devices add [`Own`] to their
+//! `Hello`; older ones ignore it. The rest of those conversations (adding a
+//! device, moving the vault, a sync) only ever goes to a peer that sent it.
+//!
 //! [`Session::pairing_code`]: super::Session::pairing_code
 
+use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use zeroize::Zeroizing;
 
+use crate::sync::Manifest;
 use crate::{Error, Result};
 
 /// Version of the protocol; a peer that speaks another one is turned away.
@@ -36,6 +43,10 @@ pub enum Message {
         name: String,
         /// The sender already has the receiver as a contact.
         known: bool,
+        /// What the sender says about the user's own devices; versions
+        /// before them send nothing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        own: Option<Own>,
     },
     /// The initiator's commitment to its pairing nonce: the SHA-256 of it,
     /// in base64.
@@ -54,6 +65,100 @@ pub enum Message {
     Payload { item: Item },
     /// Whether the receiver saved the item.
     Received { saved: bool },
+    /// A large value follows as [`Message::Part`]s: `size` bytes with this
+    /// SHA-256 (base64). Only between own devices.
+    Bytes { size: u64, sha256: String },
+    /// The next piece of a large value, in base64.
+    Part { data: String },
+    /// The vault secret, after the vault file it opens.
+    Secret { key: SecretText },
+    /// The sender recorded the receiver as one of the user's devices.
+    Added,
+    /// What the sender has to sync.
+    Manifest { manifest: Manifest },
+    /// What the initiator's user chose for each conflict, by item id: the
+    /// initiator's version or the responder's stays.
+    Decisions {
+        initiator: Vec<String>,
+        responder: Vec<String>,
+    },
+    /// What the sender has after a sync, as the SHA-256 of each item, and
+    /// how many changes it put off for its own user to confirm.
+    Applied {
+        hashes: BTreeMap<String, String>,
+        deferred: u32,
+    },
+}
+
+/// What a side says about the user's own devices in its `Hello`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Own {
+    /// What the side that connected came for; `None` from the side that
+    /// answers, and for a plain pairing or sending.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<Intent>,
+    pub vault: VaultState,
+}
+
+/// Why the side that connected came.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Intent {
+    /// To make the other computer one of the user's devices.
+    AddDevice,
+    /// To sync with one of the user's devices.
+    Sync,
+    /// Something a later version does: turned away.
+    #[serde(other)]
+    Other,
+}
+
+/// The sender's vault.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum VaultState {
+    /// There is none on this computer: it may be given one.
+    Missing,
+    Locked,
+    /// Unlocked. `proof` shows the peer which vault it is, if it has the
+    /// same one, and tells it nothing otherwise ([`super::own::OwnKey`]).
+    Open {
+        proof: String,
+    },
+}
+
+/// Text that stays out of logs: `Debug` hides it, and it is wiped when
+/// dropped.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SecretText(Zeroizing<String>);
+
+impl SecretText {
+    pub fn new(text: impl Into<String>) -> Self {
+        Self(Zeroizing::new(text.into()))
+    }
+
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for SecretText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SecretText(…)")
+    }
+}
+
+impl Serialize for SecretText {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for SecretText {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        String::deserialize(deserializer).map(Self::new)
+    }
 }
 
 /// Something one computer sends another.
@@ -288,6 +393,7 @@ mod tests {
             version: VERSION,
             name: "MacBook".into(),
             known: false,
+            own: None,
         };
         let json = serde_json::to_string(&hello).unwrap();
         assert_eq!(
@@ -296,6 +402,63 @@ mod tests {
         );
         assert_eq!(serde_json::from_str::<Message>(&json).unwrap(), hello);
         assert!(serde_json::from_str::<Message>(r#"{"type":"other"}"#).is_err());
+    }
+
+    /// The `Hello` of a version before own devices, as it parses here, and
+    /// this version's as such a version reads it.
+    #[derive(Deserialize)]
+    #[serde(tag = "type", rename_all = "camelCase")]
+    enum OldMessage {
+        Hello {
+            version: u32,
+            name: String,
+            known: bool,
+        },
+    }
+
+    #[test]
+    fn hellos_about_own_devices_get_along_with_older_versions() {
+        let hello = Message::Hello {
+            version: VERSION,
+            name: "MacBook".into(),
+            known: true,
+            own: Some(Own {
+                intent: Some(Intent::Sync),
+                vault: VaultState::Open {
+                    proof: "cHJvb2Y=".into(),
+                },
+            }),
+        };
+        let json = serde_json::to_string(&hello).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"hello","version":1,"name":"MacBook","known":true,"own":{"intent":"sync","vault":{"state":"open","proof":"cHJvb2Y="}}}"#
+        );
+        assert_eq!(serde_json::from_str::<Message>(&json).unwrap(), hello);
+        let OldMessage::Hello {
+            version,
+            name,
+            known,
+        } = serde_json::from_str(&json).unwrap();
+        assert_eq!((version, name.as_str(), known), (VERSION, "MacBook", true));
+
+        let later = r#"{"type":"hello","version":1,"name":"x","known":false,"own":{"intent":"grant","vault":{"state":"missing"}}}"#;
+        let Message::Hello { own: Some(own), .. } = serde_json::from_str(later).unwrap() else {
+            panic!("not a hello with own")
+        };
+        assert_eq!(own.intent, Some(Intent::Other));
+        assert_eq!(own.vault, VaultState::Missing);
+    }
+
+    #[test]
+    fn a_secret_stays_out_of_debug() {
+        let message = Message::Secret {
+            key: SecretText::new("ABCD-EFGH"),
+        };
+        assert!(!format!("{message:?}").contains("ABCD"));
+        let json = serde_json::to_string(&message).unwrap();
+        assert_eq!(json, r#"{"type":"secret","key":"ABCD-EFGH"}"#);
+        assert_eq!(serde_json::from_str::<Message>(&json).unwrap(), message);
     }
 
     fn password() -> Item {

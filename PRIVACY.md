@@ -114,9 +114,20 @@ It talks to the local network only for **Nearby**, and only when you ask:
   connection. Nothing goes through a server, ours or anyone else's.
 - When you send a password or a host, it goes only to the computer you pick, and only
   after its user accepts it.
+- When you add one of your own computers, the one that has your vault gives it the
+  vault and its recovery key, after you compare the codes and confirm with Touch ID,
+  Windows Hello or your master password.
+- While your vault is unlocked and you have another computer of your own, the app
+  is reachable by your computers on this network, under a name that keeps changing
+  and tells others nothing. You can turn this off in **Nearby → My devices**. When
+  you sync, your hosts (without your keys or anything else of the computer's own),
+  the server keys you trust for them and the list of your computers go to your other
+  computer, and its come back.
 
 Each computer you pair with is recorded in your vault with the name it gave and the
-date. You can remove it on the Nearby page. The key that identifies your computer to
+date, and so is each of your own computers. You can remove them on the Nearby page.
+For each of your other computers, the app keeps what it needs to tell what changed
+since the last sync: hashes, never the hosts themselves, in its local data folder. The key that identifies your computer to
 paired ones is kept in your system's credential store.
 
 For each browser you connect, the app records in your vault the browser's name, your

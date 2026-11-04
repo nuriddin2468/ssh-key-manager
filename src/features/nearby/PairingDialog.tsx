@@ -19,9 +19,10 @@ import { Tile } from '@/components/ui/Tile';
 import { groupCode } from '@/features/browser/queries';
 import { ItemCard } from './ItemCard';
 import { canRetry, isActive } from './model';
+import { AuthorizeStep, SetMasterStep, TransferStep } from './OwnSteps';
 import { useNearby } from './queries';
 
-const FAILURES = {
+export const FAILURES = {
   unreachable: 'nearby.pairing.unreachable',
   declined: 'nearby.pairing.declined',
   peerDeclined: 'nearby.pairing.peerDeclined',
@@ -34,18 +35,22 @@ const FAILURES = {
   refused: 'nearby.pairing.refused',
   turned: 'nearby.pairing.turned',
   notSaved: 'nearby.pairing.notSaved',
+  otherVault: 'nearby.pairing.otherVault',
+  notOwn: 'nearby.pairing.notOwn',
 } as const satisfies Record<PairingFailure, string>;
 
 /**
- * App-wide: a pairing with another device, from either side. Both users
- * compare the code on their screens; the backend saves the contact only when
- * both say it matches. Mounted once in the shell.
+ * App-wide: a pairing with another device, from either side, or adding one
+ * of the user's devices. Both users compare the code on their screens; the
+ * backend saves the contact (or the device) only when both say it matches.
+ * Syncs have a dialog of their own. Mounted once in the shell.
  */
 export function PairingDialog() {
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const status = useNearby();
-  const pairing = status.data?.pairing ?? null;
+  const any = status.data?.pairing ?? null;
+  const pairing = any?.kind === 'sync' ? null : any;
   // The last pairing shown stays while the dialog animates out.
   const shown = useRef<Pairing | null>(null);
   if (pairing) shown.current = pairing;
@@ -61,7 +66,8 @@ export function PairingDialog() {
   const footer = useRef<HTMLDivElement>(null);
   const step = pairing?.phase.type;
   useEffect(() => {
-    if (!step) return;
+    // These steps focus a field or button of their own.
+    if (!step || step === 'authorize' || step === 'setMaster') return;
     const buttons = footer.current?.querySelectorAll<HTMLElement>('button');
     const asks = step === 'compare' || step === 'offered';
     const target = asks ? buttons?.[0] : buttons?.[buttons.length - 1];
@@ -82,15 +88,25 @@ export function PairingDialog() {
     phase.type === 'received'
       ? phase.item
       : null;
+  const device = current.kind === 'device';
   const title = !current.peer
     ? t('nearby.pairing.title')
-    : phase.type === 'offering' || phase.type === 'sent'
-      ? t('nearby.send.titleTo', { peer })
-      : phase.type === 'offered' || phase.type === 'received'
-        ? t('nearby.send.titleFrom', { peer })
-        : current.outgoing
-          ? t('nearby.pairing.titleOut', { peer })
-          : t('nearby.pairing.titleIn', { peer });
+    : device
+      ? current.outgoing
+        ? t('nearby.own.titleOut', { peer })
+        : t('nearby.own.titleIn', { peer })
+      : phase.type === 'offering' || phase.type === 'sent'
+        ? t('nearby.send.titleTo', { peer })
+        : phase.type === 'offered' || phase.type === 'received'
+          ? t('nearby.send.titleFrom', { peer })
+          : current.outgoing
+            ? t('nearby.pairing.titleOut', { peer })
+            : t('nearby.pairing.titleIn', { peer });
+  const description = item
+    ? t('nearby.send.description')
+    : device
+      ? t('nearby.own.description')
+      : t('nearby.pairing.description');
 
   return (
     // Closing cancels a pairing that is going on; it can't be dismissed by accident.
@@ -104,7 +120,7 @@ export function PairingDialog() {
             </Tile>
           }
           title={title}
-          description={item ? t('nearby.send.description') : t('nearby.pairing.description')}
+          description={description}
         />
         <DialogBody>
           <div role="status" className="flex flex-col gap-3">
@@ -168,6 +184,27 @@ export function PairingDialog() {
                 {t('nearby.send.keysDiffer')}
               </p>
             ) : null}
+            {phase.type === 'authorize' ? (
+              <AuthorizeStep id={current.id} peer={peer} vault={phase.vault} />
+            ) : null}
+            {phase.type === 'approving' ? (
+              <p className="flex items-center gap-2.5 text-[13px] leading-5 text-fg-2">
+                <Spinner className="size-4" />
+                {t('nearby.own.approving', { peer })}
+              </p>
+            ) : null}
+            {phase.type === 'transfer' ? (
+              <TransferStep done={phase.done} total={phase.total} />
+            ) : null}
+            {phase.type === 'setMaster' ? <SetMasterStep id={current.id} peer={peer} /> : null}
+            {phase.type === 'added' ? (
+              <OkBox>
+                {phase.vault
+                  ? t('nearby.own.addedVault', { peer })
+                  : t('nearby.own.added', { peer })}
+              </OkBox>
+            ) : null}
+            {phase.type === 'joined' ? <OkBox>{t('nearby.own.joined')}</OkBox> : null}
             {phase.type === 'paired' || phase.type === 'known' ? (
               <p className="flex gap-2.5 rounded-xl border border-ok/30 bg-ok/[0.08] px-3 py-2.5 font-medium">
                 <CheckCircle2
@@ -241,6 +278,17 @@ export function PairingDialog() {
               </Button>
             ) : (
               <>
+                {phase.type === 'joined' ? (
+                  <Button
+                    size="lg"
+                    onClick={() => {
+                      close(current.id);
+                      void api.nearbySync(null).catch((error) => toastError(t, error));
+                    }}
+                  >
+                    {t('nearby.own.syncNow')}
+                  </Button>
+                ) : null}
                 {phase.type === 'received' ? (
                   <Button
                     size="lg"

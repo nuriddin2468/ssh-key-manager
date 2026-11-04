@@ -29,6 +29,7 @@ import type { KeyInstall } from '@/bindings/KeyInstall';
 import type { KeysView } from '@/bindings/KeysView';
 import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostsFile } from '@/bindings/KnownHostsFile';
+import type { MyDevice } from '@/bindings/MyDevice';
 import type { NameLookup } from '@/bindings/NameLookup';
 import type { NearbyStatus } from '@/bindings/NearbyStatus';
 import type { OpenOptions } from '@/bindings/OpenOptions';
@@ -41,6 +42,7 @@ import type { SendRequest } from '@/bindings/SendRequest';
 import type { ServerKeys } from '@/bindings/ServerKeys';
 import type { ServerKeysAction } from '@/bindings/ServerKeysAction';
 import type { Strength } from '@/bindings/Strength';
+import type { SyncDecisions } from '@/bindings/SyncDecisions';
 import type { TerminalEvent } from '@/bindings/TerminalEvent';
 import type { TerminalInfo } from '@/bindings/TerminalInfo';
 import type { VaultAudit } from '@/bindings/VaultAudit';
@@ -186,6 +188,26 @@ export const api = {
   nearbyClose: (id: number) => call<void>('nearby_close', { id }),
   nearbyContacts: () => call<Contact[]>('nearby_contacts'),
   nearbyRemoveContact: (key: string) => call<void>('nearby_remove_contact', { key }),
+  /** A computer without a vault: visible for ten minutes to be given one, or hidden. */
+  nearbyJoin: (on: boolean) => call<NearbyStatus>('nearby_join', { on }),
+  /** Makes a device found nearby one of the user's devices, giving it the vault if it has none. */
+  nearbyAddDevice: (target: string) => call<number>('nearby_add_device', { target }),
+  /** The yes to adding a device: with the master password, or Touch ID / Windows Hello without one. */
+  nearbyAuthorize: (id: number, master: string | null) =>
+    call<void>('nearby_authorize', { id, master }),
+  /** Sets up the vault another computer gave, with this computer's master password. */
+  nearbyFinishJoin: (id: number, master: string) =>
+    call<void>('nearby_finish_join', { id, master }),
+  nearbyDevices: () => call<MyDevice[]>('nearby_devices'),
+  nearbyRemoveDevice: (key: string) => call<void>('nearby_remove_device', { key }),
+  /** Whether the user's devices can find this computer while the vault is unlocked. */
+  nearbySetReachable: (reachable: boolean) =>
+    call<NearbyStatus>('nearby_set_reachable', { reachable }),
+  /** Syncs with one of the user's devices (its key), or with every one reachable. */
+  nearbySync: (key: string | null) => call<void>('nearby_sync', { key }),
+  /** The user's decisions on what a sync brings. */
+  nearbyDecide: (id: number, decisions: SyncDecisions) =>
+    call<void>('nearby_decide', { id, decisions }),
 
   /** Opens the system terminal with `ssh <alias>`. */
   terminalOpenExternal: (alias: string) => call<void>('terminal_open_external', { alias }),

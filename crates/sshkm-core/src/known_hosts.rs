@@ -346,6 +346,16 @@ fn entry(index: usize, parts: &Parts) -> KnownHostEntry {
     }
 }
 
+/// The `SHA256:…` fingerprint of a key in standard base64, as
+/// `ssh-keygen -l` prints it; `None` if it is not base64.
+pub fn fingerprint(key: &str) -> Option<String> {
+    let blob = decode_b64(key)?;
+    Some(format!(
+        "SHA256:{}",
+        Base64Unpadded::encode_string(&Sha256::digest(&blob))
+    ))
+}
+
 /// The name OpenSSH looks up: `host`, or `[host]:port` for non-default ports.
 fn lookup_name(host: &str, port: u16) -> String {
     let host = host.to_ascii_lowercase();

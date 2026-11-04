@@ -125,12 +125,14 @@ Builds are not code-signed yet (it's on the [roadmap](#roadmap)), so your system
 **Nearby**
 - Pair with a colleague's computer, or another of your own, on the same network: both screens show a six-digit code, and you pair only if they match.
 - Computers talk to each other directly and encrypted. There is no server in between, and your computer is visible to others only for ten minutes after you ask.
+- Set up a new computer of your own from one you have: it gets your vault over the network after you compare the codes and confirm with Touch ID or your master password, and sets its own master password.
+- Keep your hosts and server keys in step across your computers with **Sync now**. Each computer keeps its own sign-in keys; changes that run a program, many deletions and conflicts wait for your choice.
 
 **Feels native.** Menu bar and keyboard shortcuts on macOS (⌘1–9, ⌘N, ⌘T, ⌘,), and changes you make in a terminal show up instantly.
 
 ## Privacy and safety
 
-- **Nothing leaves your computer.** The app sends none of your data anywhere. It goes online only to check GitHub for a new version of itself (you can turn this off in **Settings → Updates**) and when you ask it to reach a server: checking a host key, testing a connection or opening a terminal session. **Nearby** talks only to other computers running the app on your local network, directly and encrypted, and only while you use it.
+- **Nothing leaves your computer.** The app sends none of your data anywhere. It goes online only to check GitHub for a new version of itself (you can turn this off in **Settings → Updates**) and when you ask it to reach a server: checking a host key, testing a connection or opening a terminal session. **Nearby** talks only to other computers running the app on your local network, directly and encrypted, and only while you use it, or, for your own computers, while your vault is unlocked (you can turn that off).
 - **Your private keys stay private.** The interface only ever sees public keys and fingerprints. Passphrases are used once and never stored, unless you save them in your password vault.
 - **Your passwords stay encrypted.** The vault is decrypted only in memory while it's unlocked, and the interface sees a password only when you choose to reveal it. There is no way in without the master password or the recovery key, so keep the recovery key somewhere safe.
 - **Your files stay standard.** Everything is plain OpenSSH, and you can stop using the app at any time.

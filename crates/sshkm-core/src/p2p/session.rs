@@ -14,6 +14,10 @@
 //!   code will be, so the two codes agree by chance only, one time in a
 //!   million. (Taken from the handshake hash alone, the code could be
 //!   matched by trying a million keys.)
+//! - **Large values.** Between own devices a value larger than a message (a
+//!   vault file, a long list of hosts) goes as [`Message::Bytes`], its size
+//!   and SHA-256, and then [`Message::Part`]s; the receiver sets how large it
+//!   may be.
 
 use std::io::{self, Read, Write};
 
@@ -35,6 +39,8 @@ const CODE_LABEL: &[u8] = b"sshkm-p2p pairing code";
 const NOISE_MAX: usize = 65_535;
 const TAG: usize = 16;
 const NONCE_LEN: usize = 32;
+/// Largest piece of a large value, before base64: well within a message.
+const PART: usize = 512 * 1024;
 
 /// An open session over `S`, after the handshake.
 pub struct Session<S> {
@@ -121,17 +127,129 @@ impl<S: Read + Write> Session<S> {
         &self.stream
     }
 
+    /// The hash of the handshake, the same on both sides and different in
+    /// every session: what a proof made for this session is bound to.
+    pub fn handshake_hash(&self) -> &[u8] {
+        &self.hash
+    }
+
+    /// Whether this side connected.
+    pub fn is_initiator(&self) -> bool {
+        self.initiator
+    }
+
     pub fn send(&mut self, message: &Message) -> Result<()> {
         // The buffers may hold a password: they are wiped when dropped.
-        let json = Zeroizing::new(
-            serde_json::to_vec(message).map_err(|e| Error::Parse(format!("message: {e}")))?,
-        );
+        let json = to_json(message)?;
+        self.send_json(&json)
+    }
+
+    /// Sends `message`, as a large value if it does not fit in one message;
+    /// the peer reads it with [`Self::recv_large`].
+    pub fn send_large(&mut self, message: &Message) -> Result<()> {
+        let json = to_json(message)?;
+        if json.len() <= MAX_MESSAGE {
+            self.send_json(&json)
+        } else {
+            self.send_bytes(&json, &mut |_, _| {})
+        }
+    }
+
+    /// Sends `bytes` as a large value, calling `progress` with the bytes
+    /// sent so far and the total after each part.
+    pub fn send_bytes(&mut self, bytes: &[u8], progress: &mut dyn FnMut(u64, u64)) -> Result<()> {
+        let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        self.send(&Message::Bytes {
+            size,
+            sha256: Base64::encode_string(&Sha256::digest(bytes)),
+        })?;
+        let mut sent = 0;
+        for part in bytes.chunks(PART) {
+            self.send(&Message::Part {
+                data: Base64::encode_string(part),
+            })?;
+            sent += u64::try_from(part.len()).unwrap_or(u64::MAX);
+            progress(sent, size);
+        }
+        Ok(())
+    }
+
+    /// Reads a large value of at most `max` bytes, as [`Self::send_bytes`]
+    /// sends it.
+    pub fn recv_bytes(
+        &mut self,
+        max: u64,
+        progress: &mut dyn FnMut(u64, u64),
+    ) -> Result<Zeroizing<Vec<u8>>> {
+        let Message::Bytes { size, sha256 } = self.recv()? else {
+            return Err(unexpected("a large value"));
+        };
+        self.collect(size, &sha256, max, progress)
+    }
+
+    /// Reads a message [`Self::send_large`] sent: one of at most `max` bytes
+    /// of JSON.
+    pub fn recv_large(&mut self, max: u64) -> Result<Message> {
+        match self.recv()? {
+            Message::Bytes { size, sha256 } => {
+                let json = self.collect(size, &sha256, max, &mut |_, _| {})?;
+                match serde_json::from_slice(&json) {
+                    Ok(Message::Bytes { .. } | Message::Part { .. }) => {
+                        Err(unexpected("a message in the large value"))
+                    }
+                    Ok(message) => Ok(message),
+                    Err(e) => Err(Error::Parse(format!("message: {e}"))),
+                }
+            }
+            message => Ok(message),
+        }
+    }
+
+    fn collect(
+        &mut self,
+        size: u64,
+        sha256: &str,
+        max: u64,
+        progress: &mut dyn FnMut(u64, u64),
+    ) -> Result<Zeroizing<Vec<u8>>> {
+        if size > max {
+            return Err(Error::Parse(
+                "the peer sent a value that is too large".into(),
+            ));
+        }
+        let expected = Base64::decode_vec(sha256)
+            .map_err(|_| Error::Parse("the peer's hash is not base64".into()))?;
+        let total = usize::try_from(size).unwrap_or(usize::MAX);
+        let mut bytes = Zeroizing::new(Vec::with_capacity(total.min(16 * PART)));
+        while bytes.len() < total {
+            let Message::Part { data } = self.recv()? else {
+                return Err(unexpected("the next part"));
+            };
+            let part = Zeroizing::new(
+                Base64::decode_vec(&data)
+                    .map_err(|_| Error::Parse("a part is not base64".into()))?,
+            );
+            if part.is_empty() || part.len() > PART || bytes.len() + part.len() > total {
+                return Err(Error::Parse("a part of the wrong size".into()));
+            }
+            bytes.extend_from_slice(&part);
+            progress(u64::try_from(bytes.len()).unwrap_or(u64::MAX), size);
+        }
+        if !bool::from(Sha256::digest(&*bytes).as_slice().ct_eq(&expected)) {
+            return Err(Error::Parse(
+                "the value does not match the peer's hash".into(),
+            ));
+        }
+        Ok(bytes)
+    }
+
+    fn send_json(&mut self, json: &[u8]) -> Result<()> {
         if json.len() > MAX_MESSAGE {
             return Err(Error::invalid("the message is too large"));
         }
         let mut plain = Zeroizing::new(Vec::with_capacity(4 + json.len()));
         plain.extend_from_slice(&u32::try_from(json.len()).unwrap_or(u32::MAX).to_be_bytes());
-        plain.extend_from_slice(&json);
+        plain.extend_from_slice(json);
         let mut out = Zeroizing::new(vec![0; NOISE_MAX]);
         for chunk in plain.chunks(NOISE_MAX - TAG) {
             let n = self
@@ -216,6 +334,12 @@ impl<S: Read + Write> Session<S> {
     }
 }
 
+fn to_json(message: &Message) -> Result<Zeroizing<Vec<u8>>> {
+    serde_json::to_vec(message)
+        .map(Zeroizing::new)
+        .map_err(|e| Error::Parse(format!("message: {e}")))
+}
+
 /// Six digits from the handshake hash and both nonces.
 fn code(hash: &[u8], initiator: &[u8], responder: &[u8]) -> String {
     let digest = Sha256::new()
@@ -286,6 +410,7 @@ mod tests {
             version: VERSION,
             name: name.into(),
             known: false,
+            own: None,
         }
     }
 
@@ -379,6 +504,59 @@ mod tests {
         session.send(&long).unwrap();
         responder.join().unwrap();
         assert!(session.send(&hello(&"x".repeat(MAX_MESSAGE))).is_err());
+    }
+
+    #[test]
+    fn large_values_go_in_parts() {
+        let (alice, bob) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (client, server) = pipe();
+        let bytes: Vec<u8> = (0..1_300_000_u32).map(|i| (i % 251) as u8).collect();
+        let long = hello(&"y".repeat(MAX_MESSAGE + 10));
+        let (expected_bytes, expected_long) = (bytes.clone(), long.clone());
+        let responder = thread::spawn(move || {
+            let mut session = accept(server, &bob).unwrap();
+            let mut seen = Vec::new();
+            let got = session
+                .recv_bytes(2_000_000, &mut |done, total| seen.push((done, total)))
+                .unwrap();
+            assert_eq!(*got, expected_bytes);
+            assert_eq!(seen.len(), 3);
+            assert_eq!(seen.last(), Some(&(1_300_000, 1_300_000)));
+            assert_eq!(session.recv_large(4 * 1024 * 1024).unwrap(), expected_long);
+            assert_eq!(session.recv_large(1024).unwrap(), hello("short"));
+            // Too large for what this side takes.
+            assert!(session.recv_large(1024).is_err());
+        });
+        let mut session = connect(client, &alice).unwrap();
+        session.send_bytes(&bytes, &mut |_, _| {}).unwrap();
+        session.send_large(&long).unwrap();
+        session.send_large(&hello("short")).unwrap();
+        // The responder hangs up after the header.
+        let _ = session.send_large(&long);
+        responder.join().unwrap();
+    }
+
+    #[test]
+    fn a_large_value_must_match_its_hash() {
+        let (alice, bob) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (client, server) = pipe();
+        let responder = thread::spawn(move || {
+            let mut session = accept(server, &bob).unwrap();
+            session.recv_bytes(1024, &mut |_, _| {})
+        });
+        let mut session = connect(client, &alice).unwrap();
+        session
+            .send(&Message::Bytes {
+                size: 3,
+                sha256: Base64::encode_string(&Sha256::digest(b"abc")),
+            })
+            .unwrap();
+        session
+            .send(&Message::Part {
+                data: Base64::encode_string(b"abd"),
+            })
+            .unwrap();
+        assert!(responder.join().unwrap().is_err());
     }
 
     #[test]

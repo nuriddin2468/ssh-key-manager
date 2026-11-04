@@ -344,9 +344,11 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
 `src-tauri/src/nearby/`.
 
 - **Visible on request.** The app announces itself (mDNS, `_sshkm._tcp`) and accepts
-  connections only for ten minutes after the user clicks **Show for 10 minutes**, under
-  a random instance name with the device name in the TXT record; the device key is
-  never announced. It browses for others only while the Nearby page is open.
+  connections only for ten minutes after the user clicks **Show for 10 minutes** (or,
+  without a vault, **Get it from my other computer**), under a random instance name
+  with the device name in the TXT record; the device key is never announced. It
+  browses for others only while the Nearby page is open. The user's own devices find
+  each other another way (below).
 - **Device key.** Each computer has a Curve25519 key pair, made on first use and kept
   in the system's credential store. Paired computers know each other by the public key.
 - **Encrypted session.** Every connection starts with a `Noise_XX_25519_ChaChaPoly_SHA256`
@@ -363,7 +365,8 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   match. A "no", a cancel or a dropped connection on either side saves nothing.
   Contacts are kept in the vault (`sshkm.contact.<device key>` in its custom data), so
   pairing needs it unlocked.
-- **One at a time.** While a pairing goes on, other connections are closed at once.
+- **One at a time.** While a pairing, an adding or a sync goes on, other connections
+  are closed at once.
   The users have three minutes to compare the codes.
 - **Sending.** After pairing, or straight away between contacts, the side that
   connected may send one item: a vault entry or a host. The UI only names it; the
@@ -375,6 +378,55 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   It never adds a server key for a host it already has keys for, since `ssh` would
   then accept the sender's key next to its own; it keeps its own and warns instead.
   A 2FA secret goes only if the sender ticks it; a key's passphrase never goes.
+- **Own devices.** The user's own computers are a separate, higher level of trust than
+  contacts. They are listed in the vault (`sshkm.device.<device key>` in its custom
+  data), this computer included, so every copy of the vault knows all of them; a
+  removed one stays as a tombstone so a sync doesn't bring it back. The "own device"
+  part of a conversation goes only to a peer whose `Hello` says it knows about own
+  devices; older versions see nothing new.
+- **Same vault, without telling it.** In its `Hello` each side sends an HMAC-SHA256,
+  keyed with a key derived (HKDF) from the vault secret, over the session's handshake
+  hash and its role. A peer with the same vault checks it in constant time; any other
+  peer learns nothing from it, and it can't be replayed in another session. A new
+  recovery key changes the key, so a computer that is gone fails the check.
+- **Adding a device.** The computer with the vault connects to the other. Both users
+  compare the code, always, even between contacts; then the first user confirms with
+  Touch ID / Windows Hello or the master password. Only then does it record both
+  computers as the user's devices. Two different vaults are never merged: the
+  conversation stops before the code. If the other computer has no vault yet (it
+  waits for one, `join=1` in its announcement, and takes nothing but being added),
+  it gets the vault file in parts (its size and SHA-256 first, at most 256 MiB) and
+  then the vault secret. It checks that the secret opens the file, keeps both in
+  memory only, and writes the file once its user has set a master password of its
+  own. Someone else on the network who answers in place of that computer shows a
+  code the user never sees on their own screen, and the real computer shows none.
+- **Reachable by own devices.** While the vault is unlocked, there is another own
+  device, and the user didn't switch it off, the app listens on a port of its own
+  and announces it as `_sshkm-own._tcp` under an HMAC of its device key and the
+  current ten-minute window, with nothing else in the record. The name changes and
+  says nothing to others; the user's devices recognise it. On that port only a sync
+  is taken, and only from a device that is one of the user's and proves it has the
+  vault: anyone else is turned away right after the handshake.
+- **Syncing hosts.** Only `Host` blocks for single names go: never `Match`, `Host *`
+  and other patterns, options before the first block or `Include`. A block goes
+  without what belongs to the computer (`IdentityFile`, `CertificateFile`,
+  `IdentityAgent`, `UseKeychain`, `IdentitiesOnly`, PKCS#11 and security key
+  providers, control sockets, other `known_hosts` files) and without any value that
+  names an absolute or home path. The receiver checks every id, keyword and value
+  again, keeps its own options of the block where they are, and puts new blocks
+  before `Host *`. What changed is told by a snapshot of each other device's last
+  sync, kept as HMACs (keyed with a key derived from the device key) of each field,
+  never the values. A change that would add a directive that runs a program or
+  reaches beyond the host (the list under "Standard files only" above) and more than
+  five deletions at once are never made unasked: the user of the computer that started
+  the sync decides there, and the other computer puts them off until its own user
+  syncs from it. A change turned down is not asked about again until it changes. A
+  conflict is the user's choice too. Both files are backed up before a sync writes
+  them, and a file changed meanwhile is not written.
+- **Syncing server keys.** `known_hosts` only grows: a computer adds the other's keys
+  for a host it has no key for. For a host it trusts another key of the same type
+  for, it keeps its own and shows both fingerprints: one of the two may have met a
+  server pretending.
 
 ## Reporting a vulnerability
 

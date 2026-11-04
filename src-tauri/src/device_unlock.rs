@@ -395,7 +395,7 @@ fn enrollment() -> Option<String> {
 }
 
 /// Shows the system prompt: macOS puts `reason` after "<app> is trying to".
-fn authenticate(reason: &Localized) -> AppResult<()> {
+pub(crate) fn authenticate(reason: &Localized) -> AppResult<()> {
     biometrics::authenticate(reason.pick()).map_err(os_error)
 }
 

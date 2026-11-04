@@ -70,7 +70,21 @@ real `~/.ssh`. Its modules:
     JSON messages, and agrees on the six-digit pairing code with a hash commitment
     (see SECURITY.md).
   - `protocol` is the messages. Contacts live in the vault's custom data
-    (`vault::contacts`).
+    (`vault::contacts`), and so do the user's own devices (`vault::own_devices`).
+  - `own` tells whether two computers have the same vault (a proof bound to the
+    session) and makes the names own devices announce themselves under.
+  - Large values (a vault file, a long manifest) go as their size and SHA-256, then
+    in parts, so a message never passes 1 MiB.
+
+- `sync`: keeping the user's own computers in step.
+  - `merge` is a three-way merge of items made of fields, against a snapshot of keyed
+    hashes of what both had after their last sync: what only one side changed goes
+    its way, what both changed differently is a conflict.
+  - `hosts` makes the items from `ssh_config` (`Host` blocks for single names, without
+    what belongs to the computer) and applies changes, keeping the computer's own
+    options in place and new blocks before `Host *`.
+  - `host_keys` collects the server keys for those hosts and adds the other's where
+    there are none, reporting different keys of one type.
 
 Errors have a stable `code` (`wrong_passphrase`, `agent_unavailable`, …) that the UI
 translates.
@@ -132,6 +146,16 @@ translates.
     is the whole conversation; it reaches the app through a small `Side` trait, so its
     tests run two sides over loopback without Tauri.
   - Every change goes to the UI as `nearby-changed` with the whole status.
+  - `own` adds one of the user's devices after the code: the user confirms, both are
+    recorded, and a computer without a vault gets it, held in memory until its user
+    sets a master password (`Vault::join`).
+  - `presence` announces this computer to the user's devices while the vault is
+    unlocked, on a port that only takes a sync, and finds theirs.
+  - `sync` is a sync's conversation: manifests both ways, each side's plan, the
+    decisions of the user who started it, writing, and agreeing on the next snapshot,
+    which `store` keeps per device in `sync/` in the app's data folder.
+  - `examples/nearby_peer.rs` stands in for another computer, also as a new one
+    (`--join`) and as one of the user's devices (`--sync`).
 - **Watcher.** Watches `~/.ssh` and the hosts file so changes made in a terminal appear
   immediately.
 - **Vault runtime.** The unlocked vault lives only in the Rust process. A timer locks

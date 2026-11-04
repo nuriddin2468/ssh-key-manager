@@ -24,6 +24,7 @@ export type Route =
   | { page: 'passwords'; entryId?: string }
   /** `connect` starts a session to that alias; `nonce` makes each request a new one. */
   | { page: 'terminal'; connect?: string; nonce?: number }
+  | { page: 'nearby' }
   | { page: 'settings' };
 
 export type Page = Route['page'];
@@ -60,6 +61,7 @@ function devRoute(): Route | undefined {
     page === 'agent' ||
     page === 'known' ||
     page === 'audit' ||
+    page === 'nearby' ||
     page === 'settings'
   ) {
     return { page };

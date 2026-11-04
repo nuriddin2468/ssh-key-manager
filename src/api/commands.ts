@@ -7,6 +7,7 @@ import type { AuditReport } from '@/bindings/AuditReport';
 import type { BrowserStatus } from '@/bindings/BrowserStatus';
 import type { ConfigFile } from '@/bindings/ConfigFile';
 import type { ConnectionTest } from '@/bindings/ConnectionTest';
+import type { Contact } from '@/bindings/Contact';
 import type { CopyField } from '@/bindings/CopyField';
 import type { CopyResult } from '@/bindings/CopyResult';
 import type { EntryDetail } from '@/bindings/EntryDetail';
@@ -29,6 +30,7 @@ import type { KeysView } from '@/bindings/KeysView';
 import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostsFile } from '@/bindings/KnownHostsFile';
 import type { NameLookup } from '@/bindings/NameLookup';
+import type { NearbyStatus } from '@/bindings/NearbyStatus';
 import type { OpenOptions } from '@/bindings/OpenOptions';
 import type { OtpCode } from '@/bindings/OtpCode';
 import type { PermissionFix } from '@/bindings/PermissionFix';
@@ -158,6 +160,20 @@ export const api = {
     call<KeyInstall>('vault_install_public_key', { alias, keyId }),
   /** Tests that the host lets the user in with a key alone (no password). */
   vaultTestKeyLogin: (alias: string) => call<ConnectionTest>('vault_test_key_login', { alias }),
+
+  nearbyStatus: () => call<NearbyStatus>('nearby_status'),
+  nearbySetName: (name: string) => call<NearbyStatus>('nearby_set_name', { name }),
+  /** Visible to others on the local network for ten minutes, or hidden. */
+  nearbySetVisible: (visible: boolean) => call<NearbyStatus>('nearby_set_visible', { visible }),
+  /** The Nearby page looks for other devices while it is open. */
+  nearbySetLooking: (looking: boolean) => call<NearbyStatus>('nearby_set_looking', { looking }),
+  /** Pairs with a device found nearby (its id) or at `host:port`. */
+  nearbyPair: (target: string) => call<number>('nearby_pair', { target }),
+  nearbyAnswer: (id: number, matched: boolean) => call<void>('nearby_answer', { id, matched }),
+  /** Cancels a pairing, or forgets one that is over. */
+  nearbyClose: (id: number) => call<void>('nearby_close', { id }),
+  nearbyContacts: () => call<Contact[]>('nearby_contacts'),
+  nearbyRemoveContact: (key: string) => call<void>('nearby_remove_contact', { key }),
 
   /** Opens the system terminal with `ssh <alias>`. */
   terminalOpenExternal: (alias: string) => call<void>('terminal_open_external', { alias }),

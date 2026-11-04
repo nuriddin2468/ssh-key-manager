@@ -5,6 +5,7 @@ import {
   LockKeyhole,
   type LucideIcon,
   Network,
+  Radar,
   RectangleEllipsis,
   Server,
   Settings as SettingsIcon,
@@ -151,6 +152,9 @@ export function Sidebar() {
             }
             onClick={() => navigate({ page: 'terminal' })}
           />
+        </NavGroup>
+        <NavGroup label={t('nav.groupSharing')}>
+          {item('nearby', t('nav.nearby'), 'orange', Radar)}
         </NavGroup>
         <NavGroup label={t('nav.groupHealth')}>
           <NavItem

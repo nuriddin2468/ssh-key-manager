@@ -23,6 +23,8 @@
 //! - [`audit`]: security findings computed from all of the above.
 //! - [`vault`]: the encrypted password vault, its key slots and the password
 //!   generator.
+//! - [`p2p`]: two copies of the app talking over the local network: device
+//!   keys, the encrypted session and its pairing code.
 //! - [`browser`]: what the browser extension may see of the vault: which
 //!   logins belong to a page, and the encrypted channel to the extension.
 //!
@@ -45,6 +47,7 @@ pub mod fsutil;
 pub mod hosts_file;
 pub mod keys;
 pub mod known_hosts;
+pub mod p2p;
 pub mod paths;
 pub mod perms;
 mod text;

@@ -63,6 +63,15 @@ real `~/.ssh`. Its modules:
     question goes unsealed and needs no pairing: whether two origins are the same site
     (`sameSite`), so the extension can keep a save offer on the site it came from.
 
+- `p2p`: two copies of the app talking over the local network, without the network
+  itself, so the tests run over loopback sockets.
+  - `identity` is the device's Curve25519 key pair.
+  - `session` runs a Noise `XX` handshake over any byte stream, sends length-framed
+    JSON messages, and agrees on the six-digit pairing code with a hash commitment
+    (see SECURITY.md).
+  - `protocol` is the messages. Contacts live in the vault's custom data
+    (`vault::contacts`).
+
 Errors have a stable `code` (`wrong_passphrase`, `agent_unavailable`, …) that the UI
 translates.
 
@@ -111,6 +120,13 @@ translates.
     It reaches the app through a small `Env` trait, so its tests run against a real
     vault without Tauri, and `examples/autofill_bridge.rs` serves a throwaway vault
     to the extension's end-to-end test.
+- **Nearby.** `src-tauri/src/nearby/`.
+  - Announces the device with mDNS for ten minutes when asked, and browses for
+    others while the Nearby page is open (`mdns-sd`).
+  - Pairs one device at a time, from either side, on its own thread. `pairing::converse`
+    is the whole conversation; it reaches the app through a small `Side` trait, so its
+    tests run two sides over loopback without Tauri.
+  - Every change goes to the UI as `nearby-changed` with the whole status.
 - **Watcher.** Watches `~/.ssh` and the hosts file so changes made in a terminal appear
   immediately.
 - **Vault runtime.** The unlocked vault lives only in the Rust process. A timer locks

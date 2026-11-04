@@ -299,6 +299,35 @@ typed logins to check at most about once a second.
   click, but no other site's.
 - A site you log in to sees the password you fill there, as it would if you typed it.
 
+## Nearby
+
+Two copies of the app on the same local network pair, and later talk, over a direct
+TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
+`src-tauri/src/nearby/`.
+
+- **Visible on request.** The app announces itself (mDNS, `_sshkm._tcp`) and accepts
+  connections only for ten minutes after the user clicks **Show for 10 minutes**, under
+  a random instance name with the device name in the TXT record; the device key is
+  never announced. It browses for others only while the Nearby page is open.
+- **Device key.** Each computer has a Curve25519 key pair, made on first use and kept
+  in the system's credential store. Paired computers know each other by the public key.
+- **Encrypted session.** Every connection starts with a `Noise_XX_25519_ChaChaPoly_SHA256`
+  handshake (prologue `sshkm-p2p/1`): each side proves it holds its device key, and
+  everything after is encrypted and authenticated. Messages are JSON of at most 1 MiB.
+- **Pairing code.** Two computers that don't know each other both show a six-digit
+  code, and each user says whether the other screen shows the same one. The code comes
+  from the handshake hash and a nonce from each side; the side that connected commits
+  to its nonce (SHA-256) before it sees the other's, and the other sends its own before
+  it sees the first. Someone in the middle runs a separate handshake with each side, so
+  the two codes match only by chance, one time in a million: they can't try keys until
+  the codes agree, as they could if the code came from the handshake hash alone.
+- **Both must agree.** A computer becomes a contact only when both users said the codes
+  match. A "no", a cancel or a dropped connection on either side saves nothing.
+  Contacts are kept in the vault (`sshkm.contact.<device key>` in its custom data), so
+  pairing needs it unlocked.
+- **One at a time.** While a pairing goes on, other connections are closed at once.
+  The users have three minutes to compare the codes.
+
 ## Reporting a vulnerability
 
 Please do not open a public issue. Report it privately through

@@ -104,6 +104,19 @@ It goes online only:
   opening a terminal session;
 - for a DNS lookup when you ask where a name leads.
 
+It talks to the local network only for **Nearby**, and only when you ask:
+
+- While the Nearby page is open, it listens for other computers running the app on
+  the same network (mDNS).
+- When you click **Show for 10 minutes**, it announces your computer's name on that
+  network for ten minutes and accepts connections from other copies of the app.
+- When you pair two computers, they talk directly to each other over an encrypted
+  connection. Nothing goes through a server, ours or anyone else's.
+
+Each computer you pair with is recorded in your vault with the name it gave and the
+date. You can remove it on the Nearby page. The key that identifies your computer to
+paired ones is kept in your system's credential store.
+
 For each browser you connect, the app records in your vault the browser's name, your
 computer's name and the date you connected. You can disconnect a browser in
 **Settings → Browser autofill**. [SECURITY.md](SECURITY.md) describes in detail how the

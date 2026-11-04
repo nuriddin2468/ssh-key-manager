@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged by Tauri into the app's Info.plist. Since macOS 15 an app asks
+     before it uses the local network; Nearby needs it to find and pair
+     other computers running the app. -->
+<plist version="1.0">
+<dict>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>SSH Key Manager looks for other computers running it on your network, so you can pair with them.</string>
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_sshkm._tcp</string>
+  </array>
+</dict>
+</plist>

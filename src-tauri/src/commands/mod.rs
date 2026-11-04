@@ -9,6 +9,7 @@ pub mod environment;
 pub mod hosts_file;
 pub mod keys;
 pub mod known_hosts;
+pub mod nearby;
 pub mod remote;
 pub mod terminal;
 pub mod updates;

@@ -12,6 +12,9 @@ import { HostsPage } from '@/features/hosts/HostsPage';
 import { HostsFilePage } from '@/features/hostsFile/HostsFilePage';
 import { KeysPage } from '@/features/keys/KeysPage';
 import { KnownHostsPage } from '@/features/known/KnownHostsPage';
+import { NearbyPage } from '@/features/nearby/NearbyPage';
+import { PairingDialog } from '@/features/nearby/PairingDialog';
+import { useNearbyEvents } from '@/features/nearby/queries';
 import { OverviewPage } from '@/features/overview/OverviewPage';
 import { useVaultFileEvents } from '@/features/passwords/files';
 import { PasswordsPage } from '@/features/passwords/PasswordsPage';
@@ -62,6 +65,7 @@ function Shell() {
   useAppEvents();
   useVaultEvents();
   useVaultFileEvents();
+  useNearbyEvents();
   useAutomaticUpdates(useSettings().autoUpdate);
   useKeysFromVault();
 
@@ -89,9 +93,11 @@ function Shell() {
         {route.page === 'terminal' ? (
           <TerminalPage connect={route.connect} nonce={route.nonce} />
         ) : null}
+        {route.page === 'nearby' ? <NearbyPage /> : null}
         {route.page === 'settings' ? <SettingsPage /> : null}
       </main>
       <BrowserPairing />
+      <PairingDialog />
     </div>
   );
 }

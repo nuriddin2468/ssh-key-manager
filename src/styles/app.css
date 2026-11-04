@@ -230,6 +230,15 @@
   --glow-a: rgb(22 163 74 / 0.22);
   --glow-b: rgb(37 99 235 / 0.08);
 }
+[data-section="nearby"] {
+  --accent-1: #fdba74;
+  --accent-2: #f97316;
+  --accent-ink: #3a1503;
+  --accent-text: #fed7aa;
+  --accent-rgb: 251 146 60;
+  --glow-a: rgb(234 88 12 / 0.22);
+  --glow-b: rgb(124 58 237 / 0.08);
+}
 [data-section="settings"] {
   --accent-1: #cbd5e1;
   --accent-2: #64748b;

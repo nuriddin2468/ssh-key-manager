@@ -17,6 +17,7 @@ import type { KnownHostEntry } from '@/bindings/KnownHostEntry';
 import type { PermissionFix } from '@/bindings/PermissionFix';
 import { browserHandlers } from './browser';
 import { hostsFileFindings, hostsFileHandlers } from './hostsFile';
+import { nearbyHandlers } from './nearby';
 import { terminalHandlers } from './terminal';
 import { vaultHandlers } from './vault';
 import { vaultFilesHandlers } from './vaultFiles';
@@ -392,6 +393,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   ...vaultFilesHandlers,
   ...browserHandlers,
   ...terminalHandlers(hosts),
+  ...nearbyHandlers,
   get_environment: (): Environment => ({
     paths: { home: HOME, dir: DIR, config: `${DIR}/config`, knownHosts: `${DIR}/known_hosts` },
     platform: 'macos',

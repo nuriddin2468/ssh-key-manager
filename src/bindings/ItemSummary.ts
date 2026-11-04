@@ -16,4 +16,24 @@ address: string,
 /**
  * How many of the server's keys come with it.
  */
-hostKeys: number, };
+hostKeys: number, } | { "type": "hostsGroup", name: string, 
+/**
+ * How many entries it has.
+ */
+entries: number, 
+/**
+ * The first names of its first few entries, each once.
+ */
+names: Array<string>, } | { "type": "publicKey", 
+/**
+ * The key's file name on the sender's computer.
+ */
+name: string, 
+/**
+ * E.g. `ssh-ed25519`; empty if the key can't be read.
+ */
+keyType: string, 
+/**
+ * `SHA256:…`, as `ssh-keygen -l` prints it.
+ */
+fingerprint: string, comment: string, };

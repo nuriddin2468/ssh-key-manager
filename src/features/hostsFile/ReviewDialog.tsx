@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { FileDiff, Lock } from 'lucide-react';
+import { FileDiff, Laptop, Lock } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
@@ -14,11 +14,21 @@ import { Tile } from '@/components/ui/Tile';
 import { cn } from '@/lib/cn';
 import { useHostsApply } from './useHostsApply';
 
+/** A group another computer sent, which the changes add. */
+export interface ReceivedNote {
+  /** Its name in the draft. */
+  group: string;
+  /** The other computer. */
+  from: string;
+  count: number;
+}
+
 interface ReviewDialogProps {
   revision: string;
   changes: HostsChange[];
   /** Saving found the file changed elsewhere; these are the changes carried over to it. */
   conflict: boolean;
+  received?: ReceivedNote;
   /** The file was written. */
   onApplied: () => void;
   /** The file changed elsewhere (`file` is how it is now), so nothing was written. */
@@ -38,6 +48,7 @@ export function ReviewDialog({
   revision,
   changes,
   conflict,
+  received,
   onApplied,
   onStale,
   onDone,
@@ -52,6 +63,13 @@ export function ReviewDialog({
     refetchOnWindowFocus: false,
   });
   const stale = preview.data?.stale ?? false;
+  const receivedText = received
+    ? t('hostsFile.received', {
+        count: received.count,
+        from: received.from,
+        name: received.group,
+      })
+    : null;
 
   const submit = () =>
     apply.mutate(
@@ -73,9 +91,25 @@ export function ReviewDialog({
           </Tile>
         }
         title={t('hostsFile.reviewTitle')}
-        description={t('hostsFile.reviewDescription')}
+        description={
+          <>
+            {t('hostsFile.reviewDescription')}
+            {/* Read when the dialog opens: where the changes came from. */}
+            {receivedText ? <span className="sr-only"> {receivedText}</span> : null}
+          </>
+        }
       />
       <DialogBody>
+        {receivedText ? (
+          // The dialog's description says it to screen readers already.
+          <p
+            aria-hidden="true"
+            className="flex gap-2.5 rounded-xl border border-info-solid/30 bg-info-solid/[0.09] px-3 py-2.5 text-[12.5px] leading-[18px] text-fg-2"
+          >
+            <Laptop className="mt-0.5 size-4 shrink-0 text-info" strokeWidth={2} />
+            {receivedText}
+          </p>
+        ) : null}
         {conflict && !stale ? (
           <p
             role="alert"

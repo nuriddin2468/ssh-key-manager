@@ -10,7 +10,7 @@ use tauri::{AppHandle, State};
 
 use super::{Shared, blocking};
 use crate::error::{AppError, AppResult};
-use crate::nearby::items::SendRequest;
+use crate::nearby::items::{ReceivedGroup, SendRequest};
 use crate::nearby::{Nearby, NearbyStatus, SharedNearby};
 
 async fn on_nearby<T, F>(nearby: &SharedNearby, work: F) -> AppResult<T>
@@ -91,6 +91,16 @@ pub async fn nearby_answer(
 pub async fn nearby_close(nearby: State<'_, SharedNearby>, id: u32) -> AppResult<()> {
     nearby.close(id);
     Ok(())
+}
+
+/// The hosts file group that came with pairing `id`, for the Hosts file page
+/// to show as a change; `None` once another one came.
+#[tauri::command]
+pub async fn nearby_received_group(
+    nearby: State<'_, SharedNearby>,
+    id: u32,
+) -> AppResult<Option<ReceivedGroup>> {
+    Ok(nearby.received_group(id))
 }
 
 #[tauri::command]

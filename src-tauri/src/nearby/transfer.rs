@@ -136,7 +136,7 @@ mod tests {
     use std::net::{TcpListener, TcpStream};
     use std::thread;
 
-    use sshkm_core::p2p::protocol::{HostKey, ItemSummary, VERSION};
+    use sshkm_core::p2p::protocol::{HostKey, HostsEntry, ItemSummary, VERSION};
     use sshkm_core::p2p::{Identity, accept, connect};
 
     use super::super::script::{Script, codes, run};
@@ -165,6 +165,25 @@ mod tests {
                 key_type: "ssh-ed25519".into(),
                 key: "AAAAC3NzaC1lZDI1NTE5AAAAIBIZ".into(),
             }],
+        }
+    }
+
+    fn group() -> Item {
+        Item::HostsGroup {
+            name: "dev".into(),
+            entries: vec![HostsEntry {
+                address: "10.0.4.12".into(),
+                names: vec!["api.dev.local".into()],
+                enabled: true,
+                expires: None,
+            }],
+        }
+    }
+
+    fn public_key() -> Item {
+        Item::PublicKey {
+            name: "id_ed25519".into(),
+            key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBIZFNq0hlvHGZ/oas65Ba4jkcFEy3dX/aRZy70M73oL aziz@mac".into(),
         }
     }
 
@@ -223,6 +242,25 @@ mod tests {
     }
 
     #[test]
+    fn sends_hosts_groups_and_public_keys() {
+        for item in [group(), public_key()] {
+            let mut left = Script::new("alice", Some(true));
+            left.knows = true;
+            let mut right = Script::new("bob", Some(true));
+            right.knows = true;
+            let ((left_end, _), (right_end, right)) = run(left, right, Some(&item));
+            assert_eq!(
+                left_end,
+                PairingPhase::Sent {
+                    item: item.summary()
+                }
+            );
+            assert!(matches!(right_end, PairingPhase::Received { .. }));
+            assert_eq!(*right.stored.lock().unwrap(), [item]);
+        }
+    }
+
+    #[test]
     fn the_receiver_may_turn_it_down() {
         let right = Script::answering("bob", &[Some(true), Some(false)]);
         let ((left_end, _), (right_end, right)) =
@@ -270,6 +308,45 @@ mod tests {
             .unwrap();
         assert_eq!(session.recv().unwrap(), Message::Reply { accepted: true });
         session.send(&Message::Payload { item: host() }).unwrap();
+        assert_eq!(session.recv().unwrap(), Message::Received { saved: false });
+        let (end, side) = receiver.join().unwrap();
+        assert_eq!(end, failed(PairingFailure::Broken));
+        assert_eq!(*side.stored.lock().unwrap(), Vec::<Item>::new());
+    }
+
+    #[test]
+    fn a_key_other_than_the_offered_one_is_not_saved() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let receiver = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut session = accept(stream, &Identity::generate().unwrap()).unwrap();
+            let mut side = Script::new("bob", Some(true));
+            side.knows = true;
+            (exchange(&mut session, &side, false, None), side)
+        });
+        let stream = TcpStream::connect(address).unwrap();
+        let mut session = connect(stream, &Identity::generate().unwrap()).unwrap();
+        session
+            .send(&Message::Hello {
+                version: VERSION,
+                name: "mallory".into(),
+                known: true,
+            })
+            .unwrap();
+        assert!(matches!(session.recv().unwrap(), Message::Hello { .. }));
+        session
+            .send(&Message::Offer {
+                item: public_key().summary(),
+            })
+            .unwrap();
+        assert_eq!(session.recv().unwrap(), Message::Reply { accepted: true });
+        // Same name and comment, another key.
+        let other = Item::PublicKey {
+            name: "id_ed25519".into(),
+            key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFR8U3VxsN3V7MFbnGqYVNCEWbAVE2k5oNMYoprkbtE8 aziz@mac".into(),
+        };
+        session.send(&Message::Payload { item: other }).unwrap();
         assert_eq!(session.recv().unwrap(), Message::Received { saved: false });
         let (end, side) = receiver.join().unwrap();
         assert_eq!(end, failed(PairingFailure::Broken));

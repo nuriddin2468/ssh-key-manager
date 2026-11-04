@@ -112,12 +112,16 @@ It talks to the local network only for **Nearby**, and only when you ask:
   network for ten minutes and accepts connections from other copies of the app.
 - When you pair two computers, they talk directly to each other over an encrypted
   connection. Nothing goes through a server, ours or anyone else's.
-- When you send a password or a host, it goes only to the computer you pick, and only
-  after its user accepts it.
+- When you send a password, a host, a group of your hosts file or your public key, it
+  goes only to the computer you pick, and only after its user accepts it. A hosts file
+  group goes with its addresses and names, without comments; a public key goes
+  without its private key.
 
 Each computer you pair with is recorded in your vault with the name it gave and the
 date. You can remove it on the Nearby page. The key that identifies your computer to
-paired ones is kept in your system's credential store.
+paired ones is kept in your system's credential store. A public key you receive is
+saved in `~/.ssh`, and its fingerprint in `nearby.json` in the app's data folder, so
+the app knows the key is someone else's.
 
 For each browser you connect, the app records in your vault the browser's name, your
 computer's name and the date you connected. You can disconnect a browser in
@@ -143,4 +147,4 @@ Questions about privacy: [open an issue](https://github.com/nuriddin2468/ssh-key
 Security problems: report them privately through
 [GitHub security advisories](https://github.com/nuriddin2468/ssh-key-manager/security/advisories/new).
 
-Last updated: 3 November 2026.
+Last updated: 4 November 2026.

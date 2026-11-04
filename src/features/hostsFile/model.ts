@@ -22,6 +22,9 @@ export const KIND_STYLE: Record<
 };
 
 /** The form resolvers compare names in: lower case, without a final dot. */
+/** Longest group name, in characters, as the backend allows. */
+export const MAX_GROUP_NAME = 64;
+
 export function normalizeName(name: string): string {
   return name.replace(/\.$/, '').toLowerCase();
 }

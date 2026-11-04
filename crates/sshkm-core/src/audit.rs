@@ -301,13 +301,20 @@ pub struct AuditInput<'a> {
     pub hosts_file: &'a [HostsFileEntry],
     /// The time temporary entries are compared with (none: never expired).
     pub now: Option<OffsetDateTime>,
+    /// Fingerprints of other people's public keys, received from them: a
+    /// `.pub` of one is no orphan, as its private key is theirs.
+    pub others: &'a [String],
 }
 
 /// Runs all rules. Pure: no file system access.
 pub fn run(input: &AuditInput<'_>) -> AuditReport {
     let mut findings = Vec::new();
     for key in input.keys {
-        key_findings(key, &mut findings);
+        let theirs = key
+            .fingerprint
+            .as_ref()
+            .is_some_and(|fingerprint| input.others.contains(fingerprint));
+        key_findings(key, theirs, &mut findings);
     }
     duplicate_findings(input.keys, &mut findings);
     if let Some(dir) = input.ssh_dir.filter(|d| d.permissions.is_problem()) {
@@ -376,7 +383,12 @@ pub fn run(input: &AuditInput<'_>) -> AuditReport {
 /// Scans `paths.dir`, loads `paths.config` and the hosts file, checks the
 /// directory and config permissions and runs the audit. A config or hosts
 /// file that cannot be read is skipped (the pages that show them report why).
-pub fn run_for_paths(paths: &SshPaths, hosts_file: &Path) -> Result<AuditReport> {
+/// `others` are the fingerprints of other people's keys ([`AuditInput::others`]).
+pub fn run_for_paths(
+    paths: &SshPaths,
+    hosts_file: &Path,
+    others: &[String],
+) -> Result<AuditReport> {
     let scan = keys::scan(&paths.dir)?;
     let config = SshConfig::load(&paths.config).ok();
     let usage = config
@@ -413,10 +425,12 @@ pub fn run_for_paths(paths: &SshPaths, hosts_file: &Path) -> Result<AuditReport>
         identity_usage: &usage,
         hosts_file: &hosts,
         now: Some(OffsetDateTime::now_utc()),
+        others,
     }))
 }
 
-fn key_findings(key: &KeyInfo, out: &mut Vec<Finding>) {
+/// `theirs`: the key is someone else's, so it has no private key here.
+fn key_findings(key: &KeyInfo, theirs: bool, out: &mut Vec<Finding>) {
     let subject = || FindingSubject {
         key_id: Some(key.id.clone()),
         path: key.private_path.clone().or_else(|| key.public_path.clone()),
@@ -450,12 +464,14 @@ fn key_findings(key: &KeyInfo, out: &mut Vec<Finding>) {
     }
 
     let Some(private_path) = &key.private_path else {
-        push(
-            "orphanPublicKey",
-            Severity::Info,
-            FindingKind::OrphanPublicKey,
-            None,
-        );
+        if !theirs {
+            push(
+                "orphanPublicKey",
+                Severity::Info,
+                FindingKind::OrphanPublicKey,
+                None,
+            );
+        }
         return;
     };
 
@@ -693,6 +709,30 @@ mod tests {
     }
 
     #[test]
+    fn someone_elses_key_is_no_orphan() {
+        let orphan = |id: &str, algorithm| KeyInfo {
+            private_path: None,
+            encrypted: None,
+            format: KeyFormat::PublicOnly,
+            algorithm,
+            ..key(id)
+        };
+        let keys = [
+            orphan("mine", KeyAlgorithm::Ed25519),
+            orphan("theirs", KeyAlgorithm::Ed25519),
+            orphan("old", KeyAlgorithm::Dsa),
+        ];
+        let others = ["SHA256:theirs".to_owned(), "SHA256:old".to_owned()];
+        let report = run(&AuditInput {
+            keys: &keys,
+            others: &others,
+            ..AuditInput::default()
+        });
+        // Its strength still counts.
+        assert_eq!(ids(&report), ["dsaKey:old", "orphanPublicKey:mine"]);
+    }
+
+    #[test]
     fn clean_input_has_no_findings() {
         let keys = [key("a")];
         let report = run(&AuditInput {
@@ -843,6 +883,7 @@ mod tests {
             identity_usage: &usage,
             hosts_file: &[],
             now: None,
+            others: &[],
         });
         assert_eq!(
             ids(&report),
@@ -988,7 +1029,7 @@ mod tests {
         let hosts = dir.path().join("hosts");
         std::fs::write(&hosts, "203.0.113.66 github.com x/1\n").unwrap();
         let paths = SshPaths::with_home(dir.path(), dir.path().join(".ssh"));
-        let report = run_for_paths(&paths, &hosts).unwrap();
+        let report = run_for_paths(&paths, &hosts, &[]).unwrap();
         assert_eq!(ids(&report), ["hostsFileRedirect:github.com:203.0.113.66"]);
     }
 
@@ -1050,7 +1091,7 @@ mod tests {
         .unwrap();
         fs::set_permissions(dir.join("config"), fs::Permissions::from_mode(0o600)).unwrap();
         let paths = SshPaths::with_home(home.path(), &dir);
-        let report = run_for_paths(&paths, &home.path().join("hosts")).unwrap();
+        let report = run_for_paths(&paths, &home.path().join("hosts"), &[]).unwrap();
         let kinds: Vec<_> = report
             .findings
             .iter()
@@ -1082,7 +1123,7 @@ mod tests {
                     .unwrap();
             }
         }
-        let report = run_for_paths(&paths, &home.path().join("hosts")).unwrap();
+        let report = run_for_paths(&paths, &home.path().join("hosts"), &[]).unwrap();
         assert_eq!(
             ids(&report),
             [format!(

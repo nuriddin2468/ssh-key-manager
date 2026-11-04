@@ -3,4 +3,4 @@
 /**
  * Why a pairing ended without one.
  */
-export type PairingFailure = "unreachable" | "declined" | "peerDeclined" | "cancelled" | "peerLeft" | "timedOut" | "vaultLocked" | "version" | "broken";
+export type PairingFailure = "unreachable" | "declined" | "peerDeclined" | "cancelled" | "peerLeft" | "timedOut" | "vaultLocked" | "version" | "broken" | "refused" | "turned" | "notSaved";

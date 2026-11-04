@@ -10,6 +10,7 @@ use tauri::{AppHandle, State};
 
 use super::{Shared, blocking};
 use crate::error::{AppError, AppResult};
+use crate::nearby::items::SendRequest;
 use crate::nearby::{Nearby, NearbyStatus, SharedNearby};
 
 async fn on_nearby<T, F>(nearby: &SharedNearby, work: F) -> AppResult<T>
@@ -63,7 +64,19 @@ pub async fn nearby_pair(nearby: State<'_, SharedNearby>, target: String) -> App
     on_nearby(&nearby, move |nearby| nearby.pair(&target)).await
 }
 
-/// Whether the codes on both screens match.
+/// Sends what `item` names to a device found nearby (its id) or at an
+/// address, pairing first if the two don't know each other. Returns the
+/// pairing's id; the rest comes as events.
+#[tauri::command]
+pub async fn nearby_send(
+    nearby: State<'_, SharedNearby>,
+    target: String,
+    item: SendRequest,
+) -> AppResult<u32> {
+    on_nearby(&nearby, move |nearby| nearby.send(&target, &item)).await
+}
+
+/// Whether the codes on both screens match, or whether to accept an item.
 #[tauri::command]
 pub async fn nearby_answer(
     nearby: State<'_, SharedNearby>,

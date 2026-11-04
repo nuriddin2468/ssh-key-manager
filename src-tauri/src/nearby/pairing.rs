@@ -6,13 +6,17 @@
 //! each user says whether their screen shows the same one, and each side
 //! tells the other. Only when both said yes does each save the other as a
 //! contact. A "no" from either side, a cancel or a hang-up ends it.
+//!
+//! After that the side that connected may send one item (see [`transfer`]).
+//!
+//! [`transfer`]: super::transfer
 
 use std::io::{self, ErrorKind};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use sshkm_core::p2p::protocol::{VERSION, clean_name};
+use sshkm_core::p2p::protocol::{Item, ItemSummary, VERSION, clean_name};
 use sshkm_core::p2p::{Message, PeerKey, Session};
 
 /// How long the users have to compare the codes.
@@ -39,6 +43,28 @@ pub enum PairingPhase {
     Paired,
     /// Both were each other's contacts already.
     Known,
+    /// This side offered `item`; the other user hasn't answered yet.
+    Offering {
+        item: ItemSummary,
+    },
+    /// The other side offers `item`; this user hasn't answered yet.
+    Offered {
+        item: ItemSummary,
+    },
+    /// The other side saved the item this side sent.
+    Sent {
+        item: ItemSummary,
+    },
+    /// This side saved the item it got, as `name` (the entry's title or the
+    /// host's alias, which gets a number if the alias is taken).
+    #[serde(rename_all = "camelCase")]
+    Received {
+        item: ItemSummary,
+        name: String,
+        /// A host came with server keys other than the ones this computer
+        /// has for it; this computer's are kept.
+        keys_differ: bool,
+    },
     Failed {
         reason: PairingFailure,
     },
@@ -67,6 +93,12 @@ pub enum PairingFailure {
     Version,
     /// The connection broke or the other side broke the protocol.
     Broken,
+    /// The other user turned down the item this side offered.
+    Refused,
+    /// This user turned down the item offered.
+    Turned,
+    /// The item could not be saved where it goes.
+    NotSaved,
 }
 
 /// What [`converse`] needs from the side it runs on.
@@ -83,6 +115,9 @@ pub trait Side {
     /// The user's answer if one comes within `wait`; `Err(Cancelled)` once
     /// the user cancelled.
     fn answer(&self, wait: Duration) -> Result<Option<bool>, PairingFailure>;
+    /// Saves an item the user accepted, checked against what was offered.
+    /// Returns its name and whether a host's keys differ from the ones here.
+    fn store(&self, item: &Item) -> Result<(String, bool), PairingFailure>;
 }
 
 /// Runs a pairing over an open session; returns how it ended, never
@@ -156,7 +191,7 @@ fn talk(
 /// Waits for this user's answer while watching the connection, so a "no" or
 /// a hang-up from the other side ends the wait. Returns this user's answer
 /// and the other's, if it came first.
-fn wait_for_answer(
+pub(super) fn wait_for_answer(
     session: &mut Session<TcpStream>,
     side: &impl Side,
 ) -> Result<(bool, Option<bool>), PairingFailure> {
@@ -192,7 +227,7 @@ fn waiting(stream: &TcpStream) -> io::Result<bool> {
 }
 
 /// A failed read: the peer hung up, took too long, or sent garbage.
-fn broken(error: sshkm_core::Error) -> PairingFailure {
+pub(super) fn broken(error: sshkm_core::Error) -> PairingFailure {
     match error {
         sshkm_core::Error::Io { source, .. } => match source.kind() {
             ErrorKind::UnexpectedEof
@@ -207,96 +242,10 @@ fn broken(error: sshkm_core::Error) -> PairingFailure {
 
 #[cfg(test)]
 mod tests {
-    use std::net::TcpListener;
-    use std::sync::Mutex;
-    use std::thread;
+    use std::time::Duration;
 
-    use sshkm_core::p2p::{Identity, accept, connect};
-
+    use super::super::script::{Script, codes, pair};
     use super::*;
-
-    /// A side whose user answers `answer` (`None`: cancels) after `delay`.
-    struct Script {
-        name: &'static str,
-        knows: bool,
-        answer: Option<bool>,
-        delay: Duration,
-        shown: Mutex<Vec<(Option<String>, PairingPhase)>>,
-        saved: Mutex<Vec<String>>,
-        asked: Mutex<Option<Instant>>,
-    }
-
-    impl Script {
-        fn new(name: &'static str, answer: Option<bool>) -> Self {
-            Self {
-                name,
-                knows: false,
-                answer,
-                delay: Duration::ZERO,
-                shown: Mutex::default(),
-                saved: Mutex::default(),
-                asked: Mutex::default(),
-            }
-        }
-    }
-
-    impl Side for Script {
-        fn name(&self) -> String {
-            self.name.into()
-        }
-        fn knows(&self, _: PeerKey) -> Result<bool, PairingFailure> {
-            Ok(self.knows)
-        }
-        fn save(&self, _: PeerKey, name: &str) -> Result<(), PairingFailure> {
-            self.saved.lock().unwrap().push(name.into());
-            Ok(())
-        }
-        fn show(&self, peer: Option<&str>, phase: &PairingPhase) {
-            self.shown
-                .lock()
-                .unwrap()
-                .push((peer.map(str::to_owned), phase.clone()));
-        }
-        fn answer(&self, wait: Duration) -> Result<Option<bool>, PairingFailure> {
-            let first = *self.asked.lock().unwrap().get_or_insert_with(Instant::now);
-            if first.elapsed() < self.delay {
-                thread::sleep(wait);
-                return Ok(None);
-            }
-            match self.answer {
-                Some(answer) => Ok(Some(answer)),
-                None => Err(PairingFailure::Cancelled),
-            }
-        }
-    }
-
-    /// Runs `left` as the connecting side and `right` as the other.
-    fn pair(left: Script, right: Script) -> ((PairingPhase, Script), (PairingPhase, Script)) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let other = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut session = accept(stream, &Identity::generate().unwrap()).unwrap();
-            (converse(&mut session, &right), right)
-        });
-        let stream = TcpStream::connect(address).unwrap();
-        let mut session = connect(stream, &Identity::generate().unwrap()).unwrap();
-        let mine = (converse(&mut session, &left), left);
-        drop(session);
-        (mine, other.join().unwrap())
-    }
-
-    fn codes(side: &Script) -> Vec<String> {
-        side.shown
-            .lock()
-            .unwrap()
-            .iter()
-            .filter_map(|(_, phase)| match phase {
-                PairingPhase::Compare { code } => Some(code.clone()),
-                _ => None,
-            })
-            .collect()
-    }
 
     #[test]
     fn both_yes_saves_each_other() {

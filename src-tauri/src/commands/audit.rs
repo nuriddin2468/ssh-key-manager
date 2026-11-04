@@ -6,13 +6,24 @@ use tauri::State;
 
 use super::{Shared, blocking};
 use crate::error::AppResult;
+use crate::nearby::SharedNearby;
 use crate::state::AppState;
 use crate::types::PermissionFix;
 
+/// Runs the audit. Public keys received through Nearby are other people's,
+/// so they aren't reported for lacking a private key.
 #[tauri::command]
-pub async fn run_audit(state: State<'_, Shared>) -> AppResult<AuditReport> {
-    blocking(&state, |state| {
-        Ok(audit::run_for_paths(&state.paths, &state.hosts_file)?)
+pub async fn run_audit(
+    state: State<'_, Shared>,
+    nearby: State<'_, SharedNearby>,
+) -> AppResult<AuditReport> {
+    let others = nearby.received_keys();
+    blocking(&state, move |state| {
+        Ok(audit::run_for_paths(
+            &state.paths,
+            &state.hosts_file,
+            &others,
+        )?)
     })
     .await
 }
@@ -31,7 +42,8 @@ pub async fn fix_permissions(
 }
 
 fn apply_offered(state: &AppState, items: &[PermissionFix]) -> AppResult<u32> {
-    let report = audit::run_for_paths(&state.paths, &state.hosts_file)?;
+    // Received keys change no permission fix.
+    let report = audit::run_for_paths(&state.paths, &state.hosts_file, &[])?;
     let offered = report
         .findings
         .into_iter()

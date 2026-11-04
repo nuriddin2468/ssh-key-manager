@@ -366,15 +366,34 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
 - **One at a time.** While a pairing goes on, other connections are closed at once.
   The users have three minutes to compare the codes.
 - **Sending.** After pairing, or straight away between contacts, the side that
-  connected may send one item: a vault entry or a host. The UI only names it; the
-  backend reads the secret from the vault. First goes a summary with nothing secret
-  in it (title and username, or alias and address); the item itself goes only after
-  the other user accepts. The receiver checks that the item matches the summary and
-  that every name in a host is made of name characters only, refuses a host block
-  that would add a directive running a program, and gives a taken alias a number.
-  It never adds a server key for a host it already has keys for, since `ssh` would
-  then accept the sender's key next to its own; it keeps its own and warns instead.
-  A 2FA secret goes only if the sender ticks it; a key's passphrase never goes.
+  connected may send one item: a vault entry, a host, a hosts file group or a public
+  key. The UI only names it; the backend reads it from the vault, `~/.ssh` or the
+  hosts file. First goes a summary with nothing secret in it (title and username,
+  alias and address, a group's name, size and first names, or a key's name, type,
+  fingerprint and comment); the item itself goes only after the other user accepts.
+  The receiver checks that the item matches the summary and that every name in a
+  host is made of name characters only, refuses a host block that would add a
+  directive running a program, and gives a taken alias a number. It never adds a
+  server key for a host it already has keys for, since `ssh` would then accept the
+  sender's key next to its own; it keeps its own and warns instead. A 2FA secret
+  goes only if the sender ticks it; a key's passphrase never goes.
+- **A hosts file group is never written on arrival.** The hosts file decides where
+  names lead for every program, so a received group only becomes a change on the
+  Hosts file page: the user sees the diff and saves it with the administrator
+  password, as any other change (see above). Its entries must be plain IP addresses
+  (no `%scope`) and host names made of name characters, none of them one the system
+  relies on (`localhost`, …); comments don't travel. At most 1000 entries come in
+  one group. A group of the same name gets a number (`Staging 2`), so the sender
+  can't add entries to a group already there.
+- **A public key arrives as a key of someone else's.** Only the public half ever
+  goes: the sender's private key is never read. The receiver parses the line as an
+  OpenSSH public key (one line, not a certificate) and writes it out again from
+  what was parsed, as `~/.ssh/<name>.pub`. A name either half of a pair has already
+  gets a number, so a received key never pairs with a private key of this computer;
+  a name `ssh` tries on its own (`id_ed25519`, …) gets the sender's device name
+  added, since `ssh` would otherwise offer someone else's key to every server. A key
+  that is there already is not written again. Its fingerprint is remembered in
+  `nearby.json`, so the audit doesn't report it for having no private key.
 
 ## Reporting a vulnerability
 

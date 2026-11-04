@@ -131,6 +131,10 @@ translates.
   - Pairs one device at a time, from either side, on its own thread. `pairing::converse`
     is the whole conversation; it reaches the app through a small `Side` trait, so its
     tests run two sides over loopback without Tauri.
+  - `items` reads what is sent and saves what is received. A hosts file group waits
+    in memory until the Hosts file page adds it to its draft (`nearby_received_group`)
+    and shows the review; a public key goes to `~/.ssh` through `keys::add_public`,
+    and its fingerprint to `nearby.json`, which the audit reads (`AuditInput::others`).
   - Every change goes to the UI as `nearby-changed` with the whole status.
 - **Watcher.** Watches `~/.ssh` and the hosts file so changes made in a terminal appear
   immediately.

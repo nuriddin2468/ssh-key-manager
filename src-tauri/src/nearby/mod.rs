@@ -9,7 +9,8 @@
 //!   ([`sshkm_core::p2p`]), then [`pairing::converse`]. Contacts are kept in
 //!   the vault, so pairing needs it unlocked.
 //!
-//! The device key lives in the system's credential store, the device name in
+//! The device key lives in the system's credential store; the device name,
+//! and the fingerprints of public keys received from others, in
 //! `nearby.json` in the app's data folder. The UI follows [`CHANGED_EVENT`],
 //! which carries the whole [`NearbyStatus`].
 
@@ -40,7 +41,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use self::items::SendRequest;
+use self::items::{ReceivedGroup, SendRequest};
 use self::pairing::{PairingFailure, PairingPhase, Side};
 use self::transfer::exchange;
 use crate::commands::Shared;
@@ -101,9 +102,16 @@ pub struct Pairing {
     pub phase: PairingPhase,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+/// What `nearby.json` holds.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Settings {
+    /// The device name the user chose.
     name: Option<String>,
+    /// Fingerprints of public keys received from others, which the audit
+    /// knows have no private key here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    received_keys: Vec<String>,
 }
 
 pub type SharedNearby = Arc<Nearby>;
@@ -118,6 +126,9 @@ pub struct Nearby {
 #[derive(Default)]
 struct Inner {
     name: String,
+    settings: Settings,
+    /// The last hosts file group received, until another one comes.
+    received_group: Option<ReceivedGroup>,
     identity: Option<Arc<Identity>>,
     mdns: Option<ServiceDaemon>,
     visible: Option<Visible>,
@@ -165,7 +176,8 @@ impl Nearby {
             .unwrap_or_default();
         let name = settings
             .name
-            .map(|name| clean_name(&name))
+            .as_deref()
+            .map(clean_name)
             .filter(|name| !name.is_empty())
             .unwrap_or_else(default_name);
         Self {
@@ -174,6 +186,7 @@ impl Nearby {
             next_id: AtomicU32::new(1),
             inner: Mutex::new(Inner {
                 name,
+                settings,
                 ..Inner::default()
             }),
         }
@@ -217,15 +230,13 @@ impl Nearby {
         if name.is_empty() {
             return Err(AppError::invalid("a device needs a name"));
         }
-        let settings = Settings {
-            name: Some(name.clone()),
-        };
-        let json = serde_json::to_vec_pretty(&settings)
-            .map_err(|e| AppError::new(ErrorCode::Io, e.to_string()))?;
-        fsutil::ensure_private_dir(&self.data_dir)?;
-        fsutil::atomic_write(&self.data_dir.join(SETTINGS_FILE), &json, 0o600)?;
         let visible = {
             let mut inner = self.lock();
+            let settings = Settings {
+                name: Some(name.clone()),
+                ..inner.settings.clone()
+            };
+            self.save(&mut inner, settings)?;
             inner.name = name;
             inner.visible.is_some()
         };
@@ -234,6 +245,51 @@ impl Nearby {
             self.announce()?;
         }
         Ok(self.changed())
+    }
+
+    /// Fingerprints of the public keys received from others.
+    pub fn received_keys(&self) -> Vec<String> {
+        self.lock().settings.received_keys.clone()
+    }
+
+    /// Remembers a public key received from someone else.
+    fn remember_key(&self, fingerprint: &str) -> AppResult<()> {
+        let mut inner = self.lock();
+        if inner
+            .settings
+            .received_keys
+            .iter()
+            .any(|known| known == fingerprint)
+        {
+            return Ok(());
+        }
+        let mut settings = inner.settings.clone();
+        settings.received_keys.push(fingerprint.to_owned());
+        self.save(&mut inner, settings)
+    }
+
+    /// The hosts file group that came with pairing `id`, if it is the last
+    /// one received.
+    pub fn received_group(&self, id: u32) -> Option<ReceivedGroup> {
+        self.lock()
+            .received_group
+            .clone()
+            .filter(|group| group.id == id)
+    }
+
+    fn keep_group(&self, group: ReceivedGroup) {
+        self.lock().received_group = Some(group);
+    }
+
+    /// Writes `settings` to `nearby.json`, with the lock held so that two
+    /// writes never cross, and keeps them.
+    fn save(&self, inner: &mut Inner, settings: Settings) -> AppResult<()> {
+        let json = serde_json::to_vec_pretty(&settings)
+            .map_err(|e| AppError::new(ErrorCode::Io, e.to_string()))?;
+        fsutil::ensure_private_dir(&self.data_dir)?;
+        fsutil::atomic_write(&self.data_dir.join(SETTINGS_FILE), &json, 0o600)?;
+        inner.settings = settings;
+        Ok(())
     }
 
     /// Makes this device visible for ten minutes, or hides it.
@@ -722,9 +778,12 @@ impl Side for AppSide<'_> {
     }
 
     fn store(&self, item: &Item) -> Result<(String, bool), PairingFailure> {
-        let state = self.nearby.state().map_err(|_| PairingFailure::Broken)?;
-        let app = self.nearby.app().map_err(|_| PairingFailure::Broken)?;
-        items::store(&state, app, item)
+        let peer = self
+            .nearby
+            .slot(self.id)
+            .as_mut()
+            .and_then(|slot| slot.view.peer.clone());
+        items::store(self.nearby, self.id, peer.as_deref(), item)
     }
 
     fn answer(&self, wait: Duration) -> Result<Option<bool>, PairingFailure> {

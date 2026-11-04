@@ -460,7 +460,9 @@ fn line_number(index: usize) -> u32 {
     u32::try_from(index + 1).unwrap_or(u32::MAX)
 }
 
-fn is_system_name(name: &str) -> bool {
+/// Whether the operating system relies on `name` (`localhost`, …), so the
+/// app never sets it.
+pub fn is_system_name(name: &str) -> bool {
     SYSTEM_NAMES.contains(&normalize_name(name).as_str())
 }
 

@@ -8,7 +8,14 @@ import { Select } from '@/components/ui/Select';
 import { SwitchRow } from '@/components/ui/Switch';
 import { TextField } from '@/components/ui/TextField';
 import { Tile } from '@/components/ui/Tile';
-import { expiryIn, isIpAddress, isSystemName, isValidName, splitNames } from './model';
+import {
+  expiryIn,
+  isIpAddress,
+  isSystemName,
+  isValidName,
+  MAX_GROUP_NAME,
+  splitNames,
+} from './model';
 
 interface EntryDialogProps {
   /** The entry to edit; `null` adds one. */
@@ -25,8 +32,6 @@ const NONE = '\u0000none';
 const NEW = '\u0000new';
 const KEEP = 'keep';
 const EXPIRY_SECONDS = { '3600': 3600, '28800': 28_800, '86400': 86_400 } as const;
-
-export const MAX_GROUP_NAME = 64;
 
 /** A group name problem, or nothing when `name` can be used. */
 export function groupNameError(name: string, taken: readonly string[]) {

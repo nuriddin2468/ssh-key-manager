@@ -11,6 +11,7 @@ import {
   KeyRound,
   Lock,
   MoreHorizontal,
+  Send,
   ShieldCheck,
   Trash2,
 } from 'lucide-react';
@@ -26,11 +27,13 @@ import type { Finding } from '@/bindings/Finding';
 import type { KeyView } from '@/bindings/KeyView';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { Dialog } from '@/components/ui/Dialog';
 import { IconButton } from '@/components/ui/IconButton';
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '@/components/ui/Menu';
 import { Tile, TONES } from '@/components/ui/Tile';
 import { findingText, findingTitle } from '@/features/audit/model';
 import { fixLabelKey, useFix } from '@/features/audit/useFix';
+import { SendDialog } from '@/features/nearby/SendDialog';
 import { copyText } from '@/lib/clipboard';
 import { cn } from '@/lib/cn';
 import { displayPath } from '@/lib/format';
@@ -60,6 +63,7 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
   const environment = useEnvironment();
   const keys = useKeys();
   const [confirmTrash, setConfirmTrash] = useState(false);
+  const [sending, setSending] = useState(false);
   const home = environment.data?.paths.home;
   const tone = keyTone(key);
   const keysById = new Map((keys.data?.keys ?? []).map((k) => [k.id, k]));
@@ -205,6 +209,14 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
               onClick={() => void copy(key.publicKey ?? '', t('keys.copiedPublic'))}
             >
               {t('keys.copyPublic')}
+            </Button>
+          ) : null}
+          {key.publicKey ? (
+            <Button
+              icon={<Send className="size-[15px]" strokeWidth={1.9} />}
+              onClick={() => setSending(true)}
+            >
+              {t('keys.sendPublic')}
             </Button>
           ) : null}
           {hasPrivate(key) && !key.inAgent ? (
@@ -357,6 +369,15 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
         </Button>
       </div>
 
+      <Dialog open={sending} onOpenChange={setSending}>
+        {sending ? (
+          <SendDialog
+            what={{ type: 'publicKey', keyId: key.id }}
+            name={key.name}
+            onStarted={() => setSending(false)}
+          />
+        ) : null}
+      </Dialog>
       <ConfirmDialog
         open={confirmTrash}
         onOpenChange={setConfirmTrash}

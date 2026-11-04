@@ -30,8 +30,8 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use zeroize::Zeroizing;
 
 pub use ops::{
-    EcdsaCurve, GenerateAlgorithm, GenerateRequest, UnlockedKey, change_passphrase, generate,
-    import, load_private, move_to_trash, regenerate_public, validate_file_name,
+    EcdsaCurve, GenerateAlgorithm, GenerateRequest, UnlockedKey, add_public, change_passphrase,
+    generate, import, load_private, move_to_trash, regenerate_public, validate_file_name,
 };
 
 use crate::{

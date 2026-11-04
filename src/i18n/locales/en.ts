@@ -89,6 +89,10 @@ const en = {
       otp: '2FA',
       hostKeys_one: '{{count}} server key',
       hostKeys_other: '{{count}} server keys',
+      hostsGroup: 'Hosts file group',
+      publicKey: 'Public key',
+      entries_one: '{{count}} entry',
+      entries_other: '{{count}} entries',
     },
     send: {
       title: 'Send “{{name}}”',
@@ -96,6 +100,9 @@ const en = {
         'The password goes straight to the other computer, encrypted, once they accept it.',
       hostText:
         'The address, user, port and the server’s key go to the other computer. Your sign-in key stays here.',
+      groupText:
+        'The group’s entries go to the other computer. Their hosts file changes only after they review the change and save it with their administrator password.',
+      keyText: 'Only the public half goes. The private key stays on this computer.',
       otp: 'Send the 2FA secret too',
       otpHint: 'They’ll get codes for this account as well.',
       vaultLocked: 'Unlock the vault to send: paired computers are kept there.',
@@ -112,15 +119,22 @@ const en = {
       offeredHost:
         'It goes into ~/.ssh/config, and the server’s key into known_hosts. You choose the sign-in key.',
       offeredPassword: 'It’s saved in Passwords.',
+      offeredGroup:
+        'Nothing is written to your hosts file yet: you’ll see the change first and save it with your administrator password.',
+      offeredKey: 'It’s saved in Keys as a public key only: the private key stays with its owner.',
       sent: 'Saved on {{peer}}.',
+      sentGroup: 'The group is on {{peer}}. Their hosts file changes once they save it.',
       receivedHost: 'Added the host {{name}} to ~/.ssh/config.',
       receivedPassword: 'Saved in Passwords as “{{name}}”.',
+      receivedKey: 'Saved in Keys as “{{name}}”.',
       keysDiffer:
         'The server key they sent differs from the one this computer has. Yours is kept; compare them with “Check host key” before you connect.',
       decline: 'Decline',
       accept: 'Accept',
       openHosts: 'Open Hosts',
       openPasswords: 'Open Passwords',
+      openKeys: 'Open Keys',
+      anotherComputer: 'another computer',
     },
     pairing: {
       title: 'Pairing',
@@ -244,6 +258,7 @@ const en = {
     selectPrompt: 'Select a key to see its details.',
     copyPublic: 'Copy public key',
     copiedPublic: 'Public key copied',
+    sendPublic: 'Send public key…',
     unlock: 'Unlock in agent',
     lock: 'Lock in agent',
     more: 'More actions',
@@ -896,6 +911,7 @@ const en = {
     groupMore: 'More actions for {{name}}',
     groupAdd: 'Add entry to group',
     groupRename: 'Rename…',
+    groupSend: 'Send to a computer nearby…',
     groupUngroup: 'Ungroup',
     groupDelete: 'Delete group and its entries',
     groupRenamed: 'Renamed',
@@ -924,6 +940,10 @@ const en = {
       'Another program changed the hosts file, so nothing was saved. Your changes were discarded.',
     reviewConflict:
       'Another program changed the hosts file while the password prompt was open, so nothing was saved. Your changes are shown against the file as it is now. Check them and save again.',
+    received_one:
+      '{{count}} entry from {{from}} is in the group “{{name}}”. Check where it leads before you save.',
+    received_other:
+      '{{count}} entries from {{from}} are in the group “{{name}}”. Check where they lead before you save.',
     authPrompt: 'SSH Key Manager wants to update the hosts file.',
     entryAddTitle: 'Add an entry',
     entryEditTitle: 'Edit entry',

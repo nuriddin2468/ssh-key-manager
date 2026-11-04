@@ -124,6 +124,7 @@ Builds are not code-signed yet (it's on the [roadmap](#roadmap)), so your system
 
 **Nearby**
 - Pair with a colleague's computer, or another of your own, on the same network: both screens show a six-digit code, and you pair only if they match.
+- Send a password, a host, a group of your hosts file or your public key. Nothing is saved until the other side accepts, and a hosts file group is written only after they review the change and give the administrator password.
 - Computers talk to each other directly and encrypted. There is no server in between, and your computer is visible to others only for ten minutes after you ask.
 
 **Feels native.** Menu bar and keyboard shortcuts on macOS (⌘1–9, ⌘N, ⌘T, ⌘,), and changes you make in a terminal show up instantly.

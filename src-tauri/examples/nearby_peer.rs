@@ -5,13 +5,15 @@
 //! cargo run -p sshkm-app --example nearby_peer -- "Test peer"
 //! cargo run -p sshkm-app --example nearby_peer -- "Test peer" --send password
 //! cargo run -p sshkm-app --example nearby_peer -- "Test peer" --send host
+//! cargo run -p sshkm-app --example nearby_peer -- "Test peer" --send group
+//! cargo run -p sshkm-app --example nearby_peer -- "Test peer" --send key
 //! ```
 //!
 //! Without `--send` it shows itself as the app does after "Show for 10
 //! minutes" and waits: pair with it or send it something from the app, and
 //! it prints the pairing code and what it got. With `--send` it looks for the
-//! app (click "Show for 10 minutes" there first) and sends it a sample login
-//! or host. It does one exchange and exits.
+//! app (click "Show for 10 minutes" there first) and sends it a sample login,
+//! host, hosts file group or public key. It does one exchange and exits.
 
 use std::io::{self, BufRead, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
@@ -21,7 +23,7 @@ use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use sshkm_app_lib::nearby::SERVICE_TYPE;
 use sshkm_app_lib::nearby::pairing::{PairingFailure, PairingPhase, Side};
 use sshkm_app_lib::nearby::transfer::exchange;
-use sshkm_core::p2p::protocol::{HostKey, Item, ItemSummary};
+use sshkm_core::p2p::protocol::{HostKey, HostsEntry, Item, ItemSummary};
 use sshkm_core::p2p::{self, Identity, PeerKey};
 
 struct Terminal {
@@ -97,11 +99,32 @@ impl Side for Terminal {
                     "Got the host {alias} ({}) with {} server key(s).",
                     match item.summary() {
                         ItemSummary::Host { address, .. } => address,
-                        ItemSummary::Password { .. } => String::new(),
+                        _ => String::new(),
                     },
                     host_keys.len()
                 );
                 Ok((alias.clone(), false))
+            }
+            Item::HostsGroup { name, entries } => {
+                println!("Got the hosts file group \"{name}\":");
+                for entry in entries {
+                    println!(
+                        "  {}{} {}{}",
+                        if entry.enabled { "" } else { "# " },
+                        entry.address,
+                        entry.names.join(" "),
+                        entry
+                            .expires
+                            .as_ref()
+                            .map(|until| format!(" (until {until})"))
+                            .unwrap_or_default()
+                    );
+                }
+                Ok((name.clone(), false))
+            }
+            Item::PublicKey { name, key } => {
+                println!("Got the public key {name}: {key}");
+                Ok((name.clone(), false))
             }
         }
     }
@@ -116,11 +139,41 @@ fn describe(item: &ItemSummary) -> String {
     match item {
         ItemSummary::Password { title, .. } => format!("the login \"{title}\""),
         ItemSummary::Host { alias, address, .. } => format!("the host {alias} ({address})"),
+        ItemSummary::HostsGroup { name, entries, .. } => {
+            format!("the hosts file group \"{name}\" ({entries} entries)")
+        }
+        ItemSummary::PublicKey {
+            name, fingerprint, ..
+        } => format!("the public key {name} ({fingerprint})"),
     }
 }
 
 fn sample(kind: &str, name: &str) -> Item {
-    if kind == "host" {
+    if kind == "group" {
+        let entry = |address: &str, names: &[&str], enabled: bool| HostsEntry {
+            address: address.into(),
+            names: names.iter().map(|&name| name.to_owned()).collect(),
+            enabled,
+            expires: None,
+        };
+        Item::HostsGroup {
+            name: "test peer".into(),
+            entries: vec![
+                entry("192.0.2.10", &["api.test-peer.local", "api"], true),
+                entry("192.0.2.11", &["db.test-peer.local"], true),
+                entry("2001:db8::12", &["cache.test-peer.local"], false),
+                HostsEntry {
+                    expires: Some("2030-01-01T00:00:00Z".into()),
+                    ..entry("192.0.2.13", &["preview.test-peer.local"], true)
+                },
+            ],
+        }
+    } else if kind == "key" {
+        Item::PublicKey {
+            name: "id_ed25519".into(),
+            key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBIZFNq0hlvHGZ/oas65Ba4jkcFEy3dX/aRZy70M73oL test@peer".into(),
+        }
+    } else if kind == "host" {
         Item::Host {
             alias: "test-peer-host".into(),
             host_name: Some("192.0.2.10".into()),

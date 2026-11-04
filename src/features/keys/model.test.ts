@@ -6,6 +6,7 @@ import {
   isPlain,
   isWeak,
   keyTone,
+  keyTypeBadge,
   passphraseStrength,
   suggestFileName,
 } from './model';
@@ -49,6 +50,10 @@ describe('key classification', () => {
   it('labels and colours keys by algorithm', () => {
     expect(algorithmBadge(key({ algorithm: 'rsa', bits: 3072 }))).toBe('RSA 3072');
     expect(algorithmBadge(key({ algorithm: 'skEcdsaP256' }))).toBe('ECDSA-SK');
+    expect(keyTypeBadge('ssh-ed25519')).toBe('ED25519');
+    expect(keyTypeBadge('ssh-rsa')).toBe('RSA');
+    expect(keyTypeBadge('sk-ssh-ed25519@openssh.com')).toBe('ED25519-SK');
+    expect(keyTypeBadge('ssh-xyz')).toBe('ssh-xyz');
     expect(keyTone(key({ algorithm: 'rsa', bits: 2048 }))).toBe('amber');
     expect(keyTone(key({ hardware: true, algorithm: 'skEd25519' }))).toBe('violet');
     expect(keyTone(key({ privatePath: null }))).toBe('slate');

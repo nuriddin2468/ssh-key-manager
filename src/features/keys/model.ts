@@ -1,3 +1,4 @@
+import type { KeyAlgorithm } from '@/bindings/KeyAlgorithm';
 import type { KeyInfo } from '@/bindings/KeyInfo';
 import type { Tone } from '@/components/ui/Tile';
 
@@ -36,6 +37,22 @@ export function algorithmBadge(key: Pick<KeyInfo, 'algorithm' | 'bits' | 'keyTyp
     case 'other':
       return key.keyType || '?';
   }
+}
+
+const ALGORITHMS: Record<string, KeyAlgorithm> = {
+  'ssh-ed25519': 'ed25519',
+  'ssh-rsa': 'rsa',
+  'ecdsa-sha2-nistp256': 'ecdsaP256',
+  'ecdsa-sha2-nistp384': 'ecdsaP384',
+  'ecdsa-sha2-nistp521': 'ecdsaP521',
+  'sk-ssh-ed25519@openssh.com': 'skEd25519',
+  'sk-ecdsa-sha2-nistp256@openssh.com': 'skEcdsaP256',
+  'ssh-dss': 'dsa',
+};
+
+/** The type badge for an OpenSSH key type such as `ssh-ed25519`, without a size. */
+export function keyTypeBadge(keyType: string): string {
+  return algorithmBadge({ algorithm: ALGORITHMS[keyType] ?? 'other', bits: null, keyType });
 }
 
 /** `Ed25519 · 256-bit` style description for the details panel. */

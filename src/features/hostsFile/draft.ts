@@ -6,6 +6,7 @@ import type { HostsChange } from '@/bindings/HostsChange';
 import type { HostsEntryEdit } from '@/bindings/HostsEntryEdit';
 import type { HostsFileEntry } from '@/bindings/HostsFileEntry';
 import type { HostsFileView } from '@/bindings/HostsFileView';
+import { MAX_GROUP_NAME } from './model';
 
 export interface Draft {
   /** The file revision the draft was made against. */
@@ -368,6 +369,46 @@ export function sections(view: HostsFileView, draft: Draft): Section[] {
     });
   }
   return [loose, ...inFile, ...fresh];
+}
+
+/**
+ * `name`, or `name 2`, `name 3`… when `taken` has it, shortened to stay
+ * within the longest group name.
+ */
+export function freeGroupName(taken: readonly string[], name: string): string {
+  if (!taken.includes(name)) return name;
+  for (let n = 2; ; n += 1) {
+    const suffix = ` ${n}`;
+    const base = [...name]
+      .slice(0, MAX_GROUP_NAME - suffix.length)
+      .join('')
+      .trimEnd();
+    if (!taken.includes(`${base}${suffix}`)) return `${base}${suffix}`;
+  }
+}
+
+/**
+ * Entries another computer sent, as a new group of the draft: named `name`,
+ * or with a number when the file or the draft has a group of that name.
+ * Returns the draft and the group's name.
+ */
+export function addReceived(
+  draft: Draft,
+  view: HostsFileView,
+  name: string,
+  entries: readonly HostsEntryEdit[],
+): { draft: Draft; group: string } {
+  const group = freeGroupName(
+    [...view.groups.map((g) => g.name), ...groupNames(view, draft)],
+    name,
+  );
+  return {
+    draft: entries.reduce(
+      (next, entry) => addEntry(next, { ...entry, group }),
+      createGroup(draft, group),
+    ),
+    group,
+  };
 }
 
 /** Group names the draft shows, in order: the groups an entry can be put in. */

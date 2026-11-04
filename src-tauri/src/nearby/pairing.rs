@@ -55,8 +55,12 @@ pub enum PairingPhase {
     Sent {
         item: ItemSummary,
     },
-    /// This side saved the item it got, as `name` (the entry's title or the
-    /// host's alias, which gets a number if the alias is taken).
+    /// This side saved the item it got, as `name`: the entry's title, the
+    /// host's alias (with a number if it is taken) or the key's file name. A
+    /// hosts file group named `name` waits for the user to save it on the
+    /// Hosts file page (see [`Nearby::received_group`]).
+    ///
+    /// [`Nearby::received_group`]: super::Nearby::received_group
     #[serde(rename_all = "camelCase")]
     Received {
         item: ItemSummary,

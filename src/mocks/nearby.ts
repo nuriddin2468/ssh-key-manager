@@ -1,16 +1,19 @@
 // Mock Nearby for `pnpm dev`: two computers turn up a moment after the page
 // starts looking; pairing with the first goes through the code, the second
 // can't be reached. `?nearby=incoming` makes a third one ask to pair a few
-// seconds after this one is shown.
+// seconds after this one is shown, and send a login; `&item=group` or
+// `&item=key` makes it send a hosts file group or a public key instead.
 
 import type { Contact } from '@/bindings/Contact';
 import type { ItemSummary } from '@/bindings/ItemSummary';
 import type { NearbyDevice } from '@/bindings/NearbyDevice';
 import type { NearbyStatus } from '@/bindings/NearbyStatus';
 import type { Pairing } from '@/bindings/Pairing';
+import type { ReceivedGroup } from '@/bindings/ReceivedGroup';
 import type { SendRequest } from '@/bindings/SendRequest';
 import type { VaultStatus } from '@/bindings/VaultStatus';
 import { MOCK_CHANGED_EVENT, MOCK_CONTACTS_EVENT } from '@/features/nearby/queries';
+import { hostsFileInfo } from './hostsFile';
 import { vaultHandlers } from './vault';
 
 const FOUND: NearbyDevice[] = [
@@ -28,6 +31,79 @@ let nextId = 1;
 let sending: ItemSummary | null = null;
 let receiving: ItemSummary | null = null;
 const timers: number[] = [];
+/** Hosts file groups received, by pairing. */
+const receivedGroups = new Map<number, ReceivedGroup>();
+
+/** What the computer that asks to pair sends, by `?item=`. */
+const INCOMING: Record<string, ItemSummary> = {
+  password: { type: 'password', title: 'Office Wi-Fi', username: 'guest', url: '', otp: false },
+  group: {
+    type: 'hostsGroup',
+    name: 'Staging',
+    entries: 3,
+    names: ['qa-api.internal', 'qa-db.internal', 'qa-cache.internal'],
+  },
+  key: {
+    type: 'publicKey',
+    name: 'id_ed25519',
+    keyType: 'ssh-ed25519',
+    fingerprint: 'SHA256:76vvbGumhP/HpDH4tlyySHWs5hgRZJHr2wQ7hSDwRK8',
+    comment: 'sardor@thinkpad',
+  },
+};
+
+const GROUP_ENTRIES = [
+  { address: '10.0.12.10', names: ['qa-api.internal'], enabled: true, expires: null },
+  { address: '10.0.12.11', names: ['qa-db.internal'], enabled: true, expires: null },
+  { address: '10.0.12.12', names: ['qa-cache.internal'], enabled: false, expires: null },
+];
+
+/** The summary the backend makes of what `request` names. */
+function summary(request: SendRequest): ItemSummary {
+  switch (request.type) {
+    case 'host':
+      return { type: 'host', alias: request.alias, address: 'ubuntu@10.0.4.12', hostKeys: 1 };
+    case 'password':
+      return { type: 'password', title: 'prod-api', username: 'deploy', url: '', otp: request.otp };
+    case 'hostsGroup': {
+      const entries = hostsFileInfo().view.entries.filter((e) => e.group === request.name);
+      return {
+        type: 'hostsGroup',
+        name: request.name,
+        entries: entries.length,
+        names: [...new Set(entries.flatMap((e) => e.names.slice(0, 1)))].slice(0, 3),
+      };
+    }
+    case 'publicKey': {
+      // Mock key ids are `<fingerprint>#<file name>`.
+      const [fingerprint = '', file = ''] = request.keyId.split('#');
+      return {
+        type: 'publicKey',
+        name: file.replace(/\.pub$/, ''),
+        keyType: 'ssh-ed25519',
+        fingerprint,
+        comment: 'dev@macbook-pro',
+      };
+    }
+  }
+}
+
+/** The name a received item gets, as the backend gives it. */
+function receivedName(item: ItemSummary, peer: string): string {
+  switch (item.type) {
+    case 'host':
+      return item.alias;
+    case 'password':
+      return item.title;
+    case 'hostsGroup':
+      return item.name;
+    case 'publicKey':
+      return /^id_[a-z0-9_]+$/.test(item.name)
+        ? `${item.name}-${peer.replace(/[^A-Za-z0-9_.]+/g, '-')}`
+        : item.name;
+  }
+}
+
 const contacts: Contact[] = [
   { key: 'bW9jay1ib2J1cg==', name: 'ThinkPad Bobura', paired: '2026-10-21T09:12:00Z' },
 ];
@@ -121,13 +197,8 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
       later(3000, () => {
         if (active()) return;
         sending = null;
-        receiving = {
-          type: 'password',
-          title: 'Office Wi-Fi',
-          username: 'guest',
-          url: '',
-          otp: false,
-        };
+        const kind = new URLSearchParams(window.location.search).get('item') ?? 'password';
+        receiving = INCOMING[kind] ?? INCOMING.password ?? null;
         start(false, 'ThinkPad Sardora', true);
       });
     }
@@ -158,12 +229,8 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
   nearby_send: ({ target, item }) => {
     if (locked()) return fail('vault_locked', 'the vault is locked');
     if (active()) return fail('conflict', 'another pairing is going on');
-    const request = item as SendRequest;
     receiving = null;
-    sending =
-      request.type === 'host'
-        ? { type: 'host', alias: request.alias, address: 'ubuntu@10.0.4.12', hostKeys: 1 }
-        : { type: 'password', title: 'prod-api', username: 'deploy', url: '', otp: request.otp };
+    sending = summary(item as SendRequest);
     const found = devices.find((device) => device.id === target);
     const peer = found?.name ?? String(target);
     if (!contacts.some((contact) => contact.name === peer)) {
@@ -183,6 +250,15 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
     const id = Number(raw);
     if (pairing?.id === id && pairing.phase.type === 'offered') {
       const item = pairing.phase.item;
+      const peer = pairing.peer ?? '?';
+      if (matched && item.type === 'hostsGroup') {
+        receivedGroups.set(id, {
+          id,
+          name: item.name,
+          from: peer,
+          entries: GROUP_ENTRIES.map((entry) => ({ ...entry, comment: null, group: item.name })),
+        });
+      }
       update(
         id,
         matched
@@ -190,7 +266,7 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
               phase: {
                 type: 'received',
                 item,
-                name: item.type === 'host' ? item.alias : item.title,
+                name: receivedName(item, peer),
                 keysDiffer: false,
               },
             }
@@ -228,6 +304,7 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
     }
     return undefined;
   },
+  nearby_received_group: ({ id }) => receivedGroups.get(Number(id)) ?? null,
   nearby_contacts: () => {
     if (locked()) return fail('vault_locked', 'the vault is locked');
     return [...contacts].sort((a, b) => a.name.localeCompare(b.name));

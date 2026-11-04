@@ -8,13 +8,15 @@ use sshkm_core::SecretString;
 use sshkm_core::keys::KeyInfo;
 use tauri::State;
 
+use sshkm_core::authorized_keys::{self, AuthorizedKeys};
+
 use super::keys::find_key;
 use super::{Shared, blocking};
 use crate::askpass::{AskedPrompt, Connection, PromptAccount, Secrets};
 use crate::error::{AppError, AppResult};
 use crate::process::{self, Output};
 use crate::state::AppState;
-use crate::types::KeyInstall;
+use crate::types::{KeyInstall, ServerKeys, ServerKeysAction};
 
 /// Appends the public key of `key_id` to `~/.ssh/authorized_keys` on the host
 /// `alias`, creating `~/.ssh` (0700) and the file (0600) if missing and
@@ -50,20 +52,7 @@ pub fn install_key(
     let run = run_ssh(
         state,
         alias,
-        &[
-            // Only the command: no forwarding, no tty, no configured
-            // RemoteCommand in the way.
-            "-o",
-            "RemoteCommand=none",
-            "-o",
-            "RequestTTY=no",
-            "-o",
-            "ClearAllForwardings=yes",
-            "-o",
-            "ForwardAgent=no",
-            "-o",
-            "ForwardX11=no",
-        ],
+        COMMAND_ONLY,
         &[&remote],
         secrets,
         Some(format!("{line}\n").into_bytes()),
@@ -82,6 +71,144 @@ pub fn install_key(
         output: with_timeout_note(output.trim().to_owned(), &run.output),
         prompts: run.prompts,
     })
+}
+
+/// Options of a run that only runs its command: no forwarding, no tty, no
+/// configured `RemoteCommand` in the way.
+const COMMAND_ONLY: &[&str] = &[
+    "-o",
+    "RemoteCommand=none",
+    "-o",
+    "RequestTTY=no",
+    "-o",
+    "ClearAllForwardings=yes",
+    "-o",
+    "ForwardAgent=no",
+    "-o",
+    "ForwardX11=no",
+];
+
+/// Reads `~/.ssh/authorized_keys` on the host `alias`, first adding or
+/// removing a key if `action` says so. Without a saved password `ssh` must
+/// get in by itself, with a key that already works.
+///
+/// The server needs a POSIX `sh`; a key travels over stdin.
+#[tauri::command]
+pub async fn server_keys(
+    state: State<'_, Shared>,
+    alias: String,
+    action: ServerKeysAction,
+) -> AppResult<ServerKeys> {
+    blocking(&state, move |state| {
+        read_server_keys(state, &alias, &action, Secrets::default())
+    })
+    .await
+}
+
+/// [`server_keys`] with the secrets already gathered. The change and the
+/// read happen in one sign-in.
+pub fn read_server_keys(
+    state: &AppState,
+    alias: &str,
+    action: &ServerKeysAction,
+    secrets: Secrets,
+) -> AppResult<ServerKeys> {
+    check_alias(alias)?;
+    let (change, input) = match action {
+        ServerKeysAction::List => (String::new(), None),
+        ServerKeysAction::Add { key_id } => (
+            format!("sh -c '{INSTALL_SCRIPT}'; "),
+            Some(public_line(&find_key(state, key_id)?)?),
+        ),
+        ServerKeysAction::Remove { public_key } => (
+            format!("sh -c '{REMOVE_SCRIPT}'; "),
+            Some(key_blob(public_key)?),
+        ),
+    };
+    let remote = format!("{change}sh -c '{READ_SCRIPT}'");
+    let run = run_ssh(
+        state,
+        alias,
+        COMMAND_ONLY,
+        &[&remote],
+        secrets,
+        input.map(|line| format!("{line}\n").into_bytes()),
+        Duration::from_secs(30),
+    )?;
+
+    let (before, file) = split_read(&run.output.stdout);
+    let [done, changed]: [&[&str]; 2] = match action {
+        ServerKeysAction::List => [&[], &[]],
+        ServerKeysAction::Add { .. } => [&[ADDED, PRESENT], &[ADDED]],
+        ServerKeysAction::Remove { .. } => [&[REMOVED, ABSENT], &[REMOVED]],
+    };
+    let marked = |markers: &[&str]| markers.iter().any(|marker| has_line(before, marker));
+    let read = file != Read::Failed;
+    let printed = before
+        .lines()
+        .filter(|line| !MARKERS.contains(&line.trim()))
+        .chain(run.output.stderr.lines())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(ServerKeys {
+        ok: read && (done.is_empty() || marked(done)),
+        changed: marked(changed),
+        read,
+        file: match file {
+            Read::File(text) => authorized_keys::parse(text),
+            Read::NoFile | Read::Failed => AuthorizedKeys::default(),
+        },
+        output: with_timeout_note(printed.trim().to_owned(), &run.output),
+        prompts: run.prompts,
+    })
+}
+
+/// What [`READ_SCRIPT`] printed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Read<'a> {
+    /// The file's text, between the markers.
+    File(&'a str),
+    /// There is no `authorized_keys`.
+    NoFile,
+    /// Nothing, or cut short: signing in or reading failed.
+    Failed,
+}
+
+/// What the commands printed before [`READ_SCRIPT`]'s output, and that
+/// output.
+fn split_read(stdout: &str) -> (&str, Read<'_>) {
+    let mut offset = 0;
+    for line in stdout.split_inclusive('\n') {
+        let start = offset;
+        offset += line.len();
+        match line.trim_end() {
+            NO_FILE => return (&stdout[..start], Read::NoFile),
+            BEGIN => {
+                // The script ends the file with a newline of its own.
+                let rest = &stdout[offset..];
+                let file = rest
+                    .rfind(&format!("\n{END}"))
+                    .map_or(Read::Failed, |end| Read::File(&rest[..end]));
+                return (&stdout[..start], file);
+            }
+            _ => {}
+        }
+    }
+    (stdout, Read::Failed)
+}
+
+/// The base64 blob of a one-line public key (`<type> <base64> [comment]`),
+/// checked to be a key.
+fn key_blob(public_key: &str) -> AppResult<String> {
+    let key = PublicKey::from_openssh(public_key.trim())
+        .map_err(|e| AppError::invalid(format!("not a public key: {e}")))?;
+    let line = key
+        .to_openssh()
+        .map_err(|e| AppError::invalid(format!("not a public key: {e}")))?;
+    line.split(' ')
+        .nth(1)
+        .map(str::to_owned)
+        .ok_or_else(|| AppError::invalid("not a public key"))
 }
 
 /// A host alias as `ssh` takes it on the command line.
@@ -273,6 +400,13 @@ fn has_line(text: &str, wanted: &str) -> bool {
 
 const ADDED: &str = "sshkm:added";
 const PRESENT: &str = "sshkm:present";
+const REMOVED: &str = "sshkm:removed";
+const ABSENT: &str = "sshkm:absent";
+const BEGIN: &str = "sshkm:begin";
+const END: &str = "sshkm:end";
+const NO_FILE: &str = "sshkm:none";
+/// Lines the scripts print for the app, left out of what the user reads.
+const MARKERS: &[&str] = &[ADDED, PRESENT, REMOVED, ABSENT];
 
 /// Run by the server's `sh` with the key line on stdin. One line with no `'`
 /// (it goes inside `sh -c '…'`) and no `!` (csh history expansion), so any
@@ -295,6 +429,41 @@ const INSTALL_SCRIPT: &str = concat!(
     "if [ -s \"$f\" ] && [ -n \"$(tail -c 1 \"$f\")\" ]; then echo >> \"$f\" || exit 1; fi; ",
     "printf \"%s\\n\" \"$key\" >> \"$f\" || exit 1; ",
     "echo sshkm:added",
+);
+
+/// Run by the server's `sh` with a key's base64 blob on stdin; one line as
+/// [`INSTALL_SCRIPT`] is.
+///
+/// It removes every line that has the blob as a field, so with any options
+/// or comment, and keeps commented-out lines. The new file is written next
+/// to the old one with its mode (`cp -p`) and renamed over it; behind a
+/// symbolic link it is written in place, so the link stays.
+const REMOVE_SCRIPT: &str = concat!(
+    "IFS= read -r b || [ -n \"$b\" ] || exit 65; ",
+    "[ -n \"$b\" ] || exit 65; ",
+    "cd || exit 1; ",
+    "f=.ssh/authorized_keys; ",
+    "[ -f \"$f\" ] || { echo sshkm:absent; exit 0; }; ",
+    "awk -v b=\"$b\" ",
+    "\"/^[ \\t]*#/ { next } { for (i = 1; i <= NF; i++) if (\\$i == b) n++ } END { exit (n ? 0 : 1) }\" ",
+    "\"$f\"; ",
+    "s=$?; [ $s -ne 1 ] || { echo sshkm:absent; exit 0; }; [ $s -eq 0 ] || exit 1; ",
+    "t=\"$f.sshkm-$$\"; ",
+    "cp -p \"$f\" \"$t\" && awk -v b=\"$b\" ",
+    "\"/^[ \\t]*#/ { print; next } { for (i = 1; i <= NF; i++) if (\\$i == b) next; print }\" ",
+    "\"$f\" > \"$t\" && ",
+    "if [ -L \"$f\" ]; then cat \"$t\" > \"$f\" && rm -f \"$t\"; else mv -f \"$t\" \"$f\"; fi ",
+    "|| { rm -f \"$t\"; exit 1; }; ",
+    "echo sshkm:removed",
+);
+
+/// Run by the server's `sh`: prints `~/.ssh/authorized_keys` between marker
+/// lines, or a marker that there is none. One line as [`INSTALL_SCRIPT`] is.
+const READ_SCRIPT: &str = concat!(
+    "cd || exit 1; ",
+    "f=.ssh/authorized_keys; ",
+    "if [ -f \"$f\" ]; then echo sshkm:begin; cat \"$f\" || exit 1; echo; echo sshkm:end; ",
+    "else echo sshkm:none; fi",
 );
 
 #[cfg(test)]
@@ -398,10 +567,45 @@ mod tests {
     }
 
     #[test]
-    fn install_script_survives_any_login_shell() {
-        assert!(!INSTALL_SCRIPT.contains('\''));
-        assert!(!INSTALL_SCRIPT.contains('!'));
-        assert!(!INSTALL_SCRIPT.contains('\n'));
+    fn scripts_survive_any_login_shell() {
+        for script in [INSTALL_SCRIPT, REMOVE_SCRIPT, READ_SCRIPT] {
+            assert!(!script.contains('\''));
+            assert!(!script.contains('!'));
+            assert!(!script.contains('\n'));
+        }
+    }
+
+    #[test]
+    fn splits_the_file_from_what_came_before() {
+        let printed = format!("motd\nsshkm:removed\n{BEGIN}\n{KEY} a\n\n{END}\n");
+        assert_eq!(
+            split_read(&printed),
+            ("motd\nsshkm:removed\n", Read::File(&format!("{KEY} a\n")))
+        );
+        // An empty file, and one that names the marker itself.
+        assert_eq!(
+            split_read(&format!("{BEGIN}\n\n{END}\n")),
+            ("", Read::File(""))
+        );
+        let tricky = format!("{BEGIN}\n{END}\nsshkm:added\n\n{END}\n");
+        assert_eq!(
+            split_read(&tricky).1,
+            Read::File(&format!("{END}\nsshkm:added\n"))
+        );
+        assert_eq!(split_read("x\nsshkm:none\n"), ("x\n", Read::NoFile));
+        // Cut short: no end marker.
+        assert_eq!(split_read(&format!("{BEGIN}\n{KEY}")), ("", Read::Failed));
+        assert_eq!(
+            split_read("Permission denied"),
+            ("Permission denied", Read::Failed)
+        );
+    }
+
+    #[test]
+    fn key_blobs() {
+        assert_eq!(key_blob(&format!(" {KEY} alice\n")).unwrap(), &KEY[12..]);
+        assert!(key_blob("ssh-ed25519 not-base64").is_err());
+        assert!(key_blob("").is_err());
     }
 
     #[test]
@@ -436,14 +640,23 @@ mod tests {
         use std::path::Path;
         use std::process::{Command, Stdio};
 
-        use super::super::INSTALL_SCRIPT;
+        use super::super::{INSTALL_SCRIPT, READ_SCRIPT, REMOVE_SCRIPT, Read, split_read};
         use super::KEY;
 
         /// Runs the script the way a login shell would: `<shell> -c "sh -c '…'"`.
         fn install(shell: &str, home: &Path, key: &str) -> (bool, String) {
+            remote(shell, home, &format!("sh -c '{INSTALL_SCRIPT}'"), key)
+        }
+
+        fn remove(home: &Path, blob: &str) -> (bool, String) {
+            remote("sh", home, &format!("sh -c '{REMOVE_SCRIPT}'"), blob)
+        }
+
+        /// Runs `command` with `<shell> -c`, with `input` and a newline on stdin.
+        fn remote(shell: &str, home: &Path, command: &str, input: &str) -> (bool, String) {
             let mut child = Command::new(shell)
                 .arg("-c")
-                .arg(format!("sh -c '{INSTALL_SCRIPT}'"))
+                .arg(command)
                 .env("HOME", home)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -453,13 +666,111 @@ mod tests {
                 .stdin
                 .take()
                 .unwrap()
-                .write_all(format!("{key}\n").as_bytes())
+                .write_all(format!("{input}\n").as_bytes())
                 .unwrap();
             let output = child.wait_with_output().unwrap();
             (
                 output.status.success(),
                 String::from_utf8_lossy(&output.stdout).trim().to_owned(),
             )
+        }
+
+        fn blob() -> &'static str {
+            &KEY[12..]
+        }
+
+        #[test]
+        fn removes_every_line_with_the_key() {
+            let home = tempfile::tempdir().unwrap();
+            let dir = home.path().join(".ssh");
+            fs::create_dir(&dir).unwrap();
+            let file = dir.join("authorized_keys");
+            let other = format!("ssh-ed25519 {}AAAA bob", blob());
+            fs::write(
+                &file,
+                format!("# {KEY} old laptop\nfrom=\"10.0.0.0/8\" {KEY} alice\n{other}\n  {KEY}\n"),
+            )
+            .unwrap();
+            fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+
+            assert_eq!(remove(home.path(), blob()), (true, "sshkm:removed".into()));
+            assert_eq!(
+                fs::read_to_string(&file).unwrap(),
+                format!("# {KEY} old laptop\n{other}\n")
+            );
+            assert_eq!(mode(&file), 0o644);
+            // No temporary file is left behind.
+            assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+
+            assert_eq!(remove(home.path(), blob()), (true, "sshkm:absent".into()));
+        }
+
+        #[test]
+        fn nothing_to_remove() {
+            let home = tempfile::tempdir().unwrap();
+            assert_eq!(remove(home.path(), blob()), (true, "sshkm:absent".into()));
+            assert!(!home.path().join(".ssh").exists());
+            assert!(!remove(home.path(), "").0);
+        }
+
+        #[test]
+        fn removes_behind_a_symbolic_link() {
+            let home = tempfile::tempdir().unwrap();
+            let dir = home.path().join(".ssh");
+            fs::create_dir(&dir).unwrap();
+            let target = home.path().join("keys");
+            fs::write(&target, format!("{KEY} alice\nssh-rsa AAAA bob\n")).unwrap();
+            std::os::unix::fs::symlink(&target, dir.join("authorized_keys")).unwrap();
+
+            assert_eq!(remove(home.path(), blob()), (true, "sshkm:removed".into()));
+            assert!(
+                fs::symlink_metadata(dir.join("authorized_keys"))
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(fs::read_to_string(&target).unwrap(), "ssh-rsa AAAA bob\n");
+        }
+
+        #[test]
+        fn reads_after_a_change_in_any_login_shell() {
+            for shell in [
+                "sh",
+                "/bin/bash",
+                "/bin/zsh",
+                "/bin/csh",
+                "/bin/tcsh",
+                "/bin/dash",
+            ] {
+                if shell.starts_with('/') && !Path::new(shell).exists() {
+                    continue;
+                }
+                let home = tempfile::tempdir().unwrap();
+                let read = format!("sh -c '{READ_SCRIPT}'");
+                let (ok, printed) = remote(shell, home.path(), &read, "");
+                assert!(ok, "{shell}");
+                assert_eq!(split_read(&printed), ("", Read::NoFile), "{shell}");
+
+                let add = format!("sh -c '{INSTALL_SCRIPT}'; {read}");
+                let (ok, printed) = remote(shell, home.path(), &add, &format!("{KEY} alice"));
+                assert!(ok, "{shell}");
+                let printed = format!("{printed}\n");
+                assert_eq!(
+                    split_read(&printed),
+                    ("sshkm:added\n", Read::File(&format!("{KEY} alice\n"))),
+                    "{shell}"
+                );
+
+                let drop = format!("sh -c '{REMOVE_SCRIPT}'; {read}");
+                let (ok, printed) = remote(shell, home.path(), &drop, blob());
+                assert!(ok, "{shell}");
+                let printed = format!("{printed}\n");
+                assert_eq!(
+                    split_read(&printed),
+                    ("sshkm:removed\n", Read::File("")),
+                    "{shell}"
+                );
+            }
         }
 
         fn mode(path: &Path) -> u32 {

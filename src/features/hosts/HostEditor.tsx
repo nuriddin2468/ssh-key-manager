@@ -1,7 +1,9 @@
 import {
   Copy,
+  KeyRound,
   MoreHorizontal,
   PlugZap,
+  Send,
   ShieldCheck,
   SquareTerminal,
   Terminal,
@@ -37,6 +39,7 @@ import { Tooltip } from '@/components/ui/Tooltip';
 import { HostResolution } from '@/features/hostsFile/HostResolution';
 import { CheckHostKeyDialog } from '@/features/known/CheckHostKeyDialog';
 import type { KnownHostsRemoval } from '@/features/known/removal';
+import { SendDialog } from '@/features/nearby/SendDialog';
 import { useConnect } from '@/features/terminal/connect';
 import { copyText } from '@/lib/clipboard';
 import { displayPath } from '@/lib/format';
@@ -65,6 +68,7 @@ import {
   suppressedOption,
 } from './model';
 import { MoreSection } from './OtherOptions';
+import { ServerKeysDialog } from './ServerKeysDialog';
 import { SignInSection } from './SignIn';
 import { SwitchToKeyDialog } from './SwitchToKeyDialog';
 import { useDialog } from './useDialog';
@@ -147,6 +151,9 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
   // `otp`: opened to add a 2FA secret, so that field takes focus.
   const [passwordOpen, openPassword, closePassword] = useDialog<'edit' | 'otp'>(sectionButton);
   const [hostKeyOpen, openHostKey, closeHostKey] = useDialog<true>();
+  const [sending, openSend, closeSend] = useDialog<true>();
+  // Captured when it opens, so it keeps signing in the same way if the vault locks.
+  const [serverKeys, openServerKeys, closeServerKeys] = useDialog<{ withVault: boolean }>();
   // Captured when it opens, so it stays put if the vault locks meanwhile.
   const [switching, openSwitch, closeSwitch] = useDialog<{
     alias: string;
@@ -395,6 +402,15 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
                     {t('hosts.editor.checkConnection')}
                   </MenuItem>
                 )}
+                {git ? null : (
+                  <MenuItem
+                    icon={<KeyRound className="size-[15px]" strokeWidth={1.9} />}
+                    disabled={runReason !== null}
+                    onSelect={() => openServerKeys({ withVault: passwordSaved })}
+                  >
+                    {t('hosts.editor.serverKeys')}
+                  </MenuItem>
+                )}
                 <MenuItem
                   icon={<Copy className="size-[15px]" strokeWidth={1.9} />}
                   onSelect={() => void copyCommand()}
@@ -407,6 +423,13 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
                   onSelect={() => void openTerminal()}
                 >
                   {t('hosts.editor.openTerminal')}
+                </MenuItem>
+                <MenuItem
+                  icon={<Send className="size-[15px]" strokeWidth={1.9} />}
+                  disabled={dirty}
+                  onSelect={() => openSend(true)}
+                >
+                  {t('hosts.editor.send')}
                 </MenuItem>
                 <MenuSeparator />
               </>
@@ -564,6 +587,23 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
               switchSaved.current = true;
             }}
             onDone={endSwitch}
+          />
+        ) : null}
+      </Dialog>
+      <Dialog open={sending !== null} onOpenChange={(open) => open || closeSend()}>
+        {sending ? (
+          <SendDialog what={{ type: 'host', alias }} name={alias} onStarted={closeSend} />
+        ) : null}
+      </Dialog>
+      {/* Under the password and host key dialogs its failed sign-ins open. */}
+      <Dialog open={serverKeys !== null} onOpenChange={(open) => open || closeServerKeys()}>
+        {serverKeys ? (
+          <ServerKeysDialog
+            alias={alias}
+            account={target}
+            withVault={serverKeys.withVault}
+            vaultLocked={vault.vault === 'locked'}
+            onAction={fixes}
           />
         ) : null}
       </Dialog>

@@ -17,6 +17,8 @@ import type { KnownHostEntry } from '@/bindings/KnownHostEntry';
 import type { PermissionFix } from '@/bindings/PermissionFix';
 import { browserHandlers } from './browser';
 import { hostsFileFindings, hostsFileHandlers } from './hostsFile';
+import { nearbyHandlers } from './nearby';
+import { serverKeysHandlers } from './serverKeys';
 import { terminalHandlers } from './terminal';
 import { vaultHandlers } from './vault';
 import { vaultFilesHandlers } from './vaultFiles';
@@ -384,6 +386,29 @@ function agentView(): AgentView {
 }
 
 const fail = (code: string, message: string) => Promise.reject({ code, message });
+
+/** Signing in without the vault, as `ssh` does in batch mode. */
+function batchTest(alias: string) {
+  return alias === 'github.com'
+    ? {
+        ok: true,
+        output:
+          "Hi dev! You've successfully authenticated, but GitHub does not provide shell access.",
+        prompts: [],
+      }
+    : {
+        ok: false,
+        // Batch mode: an unknown host key fails outright, and servers
+        // that want a password turn every key down.
+        output:
+          alias === 'legacy-nas'
+            ? 'Host key verification failed.'
+            : ['prod-api', 'staging-api', 'bastion'].includes(alias)
+              ? `ubuntu@${alias}: Permission denied (publickey,password).`
+              : `ssh: connect to host ${alias} port 22: Operation timed out`,
+        prompts: [],
+      };
+}
 const findKey = (id: unknown) => keys.find((k) => k.id === id);
 
 const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
@@ -392,6 +417,13 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   ...vaultFilesHandlers,
   ...browserHandlers,
   ...terminalHandlers(hosts),
+  ...nearbyHandlers,
+  ...serverKeysHandlers({
+    keys: () => keys,
+    batchLogin: batchTest,
+    vaultLogin: (alias) =>
+      vaultHandlers.vault_test_connection?.({ alias }) as ReturnType<typeof batchTest>,
+  }),
   get_environment: (): Environment => ({
     paths: { home: HOME, dir: DIR, config: `${DIR}/config`, knownHosts: `${DIR}/known_hosts` },
     platform: 'macos',
@@ -501,26 +533,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       )
       .join('\n\n'),
   write_config_raw: configFile,
-  test_connection: ({ alias }) =>
-    alias === 'github.com'
-      ? {
-          ok: true,
-          output:
-            "Hi dev! You've successfully authenticated, but GitHub does not provide shell access.",
-          prompts: [],
-        }
-      : {
-          ok: false,
-          // Batch mode: an unknown host key fails outright, and servers
-          // that want a password turn every key down.
-          output:
-            alias === 'legacy-nas'
-              ? 'Host key verification failed.'
-              : ['prod-api', 'staging-api', 'bastion'].includes(String(alias))
-                ? `ubuntu@${alias}: Permission denied (publickey,password).`
-                : `ssh: connect to host ${alias} port 22: Operation timed out`,
-          prompts: [],
-        },
+  test_connection: ({ alias }) => batchTest(String(alias)),
   install_public_key: ({ alias }) => ({
     ok: false,
     added: false,

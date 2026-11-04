@@ -11,11 +11,11 @@ export const isProtected = (key: KeyInfo) =>
   hasPrivate(key) && (key.encrypted === true || key.hardware);
 
 /** DSA, or RSA below the 3072-bit recommendation. */
-export const isWeak = (key: KeyInfo) =>
+export const isWeak = (key: Pick<KeyInfo, 'algorithm' | 'bits'>) =>
   key.algorithm === 'dsa' || (key.algorithm === 'rsa' && (key.bits ?? 0) < 3072);
 
 /** Short label for the type badge: `ED25519`, `RSA 2048`, `ECDSA-SK`. */
-export function algorithmBadge(key: KeyInfo): string {
+export function algorithmBadge(key: Pick<KeyInfo, 'algorithm' | 'bits' | 'keyType'>): string {
   switch (key.algorithm) {
     case 'ed25519':
       return 'ED25519';

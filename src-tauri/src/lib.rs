@@ -10,6 +10,7 @@ mod error;
 mod gpu;
 #[cfg(target_os = "macos")]
 mod menu;
+pub mod nearby;
 mod process;
 mod state;
 pub mod terminal;
@@ -92,6 +93,17 @@ pub fn run() {
             commands::config::write_config_raw,
             commands::config::test_connection,
             commands::remote::install_public_key,
+            commands::remote::server_keys,
+            commands::nearby::nearby_status,
+            commands::nearby::nearby_set_name,
+            commands::nearby::nearby_set_visible,
+            commands::nearby::nearby_set_looking,
+            commands::nearby::nearby_pair,
+            commands::nearby::nearby_send,
+            commands::nearby::nearby_answer,
+            commands::nearby::nearby_close,
+            commands::nearby::nearby_contacts,
+            commands::nearby::nearby_remove_contact,
             commands::known_hosts::read_known_hosts,
             commands::known_hosts::find_known_hosts,
             commands::known_hosts::remove_known_hosts,
@@ -132,6 +144,7 @@ pub fn run() {
             commands::vault::vault_set_settings,
             commands::vault_hosts::vault_test_connection,
             commands::vault_hosts::vault_install_public_key,
+            commands::vault_hosts::vault_server_keys,
             commands::vault_hosts::vault_test_key_login,
             commands::vault_links::agent_add_from_vault,
             commands::vault_links::agent_add_all_from_vault,
@@ -228,6 +241,8 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     watcher::start(app.handle(), &paths.dir, &hosts_file);
     commands::agent::check_agent_pipes();
     let bridge = Arc::new(browser::Bridge::new(&data_dir));
+    let nearby = Arc::new(nearby::Nearby::new(data_dir.clone()));
+    nearby.attach(app.handle().clone());
     let state = Arc::new(AppState::new(paths, hosts_file, backup_dir, data_dir));
     state.vault.start_timer(app.handle().clone());
     device_unlock::watch_screen_lock(Arc::clone(&state.vault), app.handle().clone());
@@ -235,6 +250,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(state);
     bridge.start_if_enabled(app.handle());
     app.manage(bridge);
+    app.manage(nearby);
     #[cfg(target_os = "macos")]
     menu::install(app)?;
     Ok(())

@@ -19,10 +19,14 @@
 //! - [`known_hosts`]: a lossless model of `known_hosts`, including hashed entries.
 //! - [`hosts_file`]: a lossless, read-only model of the system hosts file.
 //! - [`agent`]: a small synchronous client for the system `ssh-agent`.
+//! - [`authorized_keys`]: the keys an `authorized_keys` file lets in, read
+//!   from a server's copy.
 //! - [`perms`]: permission checks and fixes (Unix modes, Windows ACLs).
 //! - [`audit`]: security findings computed from all of the above.
 //! - [`vault`]: the encrypted password vault, its key slots and the password
 //!   generator.
+//! - [`p2p`]: two copies of the app talking over the local network: device
+//!   keys, the encrypted session and its pairing code.
 //! - [`browser`]: what the browser extension may see of the vault: which
 //!   logins belong to a page, and the encrypted channel to the extension.
 //!
@@ -38,6 +42,7 @@
 
 pub mod agent;
 pub mod audit;
+pub mod authorized_keys;
 pub mod browser;
 pub mod config;
 mod error;
@@ -45,6 +50,7 @@ pub mod fsutil;
 pub mod hosts_file;
 pub mod keys;
 pub mod known_hosts;
+pub mod p2p;
 pub mod paths;
 pub mod perms;
 mod text;

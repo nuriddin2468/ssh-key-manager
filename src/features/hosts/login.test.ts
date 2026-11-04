@@ -60,7 +60,7 @@ describe('explain', () => {
     );
   });
 
-  it('sees an untrusted host key from the prompt or from batch mode', () => {
+  it('sees an untrusted host key from the prompt or from what ssh printed', () => {
     expect(explain(run(false, [prompt({ type: 'hostKeyConfirm' }, 'declined')]))).toEqual({
       kind: 'hostKeyUnknown',
     });
@@ -127,6 +127,13 @@ describe('loginMessage', () => {
     expect(loginMessage(run(false, [], 'Host key verification failed.'), 'test').action).toBe(
       'checkHostKey',
     );
+    // A test without the vault still hears which key ssh could not open.
+    const locked = [prompt({ type: 'passphrase', key: '/Users/dev/.ssh/id_work' }, 'missing')];
+    expect(loginMessage(run(false, locked, DENIED), 'test')).toMatchObject({
+      title: 'passphraseMissing',
+      values: { key: '/Users/dev/.ssh/id_work' },
+      action: 'unlockKey',
+    });
   });
 
   it('explains a turned-down key by context', () => {

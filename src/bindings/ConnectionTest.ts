@@ -7,8 +7,8 @@ export type ConnectionTest = { ok: boolean,
  */
 output: string, 
 /**
- * What `ssh` asked the app for and what became of it, in order. Empty
- * unless a password or one-time code was given: without one `ssh` runs in
- * batch mode and asks nothing.
+ * What `ssh` asked the app for and what became of it, in order. Without
+ * saved secrets nothing is answered, but what was asked still shows: a
+ * key passphrase, say, or an unknown host key.
  */
 prompts: Array<AskedPrompt>, };

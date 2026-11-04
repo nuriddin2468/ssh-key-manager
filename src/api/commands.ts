@@ -52,6 +52,17 @@ import { call } from '@/lib/ipc';
 /** A terminal session's channel carries output bytes and events. */
 export type TerminalMessage = ArrayBuffer | TerminalEvent;
 
+/** The passphrase the user typed for one of their keys, for a single sign-in. */
+export interface TypedPassphrase {
+  keyId: string;
+  passphrase: string;
+}
+
+const typedArgs = (typed?: TypedPassphrase) => ({
+  keyId: typed?.keyId ?? null,
+  passphrase: typed?.passphrase ?? null,
+});
+
 export const api = {
   environment: () => call<Environment>('get_environment'),
 
@@ -88,7 +99,9 @@ export const api = {
     call<ConfigFile>('remove_identity_file', { hostId, value, revision }),
   configRaw: () => call<string>('read_config_raw'),
   writeConfigRaw: (text: string) => call<ConfigFile>('write_config_raw', { text }),
-  testConnection: (alias: string) => call<ConnectionTest>('test_connection', { alias }),
+  /** `typed`: the passphrase of a key ssh cannot open by itself; `wrong_passphrase` if it doesn't open it. */
+  testConnection: (alias: string, typed?: TypedPassphrase) =>
+    call<ConnectionTest>('test_connection', { alias, ...typedArgs(typed) }),
   installPublicKey: (alias: string, keyId: string) =>
     call<KeyInstall>('install_public_key', { alias, keyId }),
   /** Reads the host's `~/.ssh/authorized_keys` after the change, if any, in one sign-in. */
@@ -159,8 +172,9 @@ export const api = {
   /** A change that weakens the vault's protection is confirmed in a native dialog first. */
   vaultSetSettings: (settings: VaultSettings) =>
     call<VaultSettings>('vault_set_settings', { settings }),
-  /** Tests a host with its password, 2FA code and key passphrases from the vault. */
-  vaultTestConnection: (alias: string) => call<ConnectionTest>('vault_test_connection', { alias }),
+  /** Tests a host with its password, 2FA code and key passphrases from the vault, and `typed`. */
+  vaultTestConnection: (alias: string, typed?: TypedPassphrase) =>
+    call<ConnectionTest>('vault_test_connection', { alias, ...typedArgs(typed) }),
   /** Installs a public key on a host, logging in with the saved password. */
   vaultInstallPublicKey: (alias: string, keyId: string) =>
     call<KeyInstall>('vault_install_public_key', { alias, keyId }),

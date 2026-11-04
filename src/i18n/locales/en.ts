@@ -449,6 +449,12 @@ const en = {
       savedTrashed: 'Its saved password is in the vault’s recycle bin.',
       vaultUpdateFailed: 'The host is saved, but its entry in the vault wasn’t updated.',
     },
+    keyCheck: {
+      vaultTitle: 'Unlock the vault to check {{alias}}',
+      vaultText: 'The passphrase of {{key}} is saved there.',
+      unlockAndCheck: 'Unlock and check',
+      typeInstead: 'Type the passphrase instead',
+    },
     serverKeys: {
       title: 'Keys on {{alias}}',
       description:
@@ -625,7 +631,7 @@ const en = {
         hostKeyChanged: 'This server’s key has changed since you last connected.',
         hostKeyChangedHint:
           'That happens when a server is reinstalled, but it can also mean someone is intercepting the connection. Check the key before you go on.',
-        passphraseMissing: 'ssh asked for the passphrase of {{key}}.',
+        passphraseMissing: 'ssh couldn’t use {{key}}: it has a passphrase.',
         passphraseMissingHint:
           'Unlock the key in ssh-agent or save its passphrase in the vault, then try again.',
         otherAccount: '{{account}} asked for its own password.',
@@ -645,6 +651,7 @@ const en = {
         checkHostKey: 'Check host key',
         editPassword: 'Edit password',
         addOtp: 'Add 2FA secret',
+        unlockKey: 'Unlock key…',
       },
       switch: {
         title: 'Switch {{alias}} to a key',

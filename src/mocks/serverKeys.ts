@@ -1,6 +1,6 @@
 // Mock `server_keys` and `vault_server_keys`: each server's
 // `~/.ssh/authorized_keys`, in memory. A server is read only after signing
-// in, the way the real commands do: in batch mode as `test_connection` does,
+// in, the way the real commands do: with keys alone as `test_connection` does,
 // with the vault as `vault_test_connection` does.
 
 import type { AskedPrompt } from '@/bindings/AskedPrompt';

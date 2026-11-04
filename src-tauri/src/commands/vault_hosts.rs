@@ -10,7 +10,7 @@ use sshkm_core::vault::{EntryKind, EntrySummary, SecretField, Vault};
 use sshkm_core::{ExposeSecret, SecretString};
 use tauri::{AppHandle, State};
 
-use super::config::connection_test;
+use super::config::{connection_test, with_typed_passphrase};
 use super::remote::{
     check_alias, combined, install_key, read_server_keys, run_ssh, with_timeout_note,
 };
@@ -24,14 +24,19 @@ use crate::types::{ConnectionTest, KeyInstall, ServerKeys, ServerKeysAction};
 /// checks it; wait for the next one instead.
 const MIN_CODE_LIFE: u64 = 5;
 
+/// [`test_connection`](super::config::test_connection) with what the vault
+/// saved, and the passphrase the user typed for a key whose one is not saved.
 #[tauri::command]
 pub async fn vault_test_connection(
     app: AppHandle,
     state: State<'_, Shared>,
     alias: String,
+    key_id: Option<String>,
+    passphrase: Option<SecretString>,
 ) -> AppResult<ConnectionTest> {
     blocking(&state, move |state| {
         let secrets = saved_secrets(state, &app, &alias)?;
+        let secrets = with_typed_passphrase(state, secrets, key_id, passphrase)?;
         connection_test(state, &alias, secrets)
     })
     .await

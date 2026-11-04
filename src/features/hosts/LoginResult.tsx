@@ -1,8 +1,10 @@
 import { CheckCircle2, X, XCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useEnvironment } from '@/api/queries';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
 import { cn } from '@/lib/cn';
+import { displayPath } from '@/lib/format';
 import { loginMessage, type MessageAction, type RunContext, type SshRun } from './login';
 
 interface LoginResultProps {
@@ -34,9 +36,15 @@ export function LoginResult({
   className,
 }: LoginResultProps) {
   const { t } = useTranslation();
+  const home = useEnvironment().data?.paths.home;
   const message = loginMessage(run, context, { vaultLocked });
-  // Every placeholder any of the messages uses.
-  const values = { alias, key: '', account: '', ...message.values };
+  // Every placeholder any of the messages uses; a key path as `~/.ssh/…`.
+  const values = {
+    alias,
+    account: '',
+    ...message.values,
+    key: displayPath(message.values?.key ?? '', home),
+  };
   const ok = message.tone === 'ok';
   const fix = message.action ? onAction?.[message.action] : undefined;
   const Icon = ok ? CheckCircle2 : XCircle;

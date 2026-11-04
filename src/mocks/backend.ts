@@ -20,7 +20,7 @@ import { hostsFileFindings, hostsFileHandlers } from './hostsFile';
 import { nearbyHandlers } from './nearby';
 import { serverKeysHandlers } from './serverKeys';
 import { terminalHandlers } from './terminal';
-import { vaultHandlers } from './vault';
+import { vaultHandlers, vaultKeyTest } from './vault';
 import { vaultFilesHandlers } from './vaultFiles';
 import { vaultLinkHandlers } from './vaultLinks';
 
@@ -387,8 +387,41 @@ function agentView(): AgentView {
 
 const fail = (code: string, message: string) => Promise.reject({ code, message });
 
-/** Signing in without the vault, as `ssh` does in batch mode. */
-function batchTest(alias: string) {
+/**
+ * The key a host's `IdentityFile` names, if `ssh` cannot open it by itself:
+ * it has a passphrase and is not in the agent.
+ */
+function lockedKey(alias: string): KeyView | undefined {
+  const spec = hostSpecs.find((s) => s.patterns.includes(alias));
+  const file = spec?.options.find((o) => o.key === 'IdentityFile')?.value.replace(/^~/, HOME);
+  const key = keys.find((k) => k.privatePath === file);
+  const inAgent = key?.fingerprint ? agentLoaded.has(key.fingerprint) : false;
+  return key?.encrypted && !inAgent ? key : undefined;
+}
+
+/**
+ * Signing in with keys alone, as `ssh` does with no saved password: a key
+ * with a passphrase gets in only from the agent, or when `opens` has its
+ * passphrase (the vault test).
+ */
+function keyTest(alias: string, opens: (fingerprint: string | null) => boolean = () => false) {
+  const locked = lockedKey(alias);
+  if (locked?.privatePath && !opens(locked.fingerprint)) {
+    const spec = hostSpecs.find((s) => s.patterns.includes(alias));
+    const user = spec?.options.find((o) => o.key === 'User')?.value ?? 'dev';
+    return {
+      ok: false,
+      output: `${user}@${alias}: Permission denied (publickey).`,
+      prompts: [
+        {
+          text: `Enter passphrase for key '${locked.privatePath}': `,
+          kind: { type: 'passphrase' as const, key: locked.privatePath },
+          account: null,
+          outcome: 'missing' as const,
+        },
+      ],
+    };
+  }
   return alias === 'github.com'
     ? {
         ok: true,
@@ -398,8 +431,8 @@ function batchTest(alias: string) {
       }
     : {
         ok: false,
-        // Batch mode: an unknown host key fails outright, and servers
-        // that want a password turn every key down.
+        // An unknown host key fails (it is never trusted for the user),
+        // and servers that want a password turn every key down.
         output:
           alias === 'legacy-nas'
             ? 'Host key verification failed.'
@@ -411,6 +444,36 @@ function batchTest(alias: string) {
 }
 const findKey = (id: unknown) => keys.find((k) => k.id === id);
 
+/**
+ * The key a check got a typed passphrase for (`secret` opens every mock key),
+ * `null` without one, or a rejection.
+ */
+function typedKey(args: Record<string, unknown>): KeyView | null | Promise<never> {
+  if (!args.keyId || !args.passphrase) return null;
+  const key = findKey(args.keyId);
+  if (!key) return fail('not_found', `key ${String(args.keyId)}`);
+  return args.passphrase === 'secret' ? key : fail('wrong_passphrase', 'wrong passphrase');
+}
+
+/** Signing in with keys, and a typed passphrase. */
+function plainTest(args: Record<string, unknown>) {
+  const typed = typedKey(args);
+  if (typed instanceof Promise) return typed;
+  return keyTest(String(args.alias), (fingerprint) => fingerprint === typed?.fingerprint);
+}
+
+/** With a saved password, signing in with it; otherwise with keys, saved passphrases and a typed one. */
+function vaultTest(args: Record<string, unknown>) {
+  const typed = typedKey(args);
+  if (typed instanceof Promise) return typed;
+  const alias = String(args.alias);
+  return (
+    vaultKeyTest(alias, (opens) =>
+      keyTest(alias, (fingerprint) => opens(fingerprint) || fingerprint === typed?.fingerprint),
+    ) ?? vaultHandlers.vault_test_connection?.(args)
+  );
+}
+
 const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   ...vaultHandlers,
   ...vaultLinkHandlers({ keys: () => keys, hosts, agent: agentLoaded }),
@@ -420,10 +483,10 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   ...nearbyHandlers,
   ...serverKeysHandlers({
     keys: () => keys,
-    batchLogin: batchTest,
-    vaultLogin: (alias) =>
-      vaultHandlers.vault_test_connection?.({ alias }) as ReturnType<typeof batchTest>,
+    batchLogin: keyTest,
+    vaultLogin: (alias) => vaultTest({ alias }) as ReturnType<typeof keyTest>,
   }),
+  vault_test_connection: vaultTest,
   get_environment: (): Environment => ({
     paths: { home: HOME, dir: DIR, config: `${DIR}/config`, knownHosts: `${DIR}/known_hosts` },
     platform: 'macos',
@@ -533,7 +596,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       )
       .join('\n\n'),
   write_config_raw: configFile,
-  test_connection: ({ alias }) => batchTest(String(alias)),
+  test_connection: plainTest,
   install_public_key: ({ alias }) => ({
     ok: false,
     added: false,

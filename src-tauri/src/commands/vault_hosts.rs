@@ -11,12 +11,14 @@ use sshkm_core::{ExposeSecret, SecretString};
 use tauri::{AppHandle, State};
 
 use super::config::connection_test;
-use super::remote::{check_alias, combined, install_key, run_ssh, with_timeout_note};
+use super::remote::{
+    check_alias, combined, install_key, read_server_keys, run_ssh, with_timeout_note,
+};
 use super::{Shared, blocking};
 use crate::askpass::Secrets;
 use crate::error::AppResult;
 use crate::state::AppState;
-use crate::types::{ConnectionTest, KeyInstall};
+use crate::types::{ConnectionTest, KeyInstall, ServerKeys, ServerKeysAction};
 
 /// A 2FA code this close to expiring may be stale by the time the server
 /// checks it; wait for the next one instead.
@@ -47,6 +49,22 @@ pub async fn vault_install_public_key(
     blocking(&state, move |state| {
         let secrets = saved_secrets(state, &app, &alias)?;
         install_key(state, &alias, &key_id, secrets)
+    })
+    .await
+}
+
+/// [`server_keys`](super::remote::server_keys), signing in with the saved
+/// password and 2FA code.
+#[tauri::command]
+pub async fn vault_server_keys(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    alias: String,
+    action: ServerKeysAction,
+) -> AppResult<ServerKeys> {
+    blocking(&state, move |state| {
+        let secrets = saved_secrets(state, &app, &alias)?;
+        read_server_keys(state, &alias, &action, secrets)
     })
     .await
 }

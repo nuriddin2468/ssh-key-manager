@@ -16,6 +16,8 @@ const sizes = {
 interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children'> {
   /** Accessible name, also shown as the tooltip. */
   label: string;
+  /** Shown instead of `label`, e.g. why the button can't be used now. */
+  tooltip?: ReactNode;
   icon: ReactNode;
   shortcut?: string;
   variant?: keyof typeof variants;
@@ -24,6 +26,7 @@ interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 
 
 export function IconButton({
   label,
+  tooltip,
   icon,
   shortcut,
   variant = 'ghost',
@@ -33,7 +36,7 @@ export function IconButton({
   ...props
 }: IconButtonProps) {
   return (
-    <Tooltip content={label} shortcut={shortcut}>
+    <Tooltip content={tooltip ?? label} shortcut={shortcut}>
       <button
         type={type}
         aria-label={label}

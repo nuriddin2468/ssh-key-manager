@@ -585,6 +585,12 @@ const uz = {
       savedTrashed: 'Saqlangan parol ombor savatiga koʻchirildi.',
       vaultUpdateFailed: 'Xost saqlandi, lekin uning ombordagi yozuvi yangilanmadi.',
     },
+    keyCheck: {
+      vaultTitle: '{{alias}} ni tekshirish uchun omborni oching',
+      vaultText: 'Unda {{key}} kalitining parol iborasi saqlangan.',
+      unlockAndCheck: 'Ochish va tekshirish',
+      typeInstead: 'Iborani qoʻlda kiritish',
+    },
     serverKeys: {
       title: '{{alias}} dagi kalitlar',
       description:
@@ -763,7 +769,7 @@ const uz = {
         hostKeyChanged: 'Oxirgi ulanishdan beri bu server kaliti oʻzgargan.',
         hostKeyChangedHint:
           'Bu server qayta oʻrnatilganda boʻladi, lekin ulanish tutib olinayotganini ham bildirishi mumkin. Davom etishdan oldin kalitni tekshiring.',
-        passphraseMissing: 'ssh {{key}} kalitining parol iborasini soʻradi.',
+        passphraseMissing: 'ssh {{key}} kalitidan foydalana olmadi: unda parol iborasi bor.',
         passphraseMissingHint:
           'Kalitni ssh-agentda faollashtiring yoki parol iborasini omborga saqlang, soʻng qayta urinib koʻring.',
         otherAccount: '{{account}} oʻz parolini soʻradi.',
@@ -784,6 +790,7 @@ const uz = {
         checkHostKey: 'Xost kalitini tekshirish',
         editPassword: 'Parolni tahrirlash',
         addOtp: '2FA sirini qoʻshish',
+        unlockKey: 'Kalitni faollashtirish…',
       },
       switch: {
         title: '{{alias}} ni kalitga oʻtkazish',

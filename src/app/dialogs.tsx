@@ -26,7 +26,7 @@ type Open =
   | { kind: 'generate'; onCreated?: (key: KeyView) => void }
   | { kind: 'addHost' }
   | { kind: 'passphrase'; key: KeyView; suggest: boolean }
-  | { kind: 'unlock'; key: KeyView; lifetime: number | null }
+  | { kind: 'unlock'; key: KeyView; lifetime: number | null; onUnlocked?: () => void }
   | null;
 
 interface DialogsValue {
@@ -36,8 +36,11 @@ interface DialogsValue {
   addHost: () => void;
   /** `suggest` starts with a generated passphrase, to be saved in the vault. */
   editPassphrase: (key: KeyView, options?: { suggest?: boolean }) => void;
-  /** Adds a key to the agent, asking for its passphrase when it has one. */
-  unlockKey: (key: KeyView, lifetime?: number | null) => void;
+  /**
+   * Adds a key to the agent, asking for its passphrase when it has one, then
+   * calls `onUnlocked`.
+   */
+  unlockKey: (key: KeyView, lifetime?: number | null, onUnlocked?: () => void) => void;
   importKey: () => Promise<void>;
 }
 
@@ -76,9 +79,9 @@ export function DialogsProvider({ children }: { children: ReactNode }) {
       addHost: () => setOpen({ kind: 'addHost' }),
       editPassphrase: (key, options) =>
         setOpen({ kind: 'passphrase', key, suggest: options?.suggest ?? false }),
-      unlockKey: (key, lifetime = settings.defaultLifetime) => {
-        if (key.encrypted) setOpen({ kind: 'unlock', key, lifetime });
-        else addPlain.mutate({ key, lifetime });
+      unlockKey: (key, lifetime = settings.defaultLifetime, onUnlocked) => {
+        if (key.encrypted) setOpen({ kind: 'unlock', key, lifetime, onUnlocked });
+        else addPlain.mutate({ key, lifetime }, { onSuccess: () => onUnlocked?.() });
       },
       importKey: async () => {
         try {
@@ -111,7 +114,12 @@ export function DialogsProvider({ children }: { children: ReactNode }) {
           <PassphraseDialog keyView={open.key} suggest={open.suggest} onDone={close} />
         ) : null}
         {open?.kind === 'unlock' ? (
-          <UnlockDialog keyView={open.key} lifetime={open.lifetime} onDone={close} />
+          <UnlockDialog
+            keyView={open.key}
+            lifetime={open.lifetime}
+            onDone={close}
+            onUnlocked={open.onUnlocked}
+          />
         ) : null}
       </Dialog>
     </DialogsContext>

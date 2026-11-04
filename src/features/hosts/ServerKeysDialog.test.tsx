@@ -78,6 +78,7 @@ function show(withVault = false) {
             alias="prod"
             account="deploy@10.0.0.5"
             withVault={withVault}
+            passwordSaved={withVault}
             vaultLocked={false}
             onAction={{}}
           />

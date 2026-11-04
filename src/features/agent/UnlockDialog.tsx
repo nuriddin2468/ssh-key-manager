@@ -24,13 +24,20 @@ interface UnlockDialogProps {
   keyView: KeyView;
   lifetime: number | null;
   onDone: () => void;
+  /** After the key was added, once the dialog is done. */
+  onUnlocked?: () => void;
 }
 
 /**
  * Adds a key to ssh-agent with its passphrase: the one saved in the vault,
  * which stays in the backend, or one the user types.
  */
-export function UnlockDialog({ keyView, lifetime: initialLifetime, onDone }: UnlockDialogProps) {
+export function UnlockDialog({
+  keyView,
+  lifetime: initialLifetime,
+  onDone,
+  onUnlocked,
+}: UnlockDialogProps) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const vault = useVaultKey(keyView.fingerprint);
@@ -40,11 +47,16 @@ export function UnlockDialog({ keyView, lifetime: initialLifetime, onDone }: Unl
   const [wrong, setWrong] = useState(false);
   const [savedError, setSavedError] = useState<keyof typeof SAVED_ERRORS | null>(null);
 
+  const unlocked = () => {
+    onDone();
+    onUnlocked?.();
+  };
+
   const unlockSaved = useAppMutation(
     (vars: { lifetime: number | null }) => api.agentAddFromVault(keyView.id, vars.lifetime),
     {
       success: () => t('keys.unlocked', { name: keyView.name }),
-      onSuccess: onDone,
+      onSuccess: unlocked,
       onError: (error) => {
         if (!(error.code in SAVED_ERRORS)) return false;
         setSavedError(error.code as keyof typeof SAVED_ERRORS);
@@ -62,7 +74,7 @@ export function UnlockDialog({ keyView, lifetime: initialLifetime, onDone }: Unl
       api.agentAdd(keyView.id, vars.passphrase, vars.lifetime),
     {
       success: () => t('keys.unlocked', { name: keyView.name }),
-      onSuccess: onDone,
+      onSuccess: unlocked,
       onError: (error) => {
         if (error.code !== 'wrong_passphrase') return false;
         setWrong(true);

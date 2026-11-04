@@ -2,12 +2,12 @@ use std::fmt::Write as _;
 use std::fs;
 use std::time::Duration;
 
-use sshkm_core::SecretString;
 use sshkm_core::config::{HostEdit, RiskyDirective, SshConfig};
-use sshkm_core::fsutil;
 use sshkm_core::paths::display_path;
+use sshkm_core::{ErrorCode, SecretString, fsutil, keys};
 use tauri::{AppHandle, State};
 
+use super::keys::{find_key, private_path};
 use super::remote::{check_alias, combined, run_ssh, with_timeout_note};
 use super::{Shared, blocking};
 use crate::askpass::Secrets;
@@ -134,22 +134,52 @@ pub async fn write_config_raw(
 /// Runs `ssh` against a host alias, so the user sees whether the key, host key
 /// and network all work.
 ///
-/// Without `password` and `otp` it never prompts (`BatchMode=yes`). With
-/// either, the app answers `ssh`'s password and one-time-code prompts with
-/// them through askpass, and `prompts` tells what was asked: a password asked
-/// again was rejected, a code asked with none given is missing, a declined
-/// host-key question means the host key is not trusted yet.
+/// The app answers `ssh`'s password and one-time-code prompts with `password`
+/// and `otp` through askpass, and the passphrase prompt of the key `key_id`
+/// with `passphrase`; without them only keys `ssh` can open by itself get in
+/// and nothing is answered. Either way `prompts` tells what was asked: a
+/// password asked again was rejected, a code asked with none given is
+/// missing, a passphrase asked with none given is a key `ssh` could not open,
+/// a declined host-key question means the host key is not trusted yet.
+///
+/// A `passphrase` that does not open the key fails with `wrong_passphrase`
+/// before `ssh` runs.
 #[tauri::command]
 pub async fn test_connection(
     state: State<'_, Shared>,
     alias: String,
     password: Option<SecretString>,
     otp: Option<SecretString>,
+    key_id: Option<String>,
+    passphrase: Option<SecretString>,
 ) -> AppResult<ConnectionTest> {
     blocking(&state, move |state| {
-        connection_test(state, &alias, Secrets::new(password, otp))
+        let secrets =
+            with_typed_passphrase(state, Secrets::new(password, otp), key_id, passphrase)?;
+        connection_test(state, &alias, secrets)
     })
     .await
+}
+
+/// `secrets` and the passphrase the user typed for the key `key_id`, once it
+/// is known to open the key. An encrypted key the app cannot open itself (a
+/// legacy PEM one) is left for `ssh` to try.
+pub fn with_typed_passphrase(
+    state: &AppState,
+    secrets: Secrets,
+    key_id: Option<String>,
+    passphrase: Option<SecretString>,
+) -> AppResult<Secrets> {
+    let (Some(key_id), Some(passphrase)) = (key_id, passphrase) else {
+        return Ok(secrets);
+    };
+    let path = private_path(&find_key(state, &key_id)?)?;
+    match keys::load_private(&path, Some(&passphrase)) {
+        Ok(_) => {}
+        Err(error) if error.code() == ErrorCode::Unsupported => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(secrets.with_passphrase(path, passphrase))
 }
 
 /// [`test_connection`] with the secrets already gathered.
@@ -376,13 +406,55 @@ mod tests {
         fs::write(&state.paths.config, "Host a\n  User me\nHost b\n").unwrap();
         assert_eq!(
             load_at(&state, &read.view.revision).unwrap_err().code(),
-            sshkm_core::ErrorCode::Conflict
+            ErrorCode::Conflict
         );
         let read = config_file(&state).unwrap();
         assert_eq!(
             load_at(&state, &read.view.revision).unwrap().hosts().len(),
             2
         );
+    }
+
+    #[test]
+    fn a_typed_passphrase_must_open_the_key() {
+        let home = tempfile::tempdir().unwrap();
+        let ssh = home.path().join(".ssh");
+        fsutil::ensure_private_dir(&ssh).unwrap();
+        let state = AppState::new(
+            sshkm_core::paths::SshPaths::with_home(home.path(), &ssh),
+            home.path().join("hosts"),
+            home.path().join("backups"),
+            home.path().join("data"),
+        );
+        let key = keys::generate(
+            &ssh,
+            &keys::GenerateRequest {
+                algorithm: keys::GenerateAlgorithm::Ed25519,
+                file_name: "id_work".into(),
+                comment: String::new(),
+                passphrase: Some("right".into()),
+            },
+        )
+        .unwrap();
+        let typed = |passphrase: &str| {
+            with_typed_passphrase(
+                &state,
+                Secrets::default(),
+                Some(key.id.clone()),
+                Some(passphrase.into()),
+            )
+        };
+
+        assert_eq!(
+            typed("wrong").unwrap_err().code(),
+            ErrorCode::WrongPassphrase
+        );
+        let secrets = typed("right").unwrap();
+        assert_eq!(secrets.passphrases.len(), 1);
+        assert_eq!(secrets.passphrases[0].0, ssh.join("id_work"));
+        // Nothing typed: nothing added.
+        let none = with_typed_passphrase(&state, Secrets::default(), None, None).unwrap();
+        assert!(none.is_empty());
     }
 
     #[test]

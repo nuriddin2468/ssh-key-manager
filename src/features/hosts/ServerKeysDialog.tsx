@@ -33,14 +33,17 @@ import {
   ownKeyName,
   removalLocksOut,
 } from './serverKeys';
+import { useUnlockFix } from './useUnlockFix';
 import { vaultErrorMessage } from './vault';
 
 interface ServerKeysDialogProps {
   alias: string;
   /** `user@host` the keys let in, as the editor shows it. */
   account: string;
-  /** Sign in with the host's saved password and 2FA code. */
+  /** Sign in with what the vault saved: the host's password and 2FA code, key passphrases. */
   withVault: boolean;
+  /** The vault has the host's password, so a removed key cannot lock the user out. */
+  passwordSaved: boolean;
   /** The vault has the host's password but is locked. */
   vaultLocked: boolean;
   /** Fixes a failed sign-in offers (checking the host key, editing the password). */
@@ -70,6 +73,7 @@ export function ServerKeysDialog({
   alias,
   account,
   withVault,
+  passwordSaved,
   vaultLocked,
   onAction,
 }: ServerKeysDialogProps) {
@@ -117,7 +121,7 @@ export function ServerKeysDialog({
     const values = { key: name, alias };
     if (!result.read) {
       const context: RunContext =
-        action.type === 'add' ? 'install' : withVault ? 'vaultTest' : 'test';
+        action.type === 'add' ? 'install' : passwordSaved ? 'vaultTest' : 'test';
       return { kind: 'login', run: result, context };
     }
     switch (action.type) {
@@ -155,6 +159,9 @@ export function ServerKeysDialog({
     run.mutate({ action: { type: 'add', keyId: key.id }, name: key.name });
   const removeKey = (entry: AuthorizedKey) =>
     run.mutate({ action: { type: 'remove', publicKey: entry.publicKey }, name: entryName(entry) });
+
+  // Once the key ssh could not open is unlocked, sign in again to read the file.
+  const unlockFix = useUnlockFix(() => list());
 
   // Read the file once, when the dialog opens (Strict Mode runs effects twice).
   const listOnce = useRef(list);
@@ -201,7 +208,7 @@ export function ServerKeysDialog({
               context={outcome.context}
               alias={alias}
               vaultLocked={vaultLocked}
-              onAction={onAction}
+              onAction={{ ...onAction, ...unlockFix(outcome.run) }}
             />
           ) : null}
           {outcome?.kind === 'error' ? (
@@ -237,7 +244,7 @@ export function ServerKeysDialog({
               const mine = ownKeyName(entry, own);
               const until = expiry(entry);
               const name = entryName(entry);
-              const locksOut = removalLocksOut(entry, entries, own, withVault);
+              const locksOut = removalLocksOut(entry, entries, own, passwordSaved);
               return (
                 <li key={entry.line} className="flex items-start gap-[11px] px-2.5 py-2">
                   <Tile tone={entryTone(entry)} size={30} className="mt-0.5">

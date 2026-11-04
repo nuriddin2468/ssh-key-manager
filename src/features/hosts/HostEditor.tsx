@@ -28,6 +28,7 @@ import { useRouter } from '@/app/router';
 import type { ConnectionTest } from '@/bindings/ConnectionTest';
 import type { HostEdit } from '@/bindings/HostEdit';
 import type { HostEntry } from '@/bindings/HostEntry';
+import type { KeyView } from '@/bindings/KeyView';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Dialog } from '@/components/ui/Dialog';
@@ -37,6 +38,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { HostResolution } from '@/features/hostsFile/HostResolution';
+import { useVaultKey } from '@/features/keys/vaultKey';
 import { CheckHostKeyDialog } from '@/features/known/CheckHostKeyDialog';
 import type { KnownHostsRemoval } from '@/features/known/removal';
 import { SendDialog } from '@/features/nearby/SendDialog';
@@ -45,10 +47,11 @@ import { copyText } from '@/lib/clipboard';
 import { displayPath } from '@/lib/format';
 import { AppError } from '@/lib/ipc';
 import { configChangeError, fileChangeError } from './fileErrors';
-import { ConfigPreview, ServerFields, useHostErrors } from './HostFields';
+import { ConfigPreview, ServerFields, useHostErrors, useKeyForFile } from './HostFields';
 import { HostPasswordDialog } from './HostPasswordDialog';
+import { KeyCheckDialog } from './KeyCheckDialog';
 import { LoginResult } from './LoginResult';
-import type { MessageAction } from './login';
+import type { MessageAction, RunContext } from './login';
 import {
   changedLines,
   chooseKey,
@@ -72,6 +75,7 @@ import { ServerKeysDialog } from './ServerKeysDialog';
 import { SignInSection } from './SignIn';
 import { SwitchToKeyDialog } from './SwitchToKeyDialog';
 import { useDialog } from './useDialog';
+import { useUnlockFix } from './useUnlockFix';
 import {
   type EntryFollowUp,
   entryFollowUp,
@@ -103,6 +107,9 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
   const saved = found?.entry;
   const alias = vault.vault === 'unlocked' ? vault.alias : (hostAliases(host)[0] ?? '');
   const passwordSaved = Boolean(saved);
+  // An open vault has more to sign in with: the host's password and 2FA
+  // code, and the passphrases of keys.
+  const withVault = vault.vault === 'unlocked';
 
   const initial = useMemo(() => formFromHost(host, { passwordSaved }), [host, passwordSaved]);
   const [form, setForm] = useState<HostForm>(initial);
@@ -141,7 +148,7 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
   }
 
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [test, setTest] = useState<{ run: ConnectionTest; withVault: boolean } | null>(null);
+  const [test, setTest] = useState<{ run: ConnectionTest; context: RunContext } | null>(null);
   // Dialogs opened from the sign-in section give focus back to it when the
   // button that opened them is gone (the password was saved, the switch ended).
   const signIn = useRef<HTMLFieldSetElement>(null);
@@ -152,8 +159,15 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
   const [passwordOpen, openPassword, closePassword] = useDialog<'edit' | 'otp'>(sectionButton);
   const [hostKeyOpen, openHostKey, closeHostKey] = useDialog<true>();
   const [sending, openSend, closeSend] = useDialog<true>();
+  const [keyCheck, openKeyCheck, closeKeyCheck] = useDialog<{
+    key: KeyView;
+    context: RunContext;
+  }>();
   // Captured when it opens, so it keeps signing in the same way if the vault locks.
-  const [serverKeys, openServerKeys, closeServerKeys] = useDialog<{ withVault: boolean }>();
+  const [serverKeys, openServerKeys, closeServerKeys] = useDialog<{
+    withVault: boolean;
+    passwordSaved: boolean;
+  }>();
   // Captured when it opens, so it stays put if the vault locks meanwhile.
   const [switching, openSwitch, closeSwitch] = useDialog<{
     alias: string;
@@ -241,12 +255,13 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
       return true;
     },
   });
-  // With a saved password the check signs in with it (and the 2FA code);
-  // otherwise ssh runs in batch mode and only keys can get in.
+  // With the vault open the check signs in with what it saved for the host;
+  // otherwise only keys ssh can use by itself get in (ones in ssh-agent, or
+  // without a passphrase).
   const check = useAppMutation(
-    async (withVault: boolean) => ({
-      run: withVault ? await api.vaultTestConnection(alias) : await api.testConnection(alias),
-      withVault,
+    async (vars: { withVault: boolean; context: RunContext }) => ({
+      run: vars.withVault ? await api.vaultTestConnection(alias) : await api.testConnection(alias),
+      context: vars.context,
     }),
     {
       onSuccess: setTest,
@@ -274,7 +289,27 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
     if (readOnly || invalid || save.isPending || !dirty) return;
     save.mutate({ edit, followUp });
   };
-  const runCheck = () => check.isPending || check.mutate(passwordSaved);
+  const checkContext: RunContext = passwordSaved ? 'vaultTest' : 'test';
+  const checkNow = () => check.mutate({ withVault, context: checkContext });
+  // The host's key, if ssh cannot open it by itself: it has a passphrase that
+  // neither ssh-agent nor the open vault holds. The check asks for it first.
+  const hostKey = useKeyForFile(form.identityFile).key;
+  const hostKeyVault = useVaultKey(hostKey?.fingerprint);
+  const lockedKey =
+    form.method !== 'password' &&
+    hostKey?.encrypted &&
+    !hostKey.inAgent &&
+    !hostKey.hardware &&
+    !(hostKeyVault.vault === 'unlocked' && hostKeyVault.entry)
+      ? hostKey
+      : undefined;
+  const runCheck = () => {
+    if (check.isPending) return;
+    if (lockedKey) openKeyCheck({ key: lockedKey, context: checkContext });
+    else checkNow();
+  };
+  // Unlocking the key ssh could not open checks again.
+  const unlockFix = useUnlockFix(checkNow);
   const copyCommand = async () => {
     try {
       await copyText(`ssh ${alias}`);
@@ -406,7 +441,7 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
                   <MenuItem
                     icon={<KeyRound className="size-[15px]" strokeWidth={1.9} />}
                     disabled={runReason !== null}
-                    onSelect={() => openServerKeys({ withVault: passwordSaved })}
+                    onSelect={() => openServerKeys({ withVault, passwordSaved })}
                   >
                     {t('hosts.editor.serverKeys')}
                   </MenuItem>
@@ -451,11 +486,11 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
           <LoginResult
             className="mx-5 mb-3"
             run={test.run}
-            context={test.withVault ? 'vaultTest' : 'test'}
+            context={test.context}
             alias={alias}
             okTitle={okTitle}
             vaultLocked={vault.vault === 'locked'}
-            onAction={fixes}
+            onAction={{ ...fixes, ...unlockFix(test.run) }}
             onClose={() => {
               setTest(null);
               header.current
@@ -590,6 +625,16 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
           />
         ) : null}
       </Dialog>
+      <Dialog open={keyCheck !== null} onOpenChange={(open) => open || closeKeyCheck()}>
+        {keyCheck ? (
+          <KeyCheckDialog
+            alias={alias}
+            keyView={keyCheck.key}
+            onChecked={(run) => setTest({ run, context: keyCheck.context })}
+            onDone={closeKeyCheck}
+          />
+        ) : null}
+      </Dialog>
       <Dialog open={sending !== null} onOpenChange={(open) => open || closeSend()}>
         {sending ? (
           <SendDialog what={{ type: 'host', alias }} name={alias} onStarted={closeSend} />
@@ -602,6 +647,7 @@ export function HostEditor({ host, hosts }: HostEditorProps) {
             alias={alias}
             account={target}
             withVault={serverKeys.withVault}
+            passwordSaved={serverKeys.passwordSaved}
             vaultLocked={vault.vault === 'locked'}
             onAction={fixes}
           />

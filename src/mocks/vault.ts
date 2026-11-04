@@ -232,6 +232,29 @@ function hostEntry(alias: string): MockEntry | undefined {
   );
 }
 
+/**
+ * The vault test of a host with no saved password: it signs in with keys,
+ * opening those whose passphrases are saved. Locked vault: `vault_locked`.
+ */
+export function vaultKeyTest<T>(
+  alias: string,
+  test: (opens: (fingerprint: string | null) => boolean) => T,
+): T | Promise<never> | undefined {
+  if (hostEntry(alias)?.detail.hasPassword) return undefined;
+  return (
+    requireUnlocked() ??
+    test((fingerprint) =>
+      entries.some(
+        (e) =>
+          !e.detail.inTrash &&
+          e.detail.kind === 'key' &&
+          e.detail.keyFingerprint === fingerprint &&
+          e.password !== '',
+      ),
+    )
+  );
+}
+
 function hostUser(alias: string): string {
   return hostEntry(alias)?.detail.username || 'dev';
 }

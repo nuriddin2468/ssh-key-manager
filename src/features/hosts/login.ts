@@ -1,7 +1,6 @@
 // What a run of `ssh` against a host means, in plain words: read from the
-// prompts `ssh` showed the app (and what became of them) and, in batch mode
-// where nothing is asked, from the few messages `ssh` always prints in
-// English.
+// prompts `ssh` showed the app (and what became of them) and from the few
+// messages `ssh` always prints in English.
 
 import type { AskedPrompt } from '@/bindings/AskedPrompt';
 import type { PromptKind } from '@/bindings/PromptKind';
@@ -41,7 +40,7 @@ export type Explanation =
 /** `alice@host: Permission denied (publickey,password).` */
 const AUTH_FAILED = /Permission denied \([\w-]+(?:,[\w-]+)*\)/;
 const HOST_KEY_CHANGED = /REMOTE HOST IDENTIFICATION HAS CHANGED/;
-/** Batch mode with an unknown key, or a changed one. */
+/** An unknown host key `ssh` was not asked about (`StrictHostKeyChecking yes`), or a changed one. */
 const HOST_KEY_FAILED = /Host key verification failed/;
 const TIMED_OUT = /\(timed out\)$/;
 
@@ -82,7 +81,7 @@ export function explain(run: SshRun): Explanation {
 
 /** What the run was for; the same outcome reads differently in each. */
 export type RunContext =
-  /** "Test connection" without the vault (batch mode: nothing is asked). */
+  /** "Test connection" with no saved password: only keys can get in. */
   | 'test'
   /** "Test connection" with the saved password and 2FA code. */
   | 'vaultTest'
@@ -91,7 +90,7 @@ export type RunContext =
   /** Signing in with a key alone. */
   | 'keyLogin';
 
-export type MessageAction = 'checkHostKey' | 'editPassword' | 'addOtp';
+export type MessageAction = 'checkHostKey' | 'editPassword' | 'addOtp' | 'unlockKey';
 
 type ResultKey = keyof (typeof en)['hosts']['vault']['result'];
 
@@ -181,6 +180,7 @@ export function loginMessage(
         title: 'passphraseMissing',
         detail: 'passphraseMissingHint',
         values: { key: explanation.key },
+        action: 'unlockKey',
       };
     case 'otherAccount':
       return {

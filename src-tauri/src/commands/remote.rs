@@ -1,5 +1,5 @@
-//! Running `ssh` against a configured host, either in batch mode or with the
-//! app answering its prompts (see [`crate::askpass`]).
+//! Running `ssh` against a configured host, with the app answering its
+//! prompts from saved secrets, or none (see [`crate::askpass`]).
 
 use std::time::Duration;
 
@@ -222,20 +222,23 @@ pub fn check_alias(alias: &str) -> AppResult<()> {
 /// A finished `ssh` run.
 pub struct SshRun {
     pub output: Output,
-    /// What `ssh` asked through askpass; empty in batch mode.
+    /// What `ssh` asked through askpass.
     pub prompts: Vec<AskedPrompt>,
 }
 
-/// Runs `ssh <mode> -o ConnectTimeout=8 <options> -T -- <alias> <remote>`.
+/// Runs `ssh <askpass options> -o ConnectTimeout=8 <options> -T -- <alias> <remote>`.
 ///
-/// - Without secrets the mode is `-o BatchMode=yes`: `ssh` asks nothing.
-/// - With secrets it is [`askpass_options`] and an askpass session answers
-///   `ssh`'s prompts: each secret at most once, yes/no questions (an unknown
-///   host key) always "no", and only for the account `ssh -G` says the alias
-///   connects to, so a `ProxyJump` host never gets the target's password.
-///   Prompts the session cannot vouch for are refused: a server's prompt
-///   posing as `ssh`'s own, and with OpenSSH before 8.5 anything through a
-///   `ProxyJump` or `ProxyCommand` (see [`Connection`]).
+/// An askpass session answers `ssh`'s prompts with `secrets` (see
+/// [`askpass_options`]): each secret at most once, yes/no questions (an
+/// unknown host key) always "no", and only for the account `ssh -G` says the
+/// alias connects to, so a `ProxyJump` host never gets the target's password.
+/// Prompts the session cannot vouch for are refused: a server's prompt
+/// posing as `ssh`'s own, and with OpenSSH before 8.5 anything through a
+/// `ProxyJump` or `ProxyCommand` (see [`Connection`]).
+///
+/// Without secrets nothing is answered, as in batch mode, but the prompts
+/// are still recorded: a key `ssh` could not open tells more than the
+/// server's "Permission denied" that follows.
 pub fn run_ssh(
     state: &AppState,
     alias: &str,
@@ -245,38 +248,32 @@ pub fn run_ssh(
     input: Option<Vec<u8>>,
     timeout: Duration,
 ) -> AppResult<SshRun> {
-    let mut command = process::command("ssh");
-    let session = if secrets.is_empty() {
-        command.args(["-o", "BatchMode=yes"]);
-        None
-    } else {
-        let target = match ssh_target(alias)? {
-            Ok(target) => target,
-            // `ssh` cannot read its configuration for this host: report what
-            // it said, as a failed run would.
-            Err(output) => {
-                return Ok(SshRun {
-                    output,
-                    prompts: Vec::new(),
-                });
-            }
-        };
-        let askpass = askpass_options(&secrets);
-        let keyboard_interactive = target.keyboard_interactive
-            && !askpass.contains(&"KbdInteractiveAuthentication=no")
-            && !options.contains(&"KbdInteractiveAuthentication=no");
-        let session = state.askpass_session(secrets)?;
-        session.expect_account(target.account);
-        session.expect_connection(Connection::new(
-            state.openssh_version().as_deref(),
-            keyboard_interactive,
-            target.proxied,
-        ));
-        session.configure(&mut command);
-        command.args(askpass);
-        Some(session)
+    let target = match ssh_target(alias)? {
+        Ok(target) => target,
+        // `ssh` cannot read its configuration for this host: report what it
+        // said, as a failed run would.
+        Err(output) => {
+            return Ok(SshRun {
+                output,
+                prompts: Vec::new(),
+            });
+        }
     };
+    let askpass = askpass_options(&secrets);
+    let keyboard_interactive = target.keyboard_interactive
+        && !askpass.contains(&"KbdInteractiveAuthentication=no")
+        && !options.contains(&"KbdInteractiveAuthentication=no");
+    let session = state.askpass_session(secrets)?;
+    session.expect_account(target.account);
+    session.expect_connection(Connection::new(
+        state.openssh_version().as_deref(),
+        keyboard_interactive,
+        target.proxied,
+    ));
+    let mut command = process::command("ssh");
+    session.configure(&mut command);
     command
+        .args(askpass)
         .args(["-o", "ConnectTimeout=8"])
         .args(options)
         .args(["-T", "--", alias])
@@ -284,20 +281,24 @@ pub fn run_ssh(
     let output = process::run_command(&mut command, input, timeout)?;
     Ok(SshRun {
         output,
-        prompts: session.map(|s| s.asked()).unwrap_or_default(),
+        prompts: session.asked(),
     })
 }
 
 /// The options of a run whose prompts an askpass session answers: `ssh` may
-/// ask, once per password. With only key passphrases saved,
-/// keyboard-interactive is off too, so a server cannot even put a prompt of
-/// its own to the session. A saved password or 2FA code keeps it on: many
-/// servers (FreeBSD, pfSense) ask for the password that way. Their prompts
-/// still never get a passphrase (see [`Connection`]).
+/// ask, once per password. Without a saved password, password logins are
+/// off, so `ssh` signs in with keys only, as in batch mode. Without a 2FA
+/// code either, keyboard-interactive is off too, so a server cannot even put
+/// a prompt of its own to the session. A saved password or 2FA code keeps it
+/// on: many servers (FreeBSD, pfSense) ask for the password that way. Their
+/// prompts still never get a passphrase (see [`Connection`]).
 fn askpass_options(secrets: &Secrets) -> Vec<&'static str> {
     let mut options = vec!["-o", "BatchMode=no", "-o", "NumberOfPasswordPrompts=1"];
-    if secrets.password.is_none() && secrets.one_time_code.is_none() {
-        options.extend(["-o", "KbdInteractiveAuthentication=no"]);
+    if secrets.password.is_none() {
+        options.extend(["-o", "PasswordAuthentication=no"]);
+        if secrets.one_time_code.is_none() {
+            options.extend(["-o", "KbdInteractiveAuthentication=no"]);
+        }
     }
     options
 }
@@ -545,19 +546,25 @@ mod tests {
 
     #[test]
     fn keyboard_interactive_is_off_with_only_passphrases() {
-        let off = |secrets: &Secrets| {
+        let off = |secrets: &Secrets, option: &str| {
             askpass_options(secrets)
                 .windows(2)
-                .any(|pair| pair == ["-o", "KbdInteractiveAuthentication=no"])
+                .any(|pair| pair == ["-o", option])
         };
-        assert!(off(&Secrets::default().with_passphrase("/k", "pp".into())));
-        assert!(!off(
-            &Secrets::new(Some("pw".into()), None).with_passphrase("/k", "pp".into())
-        ));
-        assert!(!off(&Secrets::new(
-            Some("pw".into()),
-            Some("123456".into())
-        )));
+        let kbd = "KbdInteractiveAuthentication=no";
+        let password = "PasswordAuthentication=no";
+        // Nothing saved: keys only, as in batch mode.
+        assert!(off(&Secrets::default(), kbd) && off(&Secrets::default(), password));
+        let passphrase = Secrets::default().with_passphrase("/k", "pp".into());
+        assert!(off(&passphrase, kbd) && off(&passphrase, password));
+        let saved_password =
+            Secrets::new(Some("pw".into()), None).with_passphrase("/k", "pp".into());
+        assert!(!off(&saved_password, kbd) && !off(&saved_password, password));
+        let both = Secrets::new(Some("pw".into()), Some("123456".into()));
+        assert!(!off(&both, kbd) && !off(&both, password));
+        // A 2FA code alone is asked through keyboard-interactive.
+        let code = Secrets::new(None, Some("123456".into()));
+        assert!(!off(&code, kbd) && off(&code, password));
         assert!(askpass_options(&Secrets::default()).starts_with(&[
             "-o",
             "BatchMode=no",

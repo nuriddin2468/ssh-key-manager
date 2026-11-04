@@ -353,6 +353,30 @@ mod sshd {
         );
     }
 
+    /// A test with nothing saved: the key the server accepts has a
+    /// passphrase, and the session tells which one `ssh` could not open.
+    #[test]
+    #[ignore = "starts a local sshd"]
+    fn missing_passphrase_is_recorded() {
+        let sshd = start();
+        sshd.trust_host_key();
+        let server = Server::start_with_program(APP).unwrap();
+        let session = server.session(Secrets::default());
+
+        let output = sshd.ssh(&session, &["-o", "NumberOfPasswordPrompts=1"]);
+        assert!(!output.status.success(), "{}", text(&output));
+        assert!(text(&output).contains("Permission denied (publickey)"));
+        let asked = session.asked();
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        assert_eq!(
+            asked[0].prompt.kind,
+            PromptKind::Passphrase {
+                key: sshd.client_key().display().to_string()
+            }
+        );
+        assert_eq!(asked[0].outcome, PromptOutcome::Missing);
+    }
+
     #[test]
     #[ignore = "starts a local sshd"]
     fn unknown_host_key_is_declined() {

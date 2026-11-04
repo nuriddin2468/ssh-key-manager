@@ -425,6 +425,10 @@ const uz = {
     copyPassphrase: 'Parol iborasini nusxalash',
     passphraseCopied: 'Parol iborasi nusxalandi',
     unlockToShow: '{{name}} kalitining parol iborasini koʻrsatish uchun.',
+    peek: {
+      agent: 'ssh-agent',
+      open: '«Kalitlar»da ochish',
+    },
     vaultSaveFailed: 'Parol iborasini omborga saqlab boʻlmadi',
     passphraseSavedVault: 'Parol iborasi kalitga va omborga saqlandi',
     passphraseRemovedVault:
@@ -612,6 +616,11 @@ const uz = {
     },
     panel: {
       close: 'Yopish',
+    },
+    peek: {
+      via: 'Orqali',
+      status: 'Holat',
+      open: '«Xostlar»da ochish',
     },
     testConnection: 'Ulanishni tekshirish',
     testOk: 'Ulanish va kirish muvaffaqiyatli.',
@@ -1463,8 +1472,6 @@ const uz = {
     notes: 'Izohlar',
     linkedHost: 'SSH xost',
     linkedKey: 'SSH kalit',
-    openInHosts: '{{name}} ni Xostlar boʻlimida ochish',
-    openInKeys: '{{name}} ni Kalitlar boʻlimida ochish',
     hostNotFound: '~/.ssh/config da yoʻq',
     keyNotFound: '~/.ssh da yoʻq',
     noPassword: 'Parol saqlanmagan',

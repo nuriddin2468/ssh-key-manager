@@ -19,27 +19,30 @@ import { type CSSProperties, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
-import { useEnvironment, useKeys } from '@/api/queries';
+import { useConfig, useEnvironment, useKeys } from '@/api/queries';
 import { toastError, useAppMutation } from '@/api/useAppMutation';
 import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
 import type { Finding } from '@/bindings/Finding';
+import type { HostEntry } from '@/bindings/HostEntry';
 import type { KeyView } from '@/bindings/KeyView';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Dialog } from '@/components/ui/Dialog';
 import { IconButton } from '@/components/ui/IconButton';
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '@/components/ui/Menu';
+import { Popover, PopoverTrigger } from '@/components/ui/Popover';
 import { Tile, TONES } from '@/components/ui/Tile';
 import { findingText, findingTitle } from '@/features/audit/model';
 import { fixLabelKey, useFix } from '@/features/audit/useFix';
+import { HostPreview } from '@/features/hosts/HostPreview';
 import { SendDialog } from '@/features/nearby/SendDialog';
 import { SavedSecret } from '@/features/passwords/SavedSecret';
 import { copyText } from '@/lib/clipboard';
 import { cn } from '@/lib/cn';
 import { displayPath } from '@/lib/format';
 import { fileManagerName } from '@/lib/platform';
-import { algorithmDescription, hasPrivate, isPlain, keyTone } from './model';
+import { algorithmDescription, hasPrivate, isPlain, keyTone, passphraseLabel } from './model';
 import { VaultIcon } from './VaultControls';
 import { useVaultKey } from './vaultKey';
 
@@ -63,6 +66,7 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
   const dialogs = useDialogs();
   const environment = useEnvironment();
   const keys = useKeys();
+  const hosts = useConfig().data?.view.hosts ?? [];
   const [confirmTrash, setConfirmTrash] = useState(false);
   const [sending, setSending] = useState(false);
   const home = environment.data?.paths.home;
@@ -112,13 +116,8 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
   };
 
   const path = key.privatePath ?? key.publicPath ?? '';
-  const passLabel = !hasPrivate(key)
-    ? '—'
-    : key.hardware
-      ? t('keys.passHardware')
-      : key.encrypted
-        ? t('keys.passProtected')
-        : t('keys.passNone');
+  const pass = passphraseLabel(key);
+  const passLabel = pass ? t(pass) : '—';
   const perms = key.permissions;
   const permsLabel = perms.ok
     ? t('keys.permsOk')
@@ -307,14 +306,12 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
               <span className="text-subtle">{t('keys.noHosts')}</span>
             ) : (
               key.usedBy.map((usage) => (
-                <button
+                <UsedByChip
                   key={`${usage.hostId}-${usage.patterns.join(' ')}`}
-                  type="button"
-                  onClick={() => navigate({ page: 'hosts', hostId: usage.hostId ?? undefined })}
-                  className="inline-flex h-[22px] items-center rounded-md border border-blue-400/30 bg-blue-400/12 px-2 font-mono text-[11.5px] text-blue-200 hover:bg-blue-400/20"
-                >
-                  {usage.patterns.join(' ') || '*'}
-                </button>
+                  label={usage.patterns.join(' ') || '*'}
+                  host={hosts.find((h) => h.id === usage.hostId)}
+                  onOpenHosts={() => navigate({ page: 'hosts' })}
+                />
               ))
             )}
           </dd>
@@ -406,5 +403,36 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       </h3>
       {children}
     </section>
+  );
+}
+
+/**
+ * A host that uses the key: its preview, or for an `IdentityFile` that
+ * applies to every host (no host block), the Hosts page.
+ */
+function UsedByChip({
+  label,
+  host,
+  onOpenHosts,
+}: {
+  label: string;
+  host: HostEntry | undefined;
+  onOpenHosts: () => void;
+}) {
+  const chip = (
+    <button
+      type="button"
+      onClick={host ? undefined : onOpenHosts}
+      className="inline-flex h-[22px] items-center rounded-md border border-blue-400/30 bg-blue-400/12 px-2 font-mono text-[11.5px] text-blue-200 hover:bg-blue-400/20 data-[state=open]:bg-blue-400/20"
+    >
+      {label}
+    </button>
+  );
+  if (!host) return chip;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>{chip}</PopoverTrigger>
+      <HostPreview host={host} />
+    </Popover>
   );
 }

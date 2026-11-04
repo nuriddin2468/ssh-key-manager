@@ -417,6 +417,10 @@ const en = {
     copyPassphrase: 'Copy passphrase',
     passphraseCopied: 'Passphrase copied',
     unlockToShow: 'To show the passphrase of {{name}}.',
+    peek: {
+      agent: 'ssh-agent',
+      open: 'Open in Keys',
+    },
     vaultSaveFailed: 'Couldn’t save the passphrase in your vault',
     passphraseSavedVault: 'Passphrase saved to the key and your vault',
     passphraseRemovedVault: 'Passphrase removed. Its vault entry is in the recycle bin.',
@@ -601,6 +605,11 @@ const en = {
     },
     panel: {
       close: 'Close',
+    },
+    peek: {
+      via: 'Via',
+      status: 'Status',
+      open: 'Open in Hosts',
     },
     testConnection: 'Test connection',
     testOk: 'Connected and signed in.',
@@ -1441,8 +1450,6 @@ const en = {
     notes: 'Notes',
     linkedHost: 'SSH host',
     linkedKey: 'SSH key',
-    openInHosts: 'Open {{name}} in Hosts',
-    openInKeys: 'Open {{name}} in Keys',
     hostNotFound: 'Not in ~/.ssh/config',
     keyNotFound: 'Not in ~/.ssh',
     noPassword: 'No password saved',

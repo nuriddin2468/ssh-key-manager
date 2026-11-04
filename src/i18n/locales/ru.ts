@@ -464,6 +464,10 @@ const ru = {
     copyPassphrase: 'Скопировать парольную фразу',
     passphraseCopied: 'Парольная фраза скопирована',
     unlockToShow: 'Чтобы показать парольную фразу {{name}}.',
+    peek: {
+      agent: 'ssh-agent',
+      open: 'Открыть в «Ключах»',
+    },
     vaultSaveFailed: 'Не удалось сохранить парольную фразу в хранилище',
     passphraseSavedVault: 'Парольная фраза сохранена в ключе и в хранилище',
     passphraseRemovedVault: 'Парольная фраза удалена. Её запись перемещена в корзину хранилища.',
@@ -653,6 +657,11 @@ const ru = {
     },
     panel: {
       close: 'Закрыть',
+    },
+    peek: {
+      via: 'Через',
+      status: 'Статус',
+      open: 'Открыть в «Хостах»',
     },
     testConnection: 'Проверить подключение',
     testOk: 'Подключение и вход прошли успешно.',
@@ -1558,8 +1567,6 @@ const ru = {
     notes: 'Заметки',
     linkedHost: 'SSH-хост',
     linkedKey: 'SSH-ключ',
-    openInHosts: 'Открыть {{name}} в разделе «Хосты»',
-    openInKeys: 'Открыть {{name}} в разделе «Ключи»',
     hostNotFound: 'Нет в ~/.ssh/config',
     keyNotFound: 'Нет в ~/.ssh',
     noPassword: 'Пароль не сохранён',

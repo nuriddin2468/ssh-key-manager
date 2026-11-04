@@ -14,7 +14,7 @@ import {
   Trash2,
   Undo2,
 } from 'lucide-react';
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ComponentProps, type ReactNode, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
@@ -29,7 +29,10 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Dialog } from '@/components/ui/Dialog';
 import { IconButton } from '@/components/ui/IconButton';
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '@/components/ui/Menu';
+import { Popover, PopoverTrigger } from '@/components/ui/Popover';
 import { Tile, TONES } from '@/components/ui/Tile';
+import { HostPreview } from '@/features/hosts/HostPreview';
+import { KeyPreview } from '@/features/keys/KeyPreview';
 import { SendDialog } from '@/features/nearby/SendDialog';
 import { cn } from '@/lib/cn';
 import { formatDate, formatRelative, shortFingerprint } from '@/lib/format';
@@ -378,14 +381,14 @@ export function EntryPane({ entry, onEdit, onGone }: EntryPaneProps) {
             <Field label={t('passwords.linkedHost')}>
               <span className="flex min-w-0 flex-1 items-center gap-2">
                 {linkedHost ? (
-                  <LinkChip
-                    tone="blue"
-                    icon={<Server className="size-3" strokeWidth={2.2} />}
-                    label={t('passwords.openInHosts', { name: entry.host })}
-                    onClick={() => navigate({ page: 'hosts', hostId: linkedHost.id })}
-                  >
-                    {entry.host}
-                  </LinkChip>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <LinkChip tone="blue" icon={<Server className="size-3" strokeWidth={2.2} />}>
+                        {entry.host}
+                      </LinkChip>
+                    </PopoverTrigger>
+                    <HostPreview host={linkedHost} />
+                  </Popover>
                 ) : (
                   <>
                     <span className="truncate font-mono text-[12.5px]">{entry.host}</span>
@@ -402,14 +405,17 @@ export function EntryPane({ entry, onEdit, onGone }: EntryPaneProps) {
             <Field label={t('passwords.linkedKey')}>
               <span className="flex min-w-0 flex-1 flex-col items-start gap-1">
                 {linkedKey ? (
-                  <LinkChip
-                    tone="teal"
-                    icon={<KeyRound className="size-3" strokeWidth={2.2} />}
-                    label={t('passwords.openInKeys', { name: linkedKey.name })}
-                    onClick={() => navigate({ page: 'keys', keyId: linkedKey.id })}
-                  >
-                    {linkedKey.name}
-                  </LinkChip>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <LinkChip
+                        tone="teal"
+                        icon={<KeyRound className="size-3" strokeWidth={2.2} />}
+                      >
+                        {linkedKey.name}
+                      </LinkChip>
+                    </PopoverTrigger>
+                    <KeyPreview keyView={linkedKey} />
+                  </Popover>
                 ) : (
                   <span className="text-[12px] text-warning">{t('passwords.keyNotFound')}</span>
                 )}
@@ -516,27 +522,26 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-interface LinkChipProps {
+interface LinkChipProps extends ComponentProps<'button'> {
   tone: 'blue' | 'teal';
   icon: ReactNode;
-  label: string;
-  onClick: () => void;
-  children: ReactNode;
 }
 
-/** A link to another section, styled like the "Used by" host chips on Keys. */
-function LinkChip({ tone, icon, label, onClick, children }: LinkChipProps) {
+/**
+ * A linked host or key, styled like the "Used by" host chips on Keys; a
+ * `PopoverTrigger` for its preview.
+ */
+function LinkChip({ tone, icon, children, className, ...rest }: LinkChipProps) {
   return (
     <button
       type="button"
-      aria-label={label}
-      title={label}
-      onClick={onClick}
+      {...rest}
       className={cn(
         'pressable inline-flex h-[24px] max-w-full items-center gap-1.5 rounded-md border px-2 font-mono text-[12px]',
         tone === 'blue'
-          ? 'border-blue-400/30 bg-blue-400/12 text-blue-200 hover:bg-blue-400/20'
-          : 'border-teal-400/30 bg-teal-400/12 text-teal-200 hover:bg-teal-400/20',
+          ? 'border-blue-400/30 bg-blue-400/12 text-blue-200 hover:bg-blue-400/20 data-[state=open]:bg-blue-400/20'
+          : 'border-teal-400/30 bg-teal-400/12 text-teal-200 hover:bg-teal-400/20 data-[state=open]:bg-teal-400/20',
+        className,
       )}
     >
       {icon}

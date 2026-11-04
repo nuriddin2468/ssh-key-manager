@@ -47,8 +47,10 @@ export function DialogContent({
             }
           }}
           onCloseAutoFocus={returnFocus.restore}
+          // `overflow-clip`, not `overflow-hidden`: the glow is wider than the
+          // dialog, and a scroll container could be scrolled sideways by a click.
           className={cn(
-            'pointer-events-auto relative flex max-h-[calc(100vh-32px)] w-full max-w-[620px] flex-col overflow-hidden rounded-[22px] border border-white/10 bg-[linear-gradient(180deg,rgb(26_31_46/0.97),rgb(15_18_28/0.97))] text-fg shadow-[0_40px_80px_-24px_rgb(0_0_0/0.8),inset_0_1px_0_rgb(255_255_255/0.06)] outline-none data-[state=open]:animate-dialog-in',
+            'pointer-events-auto relative flex max-h-[calc(100vh-32px)] w-full max-w-[620px] flex-col overflow-clip rounded-[22px] border border-white/10 bg-[linear-gradient(180deg,rgb(26_31_46/0.97),rgb(15_18_28/0.97))] text-fg shadow-[0_40px_80px_-24px_rgb(0_0_0/0.8),inset_0_1px_0_rgb(255_255_255/0.06)] outline-none data-[state=open]:animate-dialog-in',
             className,
           )}
         >

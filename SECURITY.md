@@ -29,10 +29,9 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     dropped when the vault locks: on request, after inactivity, after sleep, and
     optionally when the window is minimised. Showing an entry or its 2FA code doesn't
     count as activity, so it doesn't keep the vault open. Lists and details sent to the
-    interface carry no passwords or 2FA secrets; a login's or host's password reaches
-    the interface only when you choose to reveal it. A 2FA secret never does (only the
-    current code, computed in the Rust process), and neither does a saved key
-    passphrase.
+    interface carry no passwords or 2FA secrets; a password (or a key's passphrase)
+    reaches the interface only when you choose to reveal it. A 2FA secret never does:
+    only the current code, computed in the Rust process.
   - Copying a password, a 2FA code or the recovery key goes from Rust straight to the
     clipboard, marked so clipboard history (and Windows' cloud clipboard) skip it, and
     is cleared after 30 seconds by default if nothing else was copied. Locking the vault
@@ -57,11 +56,11 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     clipboard clearing; turning off device unlock; and moving the vault or switching to
     another file are each confirmed in a system dialog, which the page can't answer or
     slip under a key press (see "Standard files only").
-  - A saved key passphrase goes from the vault straight to `ssh-agent` or `ssh` inside
-    the Rust process; the interface never receives it and can't show it. Copying it goes
-    from Rust straight to the clipboard, like a password. To say "saved, but the vault is
-    locked", the interface remembers the fingerprints (public) of keys with saved
-    passphrases in its local storage.
+  - When it is used, a saved key passphrase goes from the vault straight to `ssh-agent`
+    or `ssh` inside the Rust process; the interface receives it only when you choose to
+    show it, like a password. Copying it goes from Rust straight to the clipboard. To
+    say "saved, but the vault is locked", the interface remembers the fingerprints
+    (public) of keys with saved passphrases in its local storage.
   - Touch ID / Windows Hello adds one slot per computer to `vault.keys`; a new recovery
     key removes every such slot.
     - **Windows**: the slot's key is derived (HKDF-SHA256) from a Windows Hello signature

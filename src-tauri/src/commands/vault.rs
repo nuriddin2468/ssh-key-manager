@@ -1,7 +1,7 @@
 //! The password vault. Secrets leave the Rust process only when the user asks
-//! to see a password ([`vault_reveal`]; never a 2FA secret or a saved key
-//! passphrase) or for a recovery key that must be shown; copying goes
-//! straight from here to the clipboard ([`vault_copy`]).
+//! to see a password or key passphrase ([`vault_reveal`]; never a 2FA
+//! secret) or for a recovery key that must be shown; copying goes straight
+//! from here to the clipboard ([`vault_copy`]).
 //!
 //! Reads the UI repeats by itself (the list, an entry, a 2FA code) don't
 //! count as activity, so they never keep the vault unlocked. Changes that
@@ -220,9 +220,9 @@ pub async fn vault_entry(
     .await
 }
 
-/// The password of a login or host entry, for the user to see. Nothing else
-/// is ever shown: a 2FA secret and a saved key passphrase are refused, and
-/// stay in this process (the 2FA code and copying go without them).
+/// The password of an entry (a key's passphrase for a key entry), for the
+/// user to see. A 2FA secret is never shown: it stays in this process, and
+/// the 2FA code and copying go without it.
 #[tauri::command]
 pub async fn vault_reveal(
     app: AppHandle,
@@ -235,7 +235,7 @@ pub async fn vault_reveal(
     }
     blocking(&state, move |state| {
         state.vault.with(&app, |vault| {
-            Ok(vault.password_to_show(&id)?.expose_secret().to_owned())
+            Ok(vault.secret(&id, field)?.expose_secret().to_owned())
         })
     })
     .await

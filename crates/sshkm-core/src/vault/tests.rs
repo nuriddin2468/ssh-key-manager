@@ -343,45 +343,6 @@ fn a_bad_otp_secret_in_a_keepass_file_is_an_error_not_a_crash() {
 }
 
 #[test]
-fn only_login_and_host_passwords_are_ever_shown() {
-    let fx = Fixture::new();
-    let (mut vault, _) = Vault::create(&fx.paths, &s("master")).unwrap();
-    let login_id = vault.add_entry(&login("GitHub", "gh-pass")).unwrap();
-    let host_id = vault
-        .add_entry(&EntryInput {
-            kind: EntryKind::Host,
-            host: Some("prod".into()),
-            ..login("prod", "host-pass")
-        })
-        .unwrap();
-    let key_id = vault
-        .add_entry(&EntryInput {
-            kind: EntryKind::Key,
-            key_fingerprint: Some("SHA256:abc".into()),
-            ..login("id_ed25519", "key-passphrase")
-        })
-        .unwrap();
-    for (id, password) in [(&login_id, "gh-pass"), (&host_id, "host-pass")] {
-        assert_eq!(
-            vault.password_to_show(id).unwrap().expose_secret(),
-            password
-        );
-    }
-    assert!(matches!(
-        vault.password_to_show(&key_id),
-        Err(Error::InvalidInput(_))
-    ));
-    // Still there for ssh-agent and ssh, inside the process.
-    assert_eq!(
-        vault
-            .secret(&key_id, SecretField::Password)
-            .unwrap()
-            .expose_secret(),
-        "key-passphrase"
-    );
-}
-
-#[test]
 fn trash_restore_and_delete() {
     let fx = Fixture::new();
     let (mut vault, recovery) = Vault::create(&fx.paths, &s("master")).unwrap();

@@ -11,8 +11,8 @@
 //! An unlocked [`Vault`] holds the decrypted database and the secret in memory;
 //! dropping it is locking it. Entries reach the UI as [`EntrySummary`] and
 //! [`EntryDetail`], which never contain a password or a 2FA secret: those are
-//! read one at a time with [`Vault::secret`], and the only one the user is
-//! ever shown is a login's or host's password ([`Vault::password_to_show`]).
+//! read one at a time with [`Vault::secret`]. A password (or a key's
+//! passphrase) is shown to the user when they ask; a 2FA secret never is.
 //!
 //! Every change is written at once (atomically, after a backup of the previous
 //! file). If another program or computer changed the database or the key slots
@@ -701,17 +701,6 @@ impl Vault {
             SecretField::Otp => fields::OTP,
         };
         Ok(SecretString::from(text(entry.get(name))))
-    }
-
-    /// The password of a login or host entry, for the user to see. A key
-    /// entry's password is a key passphrase, which only ever goes to
-    /// `ssh-agent` or `ssh` inside this process, so it is refused.
-    pub fn password_to_show(&self, id: &str) -> Result<SecretString> {
-        let entry = self.find(id)?;
-        if EntryKind::parse(entry.get(KIND_FIELD).unwrap_or_default()) == EntryKind::Key {
-            return Err(Error::invalid("a saved key passphrase is never shown"));
-        }
-        Ok(SecretString::from(text(entry.get(fields::PASSWORD))))
     }
 
     /// The current 2FA code of an entry and the seconds it stays valid. A

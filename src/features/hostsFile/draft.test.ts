@@ -3,10 +3,12 @@ import type { HostsFileEntry } from '@/bindings/HostsFileEntry';
 import type { HostsFileView } from '@/bindings/HostsFileView';
 import {
   addEntry,
+  addReceived,
   changeCount,
   createGroup,
   editOf,
   emptyDraft,
+  freeGroupName,
   groupNames,
   rebase,
   removeEntry,
@@ -229,5 +231,48 @@ describe('rebase', () => {
     const twice = [...view.entries, { ...api, line: 9 }];
     expect(rebase(draft, view, { ...view, entries: twice }, 'r2')).toBe(null);
     expect(rebase(draft, view, { ...view, groups: [] }, 'r2')).toBe(null);
+  });
+});
+
+describe('received groups', () => {
+  it('numbers a name that is taken, within the longest group name', () => {
+    expect(freeGroupName([], 'dev')).toBe('dev');
+    expect(freeGroupName(['dev', 'dev 2'], 'dev')).toBe('dev 3');
+    const long = 'x'.repeat(64);
+    expect(freeGroupName([long], long)).toBe(`${'x'.repeat(62)} 2`);
+    expect(freeGroupName(['Dev'], 'dev')).toBe('dev');
+  });
+
+  it('adds the entries as a new group, beside one of the same name', () => {
+    const view: HostsFileView = {
+      entries: [entry(2, ['api.local'], 'dev')],
+      invalid: [],
+      groups: [{ name: 'dev', line: 1, endLine: 3 }],
+    };
+    const received = [
+      {
+        address: '10.0.4.12',
+        names: ['db.local'],
+        comment: null,
+        enabled: true,
+        expires: null,
+        group: 'dev',
+      },
+      {
+        address: '10.0.4.13',
+        names: ['cache.local'],
+        comment: null,
+        enabled: false,
+        expires: null,
+        group: 'dev',
+      },
+    ];
+    const first = addReceived(emptyDraft('r1'), view, 'dev', received);
+    expect(first.group).toBe('dev 2');
+    expect(first.draft.adds.map((a) => a.entry.group)).toEqual(['dev 2', 'dev 2']);
+    expect(changeCount(first.draft)).toBe(2);
+    // A group of that name only in the draft counts as taken too.
+    expect(addReceived(first.draft, view, 'dev', received).group).toBe('dev 3');
+    expect(toChanges(first.draft).every((change) => change.kind === 'add')).toBe(true);
   });
 });

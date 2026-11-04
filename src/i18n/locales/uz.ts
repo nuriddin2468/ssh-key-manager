@@ -93,6 +93,10 @@ const uz = {
       otp: '2FA',
       hostKeys_one: '{{count}} ta server kaliti',
       hostKeys_other: '{{count}} ta server kaliti',
+      hostsGroup: 'Hosts fayli guruhi',
+      publicKey: 'Ochiq kalit',
+      entries_one: '{{count}} ta yozuv',
+      entries_other: '{{count}} ta yozuv',
     },
     send: {
       title: '«{{name}}»ni yuborish',
@@ -100,6 +104,9 @@ const uz = {
         'Parol qabul qilingach, toʻgʻridan-toʻgʻri boshqa kompyuterga shifrlangan holda boradi.',
       hostText:
         'Manzil, foydalanuvchi, port va server kaliti boradi. Kirish kalitingiz shu yerda qoladi.',
+      groupText:
+        'Guruh yozuvlari boshqa kompyuterga boradi. U yerdagi hosts fayli oʻzgarishlar koʻrib chiqilib, administrator paroli bilan saqlangandagina oʻzgaradi.',
+      keyText: 'Faqat ochiq qismi boradi. Yopiq kalit shu kompyuterda qoladi.',
       otp: '2FA sirini ham yuborish',
       otpHint: 'Qabul qiluvchi ham bu hisob uchun kodlarni oladi.',
       vaultLocked: 'Yuborish uchun omborni oching: ulangan kompyuterlar unda saqlanadi.',
@@ -117,15 +124,22 @@ const uz = {
       offeredHost:
         'Xost ~/.ssh/config ga, server kaliti known_hosts ga qoʻshiladi. Kirish kalitini oʻzingiz tanlaysiz.',
       offeredPassword: 'Parol «Parollar»da saqlanadi.',
+      offeredGroup:
+        'Hosts faylingizga hozircha hech narsa yozilmaydi: avval oʻzgarishlarni koʻrasiz va ularni administrator paroli bilan saqlaysiz.',
+      offeredKey: '«Kalitlar»da faqat ochiq kalit sifatida saqlanadi: yopiq kalit egasida qoladi.',
       sent: '{{peer}} da saqlandi.',
+      sentGroup: 'Guruh {{peer}} ga yetkazildi. U yerdagi hosts fayli guruh saqlangach oʻzgaradi.',
       receivedHost: '{{name}} xosti ~/.ssh/config ga qoʻshildi.',
       receivedPassword: '«Parollar»da «{{name}}» nomi bilan saqlandi.',
+      receivedKey: '«Kalitlar»da «{{name}}» nomi bilan saqlandi.',
       keysDiffer:
         'Yuborilgan server kaliti shu kompyuterdagisidan farq qiladi. Sizniki qoldirildi; ulanishdan oldin ularni «Xost kalitini tekshirish» orqali solishtiring.',
       decline: 'Rad etish',
       accept: 'Qabul qilish',
       openHosts: '«Xostlar»ni ochish',
       openPasswords: '«Parollar»ni ochish',
+      openKeys: '«Kalitlar»ni ochish',
+      anotherComputer: 'boshqa kompyuter',
     },
     join: {
       waiting: 'Boshqa kompyuteringiz kutilmoqda · {{time}} qoldi',
@@ -362,6 +376,7 @@ const uz = {
     selectPrompt: 'Tafsilotlarni koʻrish uchun kalitni tanlang.',
     copyPublic: 'Ochiq kalitni nusxalash',
     copiedPublic: 'Ochiq kalit nusxalandi',
+    sendPublic: 'Ochiq kalitni yuborish…',
     unlock: 'Agentda faollashtirish',
     lock: 'Agentdan olib tashlash',
     more: 'Boshqa amallar',
@@ -1027,6 +1042,7 @@ const uz = {
     groupMore: '{{name}} guruhi uchun boshqa amallar',
     groupAdd: 'Guruhga yozuv qoʻshish',
     groupRename: 'Nomini oʻzgartirish…',
+    groupSend: 'Yaqindagi kompyuterga yuborish…',
     groupUngroup: 'Guruhni tarqatish',
     groupDelete: 'Guruhni yozuvlari bilan oʻchirish',
     groupRenamed: 'Nomi oʻzgargan',
@@ -1055,6 +1071,10 @@ const uz = {
       'Boshqa dastur hosts faylini oʻzgartirdi, shuning uchun hech narsa saqlanmadi. Oʻzgarishlaringiz bekor qilindi.',
     reviewConflict:
       'Parol oynasi ochiq turganda boshqa dastur hosts faylini oʻzgartirdi, shuning uchun hech narsa saqlanmadi. Oʻzgarishlaringiz faylning hozirgi holatiga nisbatan koʻrsatilgan. Ularni tekshirib, qaytadan saqlang.',
+    received_one:
+      '{{from}} dan {{count}} ta yozuv «{{name}}» guruhida. Saqlashdan oldin u qayerga olib borishini tekshiring.',
+    received_other:
+      '{{from}} dan {{count}} ta yozuv «{{name}}» guruhida. Saqlashdan oldin ular qayerga olib borishini tekshiring.',
     authPrompt: 'SSH Key Manager hosts faylini yangilamoqchi.',
     entryAddTitle: 'Yangi yozuv',
     entryEditTitle: 'Yozuvni tahrirlash',

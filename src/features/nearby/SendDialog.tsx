@@ -15,20 +15,30 @@ import { setStatus, useNearby } from './queries';
 /** What to send, as the page that opens the dialog knows it. */
 export type Sendable =
   | { type: 'password'; entryId: string; hasOtp: boolean }
-  | { type: 'host'; alias: string };
+  | { type: 'host'; alias: string }
+  | { type: 'hostsGroup'; name: string }
+  | { type: 'publicKey'; keyId: string };
+
+const DESCRIPTIONS = {
+  password: 'nearby.send.passwordText',
+  host: 'nearby.send.hostText',
+  hostsGroup: 'nearby.send.groupText',
+  publicKey: 'nearby.send.keyText',
+} as const satisfies Record<Sendable['type'], string>;
 
 interface SendDialogProps {
   what: Sendable;
-  /** How it is named in the title: the entry's title or the host's alias. */
+  /** How it is named in the title: the entry's title, the host's alias, the group's or the key's name. */
   name: string;
   /** Sending started; the pairing dialog shows the rest. */
   onStarted: () => void;
 }
 
 /**
- * Picks a computer on this network to send a password or a host to. The
- * backend reads what is sent; the app-wide pairing dialog then shows the
- * pairing code if the two aren't paired yet, and how the sending went.
+ * Picks a computer on this network to send a password, a host, a hosts file
+ * group or a public key to. The backend reads what is sent; the app-wide
+ * pairing dialog then shows the pairing code if the two aren't paired yet,
+ * and how the sending went.
  */
 export function SendDialog({ what, name, onStarted }: SendDialogProps) {
   const { t } = useTranslation();
@@ -53,7 +63,7 @@ export function SendDialog({ what, name, onStarted }: SendDialogProps) {
   const request: SendRequest =
     what.type === 'password'
       ? { type: 'password', entryId: what.entryId, otp: what.hasOtp && otp }
-      : { type: 'host', alias: what.alias };
+      : what;
   const send = useAppMutation((target: string) => api.nearbySend(target, request), {
     onSuccess: onStarted,
   });
@@ -69,9 +79,7 @@ export function SendDialog({ what, name, onStarted }: SendDialogProps) {
           </Tile>
         }
         title={t('nearby.send.title', { name })}
-        description={
-          what.type === 'host' ? t('nearby.send.hostText') : t('nearby.send.passwordText')
-        }
+        description={t(DESCRIPTIONS[what.type])}
       />
       <DialogBody>
         {what.type === 'password' && what.hasOtp ? (

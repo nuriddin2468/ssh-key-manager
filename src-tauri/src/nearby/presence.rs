@@ -79,7 +79,7 @@ impl Nearby {
             let inner = self.lock();
             (
                 inner.presence.as_ref().map(|p| p.window),
-                inner.reachable,
+                inner.settings.reachable != Some(false),
                 window(now()),
             )
         };

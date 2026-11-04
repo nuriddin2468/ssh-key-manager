@@ -2,8 +2,10 @@ import { AlertTriangle, CheckCircle2, Laptop, XCircle } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
+import { useKeys } from '@/api/queries';
 import { toastError, useAppMutation } from '@/api/useAppMutation';
 import { useRouter } from '@/app/router';
+import type { ItemSummary } from '@/bindings/ItemSummary';
 import type { Pairing } from '@/bindings/Pairing';
 import type { PairingFailure } from '@/bindings/PairingFailure';
 import { Button } from '@/components/ui/Button';
@@ -39,6 +41,14 @@ export const FAILURES = {
   notOwn: 'nearby.pairing.notOwn',
 } as const satisfies Record<PairingFailure, string>;
 
+/** What the receiver reads before accepting, by what is offered. */
+const OFFERED = {
+  password: 'nearby.send.offeredPassword',
+  host: 'nearby.send.offeredHost',
+  hostsGroup: 'nearby.send.offeredGroup',
+  publicKey: 'nearby.send.offeredKey',
+} as const satisfies Record<ItemSummary['type'], string>;
+
 /**
  * App-wide: a pairing with another device, from either side, or adding one
  * of the user's devices. Both users compare the code on their screens; the
@@ -49,6 +59,7 @@ export function PairingDialog() {
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const status = useNearby();
+  const keys = useKeys();
   const any = status.data?.pairing ?? null;
   const pairing = any?.kind === 'sync' ? null : any;
   // The last pairing shown stays while the dialog animates out.
@@ -73,6 +84,18 @@ export function PairingDialog() {
     const target = asks ? buttons?.[0] : buttons?.[buttons.length - 1];
     target?.focus();
   }, [step]);
+
+  // A hosts file group isn't saved yet: the Hosts file page shows it as a
+  // change, which the user saves with the administrator password.
+  const groupFrom =
+    pairing?.phase.type === 'received' && pairing.phase.item.type === 'hostsGroup'
+      ? pairing.id
+      : null;
+  useEffect(() => {
+    if (groupFrom === null) return;
+    void api.nearbyClose(groupFrom).catch(() => undefined);
+    navigate({ page: 'hostsFile', received: groupFrom });
+  }, [groupFrom, navigate]);
 
   if (!current) return null;
   // The name comes with the other side's first message; until then the
@@ -160,18 +183,23 @@ export function PairingDialog() {
             ) : null}
             {phase.type === 'offered' ? (
               <p className="text-[13px] leading-5 text-fg-2">
-                {t('nearby.send.offered', { peer })}{' '}
-                {phase.item.type === 'host'
-                  ? t('nearby.send.offeredHost')
-                  : t('nearby.send.offeredPassword')}
+                {t('nearby.send.offered', { peer })} {t(OFFERED[phase.item.type])}
               </p>
             ) : null}
-            {phase.type === 'sent' ? <OkBox>{t('nearby.send.sent', { peer })}</OkBox> : null}
-            {phase.type === 'received' ? (
+            {phase.type === 'sent' ? (
+              <OkBox>
+                {phase.item.type === 'hostsGroup'
+                  ? t('nearby.send.sentGroup', { peer })
+                  : t('nearby.send.sent', { peer })}
+              </OkBox>
+            ) : null}
+            {phase.type === 'received' && phase.item.type !== 'hostsGroup' ? (
               <OkBox>
                 {phase.item.type === 'host'
                   ? t('nearby.send.receivedHost', { name: phase.name })
-                  : t('nearby.send.receivedPassword', { name: phase.name })}
+                  : phase.item.type === 'publicKey'
+                    ? t('nearby.send.receivedKey', { name: phase.name })
+                    : t('nearby.send.receivedPassword', { name: phase.name })}
               </OkBox>
             ) : null}
             {phase.type === 'received' && phase.keysDiffer ? (
@@ -289,19 +317,32 @@ export function PairingDialog() {
                     {t('nearby.own.syncNow')}
                   </Button>
                 ) : null}
-                {phase.type === 'received' ? (
+                {phase.type === 'received' && phase.item.type !== 'hostsGroup' ? (
                   <Button
                     size="lg"
                     onClick={() => {
                       close(current.id);
+                      const { item } = phase;
                       navigate(
-                        phase.item.type === 'host' ? { page: 'hosts' } : { page: 'passwords' },
+                        item.type === 'host'
+                          ? { page: 'hosts' }
+                          : item.type === 'publicKey'
+                            ? {
+                                page: 'keys',
+                                keyId: keys.data?.keys.find(
+                                  (key) =>
+                                    key.name === phase.name && key.fingerprint === item.fingerprint,
+                                )?.id,
+                              }
+                            : { page: 'passwords' },
                       );
                     }}
                   >
                     {phase.item.type === 'host'
                       ? t('nearby.send.openHosts')
-                      : t('nearby.send.openPasswords')}
+                      : phase.item.type === 'publicKey'
+                        ? t('nearby.send.openKeys')
+                        : t('nearby.send.openPasswords')}
                   </Button>
                 ) : null}
                 <Button

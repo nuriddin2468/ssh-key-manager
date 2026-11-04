@@ -7,4 +7,4 @@ export type SendRequest = { "type": "password", entryId: string,
 /**
  * Send its 2FA secret too.
  */
-otp: boolean, } | { "type": "host", alias: string, };
+otp: boolean, } | { "type": "host", alias: string, } | { "type": "hostsGroup", name: string, } | { "type": "publicKey", keyId: string, };

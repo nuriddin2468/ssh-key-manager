@@ -112,8 +112,10 @@ It talks to the local network only for **Nearby**, and only when you ask:
   network for ten minutes and accepts connections from other copies of the app.
 - When you pair two computers, they talk directly to each other over an encrypted
   connection. Nothing goes through a server, ours or anyone else's.
-- When you send a password or a host, it goes only to the computer you pick, and only
-  after its user accepts it.
+- When you send a password, a host, a group of your hosts file or your public key, it
+  goes only to the computer you pick, and only after its user accepts it. A hosts file
+  group goes with its addresses and names, without comments; a public key goes
+  without its private key.
 - When you add one of your own computers, the one that has your vault gives it the
   vault and its recovery key, after you compare the codes and confirm with Touch ID,
   Windows Hello or your master password.
@@ -126,9 +128,11 @@ It talks to the local network only for **Nearby**, and only when you ask:
 
 Each computer you pair with is recorded in your vault with the name it gave and the
 date, and so is each of your own computers. You can remove them on the Nearby page.
-For each of your other computers, the app keeps what it needs to tell what changed
-since the last sync: hashes, never the hosts themselves, in its local data folder. The key that identifies your computer to
-paired ones is kept in your system's credential store.
+The key that identifies your computer to paired ones is kept in your system's
+credential store. A public key you receive is saved in `~/.ssh`, and its fingerprint
+in `nearby.json` in the app's data folder, so the app knows the key is someone
+else's. For each of your other computers, the app keeps what it needs to tell what
+changed since the last sync: hashes, never the hosts themselves, in the same folder.
 
 For each browser you connect, the app records in your vault the browser's name, your
 computer's name and the date you connected. You can disconnect a browser in
@@ -154,4 +158,4 @@ Questions about privacy: [open an issue](https://github.com/nuriddin2468/ssh-key
 Security problems: report them privately through
 [GitHub security advisories](https://github.com/nuriddin2468/ssh-key-manager/security/advisories/new).
 
-Last updated: 3 November 2026.
+Last updated: 4 November 2026.

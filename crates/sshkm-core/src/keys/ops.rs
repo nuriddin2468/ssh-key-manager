@@ -409,6 +409,77 @@ pub fn import(dir: &Path, source: &Path, file_name: Option<&str>) -> Result<KeyI
     })
 }
 
+/// Names `ssh` tries on its own when a host names no `IdentityFile`.
+const DEFAULT_IDENTITIES: &[&str] = &[
+    "id_rsa",
+    "id_ecdsa",
+    "id_ecdsa_sk",
+    "id_ed25519",
+    "id_ed25519_sk",
+    "id_xmss",
+    "id_dsa",
+];
+
+/// Saves another computer's public key in `dir` (created with mode 0700 if
+/// missing) as `<name>.pub`, mode 0644, written out again from what was
+/// parsed.
+///
+/// A name `ssh` tries on its own (`id_ed25519`, …) gets `-<from>` added, as
+/// `ssh` would otherwise offer someone else's key to every server. A name
+/// that either half of a pair has already gets a number (`work-2`), so the
+/// key never joins a private key of this computer. Returns the key as it is
+/// listed now.
+pub fn add_public(dir: &Path, name: &str, from: &str, key: &PublicKey) -> Result<KeyInfo> {
+    validate_file_name(name)?;
+    let base = if DEFAULT_IDENTITIES.contains(&name.to_ascii_lowercase().as_str()) {
+        format!("{name}-{}", file_label(from))
+    } else {
+        name.to_owned()
+    };
+    let line = public_line(key)?;
+    fsutil::ensure_private_dir(dir)?;
+    for n in 1..1000 {
+        let candidate = if n == 1 {
+            base.clone()
+        } else {
+            format!("{base}-{n}")
+        };
+        validate_file_name(&candidate)?;
+        let private = dir.join(&candidate);
+        let public = sibling_pub(&private);
+        if fs::symlink_metadata(&private).is_ok() || fs::symlink_metadata(&public).is_ok() {
+            continue;
+        }
+        match fsutil::write_new(&public, line.as_bytes(), 0o644) {
+            Ok(()) => return inspect(&public),
+            // Made meanwhile: try the next name.
+            Err(Error::AlreadyExists(_)) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Err(Error::AlreadyExists(dir.join(base).display().to_string()))
+}
+
+/// `label` as part of a file name: runs of other characters than ASCII
+/// letters, digits, `_` and `.` become `-`, at most 40 characters.
+fn file_label(label: &str) -> String {
+    let mut out = String::new();
+    for c in label.chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '_' | '.') {
+            out.push(c);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let out: String = out.trim_matches(['-', '.']).chars().take(40).collect();
+    let out = out.trim_end_matches(['-', '.']);
+    if out.is_empty() {
+        "received".to_owned()
+    } else {
+        out.to_owned()
+    }
+}
+
 /// Moves files to the system trash / recycle bin, so deletion can be undone.
 /// All paths must exist. On macOS the files go to the Trash via
 /// `NSFileManager`, which needs no Finder automation permission.
@@ -590,6 +661,66 @@ mod tests {
             );
         }
         assert!(validate_file_name(&"a".repeat(MAX_FILE_NAME + 1)).is_err());
+    }
+
+    #[test]
+    fn adds_public_keys_of_others_beside_no_private_key() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".ssh");
+        let key = PublicKey::from_openssh(td::OPENSSH_ED25519_PUB.trim()).unwrap();
+
+        let info = add_public(&dir, "work", "MacBook Aziza", &key).unwrap();
+        assert_eq!(info.name, "work");
+        assert_eq!(info.format, KeyFormat::PublicOnly);
+        assert_eq!(info.comment, "plain@test");
+        assert_eq!(
+            fs::read_to_string(dir.join("work.pub")).unwrap(),
+            td::OPENSSH_ED25519_PUB
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(dir.join("work.pub"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o644);
+        }
+
+        // Taken by the public key, or by a private key of this computer.
+        assert_eq!(add_public(&dir, "work", "x", &key).unwrap().name, "work-2");
+        fs::write(dir.join("deploy"), td::OPENSSH_ED25519).unwrap();
+        assert_eq!(
+            add_public(&dir, "deploy", "x", &key).unwrap().name,
+            "deploy-2"
+        );
+        assert!(!dir.join("deploy.pub").exists());
+
+        // Names `ssh` would offer to every server.
+        assert_eq!(
+            add_public(&dir, "id_ed25519", "MacBook Aziza", &key)
+                .unwrap()
+                .name,
+            "id_ed25519-MacBook-Aziza"
+        );
+        assert_eq!(
+            add_public(&dir, "ID_RSA", "Ноутбук", &key).unwrap().name,
+            "ID_RSA-received"
+        );
+        assert!(!dir.join("id_ed25519.pub").exists());
+
+        assert!(add_public(&dir, "../outside", "x", &key).is_err());
+        assert!(add_public(&dir, "config", "x", &key).is_err());
+        assert_eq!(scan(&dir).unwrap().keys.len(), 6);
+    }
+
+    #[test]
+    fn file_labels_are_file_name_safe() {
+        assert_eq!(file_label("MacBook Aziza"), "MacBook-Aziza");
+        assert_eq!(file_label("  ../evil/$(x) "), "evil-x");
+        assert_eq!(file_label("ThinkPad-Bobura's"), "ThinkPad-Bobura-s");
+        assert_eq!(file_label("Ноутбук"), "received");
+        assert_eq!(file_label(&"a".repeat(60)).len(), 40);
     }
 
     #[test]

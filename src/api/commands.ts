@@ -36,6 +36,7 @@ import type { OpenOptions } from '@/bindings/OpenOptions';
 import type { OtpCode } from '@/bindings/OtpCode';
 import type { PermissionFix } from '@/bindings/PermissionFix';
 import type { PromptAnswer } from '@/bindings/PromptAnswer';
+import type { ReceivedGroup } from '@/bindings/ReceivedGroup';
 import type { SavedHost } from '@/bindings/SavedHost';
 import type { SecretField } from '@/bindings/SecretField';
 import type { SendRequest } from '@/bindings/SendRequest';
@@ -186,6 +187,8 @@ export const api = {
   nearbyAnswer: (id: number, matched: boolean) => call<void>('nearby_answer', { id, matched }),
   /** Cancels a pairing, or forgets one that is over. */
   nearbyClose: (id: number) => call<void>('nearby_close', { id }),
+  /** The hosts file group that came with pairing `id`, waiting to be saved. */
+  nearbyReceivedGroup: (id: number) => call<ReceivedGroup | null>('nearby_received_group', { id }),
   nearbyContacts: () => call<Contact[]>('nearby_contacts'),
   nearbyRemoveContact: (key: string) => call<void>('nearby_remove_contact', { key }),
   /** A computer without a vault: visible for ten minutes to be given one, or hidden. */

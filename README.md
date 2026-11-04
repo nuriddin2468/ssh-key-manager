@@ -124,6 +124,7 @@ Builds are not code-signed yet (it's on the [roadmap](#roadmap)), so your system
 
 **Nearby**
 - Pair with a colleague's computer, or another of your own, on the same network: both screens show a six-digit code, and you pair only if they match.
+- Send a password, a host, a group of your hosts file or your public key. Nothing is saved until the other side accepts, and a hosts file group is written only after they review the change and give the administrator password.
 - Computers talk to each other directly and encrypted. There is no server in between, and your computer is visible to others only for ten minutes after you ask.
 - Set up a new computer of your own from one you have: it gets your vault over the network after you compare the codes and confirm with Touch ID or your master password, and sets its own master password.
 - Keep your hosts and server keys in step across your computers with **Sync now**. Each computer keeps its own sign-in keys; changes that run a program, many deletions and conflicts wait for your choice.

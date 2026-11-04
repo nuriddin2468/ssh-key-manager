@@ -88,7 +88,9 @@ function Shell() {
         {route.page === 'hosts' ? <HostsPage hostId={route.hostId} /> : null}
         {route.page === 'agent' ? <AgentPage /> : null}
         {route.page === 'known' ? <KnownHostsPage /> : null}
-        {route.page === 'hostsFile' ? <HostsFilePage line={route.line} /> : null}
+        {route.page === 'hostsFile' ? (
+          <HostsFilePage line={route.line} received={route.received} />
+        ) : null}
         {route.page === 'audit' ? <AuditPage /> : null}
         {route.page === 'passwords' ? <PasswordsPage entryId={route.entryId} /> : null}
         {route.page === 'terminal' ? (

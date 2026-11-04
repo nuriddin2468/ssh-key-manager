@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query';
 import { isTauri } from '@tauri-apps/api/core';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import {
@@ -14,6 +15,7 @@ import {
   Network,
   Pencil,
   Plus,
+  Send,
   Signpost,
   Trash2,
   Undo2,
@@ -22,6 +24,7 @@ import {
 import { type PointerEvent, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
+import { api } from '@/api/commands';
 import { useEnvironment, useHostsFile } from '@/api/queries';
 import { errorMessage, toastError } from '@/api/useAppMutation';
 import { useLeaveGuard, useRouter } from '@/app/router';
@@ -50,11 +53,13 @@ import { Spinner } from '@/components/ui/Spinner';
 import { Switch } from '@/components/ui/Switch';
 import { Tile } from '@/components/ui/Tile';
 import { Tooltip } from '@/components/ui/Tooltip';
+import { SendDialog } from '@/features/nearby/SendDialog';
 import { cn } from '@/lib/cn';
 import { fileManagerName } from '@/lib/platform';
 import { BackupsDialog } from './BackupsDialog';
 import {
   addEntry,
+  addReceived,
   baseline,
   changeCount,
   createGroup,
@@ -81,7 +86,7 @@ import {
 import { EntryDialog, GroupDialog } from './EntryDialog';
 import { LookupDialog } from './LookupDialog';
 import { isExpired, KIND_STYLE } from './model';
-import { ReviewDialog } from './ReviewDialog';
+import { type ReceivedNote, ReviewDialog } from './ReviewDialog';
 import { useEntryDrag } from './useEntryDrag';
 
 type Filter = 'all' | 'on' | 'off' | 'blocked';
@@ -111,8 +116,22 @@ type OpenDialog =
   | { kind: 'create'; move: EntryRow | null }
   // The draft and the file it was made on, kept while the password prompt is
   // open, so the review stays put if the file changes meanwhile.
-  | { kind: 'review'; draft: Draft; view: HostsFileView; conflict: boolean }
-  | { kind: 'backups' };
+  | {
+      kind: 'review';
+      draft: Draft;
+      view: HostsFileView;
+      conflict: boolean;
+      /** The review opened for a group another computer sent. */
+      received?: ReceivedNote;
+    }
+  | { kind: 'backups' }
+  | { kind: 'send'; group: string };
+
+/**
+ * Received groups already added to a draft, by pairing: the page may mount
+ * again with the same route, and must not add one twice.
+ */
+const shownGroups = new Set<number>();
 
 /** What an entry row's address points at, also for entries not yet saved. */
 function kindOf(row: EntryRow): HostsAddressKind {
@@ -156,7 +175,7 @@ function useDialogItems() {
 const editableEntries = (section: Section) =>
   section.entries.filter((row) => row.status !== 'removed' && !row.base?.system);
 
-export function HostsFilePage({ line }: { line?: number }) {
+export function HostsFilePage({ line, received }: { line?: number; received?: number }) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const hostsFile = useHostsFile();
@@ -199,6 +218,34 @@ export function HostsFilePage({ line }: { line?: number }) {
   );
 
   const loaded = info !== undefined;
+
+  // A group another computer sent: added to the draft and shown for review,
+  // so nothing is written before the administrator password.
+  const incoming = useQuery({
+    queryKey: ['nearby', 'received', received],
+    queryFn: () => api.nearbyReceivedGroup(received ?? 0),
+    enabled: received !== undefined && !shownGroups.has(received),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  useEffect(() => {
+    const group = incoming.data;
+    if (!group || !loaded || shownGroups.has(group.id)) return;
+    shownGroups.add(group.id);
+    const added = addReceived(current(draftState, revision), view, group.name, group.entries);
+    setDraftState(added.draft);
+    setDialog({
+      kind: 'review',
+      draft: added.draft,
+      view,
+      conflict: false,
+      received: {
+        group: added.group,
+        from: group.from ?? t('nearby.send.anotherComputer'),
+        count: group.entries.length,
+      },
+    });
+  }, [incoming.data, loaded, draftState, revision, view, t]);
+
   // Opened from an audit finding or a lookup: bring that line into view.
   useEffect(() => {
     if (line === undefined || !loaded) return;
@@ -577,6 +624,12 @@ export function HostsFilePage({ line }: { line?: number }) {
                         onUngroup={() => update((d) => ungroup(d, view, group.name))}
                         onDelete={() => deleteGroup(section, group)}
                         onRestore={() => restoreSection(section, group)}
+                        // What is sent is read from the file, so only with nothing unsaved.
+                        onSend={
+                          group.original !== null && pending === 0
+                            ? () => setDialog({ kind: 'send', group: group.name })
+                            : undefined
+                        }
                       />
                       {open ? (
                         <div className="flex flex-col pb-1">
@@ -749,6 +802,7 @@ export function HostsFilePage({ line }: { line?: number }) {
             revision={dialog.draft.revision}
             changes={toChanges(dialog.draft)}
             conflict={dialog.conflict}
+            received={dialog.received}
             onApplied={() => {
               discard();
               setDialog(null);
@@ -758,7 +812,13 @@ export function HostsFilePage({ line }: { line?: number }) {
               const carried = rebase(dialog.draft, dialog.view, file.view, file.revision);
               if (carried) {
                 setDraftState(carried);
-                setDialog({ kind: 'review', draft: carried, view: file.view, conflict: true });
+                setDialog({
+                  kind: 'review',
+                  draft: carried,
+                  view: file.view,
+                  conflict: true,
+                  received: dialog.received,
+                });
               } else {
                 toast.error(t('hostsFile.stale'));
                 discard();
@@ -769,6 +829,12 @@ export function HostsFilePage({ line }: { line?: number }) {
           />
         ) : dialog?.kind === 'backups' ? (
           <BackupsDialog onDone={() => setDialog(null)} />
+        ) : dialog?.kind === 'send' ? (
+          <SendDialog
+            what={{ type: 'hostsGroup', name: dialog.group }}
+            name={dialog.group}
+            onStarted={() => setDialog(null)}
+          />
         ) : null}
       </Dialog>
       <ConfirmDialog
@@ -831,6 +897,8 @@ interface GroupHeaderProps {
   onUngroup: () => void;
   onDelete: () => void;
   onRestore: () => void;
+  /** Sends the group to a computer nearby; missing while it can't be sent. */
+  onSend: (() => void) | undefined;
 }
 
 function GroupHeader({
@@ -848,6 +916,7 @@ function GroupHeader({
   onUngroup,
   onDelete,
   onRestore,
+  onSend,
 }: GroupHeaderProps) {
   const { t } = useTranslation();
   const dialogs = useDialogItems();
@@ -933,6 +1002,15 @@ function GroupHeader({
               {group.original !== null ? (
                 <MenuItem icon={<Ungroup className="size-4" />} onSelect={onUngroup}>
                   {t('hostsFile.groupUngroup')}
+                </MenuItem>
+              ) : null}
+              {group.original !== null ? (
+                <MenuItem
+                  icon={<Send className="size-4" />}
+                  disabled={!onSend}
+                  onSelect={dialogs.open(() => onSend?.())}
+                >
+                  {t('hostsFile.groupSend')}
                 </MenuItem>
               ) : null}
               <MenuSeparator />

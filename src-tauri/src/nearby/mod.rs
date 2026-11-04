@@ -13,7 +13,8 @@
 //!   ([`sync`]). Contacts and devices are kept in the vault, so all of them
 //!   need it unlocked, but for a computer being given one.
 //!
-//! The device key lives in the system's credential store, the device name in
+//! The device key lives in the system's credential store; the device name,
+//! and the fingerprints of public keys received from others, in
 //! `nearby.json` in the app's data folder. The UI follows [`CHANGED_EVENT`],
 //! which carries the whole [`NearbyStatus`].
 
@@ -53,7 +54,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use zeroize::Zeroizing;
 
-use self::items::SendRequest;
+use self::items::{ReceivedGroup, SendRequest};
 use self::pairing::{PairingFailure, PairingPhase, Purpose, Side, conversation};
 pub use self::presence::OWN_SERVICE_TYPE;
 use self::presence::{OwnFound, Presence};
@@ -172,9 +173,17 @@ pub struct MyDevice {
     pub reachable: bool,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+/// What `nearby.json` holds.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Settings {
+    /// The device name the user chose.
     name: Option<String>,
+    /// Fingerprints of public keys received from others, which the audit
+    /// knows have no private key here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    received_keys: Vec<String>,
+    /// `false`: not announced to the user's devices.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reachable: Option<bool>,
 }
@@ -191,7 +200,9 @@ pub struct Nearby {
 #[derive(Default)]
 struct Inner {
     name: String,
-    reachable: bool,
+    settings: Settings,
+    /// The last hosts file group received, until another one comes.
+    received_group: Option<ReceivedGroup>,
     identity: Option<Arc<Identity>>,
     mdns: Option<ServiceDaemon>,
     visible: Option<Visible>,
@@ -257,7 +268,8 @@ impl Nearby {
             .unwrap_or_default();
         let name = settings
             .name
-            .map(|name| clean_name(&name))
+            .as_deref()
+            .map(clean_name)
             .filter(|name| !name.is_empty())
             .unwrap_or_else(default_name);
         Self {
@@ -266,7 +278,7 @@ impl Nearby {
             next_id: AtomicU32::new(1),
             inner: Mutex::new(Inner {
                 name,
-                reachable: settings.reachable.unwrap_or(true),
+                settings,
                 ..Inner::default()
             }),
         }
@@ -299,7 +311,7 @@ impl Nearby {
                 .as_ref()
                 .and_then(|visible| Some(SocketAddr::new(local_ip()?, visible.port).to_string())),
             joining: inner.visible.as_ref().is_some_and(|visible| visible.join),
-            reachable: inner.reachable,
+            reachable: inner.settings.reachable != Some(false),
             present: inner.presence.is_some(),
             own_found,
             devices: {
@@ -326,8 +338,12 @@ impl Nearby {
         }
         let visible = {
             let mut inner = self.lock();
+            let settings = Settings {
+                name: Some(name.clone()),
+                ..inner.settings.clone()
+            };
+            self.save(&mut inner, settings)?;
             inner.name = name;
-            self.save_settings(&inner)?;
             inner.visible.is_some()
         };
         // Others see the new name once it is announced again.
@@ -342,22 +358,58 @@ impl Nearby {
     pub fn set_reachable(self: &Arc<Self>, on: bool) -> AppResult<NearbyStatus> {
         {
             let mut inner = self.lock();
-            inner.reachable = on;
-            self.save_settings(&inner)?;
+            let settings = Settings {
+                reachable: (!on).then_some(false),
+                ..inner.settings.clone()
+            };
+            self.save(&mut inner, settings)?;
         }
         self.reconcile_presence();
         Ok(self.changed())
     }
 
-    fn save_settings(&self, inner: &Inner) -> AppResult<()> {
-        let settings = Settings {
-            name: Some(inner.name.clone()),
-            reachable: (!inner.reachable).then_some(false),
-        };
+    /// Fingerprints of the public keys received from others.
+    pub fn received_keys(&self) -> Vec<String> {
+        self.lock().settings.received_keys.clone()
+    }
+
+    /// Remembers a public key received from someone else.
+    fn remember_key(&self, fingerprint: &str) -> AppResult<()> {
+        let mut inner = self.lock();
+        if inner
+            .settings
+            .received_keys
+            .iter()
+            .any(|known| known == fingerprint)
+        {
+            return Ok(());
+        }
+        let mut settings = inner.settings.clone();
+        settings.received_keys.push(fingerprint.to_owned());
+        self.save(&mut inner, settings)
+    }
+
+    /// The hosts file group that came with pairing `id`, if it is the last
+    /// one received.
+    pub fn received_group(&self, id: u32) -> Option<ReceivedGroup> {
+        self.lock()
+            .received_group
+            .clone()
+            .filter(|group| group.id == id)
+    }
+
+    fn keep_group(&self, group: ReceivedGroup) {
+        self.lock().received_group = Some(group);
+    }
+
+    /// Writes `settings` to `nearby.json`, with the lock held so that two
+    /// writes never cross, and keeps them.
+    fn save(&self, inner: &mut Inner, settings: Settings) -> AppResult<()> {
         let json = serde_json::to_vec_pretty(&settings)
             .map_err(|e| AppError::new(ErrorCode::Io, e.to_string()))?;
         fsutil::ensure_private_dir(&self.data_dir)?;
         fsutil::atomic_write(&self.data_dir.join(SETTINGS_FILE), &json, 0o600)?;
+        inner.settings = settings;
         Ok(())
     }
 
@@ -1161,8 +1213,12 @@ impl Side for AppSide<'_> {
     }
 
     fn store(&self, item: &Item) -> Result<(String, bool), PairingFailure> {
-        let (state, app) = self.context()?;
-        items::store(&state, app, item)
+        let peer = self
+            .nearby
+            .slot(self.id)
+            .as_mut()
+            .and_then(|slot| slot.view.peer.clone());
+        items::store(self.nearby, self.id, peer.as_deref(), item)
     }
 
     fn answer(&self, wait: Duration) -> Result<Option<bool>, PairingFailure> {

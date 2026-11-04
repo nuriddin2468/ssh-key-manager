@@ -102,6 +102,7 @@ pub fn run() {
             commands::nearby::nearby_send,
             commands::nearby::nearby_answer,
             commands::nearby::nearby_close,
+            commands::nearby::nearby_received_group,
             commands::nearby::nearby_contacts,
             commands::nearby::nearby_remove_contact,
             commands::nearby::nearby_join,

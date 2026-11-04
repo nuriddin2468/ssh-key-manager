@@ -19,7 +19,8 @@ export type Route =
   | { page: 'hosts'; hostId?: number }
   | { page: 'agent' }
   | { page: 'known' }
-  | { page: 'hostsFile'; line?: number }
+  /** `received` shows the hosts file group that came with that pairing as a change. */
+  | { page: 'hostsFile'; line?: number; received?: number }
   | { page: 'audit' }
   | { page: 'passwords'; entryId?: string }
   /** `connect` starts a session to that alias; `nonce` makes each request a new one. */

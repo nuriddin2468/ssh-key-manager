@@ -19,10 +19,15 @@
 
 use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
+use std::net::IpAddr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use ssh_key::{HashAlg, PublicKey};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use zeroize::Zeroizing;
 
+use crate::hosts_file::{is_system_name, is_valid_name};
+use crate::keys::validate_file_name;
 use crate::sync::Manifest;
 use crate::{Error, Result};
 
@@ -188,6 +193,29 @@ pub enum Item {
         proxy_jump: Option<String>,
         host_keys: Vec<HostKey>,
     },
+    /// A group of the sender's hosts file: its name and its entries. The
+    /// receiver writes it only after its user reviewed the change and gave
+    /// the administrator password.
+    HostsGroup {
+        name: String,
+        entries: Vec<HostsEntry>,
+    },
+    /// The sender's public key as one OpenSSH line, and the name of its file
+    /// there (without `.pub`).
+    PublicKey { name: String, key: String },
+}
+
+/// One entry of a hosts file group. A comment does not go over.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostsEntry {
+    /// An IPv4 or IPv6 address, without a scope.
+    pub address: String,
+    pub names: Vec<String>,
+    /// False: the entry is there, commented out.
+    pub enabled: bool,
+    /// When a temporary entry expires (RFC 3339).
+    pub expires: Option<String>,
 }
 
 /// A server's public key, as `known_hosts` has it.
@@ -222,12 +250,40 @@ pub enum ItemSummary {
         /// How many of the server's keys come with it.
         host_keys: u32,
     },
+    #[serde(rename_all = "camelCase")]
+    HostsGroup {
+        name: String,
+        /// How many entries it has.
+        entries: u32,
+        /// The first names of its first few entries, each once.
+        names: Vec<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    PublicKey {
+        /// The key's file name on the sender's computer.
+        name: String,
+        /// E.g. `ssh-ed25519`; empty if the key can't be read.
+        key_type: String,
+        /// `SHA256:…`, as `ssh-keygen -l` prints it.
+        fingerprint: String,
+        comment: String,
+    },
 }
 
 /// Most host keys one host may bring.
 const MAX_HOST_KEYS: usize = 16;
 /// Longest text field of an item, in bytes.
 const MAX_FIELD: usize = 64 * 1024;
+/// Most entries one hosts file group may bring.
+pub const MAX_GROUP_ENTRIES: usize = 1000;
+/// Most names one hosts file entry may list.
+const MAX_ENTRY_NAMES: usize = 64;
+/// Most bytes of addresses and names one group may bring.
+const MAX_GROUP_BYTES: usize = 256 * 1024;
+/// Longest group name, in characters (as the hosts file allows).
+const MAX_GROUP_NAME: usize = 64;
+/// How many entries a group's summary names.
+const SUMMARY_NAMES: usize = 3;
 
 impl Item {
     pub fn summary(&self) -> ItemSummary {
@@ -264,7 +320,41 @@ impl Item {
                 ItemSummary::Host {
                     alias: alias.clone(),
                     address,
-                    host_keys: u32::try_from(host_keys.len()).unwrap_or(u32::MAX),
+                    host_keys: count(host_keys.len()),
+                }
+            }
+            Self::HostsGroup { name, entries } => {
+                let mut names: Vec<String> = Vec::new();
+                for first in entries.iter().filter_map(|entry| entry.names.first()) {
+                    if names.len() == SUMMARY_NAMES {
+                        break;
+                    }
+                    if !names.contains(first) {
+                        names.push(first.clone());
+                    }
+                }
+                ItemSummary::HostsGroup {
+                    name: name.clone(),
+                    entries: count(entries.len()),
+                    names,
+                }
+            }
+            Self::PublicKey { name, key } => {
+                let parsed = PublicKey::from_openssh(key).ok();
+                ItemSummary::PublicKey {
+                    name: name.clone(),
+                    key_type: parsed
+                        .as_ref()
+                        .map(|key| key.algorithm().as_str().to_owned())
+                        .unwrap_or_default(),
+                    fingerprint: parsed
+                        .as_ref()
+                        .map(|key| key.fingerprint(HashAlg::Sha256).to_string())
+                        .unwrap_or_default(),
+                    comment: parsed
+                        .as_ref()
+                        .map(|key| key.comment().to_owned())
+                        .unwrap_or_default(),
                 }
             }
         }
@@ -272,7 +362,10 @@ impl Item {
 
     /// Fails unless every field is something the receiver may save: no
     /// control characters, sizes in bounds, and a host's names made only of
-    /// the characters a name has, so none of them can carry a command.
+    /// the characters a name has, so none of them can carry a command. A
+    /// hosts file group needs IP addresses and host names (none the system
+    /// relies on, like `localhost`); a public key must be one, and its file
+    /// name one a key may have.
     pub fn check(&self) -> Result<()> {
         match self {
             Self::Password {
@@ -334,8 +427,72 @@ impl Item {
                 }
                 Ok(())
             }
+            Self::HostsGroup { name, entries } => check_group(name, entries),
+            Self::PublicKey { name, key } => check_public_key(name, key),
         }
     }
+}
+
+/// See [`Item::check`].
+fn check_group(name: &str, entries: &[HostsEntry]) -> Result<()> {
+    if name.trim() != name
+        || name.is_empty()
+        || name.chars().count() > MAX_GROUP_NAME
+        || name.chars().any(char::is_control)
+    {
+        return Err(Error::invalid(format!("not a group name: {name:?}")));
+    }
+    if entries.is_empty() || entries.len() > MAX_GROUP_ENTRIES {
+        return Err(Error::invalid(format!(
+            "a group brings 1 to {MAX_GROUP_ENTRIES} entries"
+        )));
+    }
+    let mut bytes = 0;
+    for entry in entries {
+        // No scope (`%en0`): it names an interface of the sender's.
+        if entry.address.parse::<IpAddr>().is_err() {
+            return Err(Error::invalid(format!(
+                "not an IP address: {:?}",
+                entry.address
+            )));
+        }
+        if entry.names.is_empty() || entry.names.len() > MAX_ENTRY_NAMES {
+            return Err(Error::invalid("an entry needs 1 to 64 names"));
+        }
+        if let Some(bad) = entry
+            .names
+            .iter()
+            .find(|name| !is_valid_name(name) || is_system_name(name))
+        {
+            return Err(Error::invalid(format!("not a name it may set: {bad:?}")));
+        }
+        if let Some(expires) = &entry.expires
+            && OffsetDateTime::parse(expires, &Rfc3339).is_err()
+        {
+            return Err(Error::invalid(format!("not a time: {expires:?}")));
+        }
+        bytes += entry.address.len() + entry.names.iter().map(String::len).sum::<usize>();
+    }
+    if bytes > MAX_GROUP_BYTES {
+        return Err(Error::invalid("the group is too large"));
+    }
+    Ok(())
+}
+
+/// See [`Item::check`].
+fn check_public_key(name: &str, key: &str) -> Result<()> {
+    validate_file_name(name)?;
+    text(key, false)?;
+    let key_type = key.split_ascii_whitespace().next().unwrap_or_default();
+    if key_type.ends_with("-cert-v01@openssh.com") {
+        return Err(Error::invalid("a certificate, not a key"));
+    }
+    PublicKey::from_openssh(key).map_err(|_| Error::invalid("not an OpenSSH public key"))?;
+    Ok(())
+}
+
+fn count(n: usize) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
 }
 
 impl fmt::Debug for Item {
@@ -564,6 +721,140 @@ mod tests {
             *title = "a\u{0}b".into();
         }
         assert!(bad.check().is_err());
+    }
+
+    fn group() -> Item {
+        Item::HostsGroup {
+            name: "dev stack".into(),
+            entries: vec![
+                HostsEntry {
+                    address: "10.0.4.12".into(),
+                    names: vec!["api.dev.local".into(), "api".into()],
+                    enabled: true,
+                    expires: None,
+                },
+                HostsEntry {
+                    address: "fd00::7".into(),
+                    names: vec!["db.dev.local".into()],
+                    enabled: false,
+                    expires: Some("2026-11-05T09:00:00Z".into()),
+                },
+            ],
+        }
+    }
+
+    const PUBLIC: &str = include_str!("../keys/testdata/openssh_ed25519.pub");
+
+    fn public_key() -> Item {
+        Item::PublicKey {
+            name: "id_ed25519".into(),
+            key: PUBLIC.trim().into(),
+        }
+    }
+
+    #[test]
+    fn summarises_groups_and_keys() {
+        assert_eq!(
+            group().summary(),
+            ItemSummary::HostsGroup {
+                name: "dev stack".into(),
+                entries: 2,
+                names: vec!["api.dev.local".into(), "db.dev.local".into()],
+            }
+        );
+        assert_eq!(
+            public_key().summary(),
+            ItemSummary::PublicKey {
+                name: "id_ed25519".into(),
+                key_type: "ssh-ed25519".into(),
+                fingerprint: "SHA256:76vvbGumhP/HpDH4tlyySHWs5hgRZJHr2wQ7hSDwRK8".into(),
+                comment: "plain@test".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_groups_summary_names_each_name_once() {
+        let mut item = group();
+        if let Item::HostsGroup { entries, .. } = &mut item {
+            let first = entries[0].clone();
+            entries.insert(1, first.clone());
+            entries.push(first);
+        }
+        let ItemSummary::HostsGroup { entries, names, .. } = item.summary() else {
+            unreachable!()
+        };
+        assert_eq!(entries, 4);
+        assert_eq!(names, ["api.dev.local", "db.dev.local"]);
+    }
+
+    #[test]
+    fn checks_groups() {
+        assert!(group().check().is_ok());
+        let with = |change: &dyn Fn(&mut String, &mut Vec<HostsEntry>)| {
+            let mut item = group();
+            if let Item::HostsGroup { name, entries } = &mut item {
+                change(name, entries);
+            }
+            item.check().is_err()
+        };
+        assert!(with(&|name, _| *name = "a\nb".into()));
+        assert!(with(&|name, _| *name = " padded".into()));
+        assert!(with(&|name, _| *name = "x".repeat(65)));
+        assert!(with(&|_, entries| entries.clear()));
+        assert!(with(
+            &|_, entries| entries[0].address = "10.0.0.1 evil".into()
+        ));
+        assert!(with(&|_, entries| entries[0].address = "fe80::1%en0".into()));
+        assert!(with(&|_, entries| entries[0].address = "example.com".into()));
+        assert!(with(&|_, entries| entries[0].names.clear()));
+        assert!(with(
+            &|_, entries| entries[0].names[0] = "$(curl evil)".into()
+        ));
+        assert!(with(&|_, entries| entries[0].names[0] = "a b".into()));
+        assert!(with(&|_, entries| entries[0].names[0] = "LocalHost".into()));
+        assert!(with(
+            &|_, entries| entries[1].expires = Some("tomorrow".into())
+        ));
+        assert!(with(&|_, entries| {
+            let entry = entries[0].clone();
+            entries.resize(MAX_GROUP_ENTRIES + 1, entry);
+        }));
+    }
+
+    #[test]
+    fn checks_public_keys() {
+        assert!(public_key().check().is_ok());
+        let with = |name: &str, key: &str| {
+            Item::PublicKey {
+                name: name.into(),
+                key: key.into(),
+            }
+            .check()
+            .is_err()
+        };
+        let key = PUBLIC.trim();
+        for name in [
+            "",
+            ".hidden",
+            "../id",
+            "a/b",
+            "config",
+            "Authorized_Keys",
+            "id.pub",
+        ] {
+            assert!(with(name, key), "{name:?}");
+        }
+        assert!(with("id", "ssh-ed25519 AAAA not-a-key"));
+        assert!(with(
+            "id",
+            &format!("{key}\ncommand=\"x\" ssh-ed25519 AAAA")
+        ));
+        assert!(with(
+            "id",
+            &key.replacen("ssh-ed25519", "ssh-ed25519-cert-v01@openssh.com", 1)
+        ));
+        assert!(with("id", "-----BEGIN OPENSSH PRIVATE KEY-----"));
     }
 
     #[test]

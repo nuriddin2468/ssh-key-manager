@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
 import { useEnvironment } from '@/api/queries';
 import { toastError } from '@/api/useAppMutation';
+import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
 import { Logo } from '@/components/Logo';
 import { PageBody, Toolbar } from '@/components/layout/Toolbar';
@@ -189,6 +190,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 function PasswordsGroup() {
   const { t } = useTranslation();
   const { navigate } = useRouter();
+  const dialogs = useDialogs();
   const { status, settings, update } = useVaultSettings();
   const [dialog, setDialog] = useState<'master' | 'recovery' | 'device' | null>(null);
   const unlockKeysId = useId();
@@ -314,9 +316,19 @@ function PasswordsGroup() {
           <span className="min-w-0 text-[12.5px] text-muted">
             {status.state === 'locked' ? t('passwords.unlockForSecurity') : t('passwords.noVault')}
           </span>
-          <Button size="sm" className="ml-auto" onClick={() => navigate({ page: 'passwords' })}>
-            {t('passwords.openPasswords')}
-          </Button>
+          {status.state === 'locked' ? (
+            <Button
+              size="sm"
+              className="ml-auto"
+              onClick={() => dialogs.unlockVault({ description: t('passwords.unlockForSecurity') })}
+            >
+              {t('passwords.unlock')}
+            </Button>
+          ) : (
+            <Button size="sm" className="ml-auto" onClick={() => navigate({ page: 'passwords' })}>
+              {t('passwords.openPasswords')}
+            </Button>
+          )}
         </div>
       )}
 

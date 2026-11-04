@@ -3,7 +3,7 @@ import { type ReactNode, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
 import { useAppMutation } from '@/api/useAppMutation';
-import { useRouter } from '@/app/router';
+import { useDialogs } from '@/app/dialogs';
 import type { PairedBrowser } from '@/bindings/PairedBrowser';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -21,7 +21,7 @@ import { useBrowserStatus } from './queries';
  */
 export function BrowserAutofillSection() {
   const { t, i18n } = useTranslation();
-  const { navigate } = useRouter();
+  const dialogs = useDialogs();
   const titleId = useId();
   const switchId = useId();
   const status = useBrowserStatus().data;
@@ -131,9 +131,9 @@ export function BrowserAutofillSection() {
                   <Button
                     size="sm"
                     className="ml-auto"
-                    onClick={() => navigate({ page: 'passwords' })}
+                    onClick={() => dialogs.unlockVault({ description: t('browser.locked') })}
                   >
-                    {t('passwords.openPasswords')}
+                    {t('passwords.unlock')}
                   </Button>
                 </div>
               ) : status.paired.length === 0 ? (

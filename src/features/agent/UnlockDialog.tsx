@@ -3,7 +3,7 @@ import { type FormEvent, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
 import { useAppMutation } from '@/api/useAppMutation';
-import { useRouter } from '@/app/router';
+import { useDialogs } from '@/app/dialogs';
 import type { KeyView } from '@/bindings/KeyView';
 import { Button } from '@/components/ui/Button';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
@@ -39,7 +39,7 @@ export function UnlockDialog({
   onUnlocked,
 }: UnlockDialogProps) {
   const { t } = useTranslation();
-  const { navigate } = useRouter();
+  const dialogs = useDialogs();
   const vault = useVaultKey(keyView.fingerprint);
   const saved = vault.vault === 'unlocked' ? vault.entry : undefined;
   const [passphrase, setPassphrase] = useState('');
@@ -64,10 +64,12 @@ export function UnlockDialog({
       },
     },
   );
-  const openVault = () => {
-    onDone();
-    navigate({ page: 'passwords' });
-  };
+  // Opens the vault above this dialog, then unlocks the key with what it saved.
+  const openVault = () =>
+    dialogs.unlockVault({
+      description: t('agent.savedLocked'),
+      onUnlocked: () => unlockSaved.mutate({ lifetime }),
+    });
 
   const unlock = useAppMutation(
     (vars: { passphrase: string; lifetime: number | null }) =>

@@ -5,6 +5,7 @@
 import type { AgentView } from '@/bindings/AgentView';
 import type { AuditReport } from '@/bindings/AuditReport';
 import type { ConfigFile } from '@/bindings/ConfigFile';
+import type { ConnectionTest } from '@/bindings/ConnectionTest';
 import type { Environment } from '@/bindings/Environment';
 import type { Finding } from '@/bindings/Finding';
 import type { GenerateKeyRequest } from '@/bindings/GenerateKeyRequest';
@@ -16,6 +17,7 @@ import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostEntry } from '@/bindings/KnownHostEntry';
 import type { PermissionFix } from '@/bindings/PermissionFix';
 import { browserHandlers } from './browser';
+import { historyHandlers, recordCheck } from './history';
 import { hostsFileFindings, hostsFileHandlers } from './hostsFile';
 import { nearbyHandlers } from './nearby';
 import { serverKeysHandlers } from './serverKeys';
@@ -474,6 +476,20 @@ function vaultTest(args: Record<string, unknown>) {
   );
 }
 
+/** A check that is recorded in the connection history, as the backend does. */
+function withHistory(check: (args: Record<string, unknown>) => unknown) {
+  return (args: Record<string, unknown>) => {
+    const recorded = (result: unknown) => {
+      if (result && typeof result === 'object' && 'ok' in result) {
+        recordCheck(String(args.alias), result as ConnectionTest);
+      }
+      return result;
+    };
+    const result = check(args);
+    return result instanceof Promise ? result.then(recorded) : recorded(result);
+  };
+}
+
 const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   ...vaultHandlers,
   ...vaultLinkHandlers({ keys: () => keys, hosts, agent: agentLoaded }),
@@ -481,12 +497,13 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   ...browserHandlers,
   ...terminalHandlers(hosts),
   ...nearbyHandlers,
+  ...historyHandlers,
   ...serverKeysHandlers({
     keys: () => keys,
     batchLogin: keyTest,
     vaultLogin: (alias) => vaultTest({ alias }) as ReturnType<typeof keyTest>,
   }),
-  vault_test_connection: vaultTest,
+  vault_test_connection: withHistory(vaultTest),
   get_environment: (): Environment => ({
     paths: { home: HOME, dir: DIR, config: `${DIR}/config`, knownHosts: `${DIR}/known_hosts` },
     platform: 'macos',
@@ -596,7 +613,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       )
       .join('\n\n'),
   write_config_raw: configFile,
-  test_connection: plainTest,
+  test_connection: withHistory(plainTest),
   install_public_key: ({ alias }) => ({
     ok: false,
     added: false,

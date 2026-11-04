@@ -19,6 +19,7 @@ import type { SignIn } from '@/bindings/SignIn';
 import type { TerminalEvent } from '@/bindings/TerminalEvent';
 import type { TerminalInfo } from '@/bindings/TerminalInfo';
 import type { VaultStatus } from '@/bindings/VaultStatus';
+import { recordSession } from './history';
 import { vaultHandlers } from './vault';
 
 type Emit = (message: ArrayBuffer | TerminalEvent) => void;
@@ -50,6 +51,12 @@ function write(session: Session, text: string) {
 function setState(session: Session, state: SessionState) {
   if (session.ended) return;
   session.info.phase = state.phase;
+  const { alias, startedAt } = session.info;
+  if (state.phase === 'connected') recordSession(alias, startedAt, { signedIn: true });
+  if (state.phase === 'failed') recordSession(alias, startedAt, { failed: state.failure.reason });
+  if (state.phase === 'ended') {
+    recordSession(alias, startedAt, { durationSecs: state.durationSecs });
+  }
   if (state.phase === 'ended' || state.phase === 'failed') {
     session.ended = true;
     sessions.delete(session.info.id);

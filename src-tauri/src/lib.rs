@@ -8,6 +8,7 @@ mod device_unlock;
 mod error;
 #[cfg(target_os = "linux")]
 mod gpu;
+mod history;
 #[cfg(target_os = "macos")]
 mod menu;
 pub mod nearby;
@@ -92,6 +93,8 @@ pub fn run() {
             commands::config::read_config_raw,
             commands::config::write_config_raw,
             commands::config::test_connection,
+            commands::config::connection_history,
+            commands::config::clear_connection_history,
             commands::remote::install_public_key,
             commands::remote::server_keys,
             commands::nearby::nearby_status,

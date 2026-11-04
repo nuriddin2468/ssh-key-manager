@@ -3,6 +3,7 @@ import { type ReactNode, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
 import { toastError } from '@/api/useAppMutation';
+import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
 import type { EntryDetail } from '@/bindings/EntryDetail';
 import type { EntrySummary } from '@/bindings/EntrySummary';
@@ -86,13 +87,14 @@ interface VaultSaveRowProps {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
   disabled?: boolean;
-  /** Called before going to the Passwords page, e.g. to close the dialog. */
+  /** Called before going to the Passwords page to set up a vault, e.g. to close the dialog. */
   onLeave: () => void;
 }
 
 /**
  * A row for a `SwitchGroup`: the "save in the vault" switch while the vault
- * is unlocked, else a short explanation with a way to the Passwords page.
+ * is unlocked; a locked vault opens above the dialog; without a vault, a way
+ * to the Passwords page to set one up.
  */
 export function VaultSaveRow({
   vault,
@@ -103,6 +105,7 @@ export function VaultSaveRow({
 }: VaultSaveRowProps) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
+  const dialogs = useDialogs();
   const leave = () => {
     onLeave();
     navigate({ page: 'passwords' });
@@ -124,7 +127,7 @@ export function VaultSaveRow({
           label={t('generate.vaultLocked')}
           hint={t('generate.vaultLockedHint')}
           action={t('generate.unlockVault')}
-          onAction={leave}
+          onAction={() => dialogs.unlockVault({ description: t('generate.vaultLockedHint') })}
         />
       );
     case 'missing':

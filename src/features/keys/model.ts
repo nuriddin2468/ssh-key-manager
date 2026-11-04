@@ -8,6 +8,15 @@ export const hasPrivate = (key: KeyInfo) => key.privatePath !== null;
 export const isPlain = (key: KeyInfo) =>
   hasPrivate(key) && key.encrypted === false && !key.hardware;
 
+/** How the key's private half is protected, as a `keys.pass…` label; `null` without one. */
+export function passphraseLabel(
+  key: KeyInfo,
+): 'keys.passHardware' | 'keys.passProtected' | 'keys.passNone' | null {
+  if (!hasPrivate(key)) return null;
+  if (key.hardware) return 'keys.passHardware';
+  return key.encrypted ? 'keys.passProtected' : 'keys.passNone';
+}
+
 export const isProtected = (key: KeyInfo) =>
   hasPrivate(key) && (key.encrypted === true || key.hardware);
 

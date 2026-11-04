@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { api } from '@/api/commands';
 import { keys, queryClient } from '@/api/queries';
 import { toastError } from '@/api/useAppMutation';
+import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
 import type { PairingRequest } from '@/bindings/PairingRequest';
 import type { VaultStatus } from '@/bindings/VaultStatus';
@@ -29,6 +30,7 @@ import { groupCode, useBrowserEvents } from './queries';
 export function BrowserPairing() {
   const { t } = useTranslation();
   const { navigate } = useRouter();
+  const dialogs = useDialogs();
   const [request, setRequest] = useState<PairingRequest | null>(null);
   const current = useRef<PairingRequest | null>(null);
   const answered = useRef<string | null>(null);
@@ -63,11 +65,12 @@ export function BrowserPairing() {
       .catch(() => undefined);
   }, [show]);
 
+  // The browser asks for the vault: it opens here, over whatever page shows.
   const onUnlock = useCallback(() => {
-    navigate({ page: 'passwords' });
     const vault = queryClient.getQueryData<VaultStatus>(keys.vaultStatus);
-    if (vault?.state !== 'unlocked') toast(t('browser.unlockRequest'), { id: 'browser-unlock' });
-  }, [navigate, t]);
+    if (vault?.state === 'locked') dialogs.unlockVault({ description: t('browser.unlockRequest') });
+    else if (vault?.state !== 'unlocked') navigate({ page: 'passwords' });
+  }, [dialogs, navigate, t]);
   useBrowserEvents({ onPairing: show, onUnlock });
 
   const answer = useMutation({

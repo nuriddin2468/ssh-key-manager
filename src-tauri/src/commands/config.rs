@@ -13,6 +13,7 @@ use super::{Shared, blocking};
 use crate::askpass::Secrets;
 use crate::confirm::{self, Localized};
 use crate::error::AppResult;
+use crate::history::HostHistory;
 use crate::state::AppState;
 use crate::types::{ConfigFile, ConnectionTest, SavedHost};
 
@@ -196,11 +197,26 @@ pub fn connection_test(
     let timeout = Duration::from_secs(if secrets.is_empty() { 20 } else { 30 });
     let run = run_ssh(state, alias, NO_BANNER, &["exit"], secrets, None, timeout)?;
     let text = combined(&run.output);
-    Ok(ConnectionTest {
+    let checked = ConnectionTest {
         ok: signed_in(run.output.code),
         output: with_timeout_note(text, &run.output),
         prompts: run.prompts,
-    })
+    };
+    // The check ran either way; a history that cannot be written only misses it.
+    let _ = state.history.record_check(alias, &checked);
+    Ok(checked)
+}
+
+/// What became of each host's checks and in-app terminal sessions, newest
+/// first.
+#[tauri::command]
+pub async fn connection_history(state: State<'_, Shared>) -> AppResult<HostHistory> {
+    blocking(&state, |state| Ok(state.history.all())).await
+}
+
+#[tauri::command]
+pub async fn clear_connection_history(state: State<'_, Shared>, alias: String) -> AppResult<()> {
+    blocking(&state, move |state| state.history.clear(&alias)).await
 }
 
 /// `ssh` exits with 255 when it fails itself (network, host key, sign-in)

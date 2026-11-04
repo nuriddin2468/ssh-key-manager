@@ -2,7 +2,7 @@ import { createContext, type ReactNode, use, useCallback, useMemo, useRef, useSt
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api, type TerminalMessage } from '@/api/commands';
-import { invalidateAll } from '@/api/queries';
+import { invalidateAll, refreshConnectionHistory } from '@/api/queries';
 import { errorMessage } from '@/api/useAppMutation';
 import { useRouter } from '@/app/router';
 import type { PromptAnswer } from '@/bindings/PromptAnswer';
@@ -130,7 +130,10 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
         waiting.current.delete(key);
       }
       if (event.type === 'state') {
-        if (event.state.phase !== 'connecting') waiting.current.delete(key);
+        if (event.state.phase !== 'connecting') {
+          waiting.current.delete(key);
+          void refreshConnectionHistory();
+        }
         if (event.state.phase === 'ended' || event.state.phase === 'failed') {
           sessions.current.delete(key);
         }

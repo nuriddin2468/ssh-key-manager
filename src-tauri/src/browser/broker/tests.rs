@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
 use serde_json::{Value, json};
@@ -21,6 +22,13 @@ struct Fake {
     asked: Mutex<Vec<Option<PairingRequest>>>,
     shown: Mutex<u32>,
     changes: Mutex<Vec<Changed>>,
+    session: AtomicU64,
+    /// How the user answers fill prompts at once; `None` leaves them open.
+    answers: Mutex<Option<bool>>,
+    prompts: Mutex<Vec<FillPrompt>>,
+    /// The prompt left open, to answer later.
+    open_prompt: Mutex<Option<FillAnswer>>,
+    copies: Mutex<Vec<PairedBrowser>>,
 }
 
 impl Fake {
@@ -35,7 +43,26 @@ impl Fake {
             asked: Mutex::new(Vec::new()),
             shown: Mutex::new(0),
             changes: Mutex::new(Vec::new()),
+            session: AtomicU64::new(0),
+            answers: Mutex::new(Some(true)),
+            prompts: Mutex::new(Vec::new()),
+            open_prompt: Mutex::new(None),
+            copies: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Answers the prompt left open.
+    fn answer(&self, allowed: bool) {
+        let answer = lock(&self.open_prompt).take().expect("no prompt open");
+        answer(allowed);
+    }
+
+    fn prompts(&self) -> usize {
+        lock(&self.prompts).len()
+    }
+
+    fn end_session(&self) {
+        self.session.fetch_add(1, Ordering::SeqCst);
     }
 
     fn add(&self, title: &str, username: &str, url: &str, password: &str) -> String {
@@ -80,6 +107,16 @@ impl Env for Fake {
         Ok(result)
     }
 
+    fn write_keys<T>(&self, work: impl FnOnce(&mut Vault) -> AppResult<T>) -> AppResult<T> {
+        let mut guard = lock(&self.vault);
+        let vault = guard
+            .as_mut()
+            .ok_or_else(|| AppError::new(ErrorCode::VaultLocked, "locked"))?;
+        let result = work(vault)?;
+        vault.save_without_backup(&self.backups)?;
+        Ok(result)
+    }
+
     fn ask(&self, request: Option<&PairingRequest>) {
         lock(&self.asked).push(request.cloned());
     }
@@ -98,6 +135,22 @@ impl Env for Fake {
 
     fn version(&self) -> String {
         "1.2.3".into()
+    }
+
+    fn session(&self) -> u64 {
+        self.session.load(Ordering::SeqCst)
+    }
+
+    fn confirm_fill(&self, prompt: FillPrompt, answer: FillAnswer) {
+        lock(&self.prompts).push(prompt);
+        match *lock(&self.answers) {
+            Some(allowed) => answer(allowed),
+            None => *lock(&self.open_prompt) = Some(answer),
+        }
+    }
+
+    fn copied(&self, browser: &PairedBrowser) {
+        lock(&self.copies).push(browser.clone());
     }
 }
 
@@ -181,6 +234,26 @@ impl Extension {
     fn ask(&self, broker: &Broker, env: &Fake, action: &Value) -> Value {
         let (nonce, message) = self.sealed(action, now());
         self.open(&nonce, &send(broker, env, &message))
+    }
+
+    /// Asks the app for new keys; returns them, without switching to them.
+    fn rekey(&self, broker: &Broker, env: &Fake) -> ChannelKeys {
+        let next = ClientPairing::new();
+        let reply = self.ask(
+            broker,
+            env,
+            &json!({ "rekey": { "publicKey": encode(next.public_key()) } }),
+        );
+        let app_public = decode(reply["publicKey"].as_str().unwrap(), 65).unwrap();
+        next.complete(CLIENT, &app_public).unwrap()
+    }
+
+    /// The same browser with other keys: after a rekey, or a copy.
+    fn with_keys(keys: ChannelKeys) -> Self {
+        Self {
+            client: ClientPairing::new(),
+            keys: Some(keys),
+        }
     }
 
     fn open(&self, nonce: &MessageNonce, reply: &Value) -> Value {
@@ -514,6 +587,246 @@ fn typed_logins_are_checked_then_saved_or_updated() {
         *lock(&env.changes),
         [Changed::Browsers, Changed::Entries, Changed::Entries]
     );
+}
+
+fn fill(extension: &Extension, broker: &Broker, env: &Fake, origin: &str, id: &str) -> Value {
+    extension.ask(
+        broker,
+        env,
+        &json!({ "fill": { "origin": origin, "entryId": id } }),
+    )
+}
+
+#[test]
+fn a_fill_is_asked_about_once_per_page_and_session() {
+    let (broker, env, extension) = paired();
+    let github = env.add("GitHub", "octo", "https://github.com", "hunter2");
+    let filled = json!({ "username": "octo", "password": "hunter2" });
+
+    assert_eq!(
+        fill(&extension, &broker, &env, "https://github.com", &github),
+        filled
+    );
+    assert_eq!(
+        lock(&env.prompts)[0],
+        FillPrompt {
+            browser: "Chrome".into(),
+            title: "GitHub".into(),
+            username: "octo".into(),
+            site: "github.com".into(),
+        }
+    );
+    // Allowed: the same login fills the same page without asking again.
+    assert_eq!(
+        fill(&extension, &broker, &env, "https://github.com", &github),
+        filled
+    );
+    assert_eq!(env.prompts(), 1);
+    // Another page of the site is asked about on its own.
+    assert_eq!(
+        fill(
+            &extension,
+            &broker,
+            &env,
+            "https://gist.github.com",
+            &github
+        ),
+        filled
+    );
+    assert_eq!(lock(&env.prompts)[1].site, "gist.github.com");
+    // Once the session ends, the user is asked again.
+    env.end_session();
+    assert_eq!(
+        fill(&extension, &broker, &env, "https://github.com", &github),
+        filled
+    );
+    assert_eq!(env.prompts(), 3);
+    // A login of another site is refused before anyone is asked.
+    assert_eq!(
+        fill(&extension, &broker, &env, "https://evil.example", &github),
+        error("notFound")
+    );
+    assert_eq!(env.prompts(), 3);
+}
+
+#[test]
+fn a_declined_fill_gives_nothing_and_is_asked_again() {
+    let (broker, env, extension) = paired();
+    let github = env.add("GitHub", "octo", "https://github.com", "hunter2");
+    *lock(&env.answers) = Some(false);
+    assert_eq!(
+        fill(&extension, &broker, &env, "https://github.com", &github),
+        error("denied")
+    );
+    assert_eq!(
+        fill(&extension, &broker, &env, "https://github.com", &github),
+        error("denied")
+    );
+    assert_eq!(env.prompts(), 2);
+}
+
+#[test]
+fn an_unanswered_fill_expires_and_a_late_yes_still_counts() {
+    let broker = Arc::new(Broker::default().with_fill_wait(Duration::from_millis(50)));
+    let env = Arc::new(Fake::new());
+    let mut extension = Extension::new();
+    extension.pair(&broker, &env, true);
+    let github = env.add("GitHub", "octo", "https://github.com", "hunter2");
+    let gist = env.add("Gist", "octo", "https://gist.github.com", "pw2");
+    *lock(&env.answers) = None;
+
+    assert_eq!(
+        fill(&extension, &broker, &env, "https://github.com", &github),
+        error("expired")
+    );
+    // While the prompt is open, another fill waits its turn.
+    assert_eq!(
+        fill(&extension, &broker, &env, "https://gist.github.com", &gist),
+        error("busy")
+    );
+    assert_eq!(env.prompts(), 1);
+    env.answer(true);
+    assert_eq!(
+        fill(&extension, &broker, &env, "https://github.com", &github),
+        json!({ "username": "octo", "password": "hunter2" })
+    );
+    assert_eq!(env.prompts(), 1);
+}
+
+#[test]
+fn a_login_picked_twice_waits_for_one_answer() {
+    let (broker, env, extension) = paired();
+    let github = env.add("GitHub", "octo", "https://github.com", "hunter2");
+    *lock(&env.answers) = None;
+    let extension = Arc::new(extension);
+    let picks: Vec<_> = (0..2)
+        .map(|_| {
+            let (broker, env, extension) = (
+                Arc::clone(&broker),
+                Arc::clone(&env),
+                Arc::clone(&extension),
+            );
+            let github = github.clone();
+            thread::spawn(move || fill(&extension, &broker, &env, "https://github.com", &github))
+        })
+        .collect();
+    for _ in 0..500 {
+        if lock(&env.open_prompt).is_some() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    thread::sleep(Duration::from_millis(50));
+    env.answer(true);
+    for pick in picks {
+        assert_eq!(pick.join().unwrap()["password"], "hunter2");
+    }
+    assert_eq!(env.prompts(), 1);
+}
+
+#[test]
+fn a_browser_cannot_ask_over_and_over() {
+    let (broker, env, extension) = paired();
+    let github = env.add("GitHub", "octo", "https://github.com", "hunter2");
+    *lock(&env.answers) = Some(false);
+    for _ in 0..MAX_PROMPTS {
+        assert_eq!(
+            fill(&extension, &broker, &env, "https://github.com", &github),
+            error("denied")
+        );
+    }
+    assert_eq!(
+        fill(&extension, &broker, &env, "https://github.com", &github),
+        error("tooMany")
+    );
+    assert_eq!(env.prompts(), MAX_PROMPTS);
+}
+
+#[test]
+fn a_browser_may_check_only_a_few_logins_a_minute() {
+    let (broker, env, extension) = paired();
+    let check = json!({ "check": { "origin": "https://shop.example", "username": "bob", "password": "guess" } });
+    for _ in 0..MAX_CHECKS {
+        assert_eq!(
+            extension.ask(&broker, &env, &check),
+            json!({ "status": "new" })
+        );
+    }
+    assert_eq!(extension.ask(&broker, &env, &check), error("tooMany"));
+}
+
+#[test]
+fn prompt_texts_are_one_short_line() {
+    assert_eq!(shown("  Bank\n\tlogin\u{7} "), "Bank login");
+    let long = shown(&"x".repeat(100));
+    assert_eq!(long.chars().count(), SHOWN_CHARS);
+    assert!(long.ends_with('…'));
+}
+
+#[test]
+fn keys_change_and_a_copy_of_the_old_ones_is_caught() {
+    let (broker, env, extension) = paired();
+    env.add("GitHub", "octo", "https://github.com", "hunter2");
+    let status = json!({ "vault": "unlocked" });
+
+    let next = extension.rekey(&broker, &env);
+    // Until the browser uses the new keys, the old ones still work.
+    assert_eq!(extension.ask(&broker, &env, &json!("status")), status);
+    let renewed = Extension::with_keys(next);
+    // A request sealed before the switch, but delivered after it.
+    let (late_nonce, late) = extension.sealed(&json!("status"), now() - 1);
+    assert_eq!(renewed.ask(&broker, &env, &json!("status")), status);
+    assert_eq!(
+        extension.open(&late_nonce, &send(&broker, &env, &late)),
+        error("invalid"),
+        "a late request of the browser itself is refused, nothing more"
+    );
+    assert!(lock(&env.copies).is_empty());
+    assert_eq!(renewed.ask(&broker, &env, &json!("status")), status);
+
+    // Someone else uses the old keys now: the pairing goes.
+    assert_eq!(
+        extension.ask(&broker, &env, &json!("status")),
+        error("revoked")
+    );
+    let copies = lock(&env.copies).clone();
+    assert_eq!(copies.len(), 1);
+    assert_eq!(
+        (copies[0].browser.as_str(), copies[0].computer.as_str()),
+        ("Chrome", "test-mac")
+    );
+    assert_eq!(
+        env.read(false, |vault| Ok(vault.paired_browsers()))
+            .unwrap(),
+        Vec::new()
+    );
+    assert_eq!(lock(&env.changes).last(), Some(&Changed::Browsers));
+    assert_eq!(
+        renewed.ask(&broker, &env, &json!("status")),
+        error("unknownClient")
+    );
+}
+
+#[test]
+fn a_rekey_whose_answer_was_lost_changes_nothing() {
+    let (broker, env, extension) = paired();
+    let status = json!({ "vault": "unlocked" });
+    let lost = extension.rekey(&broker, &env);
+    let next = extension.rekey(&broker, &env);
+    // The later rekey replaced the lost one; the old keys still work.
+    assert_eq!(extension.ask(&broker, &env, &json!("status")), status);
+    assert_eq!(
+        Extension::with_keys(lost).ask(&broker, &env, &json!("status")),
+        error("invalid")
+    );
+    let backups = || std::fs::read_dir(&env.backups).map_or(0, Iterator::count);
+    let before = backups();
+    assert_eq!(
+        Extension::with_keys(next).ask(&broker, &env, &json!("status")),
+        status
+    );
+    assert!(lock(&env.copies).is_empty());
+    assert_eq!(backups(), before, "changing keys takes no backup");
 }
 
 #[test]

@@ -120,6 +120,11 @@ translates.
     It reaches the app through a small `Env` trait, so its tests run against a real
     vault without Tauri, and `examples/autofill_bridge.rs` serves a throwaway vault
     to the extension's end-to-end test.
+  - A login fills a page only after the user allowed it, in Touch ID, Windows Hello
+    or a native dialog (`browser/prompt.rs`); the yes lasts for the vault runtime's
+    session, which ends when the vault is locked by hand, the screen locks or the
+    computer sleeps. Each browser's keys change daily; the retired ones stay in the
+    vault, so a request sealed with a copy of them revokes the pairing.
 - **Nearby.** `src-tauri/src/nearby/`.
   - Announces the device with mDNS for ten minutes when asked, and browses for
     others while the Nearby page is open (`mdns-sd`).

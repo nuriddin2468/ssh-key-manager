@@ -119,6 +119,16 @@ pub enum Action {
         entry_id: String,
         password: SecretString,
     },
+    /// Changes this browser's keys: a new ECDH exchange, as in pairing,
+    /// over the sealed channel. The new keys open requests alongside the
+    /// current ones until the browser first uses them; from then on the old
+    /// ones are retired, and a request sealed with them shows that someone
+    /// else holds a copy.
+    Rekey {
+        /// Base64 uncompressed P-256 public key.
+        #[serde(rename = "publicKey")]
+        public_key: String,
+    },
 }
 
 /// A reply to the extension.
@@ -175,11 +185,12 @@ pub enum ReplyError {
     /// No pairing with this client id in the open vault: revoked, or another
     /// vault.
     UnknownClient,
-    /// The user declined the pairing.
+    /// The user declined the pairing, or filling the login.
     Denied,
-    /// Nobody answered the pairing in time, or the request is too old.
+    /// Nobody answered the pairing or the fill in time, or the request is
+    /// too old.
     Expired,
-    /// Another pairing is waiting for the user.
+    /// Another pairing, or another fill, is waiting for the user.
     Busy,
     /// The entry is gone or does not belong to the page.
     NotFound,
@@ -187,6 +198,11 @@ pub enum ReplyError {
     Invalid,
     /// The vault could not be read or written.
     Failed,
+    /// Sealed with keys this browser gave up, so someone else holds a copy
+    /// of them: the app forgot the pairing. Connect again.
+    Revoked,
+    /// Too many logins checked, or fills asked about, in the last minute.
+    TooMany,
 }
 
 /// The sealed payload of [`Reply::Paired`].
@@ -233,6 +249,14 @@ pub enum CheckReply {
 #[serde(rename_all = "camelCase")]
 pub struct SavedReply {
     pub entry_id: String,
+}
+
+/// Answers [`Action::Rekey`].
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RekeyReply {
+    /// The app's new public key, uncompressed SEC1, base64.
+    pub public_key: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -297,6 +321,9 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(opened.action, Action::Fill { entry_id, .. } if entry_id == "x"));
+        let opened: Opened =
+            serde_json::from_str(r#"{"sentAt":1,"action":{"rekey":{"publicKey":"pk"}}}"#).unwrap();
+        assert!(matches!(opened.action, Action::Rekey { public_key } if public_key == "pk"));
     }
 
     #[test]
@@ -306,6 +333,10 @@ mod tests {
         })
         .unwrap();
         assert_eq!(reply, r#"{"type":"error","code":"unknownClient"}"#);
+        assert_eq!(
+            serde_json::to_string(&ReplyError::TooMany).unwrap(),
+            r#""tooMany""#
+        );
         let check = serde_json::to_string(&CheckReply::Update {
             entry_id: "e".into(),
             title: "t".into(),

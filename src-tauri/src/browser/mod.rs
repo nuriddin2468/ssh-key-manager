@@ -24,6 +24,7 @@
 pub mod broker;
 mod host;
 pub mod manifests;
+mod prompt;
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
@@ -37,7 +38,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use sshkm_core::browser::protocol::{MAX_MESSAGE, VaultLock};
-use sshkm_core::vault::Vault;
+use sshkm_core::vault::{PairedBrowser, Vault};
 use sshkm_core::{ErrorCode, fsutil};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -48,7 +49,7 @@ use unix as platform;
 #[cfg(windows)]
 use windows as platform;
 
-use self::broker::{Broker, Changed, Env, PairingRequest};
+use self::broker::{Broker, Changed, Env, FillAnswer, FillPrompt, PairingRequest};
 use crate::commands::Shared;
 use crate::error::{AppError, AppResult};
 
@@ -426,6 +427,13 @@ impl Env for TauriEnv {
         state.vault.change(&self.app, &state.backup_dir, work)
     }
 
+    fn write_keys<T>(&self, work: impl FnOnce(&mut Vault) -> AppResult<T>) -> AppResult<T> {
+        let state = self.state()?;
+        state
+            .vault
+            .change_without_backup(&self.app, &state.backup_dir, work)
+    }
+
     fn ask(&self, request: Option<&PairingRequest>) {
         if request.is_some() {
             show_window(&self.app);
@@ -452,6 +460,19 @@ impl Env for TauriEnv {
 
     fn version(&self) -> String {
         self.app.package_info().version.to_string()
+    }
+
+    fn session(&self) -> u64 {
+        self.state().map_or(0, |state| state.vault.session())
+    }
+
+    fn confirm_fill(&self, prompt: FillPrompt, answer: FillAnswer) {
+        let app = self.app.clone();
+        std::thread::spawn(move || answer(prompt::confirm_fill(&app, &prompt)));
+    }
+
+    fn copied(&self, browser: &PairedBrowser) {
+        prompt::copied(&self.app, browser);
     }
 }
 

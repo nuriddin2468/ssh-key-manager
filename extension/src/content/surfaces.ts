@@ -53,6 +53,7 @@ const STYLE = `
 .user.none { font-style: italic; color: #8892a6; }
 .item:hover .user.none, .item:focus-visible .user.none { color: #a7b0c0; }
 .icon { flex: none; width: 16px; height: 16px; color: #fbcfe8; }
+.notice { margin: 0; padding: 2px 12px 10px; font-size: 12.5px; line-height: 18px; color: #c9cfda; }
 .banner { width: min(340px, calc(100vw - 32px)); padding: 14px 14px 12px; }
 .sr-only {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
@@ -417,15 +418,46 @@ export class LoginMenu extends Surface {
     this.render(anchor, [{ lines, icon: icon(LOCK, 'icon'), onChoose: this.handlers.onUnlock }]);
   }
 
-  private render(
-    anchor: HTMLInputElement,
-    items: { lines: HTMLElement; icon?: SVGSVGElement; onChoose: () => void }[],
-  ): void {
+  /** A line of text in place of the logins: waiting for the app, or why nothing was filled. */
+  showNotice(anchor: HTMLInputElement, text: string): void {
+    const panel = this.panel();
+    const notice = element('p', 'notice', text);
+    notice.setAttribute('role', 'status');
+    panel.append(notice);
+    this.mount(anchor, panel, null);
+  }
+
+  /** Whether the menu shows a notice rather than logins. */
+  get showsNotice(): boolean {
+    return this.shown && this.root.querySelector('.notice') !== null;
+  }
+
+  /** A new, empty panel with the app's name at the top, in place of what was shown. */
+  private panel(): HTMLDivElement {
     for (const node of [...this.root.childNodes]) if (node.nodeName !== 'STYLE') node.remove();
     const panel = element('div', 'panel');
     const head = element('div', 'head');
     head.setAttribute('aria-hidden', 'true');
     head.append(logo(), document.createTextNode(t('appName')));
+    panel.append(head);
+    return panel;
+  }
+
+  private mount(anchor: HTMLInputElement, panel: HTMLElement, list: HTMLElement | null): void {
+    this.root.append(panel);
+    this.anchor = anchor;
+    this.list = list;
+    this.placed = '';
+    this.position();
+    window.addEventListener('scroll', this.reposition, true);
+    window.addEventListener('resize', this.reposition);
+  }
+
+  private render(
+    anchor: HTMLInputElement,
+    items: { lines: HTMLElement; icon?: SVGSVGElement; onChoose: () => void }[],
+  ): void {
+    const panel = this.panel();
     const list = element('ul', 'list');
     list.setAttribute('role', 'menu');
     list.setAttribute('aria-label', `${t('appName')}: ${t('menuLabel')}`);
@@ -448,17 +480,11 @@ export class LoginMenu extends Surface {
     // The field is the page's, so it can't point at the menu: say it's there.
     const hint = element('p', 'sr-only');
     hint.setAttribute('role', 'status');
-    panel.append(head, list, hint);
+    panel.append(list, hint);
     setTimeout(() => {
       hint.textContent = t('menuHint');
     }, 50);
-    this.root.append(panel);
-    this.anchor = anchor;
-    this.list = list;
-    this.placed = '';
-    this.position();
-    window.addEventListener('scroll', this.reposition, true);
-    window.addEventListener('resize', this.reposition);
+    this.mount(anchor, panel, list);
   }
 
   private position(): void {

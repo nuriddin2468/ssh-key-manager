@@ -43,7 +43,7 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 pub use self::audit::{VaultAuditInput, VaultFinding, VaultFindingKind};
-pub use self::browsers::PairedBrowser;
+pub use self::browsers::{BrowserKeys, KeysUsed, PairedBrowser};
 pub use self::contacts::Contact;
 pub use self::generator::{GenerateOptions, Strength, generate, strength};
 pub use self::import::{CsvFormat, ImportPreview, ImportRow};
@@ -477,10 +477,22 @@ impl Vault {
             self.db.config = new_config();
         }
         let bytes = serialize(&self.db, &self.secret)?;
-        self.write_database(&bytes, backup_dir)
+        self.write_database(&bytes, backup_dir, true)
     }
 
-    fn write_database(&mut self, bytes: &[u8], backup_dir: &Path) -> Result<()> {
+    /// Like [`Self::save`], without a backup of the previous file: for a
+    /// change to nothing but a paired browser's keys. Such a backup would
+    /// hold nothing worth going back to, and keys change about once a day,
+    /// so they would push out the backups taken before real changes.
+    pub fn save_without_backup(&mut self, backup_dir: &Path) -> Result<()> {
+        if !matches!(self.db.config.version, DatabaseVersion::KDB4(_)) {
+            return self.save(backup_dir);
+        }
+        let bytes = serialize(&self.db, &self.secret)?;
+        self.write_database(&bytes, backup_dir, false)
+    }
+
+    fn write_database(&mut self, bytes: &[u8], backup_dir: &Path, backup: bool) -> Result<()> {
         let on_disk = match std::fs::read(&self.paths.database) {
             Ok(current) => Some(sha256(&current)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -490,7 +502,9 @@ impl Vault {
             let copy = self.write_conflict_copy(bytes, backup_dir)?;
             return Err(Error::Conflict(copy.display().to_string()));
         }
-        fsutil::backup(&self.paths.database, backup_dir)?;
+        if backup {
+            fsutil::backup(&self.paths.database, backup_dir)?;
+        }
         fsutil::atomic_write(&self.paths.database, bytes, 0o600)?;
         self.disk_hash = sha256(bytes);
         Ok(())
@@ -560,7 +574,7 @@ impl Vault {
         // The keys first: on a crash in between, the old recovery key still
         // opens the database and sets the master password again.
         self.write_slots(slots)?;
-        self.write_database(&bytes, backup_dir)?;
+        self.write_database(&bytes, backup_dir, true)?;
         let old = std::mem::replace(&mut self.secret, duplicate(&secret));
         reencrypt_copies(&self.paths, backup_dir, &old, &secret);
         Ok(secret)

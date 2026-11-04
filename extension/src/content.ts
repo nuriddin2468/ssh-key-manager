@@ -19,8 +19,9 @@ import {
   typedIn,
 } from './content/fields';
 import { LoginMenu, SaveBanner, type SaveOffer } from './content/surfaces';
+import type { Problem } from './shared/client';
 import { ext } from './shared/ext';
-import { t } from './shared/i18n';
+import { type Key, t } from './shared/i18n';
 import type {
   FillReply,
   LoginsReply,
@@ -30,6 +31,18 @@ import type {
 } from './shared/messages';
 
 const MARK = '__sshkmAutofill';
+/** A fill that takes longer than this is waiting for the user in the app. */
+const CONFIRM_NOTICE_AFTER = 400;
+/** How long the menu says why nothing was filled. */
+const NOTICE_FOR = 4000;
+
+/** What the menu says when the app filled nothing. */
+const NOT_FILLED: Partial<Record<Problem, Key>> = {
+  denied: 'fillDenied',
+  expired: 'fillExpired',
+  busy: 'fillBusy',
+  tooMany: 'fillTooMany',
+};
 
 function send<T>(message: ToBackground): Promise<T | null> {
   return (ext.runtime.sendMessage(message) as Promise<T | null>).catch(() => null);
@@ -91,9 +104,17 @@ function start(): void {
   async function pick(entryId: string): Promise<void> {
     const current = active;
     if (!current) return;
+    // The app asks the user before a login first fills a page: say where.
+    const slow = setTimeout(
+      () => menu.showNotice(current.input, t('fillConfirm')),
+      CONFIRM_NOTICE_AFTER,
+    );
     const reply = await send<FillReply>({ kind: 'fill', entryId });
+    clearTimeout(slow);
     if (!reply?.ok) {
+      const why = reply ? NOT_FILLED[reply.problem] : undefined;
       if (reply?.problem === 'locked') menu.showLocked(current.input);
+      else if (why) showNotice(current.input, t(why));
       else menu.hide();
       return;
     }
@@ -102,6 +123,17 @@ function start(): void {
     if (password) fill(password, reply.password);
     menu.hide();
     (password ?? username)?.focus();
+  }
+
+  let notices = 0;
+
+  /** Says why nothing was filled, for a few seconds. */
+  function showNotice(input: HTMLInputElement, text: string): void {
+    menu.showNotice(input, text);
+    const notice = ++notices;
+    setTimeout(() => {
+      if (notice === notices && menu.showsNotice) menu.hide();
+    }, NOTICE_FOR);
   }
 
   function capture(scope: ParentNode): void {

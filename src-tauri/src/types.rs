@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use sshkm_core::agent::{AgentIdentity, AgentStatus};
+use sshkm_core::authorized_keys::AuthorizedKeys;
 use sshkm_core::config::{ConfigView, IdentityUsage};
 use sshkm_core::hosts_file::{HostsDiffLine, HostsFileView, HostsReadOnly};
 use sshkm_core::keys::{GenerateRequest, KeyInfo, SkippedFile};
@@ -278,6 +279,47 @@ pub struct KeyInstall {
     /// It was added; `false` if it was there already or the install failed.
     pub added: bool,
     /// What `ssh` and the remote shell printed, for the user to read.
+    pub output: String,
+    /// As in [`ConnectionTest`].
+    pub prompts: Vec<AskedPrompt>,
+}
+
+/// What to do to a server's `~/.ssh/authorized_keys` before reading it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub enum ServerKeysAction {
+    /// Nothing: only read it.
+    List,
+    /// Add the public key of one of the user's keys, as `install_public_key`
+    /// does.
+    Add {
+        #[serde(rename = "keyId")]
+        key_id: String,
+    },
+    /// Remove every line with this key (`<type> <base64>`), whatever its
+    /// options or comment.
+    Remove {
+        #[serde(rename = "publicKey")]
+        public_key: String,
+    },
+}
+
+/// A server's `~/.ssh/authorized_keys`, read after an optional change, in
+/// one sign-in: a server may take each 2FA code only once.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = BINDINGS))]
+pub struct ServerKeys {
+    /// The file was read, and the change made or found already made.
+    pub ok: bool,
+    /// The key was added, or lines with it were removed.
+    pub changed: bool,
+    /// The file was read: even when the change failed, `file` is current.
+    pub read: bool,
+    /// What the file holds; empty unless it was read, or if there is none.
+    pub file: AuthorizedKeys,
+    /// What `ssh` and the remote shell printed, without the file.
     pub output: String,
     /// As in [`ConnectionTest`].
     pub prompts: Vec<AskedPrompt>,

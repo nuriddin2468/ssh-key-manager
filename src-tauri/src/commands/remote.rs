@@ -742,7 +742,7 @@ mod tests {
     #[cfg(unix)]
     mod script {
         use std::fs;
-        use std::io::Write;
+        use std::io::{ErrorKind, Write};
         use std::os::unix::fs::PermissionsExt;
         use std::path::Path;
         use std::process::{Command, Stdio};
@@ -769,12 +769,16 @@ mod tests {
                 .stdout(Stdio::piped())
                 .spawn()
                 .unwrap();
-            child
+            // A command that doesn't read its input may be gone before it is
+            // written.
+            let written = child
                 .stdin
                 .take()
                 .unwrap()
-                .write_all(format!("{input}\n").as_bytes())
-                .unwrap();
+                .write_all(format!("{input}\n").as_bytes());
+            if let Err(error) = written {
+                assert_eq!(error.kind(), ErrorKind::BrokenPipe, "{error}");
+            }
             let output = child.wait_with_output().unwrap();
             (
                 output.status.success(),

@@ -5,7 +5,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useEffect } from 'react';
 import { api } from '@/api/commands';
-import { queryClient, useVaultStatus } from '@/api/queries';
+import { invalidateAll, queryClient, useVaultStatus } from '@/api/queries';
 import type { NearbyStatus } from '@/bindings/NearbyStatus';
 
 /** Emitted by the backend with the whole status (see `nearby/mod.rs`). */
@@ -35,7 +35,12 @@ export function useContacts() {
 
 /** Puts a status the backend sent into the cache. */
 export function setStatus(status: NearbyStatus): void {
+  const before = queryClient.getQueryData<NearbyStatus>(nearbyKeys.status);
   queryClient.setQueryData(nearbyKeys.status, status);
+  // Something received went into the vault or ~/.ssh: show it everywhere.
+  if (status.pairing?.phase.type === 'received' && before?.pairing?.phase.type !== 'received') {
+    void invalidateAll();
+  }
 }
 
 /** App-wide: follows the backend's events. Mounted once in the shell. */

@@ -13,7 +13,11 @@
 //! `nearby.json` in the app's data folder. The UI follows [`CHANGED_EVENT`],
 //! which carries the whole [`NearbyStatus`].
 
+pub mod items;
 pub mod pairing;
+#[cfg(test)]
+mod script;
+pub mod transfer;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -36,9 +40,12 @@ use tauri::{AppHandle, Emitter, Manager};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use self::pairing::{PairingFailure, PairingPhase, Side, converse};
+use self::items::SendRequest;
+use self::pairing::{PairingFailure, PairingPhase, Side};
+use self::transfer::exchange;
 use crate::commands::Shared;
 use crate::error::{AppError, AppResult};
+use sshkm_core::p2p::protocol::Item;
 
 /// Emitted with the [`NearbyStatus`] whenever it changes.
 pub const CHANGED_EVENT: &str = "nearby-changed";
@@ -292,6 +299,18 @@ impl Nearby {
     /// Pairs with a device found on the network (its id) or at an address
     /// (`host:port`). The result comes as events.
     pub fn pair(self: &Arc<Self>, target: &str) -> AppResult<u32> {
+        self.start(target, None)
+    }
+
+    /// Sends what `request` names to a device found on the network, pairing
+    /// first if the two don't know each other. The result comes as events.
+    pub fn send(self: &Arc<Self>, target: &str, request: &SendRequest) -> AppResult<u32> {
+        let state = self.state()?;
+        let item = items::build(&state, self.app()?, request)?;
+        self.start(target, Some(item))
+    }
+
+    fn start(self: &Arc<Self>, target: &str, item: Option<Item>) -> AppResult<u32> {
         let identity = self.identity()?;
         self.require_vault()?;
         let addresses = {
@@ -320,7 +339,14 @@ impl Nearby {
                 );
                 return;
             };
-            nearby.run(id, stream, &identity, true, answers, &cancelled);
+            nearby.run(
+                id,
+                stream,
+                &identity,
+                &Role::Connects(item),
+                answers,
+                &cancelled,
+            );
         });
         Ok(id)
     }
@@ -425,7 +451,9 @@ impl Nearby {
             return;
         };
         let nearby = Arc::clone(self);
-        thread::spawn(move || nearby.run(id, stream, &identity, false, answers, &cancelled));
+        thread::spawn(move || {
+            nearby.run(id, stream, &identity, &Role::Answers, answers, &cancelled);
+        });
     }
 
     /// Takes the pairing slot for a new pairing; fails if one is going on.
@@ -461,7 +489,7 @@ impl Nearby {
         id: u32,
         stream: TcpStream,
         identity: &Identity,
-        outgoing: bool,
+        role: &Role,
         answers: Receiver<bool>,
         cancelled: &Arc<AtomicBool>,
     ) {
@@ -472,7 +500,7 @@ impl Nearby {
         {
             slot.socket = Some(socket);
         }
-        let session = if outgoing {
+        let session = if matches!(role, Role::Connects(_)) {
             p2p::connect(stream, identity)
         } else {
             p2p::accept(stream, identity)
@@ -485,7 +513,10 @@ impl Nearby {
                     answers: Mutex::new(answers),
                     cancelled,
                 };
-                converse(&mut session, &side)
+                match role {
+                    Role::Connects(item) => exchange(&mut session, &side, true, item.as_ref()),
+                    Role::Answers => exchange(&mut session, &side, false, None),
+                }
             }
             Err(_) => PairingPhase::Failed {
                 reason: PairingFailure::Broken,
@@ -618,6 +649,14 @@ impl Nearby {
     }
 }
 
+/// Which side of a session this computer is.
+enum Role {
+    /// It connected, to pair and to send the item, if there is one.
+    Connects(Option<Item>),
+    /// It was connected to.
+    Answers,
+}
+
 /// The pairing slot while it holds one pairing; empty for any other.
 struct SlotGuard<'a> {
     inner: MutexGuard<'a, Inner>,
@@ -680,6 +719,12 @@ impl Side for AppSide<'_> {
             slot.view.phase = phase.clone();
         }
         self.nearby.changed();
+    }
+
+    fn store(&self, item: &Item) -> Result<(String, bool), PairingFailure> {
+        let state = self.nearby.state().map_err(|_| PairingFailure::Broken)?;
+        let app = self.nearby.app().map_err(|_| PairingFailure::Broken)?;
+        items::store(&state, app, item)
     }
 
     fn answer(&self, wait: Duration) -> Result<Option<bool>, PairingFailure> {

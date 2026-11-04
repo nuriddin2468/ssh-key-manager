@@ -4,9 +4,11 @@
 // seconds after this one is shown.
 
 import type { Contact } from '@/bindings/Contact';
+import type { ItemSummary } from '@/bindings/ItemSummary';
 import type { NearbyDevice } from '@/bindings/NearbyDevice';
 import type { NearbyStatus } from '@/bindings/NearbyStatus';
 import type { Pairing } from '@/bindings/Pairing';
+import type { SendRequest } from '@/bindings/SendRequest';
 import type { VaultStatus } from '@/bindings/VaultStatus';
 import { MOCK_CHANGED_EVENT, MOCK_CONTACTS_EVENT } from '@/features/nearby/queries';
 import { vaultHandlers } from './vault';
@@ -22,6 +24,9 @@ let visibleUntil: string | null = null;
 let devices: NearbyDevice[] = [];
 let pairing: Pairing | null = null;
 let nextId = 1;
+/** What the pairing going on goes on to send, or to receive. */
+let sending: ItemSummary | null = null;
+let receiving: ItemSummary | null = null;
 const timers: number[] = [];
 const contacts: Contact[] = [
   { key: 'bW9jay1ib2J1cg==', name: 'ThinkPad Bobura', paired: '2026-10-21T09:12:00Z' },
@@ -77,7 +82,25 @@ function start(outgoing: boolean, peer: string, reachable: boolean): number {
 }
 
 const active = () =>
-  pairing !== null && ['connecting', 'compare', 'waiting'].includes(pairing.phase.type);
+  pairing !== null &&
+  ['connecting', 'compare', 'waiting', 'offering', 'offered'].includes(pairing.phase.type);
+
+/** After pairing (or straight away, between contacts): send or receive. */
+function afterPairing(id: number) {
+  if (sending) {
+    const item = sending;
+    update(id, { phase: { type: 'offering', item } });
+    later(2000, () => {
+      if (pairing?.id === id && pairing.phase.type === 'offering') {
+        update(id, { phase: { type: 'sent', item } });
+      }
+    });
+  } else if (receiving) {
+    update(id, { phase: { type: 'offered', item: receiving } });
+  } else {
+    update(id, { phase: { type: 'paired' } });
+  }
+}
 
 export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   nearby_status: status,
@@ -95,7 +118,18 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
     if (locked()) return fail('vault_locked', 'the vault is locked');
     visibleUntil = new Date(Date.now() + 10 * 60_000).toISOString();
     if (new URLSearchParams(window.location.search).get('nearby') === 'incoming') {
-      later(3000, () => active() || start(false, 'ThinkPad Sardora', true));
+      later(3000, () => {
+        if (active()) return;
+        sending = null;
+        receiving = {
+          type: 'password',
+          title: 'Office Wi-Fi',
+          username: 'guest',
+          url: '',
+          otp: false,
+        };
+        start(false, 'ThinkPad Sardora', true);
+      });
     }
     return changed();
   },
@@ -117,10 +151,53 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
     if (locked()) return fail('vault_locked', 'the vault is locked');
     if (active()) return fail('conflict', 'another pairing is going on');
     const found = devices.find((device) => device.id === target);
+    sending = null;
+    receiving = null;
     return start(true, found?.name ?? String(target), target === 'aziz');
+  },
+  nearby_send: ({ target, item }) => {
+    if (locked()) return fail('vault_locked', 'the vault is locked');
+    if (active()) return fail('conflict', 'another pairing is going on');
+    const request = item as SendRequest;
+    receiving = null;
+    sending =
+      request.type === 'host'
+        ? { type: 'host', alias: request.alias, address: 'ubuntu@10.0.4.12', hostKeys: 1 }
+        : { type: 'password', title: 'prod-api', username: 'deploy', url: '', otp: request.otp };
+    const found = devices.find((device) => device.id === target);
+    const peer = found?.name ?? String(target);
+    if (!contacts.some((contact) => contact.name === peer)) {
+      return start(true, peer, target === 'aziz');
+    }
+    // Contacts already: straight to the offer.
+    const id = nextId++;
+    pairing = { id, peer: null, outgoing: true, phase: { type: 'connecting' } };
+    changed();
+    later(700, () => {
+      update(id, { peer });
+      afterPairing(id);
+    });
+    return id;
   },
   nearby_answer: ({ id: raw, matched }) => {
     const id = Number(raw);
+    if (pairing?.id === id && pairing.phase.type === 'offered') {
+      const item = pairing.phase.item;
+      update(
+        id,
+        matched
+          ? {
+              phase: {
+                type: 'received',
+                item,
+                name: item.type === 'host' ? item.alias : item.title,
+                keysDiffer: false,
+              },
+            }
+          : { phase: { type: 'failed', reason: 'turned' } },
+      );
+      return undefined;
+    }
     if (pairing?.id !== id || pairing.phase.type !== 'compare') {
       return fail('not_found', 'the pairing has ended');
     }
@@ -138,7 +215,7 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
         paired: new Date().toISOString(),
       });
       window.dispatchEvent(new CustomEvent(MOCK_CONTACTS_EVENT));
-      update(id, { phase: { type: 'paired' } });
+      afterPairing(id);
     });
     return undefined;
   },

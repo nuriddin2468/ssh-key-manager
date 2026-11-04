@@ -37,6 +37,7 @@ import type { PermissionFix } from '@/bindings/PermissionFix';
 import type { PromptAnswer } from '@/bindings/PromptAnswer';
 import type { SavedHost } from '@/bindings/SavedHost';
 import type { SecretField } from '@/bindings/SecretField';
+import type { SendRequest } from '@/bindings/SendRequest';
 import type { Strength } from '@/bindings/Strength';
 import type { TerminalEvent } from '@/bindings/TerminalEvent';
 import type { TerminalInfo } from '@/bindings/TerminalInfo';
@@ -169,6 +170,9 @@ export const api = {
   nearbySetLooking: (looking: boolean) => call<NearbyStatus>('nearby_set_looking', { looking }),
   /** Pairs with a device found nearby (its id) or at `host:port`. */
   nearbyPair: (target: string) => call<number>('nearby_pair', { target }),
+  /** Sends what `item` names to a device found nearby, pairing first if needed. */
+  nearbySend: (target: string, item: SendRequest) => call<number>('nearby_send', { target, item }),
+  /** Whether the codes match, or whether to accept an item offered. */
   nearbyAnswer: (id: number, matched: boolean) => call<void>('nearby_answer', { id, matched }),
   /** Cancels a pairing, or forgets one that is over. */
   nearbyClose: (id: number) => call<void>('nearby_close', { id }),

@@ -21,6 +21,7 @@ use base64ct::{Base64, Encoding};
 use rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
+use zeroize::Zeroizing;
 
 use super::identity::{Identity, PeerKey, params};
 use super::protocol::{MAX_MESSAGE, Message};
@@ -121,15 +122,17 @@ impl<S: Read + Write> Session<S> {
     }
 
     pub fn send(&mut self, message: &Message) -> Result<()> {
-        let json =
-            serde_json::to_vec(message).map_err(|e| Error::Parse(format!("message: {e}")))?;
+        // The buffers may hold a password: they are wiped when dropped.
+        let json = Zeroizing::new(
+            serde_json::to_vec(message).map_err(|e| Error::Parse(format!("message: {e}")))?,
+        );
         if json.len() > MAX_MESSAGE {
             return Err(Error::invalid("the message is too large"));
         }
-        let mut plain = Vec::with_capacity(4 + json.len());
+        let mut plain = Zeroizing::new(Vec::with_capacity(4 + json.len()));
         plain.extend_from_slice(&u32::try_from(json.len()).unwrap_or(u32::MAX).to_be_bytes());
         plain.extend_from_slice(&json);
-        let mut out = vec![0; NOISE_MAX];
+        let mut out = Zeroizing::new(vec![0; NOISE_MAX]);
         for chunk in plain.chunks(NOISE_MAX - TAG) {
             let n = self
                 .noise
@@ -141,8 +144,8 @@ impl<S: Read + Write> Session<S> {
     }
 
     pub fn recv(&mut self) -> Result<Message> {
-        let mut plain = Vec::new();
-        let mut out = vec![0; NOISE_MAX];
+        let mut plain = Zeroizing::new(Vec::new());
+        let mut out = Zeroizing::new(vec![0; NOISE_MAX]);
         let mut take = |session: &mut Self, plain: &mut Vec<u8>| -> Result<()> {
             let frame = read_frame(&mut session.stream)?;
             let n = session

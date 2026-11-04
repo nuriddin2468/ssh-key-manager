@@ -21,12 +21,18 @@ export function clock(seconds: number): string {
 export function isActive(pairing: Pairing | null | undefined): boolean {
   if (!pairing) return false;
   const { type } = pairing.phase;
-  return type === 'connecting' || type === 'compare' || type === 'waiting';
+  return (
+    type === 'connecting' ||
+    type === 'compare' ||
+    type === 'waiting' ||
+    type === 'offering' ||
+    type === 'offered'
+  );
 }
 
 /** Failures the user should try again after, as opposed to a decision. */
 export function canRetry(reason: PairingFailure): boolean {
-  return reason !== 'declined' && reason !== 'peerDeclined' && reason !== 'cancelled';
+  return !['declined', 'peerDeclined', 'cancelled', 'refused', 'turned'].includes(reason);
 }
 
 /** A `host:port` the backend can try: a host and a port from 1 to 65535. */

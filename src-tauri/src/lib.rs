@@ -98,6 +98,7 @@ pub fn run() {
             commands::nearby::nearby_set_visible,
             commands::nearby::nearby_set_looking,
             commands::nearby::nearby_pair,
+            commands::nearby::nearby_send,
             commands::nearby::nearby_answer,
             commands::nearby::nearby_close,
             commands::nearby::nearby_contacts,

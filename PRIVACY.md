@@ -112,6 +112,8 @@ It talks to the local network only for **Nearby**, and only when you ask:
   network for ten minutes and accepts connections from other copies of the app.
 - When you pair two computers, they talk directly to each other over an encrypted
   connection. Nothing goes through a server, ours or anyone else's.
+- When you send a password or a host, it goes only to the computer you pick, and only
+  after its user accepts it.
 
 Each computer you pair with is recorded in your vault with the name it gave and the
 date. You can remove it on the Nearby page. The key that identifies your computer to

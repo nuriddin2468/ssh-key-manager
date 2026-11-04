@@ -327,6 +327,16 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   pairing needs it unlocked.
 - **One at a time.** While a pairing goes on, other connections are closed at once.
   The users have three minutes to compare the codes.
+- **Sending.** After pairing, or straight away between contacts, the side that
+  connected may send one item: a vault entry or a host. The UI only names it; the
+  backend reads the secret from the vault. First goes a summary with nothing secret
+  in it (title and username, or alias and address); the item itself goes only after
+  the other user accepts. The receiver checks that the item matches the summary and
+  that every name in a host is made of name characters only, refuses a host block
+  that would add a directive running a program, and gives a taken alias a number.
+  It never adds a server key for a host it already has keys for, since `ssh` would
+  then accept the sender's key next to its own; it keeps its own and warns instead.
+  A 2FA secret goes only if the sender ticks it; a key's passphrase never goes.
 
 ## Reporting a vulnerability
 

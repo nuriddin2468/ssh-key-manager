@@ -56,6 +56,9 @@ portable-pty = "0.9"
 sshkm-os = { path = "../crates/sshkm-os" }
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
+# Compares release versions, as the updater does; the version it uses, so this
+# adds no crate to the build.
+semver = "1"
 
 [dev-dependencies]
 sshkm-core = { path = "../crates/sshkm-core", features = ["ts"] }

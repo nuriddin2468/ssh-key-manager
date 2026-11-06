@@ -1,8 +1,9 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { Toaster } from 'sonner';
-import { queryClient } from '@/api/queries';
+import { queryClient, useEnvironment } from '@/api/queries';
 import { SIDEBAR_INSET, Sidebar } from '@/components/layout/Sidebar';
+import { ReleaseNotesDialog } from '@/components/ReleaseNotesDialog';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 import { AgentPage } from '@/features/agent/AgentPage';
 import { useKeysFromVault } from '@/features/agent/useKeysFromVault';
@@ -24,6 +25,7 @@ import { SettingsPage } from '@/features/settings/SettingsPage';
 import { TerminalPage } from '@/features/terminal/TerminalPage';
 import { TerminalProvider } from '@/features/terminal/TerminalProvider';
 import { platform } from '@/lib/platform';
+import { announceUpdate } from '@/lib/releaseNotes';
 import { useSettings } from '@/lib/settings';
 import { useAutomaticUpdates } from '@/lib/updater';
 import { DialogsProvider } from './dialogs';
@@ -69,6 +71,10 @@ function Shell() {
   useNearbyEvents();
   useAutomaticUpdates(useSettings().autoUpdate);
   useKeysFromVault();
+  const appVersion = useEnvironment().data?.appVersion;
+  useEffect(() => {
+    if (appVersion) announceUpdate(appVersion);
+  }, [appVersion]);
 
   // Popovers render in a portal under <body>; giving it the section too lets
   // dropdowns and menus pick up the page's accent colour.
@@ -102,6 +108,7 @@ function Shell() {
       <BrowserPairing />
       <PairingDialog />
       <SyncDialog />
+      <ReleaseNotesDialog />
     </div>
   );
 }

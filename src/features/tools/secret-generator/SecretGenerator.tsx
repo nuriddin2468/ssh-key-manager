@@ -165,7 +165,7 @@ export function SecretGenerator() {
           </span>
           {PRESET_GROUPS.map((group) => (
             <fieldset key={group.id} className="flex flex-col gap-0.5">
-              <legend className="px-2 pt-1 pb-1 text-[11px] font-semibold tracking-[0.06em] text-subtle uppercase">
+              <legend className="px-2 pt-1 pb-[5px] text-[11px] font-semibold text-subtle">
                 {t(`toolGenerator.groups.${group.id}`)}
               </legend>
               {group.presets.map((preset) => {
@@ -217,7 +217,7 @@ export function SecretGenerator() {
             <div className="flex flex-col gap-1.5">
               <div className="flex min-h-[52px] items-center gap-2 rounded-xl border border-white/[0.08] bg-black/35 py-2 pr-1.5 pl-3">
                 <span className="sr-only">{t('toolGenerator.output')}: </span>
-                <span className="selectable min-w-0 flex-1 font-mono text-[13.5px] leading-[20px] [overflow-wrap:anywhere] text-fg">
+                <span className="selectable min-w-0 flex-1 font-mono text-[15px] leading-[22px] font-medium [overflow-wrap:anywhere] text-fg">
                   {value || ' '}
                 </span>
                 <IconButton

@@ -127,6 +127,27 @@ function PingResult({ ping, host, port }: { ping: SshPing; host: string; port: n
         ms: formatMs(ping.avg ?? 0, i18n.language),
       })}
     >
+      {/* What matters most about the server comes first. */}
+      {banner?.outdated ? (
+        <Note
+          tone="warning"
+          icon={<TriangleAlert aria-hidden="true" className="size-4" strokeWidth={2} />}
+        >
+          {banner.openssh
+            ? t('toolNetwork.sshPing.outdated', { version: banner.openssh })
+            : t('toolNetwork.sshPing.protocol1')}
+        </Note>
+      ) : null}
+      {banner ? null : (
+        <Note
+          tone="warning"
+          icon={<TriangleAlert aria-hidden="true" className="size-4" strokeWidth={2} />}
+        >
+          {ping.other
+            ? t('toolNetwork.sshPing.notSsh', { port, line: ping.other })
+            : t('toolNetwork.sshPing.silent', { port })}
+        </Note>
+      )}
       {ping.address !== host ? (
         <p className="text-[12.5px] text-muted">
           {t('toolNetwork.connectedToOneOf', {
@@ -182,24 +203,8 @@ function PingResult({ ping, host, port }: { ping: SshPing; host: string; port: n
               { label: t('toolNetwork.sshPing.versionLine'), value: banner.line },
             ]}
           />
-          {banner.outdated ? (
-            <Note
-              tone="warning"
-              icon={<TriangleAlert aria-hidden="true" className="size-4" strokeWidth={2} />}
-            >
-              {banner.openssh
-                ? t('toolNetwork.sshPing.outdated', { version: banner.openssh })
-                : t('toolNetwork.sshPing.protocol1')}
-            </Note>
-          ) : null}
         </section>
-      ) : (
-        <Note tone="warning">
-          {ping.other
-            ? t('toolNetwork.sshPing.notSsh', { port, line: ping.other })
-            : t('toolNetwork.sshPing.silent', { port })}
-        </Note>
-      )}
+      ) : null}
     </ResultCard>
   );
 }

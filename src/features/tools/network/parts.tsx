@@ -9,15 +9,20 @@ import { TextField } from '@/components/ui/TextField';
 import { cn } from '@/lib/cn';
 import { type ConfigTarget, configTargets } from './model';
 
-/** The form above a network tool's result: its fields, then the button that runs it. */
+/**
+ * The form above a network tool's result: its fields, the button that runs
+ * it, and a row of quick picks under them.
+ */
 export function ToolForm({
   onSubmit,
   children,
   action,
+  footer,
 }: {
   onSubmit: () => void;
   children: ReactNode;
   action: ReactNode;
+  footer?: ReactNode;
 }) {
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -31,6 +36,7 @@ export function ToolForm({
       {children}
       {/* The labels above the fields are 18px plus a 6px gap. */}
       <div className="flex shrink-0 pt-6">{action}</div>
+      {footer ? <div className="basis-full">{footer}</div> : null}
     </form>
   );
 }
@@ -170,28 +176,31 @@ export function ResultCard({
   );
 }
 
-/** A short coloured note inside a result: what to make of it. */
+/** A short coloured note inside a result: what to make of it, and what to do. */
 export function Note({
   tone = 'neutral',
   icon,
+  action,
   children,
 }: {
   tone?: 'neutral' | 'warning' | 'critical';
   icon?: ReactNode;
+  action?: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <p
+    <div
       className={cn(
-        'flex items-start gap-2 rounded-xl border px-3 py-2 text-[12.5px] leading-[18px]',
+        'flex flex-wrap items-start gap-x-2 gap-y-1.5 rounded-xl border px-3 py-2 text-[12.5px] leading-[18px]',
         tone === 'neutral' && 'border-white/[0.08] bg-white/[0.03] text-fg-2',
         tone === 'warning' && 'border-warning-solid/30 bg-warning-solid/[0.08] text-warning',
         tone === 'critical' && 'border-critical-solid/30 bg-critical-solid/[0.08] text-critical',
       )}
     >
       {icon ? <span className="mt-px flex shrink-0">{icon}</span> : null}
-      <span className="selectable min-w-0 [overflow-wrap:anywhere]">{children}</span>
-    </p>
+      <p className="selectable min-w-[200px] flex-1 [overflow-wrap:anywhere]">{children}</p>
+      {action ? <span className="-my-1 shrink-0">{action}</span> : null}
+    </div>
   );
 }
 

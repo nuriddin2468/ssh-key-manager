@@ -114,23 +114,22 @@ function Overrides({ name }: { name: string }) {
   return (
     <div className="flex flex-col gap-2">
       {used.map(({ entry }) => (
-        <div key={entry.line} className="flex flex-wrap items-center gap-2">
-          <div className="min-w-0 flex-1">
-            <Note
-              tone="warning"
-              icon={<FileText aria-hidden="true" className="size-4" strokeWidth={1.9} />}
+        <Note
+          key={entry.line}
+          tone="warning"
+          icon={<FileText aria-hidden="true" className="size-4" strokeWidth={1.9} />}
+          action={
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => navigate({ page: 'hostsFile', line: entry.line })}
             >
-              {t('toolNetwork.dns.pinned', { name, address: entry.address, line: entry.line })}
-            </Note>
-          </div>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => navigate({ page: 'hostsFile', line: entry.line })}
-          >
-            {t('toolNetwork.dns.openHostsFile')}
-          </Button>
-        </div>
+              {t('toolNetwork.dns.openHostsFile')}
+            </Button>
+          }
+        >
+          {t('toolNetwork.dns.pinned', { name, address: entry.address, line: entry.line })}
+        </Note>
       ))}
     </div>
   );

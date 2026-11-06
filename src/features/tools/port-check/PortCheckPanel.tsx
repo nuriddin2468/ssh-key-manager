@@ -50,6 +50,19 @@ export function PortCheckPanel() {
             {t('toolNetwork.portCheck.run')}
           </Button>
         }
+        footer={
+          <fieldset className="flex flex-wrap items-center gap-1.5">
+            <legend className="sr-only">{t('toolNetwork.portCheck.common')}</legend>
+            {COMMON.map((item) => (
+              <Chip
+                key={item.port}
+                label={`${item.port} · ${item.name}`}
+                pressed={portNumber === item.port}
+                onClick={() => setPort(String(item.port))}
+              />
+            ))}
+          </fieldset>
+        }
       >
         <HostField
           value={host}
@@ -69,17 +82,6 @@ export function PortCheckPanel() {
           className="w-[104px] shrink-0"
         />
       </ToolForm>
-      <fieldset className="flex flex-wrap items-center gap-1.5 px-1">
-        <legend className="sr-only">{t('toolNetwork.portCheck.common')}</legend>
-        {COMMON.map((item) => (
-          <Chip
-            key={item.port}
-            label={`${item.port} · ${item.name}`}
-            pressed={portNumber === item.port}
-            onClick={() => setPort(String(item.port))}
-          />
-        ))}
-      </fieldset>
       <LiveRegion busy={check.isPending}>
         {check.data && check.variables ? (
           <PortResult

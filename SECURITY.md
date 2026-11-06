@@ -239,6 +239,28 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - Private keys are deliberately not backed up, because a backup taken before adding a
     passphrase would leave an unencrypted copy behind.
 - **Deletions are recoverable.** Removed keys go to the system Trash.
+- **Rotating a key takes the old one away only where the new one works.**
+  - The new key is added to a host by signing in as the host does now, with the old key.
+  - Then the app signs in offering the new key first, with password and
+    keyboard-interactive logins off, and counts the sign-in only if `ssh -v` logged
+    that the server accepted the new key: the old key, still named in the config or
+    held by the agent, would otherwise get in after the new one is turned down. The
+    log goes to a new file only you can read in the temporary folder (`ssh -E`),
+    removed right after, so nothing a jump host prints or a server sends as a banner
+    reaches it. A server can still forge a line of it in a debug message, but only
+    about itself.
+  - Only then does the host's block in `~/.ssh/config` name the new key, through the
+    usual edit with its revision check.
+  - The old key comes off a server's `authorized_keys` only when you choose it, only
+    for hosts whose new key passed that check and whose block names it, and never
+    while another alias of the same account (same host name, port and user, or no
+    user written) still signs in with the old key. The file is read back after the
+    change and a key still in it counts as not removed.
+  - The old key file is offered for the Trash only once no host in the rotation and
+    no block of the config still uses it; it is also removed from `ssh-agent`.
+  - A rotation in progress is kept in the interface's local storage so it can go on
+    later: key and host names, fingerprints, the old public key and how far each host
+    got. Nothing secret.
 - **Administrator rights only to save the hosts file, and only when you save.** The app
   itself never runs with administrator rights.
   - Changes to the hosts file are collected first and shown as a diff. Saving writes the

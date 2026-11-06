@@ -24,6 +24,7 @@ import { diagnosed, diagnoseHandlers, diagnoseHostSpecs } from './diagnose';
 import { historyHandlers, recordCheck } from './history';
 import { hostsFileFindings, hostsFileHandlers } from './hostsFile';
 import { nearbyHandlers } from './nearby';
+import { ROTATION_HOSTS, rotationHandlers } from './rotation';
 import { serverKeysHandlers } from './serverKeys';
 import { shellHistoryHandlers } from './shellHistory';
 import { terminalHandlers } from './terminal';
@@ -184,6 +185,7 @@ let hostSpecs: { patterns: string[]; options: HostOption[] }[] = [
     ],
   },
   ...diagnoseHostSpecs,
+  ...ROTATION_HOSTS,
   {
     patterns: ['*'],
     options: [opt('AddKeysToAgent', 'yes'), opt('UseKeychain', 'yes'), opt('ForwardAgent', 'yes')],
@@ -523,6 +525,12 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   }),
   ...serverKeysHandlers({
     keys: () => keys,
+    batchLogin: keyTest,
+    vaultLogin: (alias) => vaultTest({ alias }) as ReturnType<typeof keyTest>,
+  }),
+  // The key rotation's demo servers; every other host as above.
+  ...rotationHandlers({
+    keys: () => keysView().keys,
     batchLogin: keyTest,
     vaultLogin: (alias) => vaultTest({ alias }) as ReturnType<typeof keyTest>,
   }),

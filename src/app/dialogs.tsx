@@ -20,6 +20,7 @@ import { UnlockDialog } from '@/features/agent/UnlockDialog';
 import { AddHostDialog } from '@/features/hosts/AddHostDialog';
 import { GenerateKeyDialog } from '@/features/keys/GenerateKeyDialog';
 import { PassphraseDialog } from '@/features/keys/PassphraseDialog';
+import { RotateKeyDialog } from '@/features/keys/rotation/RotateKeyDialog';
 import { UnlockVaultDialog } from '@/features/passwords/UnlockVaultDialog';
 import { useSettings } from '@/lib/settings';
 import { useRouter } from './router';
@@ -55,6 +56,8 @@ interface DialogsValue {
    */
   unlockVault: (options?: VaultUnlock) => void;
   importKey: () => Promise<void>;
+  /** Replaces a key with a new one on its hosts; goes on with a rotation already started. */
+  rotateKey: (key: KeyView) => void;
 }
 
 const DialogsContext = createContext<DialogsValue | null>(null);
@@ -71,6 +74,8 @@ export function DialogsProvider({ children }: { children: ReactNode }) {
   // replacing it. It opens from code, not a Radix trigger, so focus goes back
   // by hand.
   const [vault, setVault] = useState<VaultUnlock | null>(null);
+  // Its own state too: the key and vault dialogs it opens go above it.
+  const [rotating, setRotating] = useState<KeyView | null>(null);
   const vaultOpener = useRef<HTMLElement | null>(null);
   const showVault = useCallback((next: VaultUnlock) => {
     const active = document.activeElement;
@@ -113,6 +118,7 @@ export function DialogsProvider({ children }: { children: ReactNode }) {
         else addPlain.mutate({ key, lifetime }, { onSuccess: () => onUnlocked?.() });
       },
       unlockVault: (options) => showVault(options ?? {}),
+      rotateKey: (key) => setRotating(key),
       importKey: async () => {
         try {
           const source = isTauri()
@@ -151,6 +157,12 @@ export function DialogsProvider({ children }: { children: ReactNode }) {
             onUnlocked={open.onUnlocked}
           />
         ) : null}
+      </Dialog>
+      <Dialog
+        open={rotating !== null}
+        onOpenChange={(next) => (next ? undefined : setRotating(null))}
+      >
+        {rotating ? <RotateKeyDialog keyView={rotating} onDone={() => setRotating(null)} /> : null}
       </Dialog>
       <Dialog open={vault !== null} onOpenChange={(next) => (next ? undefined : closeVault())}>
         {vault ? (

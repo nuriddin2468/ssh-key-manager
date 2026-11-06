@@ -109,6 +109,8 @@ It goes online only:
   **Settings → Updates**;
 - when you ask it to reach a server: checking a host key, testing a connection or
   opening a terminal session;
+- when you rotate a key: it signs in to the hosts you chose to add the new key, check
+  that it works and, if you ask, remove the old one;
 - for a DNS lookup when you ask where a name leads;
 - when a connection failed and you click **Check port**: it opens one connection to
   the server's port and closes it at once, without sending anything;
@@ -125,6 +127,10 @@ It goes online only:
 When a connection fails, the app explains why from what `ssh` printed. It keeps
 that explanation only in memory, next to the test's result, and never stores or
 sends it.
+
+While you rotate a key, the app remembers on this computer which hosts you chose and
+how far each got, so you can finish later: the names of the keys and hosts, their
+fingerprints and the old public key. It forgets them once the rotation is done.
 
 It talks to the local network only for **Nearby**, and only when you ask:
 

@@ -23,8 +23,26 @@ const FIX_LABELS = {
   addIdentitiesOnly: 'audit.action.addIdentitiesOnly',
 } as const;
 
+/** Findings a new key settles: they offer the rotation wizard. */
+const ROTATE_KINDS: ReadonlySet<Finding['kind']['kind']> = new Set([
+  'dsaKey',
+  'rsaTooShort',
+  'rsaBelowRecommended',
+  'unencryptedKey',
+]);
+
+/**
+ * The finding is settled by replacing its key on the servers. A key without
+ * a passphrase gets one more simply, so the rotation is offered only where
+ * that one-click fix is not.
+ */
+export function rotates(finding: Finding): boolean {
+  return ROTATE_KINDS.has(finding.kind.kind) && finding.subject.keyId !== null && !finding.fix;
+}
+
 /** The label of a finding's one-click fix, or of "open" when there is none. */
 export function fixLabelKey(finding: Finding) {
+  if (rotates(finding)) return 'rotation.action';
   if (finding.fix) return FIX_LABELS[finding.fix.kind];
   if (hostsFileLine(finding) !== undefined) return 'audit.action.openHostsFile';
   if (finding.subject.hostId !== null && !finding.subject.keyId) return 'audit.action.openHost';
@@ -101,6 +119,12 @@ export function useFix(keysById: ReadonlyMap<string, KeyView>) {
   );
 
   const fix = (finding: Finding) => {
+    if (rotates(finding)) {
+      const key = finding.subject.keyId ? keysById.get(finding.subject.keyId) : undefined;
+      if (key) dialogs.rotateKey(key);
+      else if (finding.subject.keyId) navigate({ page: 'keys', keyId: finding.subject.keyId });
+      return;
+    }
     const action = finding.fix;
     if (action?.kind === 'addPassphrase') {
       const key = keysById.get(action.keyId);

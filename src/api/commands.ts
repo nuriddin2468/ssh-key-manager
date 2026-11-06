@@ -32,6 +32,7 @@ import type { HostsFileInfo } from '@/bindings/HostsFileInfo';
 import type { HostsPreview } from '@/bindings/HostsPreview';
 import type { ImportPick } from '@/bindings/ImportPick';
 import type { KeyInstall } from '@/bindings/KeyInstall';
+import type { KeyLoginCheck } from '@/bindings/KeyLoginCheck';
 import type { KeysView } from '@/bindings/KeysView';
 import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostsFile } from '@/bindings/KnownHostsFile';
@@ -81,6 +82,15 @@ export const api = {
   changePassphrase: (keyId: string, old: string | null, next: string | null) =>
     call<KeyView>('change_passphrase', { keyId, old, new: next }),
   regeneratePublic: (keyId: string) => call<KeyView>('regenerate_public', { keyId }),
+  /**
+   * Signs in to `alias` offering `keyId` first, keys only, and says whether
+   * that key let the user in (`otherKey`: another one did).
+   */
+  checkKeyLogin: (alias: string, keyId: string) =>
+    call<KeyLoginCheck>('check_key_login', { alias, keyId }),
+  /** `checkKeyLogin` with the key passphrases saved in the vault. */
+  vaultCheckKeyLogin: (alias: string, keyId: string) =>
+    call<KeyLoginCheck>('vault_check_key_login', { alias, keyId }),
   importKey: (source: string, fileName: string | null) =>
     call<KeyView>('import_key', { source, fileName }),
   trashKey: (keyId: string) => call<void>('trash_key', { keyId }),

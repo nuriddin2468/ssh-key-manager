@@ -14,6 +14,7 @@ export const TONES = {
   orange: ['#FDBA74', '#EA580C'],
   aurora: ['#2DD4BF', '#6366F1'],
   green: ['#86EFAC', '#16A34A'],
+  cyan: ['#67E8F9', '#0891B2'],
 } as const;
 
 export type Tone = keyof typeof TONES;

@@ -45,6 +45,7 @@ const ru = {
     sessions_other: '{{count}} сессии, подключено: {{connected}}',
     groupSharing: 'Обмен',
     nearby: 'Рядом',
+    tools: 'Инструменты',
   },
   nearby: {
     title: 'Рядом',
@@ -1781,6 +1782,16 @@ const ru = {
     conflictCopy: 'Ваша версия: {{path}}',
     keysConflict:
       'Ключи хранилища одновременно изменили на другом компьютере. Здесь ничего не изменилось. Попробуйте ещё раз.',
+  },
+  tools: {
+    title: 'Инструменты',
+    back: 'Все инструменты',
+    empty: 'Инструментов пока нет.',
+    groups: {
+      secrets: 'Пароли и секреты',
+      network: 'Сеть',
+      ssh: 'SSH',
+    },
   },
   settings: {
     title: 'Настройки',

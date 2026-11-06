@@ -43,6 +43,7 @@ const uz = {
     sessions_other: '{{count}} ta seans, ulangan: {{connected}}',
     groupSharing: 'Almashish',
     nearby: 'Yaqin atrofda',
+    tools: 'Vositalar',
   },
   nearby: {
     title: 'Yaqin atrofda',
@@ -1672,6 +1673,16 @@ const uz = {
     conflictCopy: 'Sizning versiyangiz: {{path}}',
     keysConflict:
       'Ombor kalitlari bir vaqtning oʻzida boshqa kompyuterda oʻzgartirildi. Bu yerda hech narsa oʻzgarmadi. Qayta urinib koʻring.',
+  },
+  tools: {
+    title: 'Vositalar',
+    back: 'Barcha vositalar',
+    empty: 'Hozircha vositalar yoʻq.',
+    groups: {
+      secrets: 'Parollar va maxfiy maʼlumotlar',
+      network: 'Tarmoq',
+      ssh: 'SSH',
+    },
   },
   settings: {
     title: 'Sozlamalar',

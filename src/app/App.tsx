@@ -23,6 +23,7 @@ import { useVaultEvents } from '@/features/passwords/useVaultEvents';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { TerminalPage } from '@/features/terminal/TerminalPage';
 import { TerminalProvider } from '@/features/terminal/TerminalProvider';
+import { ToolsPage } from '@/features/tools/ToolsPage';
 import { platform } from '@/lib/platform';
 import { useSettings } from '@/lib/settings';
 import { useAutomaticUpdates } from '@/lib/updater';
@@ -97,6 +98,7 @@ function Shell() {
           <TerminalPage connect={route.connect} nonce={route.nonce} />
         ) : null}
         {route.page === 'nearby' ? <NearbyPage /> : null}
+        {route.page === 'tools' ? <ToolsPage tool={route.tool} /> : null}
         {route.page === 'settings' ? <SettingsPage /> : null}
       </main>
       <BrowserPairing />

@@ -41,6 +41,7 @@ const en = {
     sessions_other: '{{count}} sessions, {{connected}} connected',
     groupSharing: 'Sharing',
     nearby: 'Nearby',
+    tools: 'Tools',
   },
   nearby: {
     title: 'Nearby',
@@ -1648,6 +1649,16 @@ const en = {
     conflictCopy: 'Your version: {{path}}',
     keysConflict:
       'The vault’s keys were changed on another computer at the same time. Nothing was changed here. Try again.',
+  },
+  tools: {
+    title: 'Tools',
+    back: 'All tools',
+    empty: 'No tools yet.',
+    groups: {
+      secrets: 'Passwords and secrets',
+      network: 'Network',
+      ssh: 'SSH',
+    },
   },
   settings: {
     title: 'Settings',

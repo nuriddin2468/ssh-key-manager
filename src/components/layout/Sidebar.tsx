@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   Sparkle,
   SquareTerminal,
+  Wrench,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -29,6 +30,7 @@ import { type Page, type Route, useRouter } from '@/app/router';
 import { Logo } from '@/components/Logo';
 import { Tile, type Tone } from '@/components/ui/Tile';
 import { useSessionCounts } from '@/features/terminal/TerminalProvider';
+import { TOOLS } from '@/features/tools/registry';
 import { cn } from '@/lib/cn';
 import { platform } from '@/lib/platform';
 import { useSettings } from '@/lib/settings';
@@ -173,6 +175,8 @@ export function Sidebar() {
           />
         </NavGroup>
         <div className="flex flex-col gap-px">
+          {/* Shown once there is a tool (src/features/tools). */}
+          {TOOLS.length > 0 ? item('tools', t('nav.tools'), 'cyan', Wrench) : null}
           <NavItem
             label={t('nav.settings')}
             tone="slate"

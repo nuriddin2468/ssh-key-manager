@@ -1,6 +1,0 @@
-{
-  "kind": "new",
-  "en": "If you allow it, the Hosts page suggests servers you often connect to, from your shell history, ready to add. It runs only on your computer, and your commands and any passwords in them stay private.",
-  "ru": "Если разрешите, страница «Хосты» подскажет серверы, к которым вы часто подключаетесь, по истории командной оболочки — их можно сразу добавить. Всё работает только на вашем компьютере, а команды и пароли в них никуда не уходят.",
-  "uz": "Ruxsat bersangiz, «Xostlar» sahifasi buyruqlar tarixidan tez-tez ulanadigan serverlaringizni taklif qiladi — ularni darhol qoʻshish mumkin. Hammasi faqat kompyuteringizda ishlaydi, buyruqlar va ulardagi parollar hech qayerga ketmaydi."
-}

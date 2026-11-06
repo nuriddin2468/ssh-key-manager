@@ -1,6 +1,0 @@
-{
-  "kind": "improved",
-  "en": "Browser extension: the “Save login” banner lets you type or correct the username, and sign-ins that ask for the username and the password on separate pages are saved with both.",
-  "ru": "Расширение браузера: в баннере «Сохранить логин» можно ввести или исправить имя пользователя, а вход, где логин и пароль спрашивают на разных страницах, сохраняется целиком.",
-  "uz": "Brauzer kengaytmasi: «Login saqlansinmi» oynasida foydalanuvchi nomini kiritish yoki tuzatish mumkin, login va parol alohida sahifalarda soʻraladigan kirishlar esa toʻliq saqlanadi."
-}

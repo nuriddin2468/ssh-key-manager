@@ -1,6 +1,0 @@
-{
-  "kind": "new",
-  "en": "More SSH tools: a ProxyJump wizard for reaching servers through a bastion, a key converter for PuTTY .ppk and PEM keys, and an authorized_keys line builder with options.",
-  "ru": "Ещё SSH-инструменты: мастер ProxyJump для доступа к серверам через бастион, конвертер ключей PuTTY .ppk и PEM и конструктор строки authorized_keys с параметрами.",
-  "uz": "Yana SSH vositalari: bastion orqali serverlarga ulanish uchun ProxyJump ustasi, PuTTY .ppk va PEM kalitlari uchun konvertor hamda parametrli authorized_keys qatori konstruktori."
-}

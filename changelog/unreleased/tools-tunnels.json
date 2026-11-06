@@ -1,6 +1,0 @@
-{
-  "kind": "new",
-  "en": "SSH tunnels: save local, remote and SOCKS port forwards, switch them on and off, and see their state, also from the tray menu.",
-  "ru": "SSH-туннели: сохраняйте локальные, удалённые и SOCKS-пробросы портов, включайте и выключайте их и следите за их состоянием, в том числе из меню трея.",
-  "uz": "SSH tunnellari: lokal, masofaviy va SOCKS port yoʻnaltirishlarini saqlang, ularni yoqing va oʻchiring, holatini kuzating — tray menyusidan ham."
-}

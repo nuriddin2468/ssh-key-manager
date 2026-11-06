@@ -1,5 +1,149 @@
 [
   {
+    "version": "0.8.0",
+    "date": "2026-11-06",
+    "changes": [
+      {
+        "kind": "notice",
+        "en": "From this version, ⇧⌘Space (Ctrl+Shift+Space on Windows and Linux) opens quick search from any app. If another app of yours uses it, change or turn it off in Settings → Quick search.",
+        "ru": "С этой версии ⇧⌘Space (Ctrl+Shift+Space на Windows и Linux) открывает быстрый поиск из любого приложения. Если это сочетание нужно другой программе, измените или выключите его в Настройки → Быстрый поиск.",
+        "uz": "Shu versiyadan boshlab ⇧⌘Space (Windows va Linux’da Ctrl+Shift+Space) istalgan ilovadan tezkor qidiruvni ochadi. Bu birikma boshqa dasturingizga kerak boʻlsa, uni Sozlamalar → Tezkor qidiruvda oʻzgartiring yoki oʻchiring."
+      },
+      {
+        "kind": "new",
+        "en": "Quick search: ⇧⌘Space (Ctrl+Shift+Space) or the tray menu opens a small window from any app to connect to a host, copy a password or 2FA code, or unlock the vault.",
+        "ru": "Быстрый поиск: ⇧⌘Space (Ctrl+Shift+Space) или меню трея открывает из любого приложения маленькое окно, чтобы подключиться к хосту, скопировать пароль или код 2FA либо разблокировать хранилище.",
+        "uz": "Tezkor qidiruv: ⇧⌘Space (Ctrl+Shift+Space) yoki tray menyusi istalgan ilovadan kichik oyna ochadi — xostga ulanish, parol yoki 2FA kodini nusxalash yoxud omborni ochish uchun."
+      },
+      {
+        "kind": "new",
+        "en": "Command palette: press ⌘K (Ctrl+K) to find a host, key, password or action and run it from the keyboard.",
+        "ru": "Палитра команд: нажмите ⌘K (Ctrl+K), чтобы найти хост, ключ, пароль или действие и выполнить его с клавиатуры.",
+        "uz": "Buyruqlar palitrasi: xost, kalit, parol yoki amalni topish va klaviaturadan bajarish uchun ⌘K (Ctrl+K) tugmalarini bosing."
+      },
+      {
+        "kind": "new",
+        "en": "Key rotation: replace an old SSH key with a new Ed25519 key on every server that uses it. The app installs and checks the new key, updates your hosts, and removes the old key only where the new one works.",
+        "ru": "Ротация ключа: замените старый SSH-ключ новым Ed25519 на всех серверах, где он используется. Приложение установит и проверит новый ключ, обновит хосты и удалит старый только там, где новый работает.",
+        "uz": "Kalit rotatsiyasi: eski SSH kalitini u ishlatiladigan barcha serverlarda yangi Ed25519 kaliti bilan almashtiring. Ilova yangi kalitni oʻrnatadi va tekshiradi, xostlarni yangilaydi va eskisini faqat yangisi ishlagan joyda olib tashlaydi."
+      },
+      {
+        "kind": "new",
+        "en": "When a connection fails, the app explains why — a key the server refused, a changed host key, a timeout, an unknown name — and offers the fix, such as installing the key or checking the port.",
+        "ru": "Если подключиться не удалось, приложение объясняет почему — сервер не принял ключ, сменился ключ хоста, истекло время, имя не найдено — и предлагает исправление, например установить ключ или проверить порт.",
+        "uz": "Ulanish muvaffaqiyatsiz boʻlsa, ilova sababini tushuntiradi — server kalitni qabul qilmadi, xost kaliti oʻzgardi, vaqt tugadi, nom topilmadi — va tuzatishni taklif qiladi, masalan kalitni oʻrnatish yoki portni tekshirish."
+      },
+      {
+        "kind": "new",
+        "en": "Secret environments: keep your projects’ .env variables in the vault (dev, staging, prod), import and export .env, JSON, YAML and Kubernetes files, compare environments, open a terminal with one, and send it over Nearby to a computer with this version or later.",
+        "ru": "Окружения: храните переменные .env своих проектов в хранилище (dev, staging, prod), импортируйте и экспортируйте .env, JSON, YAML и Kubernetes, сравнивайте окружения, открывайте с ними терминал и отправляйте через «Рядом» на компьютер с этой версией или новее.",
+        "uz": "Muhitlar: loyihalaringizning .env oʻzgaruvchilarini omborda saqlang (dev, staging, prod), .env, JSON, YAML va Kubernetes fayllarini import va eksport qiling, muhitlarni solishtiring, ular bilan terminal oching va «Yaqin atrofda» orqali shu yoki undan yangi versiyali kompyuterga yuboring."
+      },
+      {
+        "kind": "new",
+        "en": "New Tools page. Its secret generator makes database, shell-safe and .env passwords, API tokens, UUIDs, JWT secrets, framework keys (Laravel, Django, Rails), Wi-Fi passwords, passphrases and PINs.",
+        "ru": "Новая страница «Инструменты». Генератор секретов создаёт пароли для баз данных, shell и .env, API-токены, UUID, секреты JWT, ключи фреймворков (Laravel, Django, Rails), пароли Wi-Fi, парольные фразы и PIN-коды.",
+        "uz": "Yangi «Vositalar» sahifasi. Maxfiy qiymatlar generatori maʼlumotlar bazasi, shell va .env uchun parollar, API tokenlari, UUID, JWT kalitlari, freymvork kalitlari (Laravel, Django, Rails), Wi-Fi parollari, parol iboralari va PIN kodlarni yaratadi."
+      },
+      {
+        "kind": "new",
+        "en": "Network tools: SSH ping with the server’s version, a port check, a DNS lookup that shows what your hosts file changes, and a TLS certificate check.",
+        "ru": "Сетевые инструменты: SSH-пинг с версией сервера, проверка порта, DNS-запрос с учётом файла hosts и проверка TLS-сертификата.",
+        "uz": "Tarmoq vositalari: server versiyasi bilan SSH ping, port tekshiruvi, hosts fayli oʻzgartirganlarini koʻrsatadigan DNS soʻrovi va TLS sertifikatini tekshirish."
+      },
+      {
+        "kind": "new",
+        "en": "More SSH tools: a ProxyJump wizard for reaching servers through a bastion, a key converter for PuTTY .ppk and PEM keys, and an authorized_keys line builder with options.",
+        "ru": "Ещё SSH-инструменты: мастер ProxyJump для доступа к серверам через бастион, конвертер ключей PuTTY .ppk и PEM и конструктор строки authorized_keys с параметрами.",
+        "uz": "Yana SSH vositalari: bastion orqali serverlarga ulanish uchun ProxyJump ustasi, PuTTY .ppk va PEM kalitlari uchun konvertor hamda parametrli authorized_keys qatori konstruktori."
+      },
+      {
+        "kind": "new",
+        "en": "SSH tunnels: save local, remote and SOCKS port forwards, switch them on and off, and see their state, also from the tray menu.",
+        "ru": "SSH-туннели: сохраняйте локальные, удалённые и SOCKS-пробросы портов, включайте и выключайте их и следите за их состоянием, в том числе из меню трея.",
+        "uz": "SSH tunnellari: lokal, masofaviy va SOCKS port yoʻnaltirishlarini saqlang, ularni yoqing va oʻchiring, holatini kuzating — tray menyusidan ham."
+      },
+      {
+        "kind": "new",
+        "en": "The audit checks ~/.ssh/config for risky settings — StrictHostKeyChecking no, UserKnownHostsFile /dev/null, ForwardAgent yes for every host, and too many agent keys without IdentitiesOnly — and fixes them in one click.",
+        "ru": "Аудит проверяет ~/.ssh/config на рискованные настройки — StrictHostKeyChecking no, UserKnownHostsFile /dev/null, ForwardAgent yes для всех хостов и слишком много ключей в агенте без IdentitiesOnly — и исправляет их в один клик.",
+        "uz": "Audit ~/.ssh/config faylini xavfli sozlamalarga tekshiradi — StrictHostKeyChecking no, UserKnownHostsFile /dev/null, barcha xostlar uchun ForwardAgent yes va IdentitiesOnly’siz agentdagi juda koʻp kalitlar — va ularni bir bosishda tuzatadi."
+      },
+      {
+        "kind": "new",
+        "en": "Optional breach check: the audit can look up your saved passwords in Have I Been Pwned. It stays off until you turn it on, and only the first 5 characters of each password’s hash leave your computer.",
+        "ru": "Проверка утечек по желанию: аудит может проверить сохранённые пароли в Have I Been Pwned. Она выключена, пока вы её не включите, и с компьютера уходят только первые 5 символов хэша каждого пароля.",
+        "uz": "Ixtiyoriy sizib chiqish tekshiruvi: audit saqlangan parollaringizni Have I Been Pwned’da tekshirishi mumkin. Uni yoqmaguningizcha u oʻchiq turadi, kompyuterdan esa har bir parol xeshining faqat birinchi 5 belgisi chiqadi."
+      },
+      {
+        "kind": "new",
+        "en": "If you allow it, the Hosts page suggests servers you often connect to, from your shell history, ready to add. It runs only on your computer, and your commands and any passwords in them stay private.",
+        "ru": "Если разрешите, страница «Хосты» подскажет серверы, к которым вы часто подключаетесь, по истории командной оболочки — их можно сразу добавить. Всё работает только на вашем компьютере, а команды и пароли в них никуда не уходят.",
+        "uz": "Ruxsat bersangiz, «Xostlar» sahifasi buyruqlar tarixidan tez-tez ulanadigan serverlaringizni taklif qiladi — ularni darhol qoʻshish mumkin. Hammasi faqat kompyuteringizda ishlaydi, buyruqlar va ulardagi parollar hech qayerga ketmaydi."
+      },
+      {
+        "kind": "new",
+        "en": "Browser extension: a switch in its popup turns off the browser’s own offers to save passwords and its form suggestions, so only SSH Key Manager shows under login fields.",
+        "ru": "Расширение браузера: переключатель в его окне выключает собственные предложения браузера сохранить пароль и подсказки в формах, чтобы под полями входа был только SSH Key Manager.",
+        "uz": "Brauzer kengaytmasi: uning oynasidagi tugma brauzerning parolni saqlash takliflari va shakl maslahatlarini oʻchiradi, shunda kirish maydonlari ostida faqat SSH Key Manager qoladi."
+      },
+      {
+        "kind": "new",
+        "en": "Before an update, What’s new shows what each version since yours changed, in your language, with what to know first and security fixes at the top. You update from there.",
+        "ru": "Перед обновлением «Что нового» показывает, что изменилось в каждой версии после вашей, на вашем языке, и в самом начале — что важно знать и исправления безопасности. Обновиться можно прямо оттуда.",
+        "uz": "Yangilashdan oldin «Nima yangi» sizdagi versiyadan keyingi har bir versiyada nima oʻzgarganini sizning tilingizda koʻrsatadi, eng boshida esa bilish muhim boʻlgan narsalar va xavfsizlik tuzatishlari turadi. Oʻsha yerdan yangilash mumkin."
+      },
+      {
+        "kind": "new",
+        "en": "After an update, the app says once what changed. Settings → Updates lists what changed in each version.",
+        "ru": "После обновления приложение один раз показывает, что изменилось. В Настройки → Обновления есть список изменений каждой версии.",
+        "uz": "Yangilangandan keyin ilova bir marta nima oʻzgarganini aytadi. Sozlamalar → Yangilanishlar boʻlimida har bir versiyadagi oʻzgarishlar roʻyxati bor."
+      },
+      {
+        "kind": "improved",
+        "en": "The audit page is clearer: its colour follows the most serious problem, password findings count in the total, cards and chips filter by area and severity, safe fixes run with one button, and a list shows every check that ran.",
+        "ru": "Страница аудита стала понятнее: её цвет зависит от самой серьёзной проблемы, находки по паролям входят в общий счёт, карточки и фильтры отбирают по области и серьёзности, безопасные исправления запускаются одной кнопкой, а список показывает все проверки.",
+        "uz": "Audit sahifasi tushunarliroq boʻldi: rangi eng jiddiy muammoga qarab oʻzgaradi, parollar boʻyicha topilmalar umumiy hisobga kiradi, kartalar va filtrlar soha hamda jiddiylik boʻyicha saralaydi, xavfsiz tuzatishlar bitta tugma bilan bajariladi, roʻyxat esa barcha tekshiruvlarni koʻrsatadi."
+      },
+      {
+        "kind": "improved",
+        "en": "Importing passwords starts with where they are now — your browser, Bitwarden, 1Password, KeePassXC, LastPass or any CSV file — and shows how to export them from there.",
+        "ru": "Импорт паролей начинается с вопроса, где они сейчас — в браузере, Bitwarden, 1Password, KeePassXC, LastPass или любом файле CSV — и показывает, как их оттуда выгрузить.",
+        "uz": "Parollarni import qilish ular hozir qayerdaligini soʻrashdan boshlanadi — brauzer, Bitwarden, 1Password, KeePassXC, LastPass yoki istalgan CSV fayl — va ularni u yerdan qanday eksport qilishni koʻrsatadi."
+      },
+      {
+        "kind": "improved",
+        "en": "Unlock Vault in the tray menu asks for Touch ID, Windows Hello or the master password in a small window instead of opening the whole app.",
+        "ru": "«Разблокировать хранилище» в меню трея запрашивает Touch ID, Windows Hello или мастер-пароль в небольшом окне, а не открывает всё приложение.",
+        "uz": "Tray menyusidagi «Omborni ochish» butun ilovani ochmasdan, kichik oynada Touch ID, Windows Hello yoki asosiy parolni soʻraydi."
+      },
+      {
+        "kind": "improved",
+        "en": "Browser extension: the login menu no longer opens over a login that’s already filled in; press Down Arrow to open it anyway. Logins for the username you typed come first.",
+        "ru": "Расширение браузера: меню логинов больше не открывается поверх уже заполненного входа — при необходимости откройте его стрелкой вниз. Логины с введённым именем пользователя показываются первыми.",
+        "uz": "Brauzer kengaytmasi: loginlar menyusi toʻldirilgan login ustida endi ochilmaydi — kerak boʻlsa, pastga strelkasi bilan oching. Kiritilgan foydalanuvchi nomidagi loginlar birinchi koʻrsatiladi."
+      },
+      {
+        "kind": "improved",
+        "en": "Browser extension: the “Save login” banner lets you type or correct the username, and sign-ins that ask for the username and the password on separate pages are saved with both.",
+        "ru": "Расширение браузера: в баннере «Сохранить логин» можно ввести или исправить имя пользователя, а вход, где логин и пароль спрашивают на разных страницах, сохраняется целиком.",
+        "uz": "Brauzer kengaytmasi: «Login saqlansinmi» oynasida foydalanuvchi nomini kiritish yoki tuzatish mumkin, login va parol alohida sahifalarda soʻraladigan kirishlar esa toʻliq saqlanadi."
+      },
+      {
+        "kind": "improved",
+        "en": "Before installing an update, the app saves a copy of your vault, ~/.ssh/config and known_hosts with its other backups.",
+        "ru": "Перед установкой обновления приложение сохраняет копию хранилища, ~/.ssh/config и known_hosts вместе с остальными резервными копиями.",
+        "uz": "Yangilanishni oʻrnatishdan oldin ilova ombor, ~/.ssh/config va known_hosts nusxasini boshqa zaxira nusxalar qatorida saqlaydi."
+      },
+      {
+        "kind": "fixed",
+        "en": "On the Nearby page, the This computer card no longer shrinks to a thin strip when several devices are listed.",
+        "ru": "На странице «Рядом» карточка «Этот компьютер» больше не сжимается в тонкую полоску, когда в списке несколько устройств.",
+        "uz": "«Yaqin atrofda» sahifasida «Shu kompyuter» kartochkasi roʻyxatda bir nechta qurilma boʻlganda endi ingichka chiziqqa aylanib qolmaydi."
+      }
+    ]
+  },
+  {
     "version": "0.7.0",
     "date": "2026-11-06",
     "changes": [

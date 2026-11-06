@@ -4,6 +4,43 @@ What changed in each version of SSH Key Manager. The app shows these notes in yo
 
 <!-- Made from changelog/releases.json by scripts/changelog.mjs: edit that file, then run `node scripts/changelog.mjs write`. -->
 
+## 0.8.0 (2026-11-06)
+
+### Before you update
+
+- From this version, ⇧⌘Space (Ctrl+Shift+Space on Windows and Linux) opens quick search from any app. If another app of yours uses it, change or turn it off in Settings → Quick search.
+
+### New
+
+- Quick search: ⇧⌘Space (Ctrl+Shift+Space) or the tray menu opens a small window from any app to connect to a host, copy a password or 2FA code, or unlock the vault.
+- Command palette: press ⌘K (Ctrl+K) to find a host, key, password or action and run it from the keyboard.
+- Key rotation: replace an old SSH key with a new Ed25519 key on every server that uses it. The app installs and checks the new key, updates your hosts, and removes the old key only where the new one works.
+- When a connection fails, the app explains why — a key the server refused, a changed host key, a timeout, an unknown name — and offers the fix, such as installing the key or checking the port.
+- Secret environments: keep your projects’ .env variables in the vault (dev, staging, prod), import and export .env, JSON, YAML and Kubernetes files, compare environments, open a terminal with one, and send it over Nearby to a computer with this version or later.
+- New Tools page. Its secret generator makes database, shell-safe and .env passwords, API tokens, UUIDs, JWT secrets, framework keys (Laravel, Django, Rails), Wi-Fi passwords, passphrases and PINs.
+- Network tools: SSH ping with the server’s version, a port check, a DNS lookup that shows what your hosts file changes, and a TLS certificate check.
+- More SSH tools: a ProxyJump wizard for reaching servers through a bastion, a key converter for PuTTY .ppk and PEM keys, and an authorized_keys line builder with options.
+- SSH tunnels: save local, remote and SOCKS port forwards, switch them on and off, and see their state, also from the tray menu.
+- The audit checks ~/.ssh/config for risky settings — StrictHostKeyChecking no, UserKnownHostsFile /dev/null, ForwardAgent yes for every host, and too many agent keys without IdentitiesOnly — and fixes them in one click.
+- Optional breach check: the audit can look up your saved passwords in Have I Been Pwned. It stays off until you turn it on, and only the first 5 characters of each password’s hash leave your computer.
+- If you allow it, the Hosts page suggests servers you often connect to, from your shell history, ready to add. It runs only on your computer, and your commands and any passwords in them stay private.
+- Browser extension: a switch in its popup turns off the browser’s own offers to save passwords and its form suggestions, so only SSH Key Manager shows under login fields.
+- Before an update, What’s new shows what each version since yours changed, in your language, with what to know first and security fixes at the top. You update from there.
+- After an update, the app says once what changed. Settings → Updates lists what changed in each version.
+
+### Improved
+
+- The audit page is clearer: its colour follows the most serious problem, password findings count in the total, cards and chips filter by area and severity, safe fixes run with one button, and a list shows every check that ran.
+- Importing passwords starts with where they are now — your browser, Bitwarden, 1Password, KeePassXC, LastPass or any CSV file — and shows how to export them from there.
+- Unlock Vault in the tray menu asks for Touch ID, Windows Hello or the master password in a small window instead of opening the whole app.
+- Browser extension: the login menu no longer opens over a login that’s already filled in; press Down Arrow to open it anyway. Logins for the username you typed come first.
+- Browser extension: the “Save login” banner lets you type or correct the username, and sign-ins that ask for the username and the password on separate pages are saved with both.
+- Before installing an update, the app saves a copy of your vault, ~/.ssh/config and known_hosts with its other backups.
+
+### Fixed
+
+- On the Nearby page, the This computer card no longer shrinks to a thin strip when several devices are listed.
+
 ## 0.7.0 (2026-11-06)
 
 ### Before you update

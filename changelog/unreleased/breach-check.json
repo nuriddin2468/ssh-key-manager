@@ -1,6 +1,0 @@
-{
-  "kind": "new",
-  "en": "Optional breach check: the audit can look up your saved passwords in Have I Been Pwned. It stays off until you turn it on, and only the first 5 characters of each password’s hash leave your computer.",
-  "ru": "Проверка утечек по желанию: аудит может проверить сохранённые пароли в Have I Been Pwned. Она выключена, пока вы её не включите, и с компьютера уходят только первые 5 символов хэша каждого пароля.",
-  "uz": "Ixtiyoriy sizib chiqish tekshiruvi: audit saqlangan parollaringizni Have I Been Pwned’da tekshirishi mumkin. Uni yoqmaguningizcha u oʻchiq turadi, kompyuterdan esa har bir parol xeshining faqat birinchi 5 belgisi chiqadi."
-}

@@ -1,6 +1,0 @@
-{
-  "kind": "improved",
-  "en": "Unlock Vault in the tray menu asks for Touch ID, Windows Hello or the master password in a small window instead of opening the whole app.",
-  "ru": "«Разблокировать хранилище» в меню трея запрашивает Touch ID, Windows Hello или мастер-пароль в небольшом окне, а не открывает всё приложение.",
-  "uz": "Tray menyusidagi «Omborni ochish» butun ilovani ochmasdan, kichik oynada Touch ID, Windows Hello yoki asosiy parolni soʻraydi."
-}

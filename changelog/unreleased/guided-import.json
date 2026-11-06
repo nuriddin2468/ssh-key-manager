@@ -1,6 +1,0 @@
-{
-  "kind": "improved",
-  "en": "Importing passwords starts with where they are now — your browser, Bitwarden, 1Password, KeePassXC, LastPass or any CSV file — and shows how to export them from there.",
-  "ru": "Импорт паролей начинается с вопроса, где они сейчас — в браузере, Bitwarden, 1Password, KeePassXC, LastPass или любом файле CSV — и показывает, как их оттуда выгрузить.",
-  "uz": "Parollarni import qilish ular hozir qayerdaligini soʻrashdan boshlanadi — brauzer, Bitwarden, 1Password, KeePassXC, LastPass yoki istalgan CSV fayl — va ularni u yerdan qanday eksport qilishni koʻrsatadi."
-}

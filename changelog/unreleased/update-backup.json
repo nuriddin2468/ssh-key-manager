@@ -1,6 +1,0 @@
-{
-  "kind": "improved",
-  "en": "Before installing an update, the app saves a copy of your vault, ~/.ssh/config and known_hosts with its other backups.",
-  "ru": "Перед установкой обновления приложение сохраняет копию хранилища, ~/.ssh/config и known_hosts вместе с остальными резервными копиями.",
-  "uz": "Yangilanishni oʻrnatishdan oldin ilova ombor, ~/.ssh/config va known_hosts nusxasini boshqa zaxira nusxalar qatorida saqlaydi."
-}

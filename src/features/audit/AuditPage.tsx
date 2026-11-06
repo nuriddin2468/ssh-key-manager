@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { Lock, RefreshCw, ShieldCheck } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
 import {
   invalidateAll,
+  queryClient,
   useAudit,
   useConfig,
   useEnvironment,
@@ -29,6 +30,7 @@ import { displayPath } from '@/lib/format';
 import { updateSettings, useSettings } from '@/lib/settings';
 import { AreaCards } from './AreaCards';
 import { AuditSummary } from './AuditSummary';
+import { BreachCheckAction, BreachSwitch, breachKey, useBreachStatus } from './BreachCheck';
 import { ChecksList } from './ChecksList';
 import { FindingRow } from './FindingRow';
 import {
@@ -38,6 +40,7 @@ import {
   automaticFixes,
   bySeverity,
   CHECKS,
+  type CheckId,
   checkResults,
   findingSubject,
   findingText,
@@ -77,6 +80,11 @@ export function AuditPage() {
     enabled: vaultState !== undefined,
   });
   const entries = useVaultEntries();
+  const breach = useBreachStatus();
+  // Reading the vault may start a breach check of new passwords.
+  useEffect(() => {
+    if (vaultAudit.dataUpdatedAt) void queryClient.invalidateQueries({ queryKey: breachKey });
+  }, [vaultAudit.dataUpdatedAt]);
   const [area, setArea] = useState<Area | null>(null);
   const [severity, setSeverity] = useState<Severity | null>(null);
   const [showIgnored, setShowIgnored] = useState(false);
@@ -106,9 +114,14 @@ export function AuditPage() {
   const counts = { critical: 0, warning: 0, info: 0 };
   for (const item of open) counts[item.severity] += 1;
   const results = checkResults(open);
-  const ran = CHECKS.filter(
-    (check) => areas.includes(check.area) && !(locked && check.area === 'passwords'),
+  const notRun = new Set<CheckId>(
+    CHECKS.filter(
+      (check) =>
+        (locked && check.area === 'passwords') ||
+        (check.id === 'breached' && !(breach?.enabled && breach.checkedAt)),
+    ).map((check) => check.id),
   );
+  const ran = CHECKS.filter((check) => areas.includes(check.area) && !notRun.has(check.id));
   const passed = ran.filter((check) => (results.get(check.id)?.count ?? 0) === 0).length;
   const automatic = automaticFixes(open);
 
@@ -242,7 +255,8 @@ export function AuditPage() {
             <AreaCards
               areas={areas}
               results={results}
-              locked={locked}
+              items={open}
+              notRun={notRun}
               selected={area}
               onSelect={(next) => {
                 setArea(next);
@@ -331,8 +345,12 @@ export function AuditPage() {
               areas={areas}
               results={results}
               locked={locked}
+              notRun={notRun}
+              extras={{ breached: <BreachCheckAction status={breach} /> }}
+              footers={{ passwords: <BreachSwitch layout="card" /> }}
               passed={passed}
               total={ran.length}
+              off={hasVault && !locked && breach && !breach.enabled ? 1 : 0}
               open={checksShown}
               onToggle={() => setChecksOpen(!checksShown)}
             />
@@ -351,7 +369,7 @@ export function AuditPage() {
 
             <p className="mt-auto flex items-center gap-2 text-[12.5px] text-subtle">
               <Lock aria-hidden="true" className="size-[15px]" strokeWidth={1.75} />
-              {t('audit.privacy')}
+              {breach?.enabled ? t('audit.privacyBreaches') : t('audit.privacy')}
             </p>
           </>
         )}

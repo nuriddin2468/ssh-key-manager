@@ -43,6 +43,11 @@ export function vaultFindingText(
       return t('audit.vault.kinds.hostNotFound.text', { host: kind.host });
     case 'passwordLogin':
       return t('audit.vault.kinds.passwordLogin.text', { host: kind.host });
+    case 'breachedPassword':
+      return t('audit.vault.kinds.breachedPassword.text', {
+        count: kind.count,
+        times: new Intl.NumberFormat(language).format(kind.count),
+      });
   }
 }
 

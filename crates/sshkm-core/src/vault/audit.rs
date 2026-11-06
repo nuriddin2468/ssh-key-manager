@@ -8,6 +8,7 @@
 //! | Rule | Severity |
 //! |---|---|
 //! | password guessed almost at once (zxcvbn score 0) | critical |
+//! | password seen in known data breaches (when checked, see [`BreachCache`]) | critical |
 //! | weak password (zxcvbn score 1) | warning |
 //! | the same password in several entries | warning |
 //! | password unchanged for more than a year | info |
@@ -26,7 +27,7 @@ use keepass::db::{EntryRef, Times, fields};
 use secrecy::SecretString;
 use serde::Serialize;
 
-use super::{EntryKind, Vault, password_changed, rfc3339, strength};
+use super::{BreachCache, EntryKind, Vault, password_changed, rfc3339, strength};
 use crate::audit::Severity;
 use crate::config::{HostEntry, HostKind};
 use crate::keys::KeyInfo;
@@ -45,6 +46,8 @@ pub struct VaultAuditInput<'a> {
     pub hosts: &'a [HostEntry],
     /// The current time, UTC.
     pub now: NaiveDateTime,
+    /// Results of the breach check, if it is on.
+    pub breaches: Option<&'a BreachCache>,
 }
 
 impl<'a> VaultAuditInput<'a> {
@@ -54,6 +57,7 @@ impl<'a> VaultAuditInput<'a> {
             keys,
             hosts,
             now: Times::now(),
+            breaches: None,
         }
     }
 }
@@ -99,6 +103,11 @@ pub enum VaultFindingKind {
     PasswordLogin {
         /// The entry's alias.
         host: String,
+    },
+    /// The password appears in known data breaches (Have I Been Pwned).
+    BreachedPassword {
+        /// How many times it was seen there.
+        count: u32,
     },
 }
 
@@ -197,6 +206,17 @@ impl Vault {
             link_findings(entry, &mut findings);
             if entry.checks_password() {
                 password_findings(entry, input.now, &mut findings);
+                if let Some(count) = input
+                    .breaches
+                    .and_then(|cache| cache.count(entry.password()))
+                    .filter(|&count| count > 0)
+                {
+                    findings.push(entry.finding(
+                        "breachedPassword",
+                        Severity::Critical,
+                        VaultFindingKind::BreachedPassword { count },
+                    ));
+                }
             }
         }
         reuse_findings(&entries, &mut findings);
@@ -408,6 +428,44 @@ mod tests {
         let mut fx = fixture();
         add(&mut fx.vault, &login("GitHub", STRONG));
         add(&mut fx.vault, &login("Mail", "kV9#pL2!mZ7qR4xT"));
+        assert_eq!(run(&fx.vault, &[], &[]), []);
+    }
+
+    #[test]
+    fn breached_passwords_are_found_once_checked() {
+        use sha1::{Digest, Sha1};
+        fn input(cache: &BreachCache) -> VaultAuditInput<'_> {
+            VaultAuditInput {
+                breaches: Some(cache),
+                ..VaultAuditInput::new(&[], &[])
+            }
+        }
+        let mut fx = fixture();
+        let github = add(&mut fx.vault, &login("GitHub", STRONG));
+        add(&mut fx.vault, &login("Mail", "kV9#pL2!mZ7qR4xT"));
+        let mut cache = BreachCache::new();
+        assert_eq!(fx.vault.audit(&input(&cache)), []);
+
+        let hash = format!("{:X}", Sha1::digest(STRONG.as_bytes()));
+        let mut query = fx.vault.breach_query(&cache, None);
+        for prefix in query.prefixes() {
+            let body = if hash.starts_with(prefix.as_str()) {
+                format!("{}:42\r\n", &hash[5..])
+            } else {
+                String::new()
+            };
+            query
+                .answer(&prefix, &body, &mut cache, std::time::Instant::now())
+                .unwrap();
+        }
+        let findings = fx.vault.audit(&input(&cache));
+        assert_eq!(ids(&findings), [format!("breachedPassword:{github}")]);
+        assert_eq!(findings[0].severity, Severity::Critical);
+        assert_eq!(
+            findings[0].kind,
+            VaultFindingKind::BreachedPassword { count: 42 }
+        );
+        // Not without the check's results.
         assert_eq!(run(&fx.vault, &[], &[]), []);
     }
 

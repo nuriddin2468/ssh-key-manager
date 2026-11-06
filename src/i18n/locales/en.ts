@@ -1390,6 +1390,8 @@ const en = {
     leadInfo: 'Only suggestions are left. Look at them when you have a minute.',
     leadClear: 'Nothing needs your attention right now.',
     checksPassed: '{{passed}} of {{total}} checks passed',
+    checksOff_one: '{{count}} turned off',
+    checksOff_other: '{{count}} turned off',
     fixAuto_one: 'Fix {{count}} automatically',
     fixAuto_other: 'Fix {{count}} automatically',
     fixAutoHint: 'File permissions and missing .pub files. Nothing else changes.',
@@ -1425,10 +1427,14 @@ const en = {
       keyFiles: 'Key files match, with no stray copies',
       folderPermissions: '~/.ssh and its config are protected',
       identityFiles: 'Keys named in the config exist',
+      hostKeys: 'ssh checks the keys of servers',
+      agentForwarding: 'Agent forwarding only where needed',
+      agentKeys: 'ssh offers each server only the right keys',
       redirects: 'Names go to their real servers',
       hostsEntries: 'No conflicting or expired entries',
       weak: 'No weak passwords',
       reused: 'No reused passwords',
+      breached: 'No passwords in known breaches',
       old: 'No passwords older than a year',
       links: 'Saved passphrases and passwords belong to existing keys and hosts',
       passwordLogin: 'Servers use keys instead of passwords',
@@ -1454,6 +1460,8 @@ const en = {
     hideIgnored: 'Hide',
     restore: 'Restore',
     privacy: 'Checks run on this computer. Nothing is sent anywhere.',
+    privacyBreaches:
+      "Checks run on this computer. The breach check sends only the first 5 characters of each password's SHA-1 hash to Have I Been Pwned.",
     action: {
       fixPermissions: 'Fix permissions',
       addPassphrase: 'Add passphrase',
@@ -1463,6 +1471,28 @@ const en = {
       openHost: 'Open host',
       openHostsFile: 'Open hosts file',
       turnOff: 'Turn off',
+      removeConfigOption: 'Remove setting',
+      addIdentitiesOnly: 'Add IdentitiesOnly',
+    },
+    breaches: {
+      label: 'Check for breached passwords',
+      hint: "Sends the first 5 characters of each password's SHA-1 hash to Have I Been Pwned (api.pwnedpasswords.com) and compares the rest on this computer. Your passwords never leave it.",
+      turnOn: 'Turn on',
+      turnOnLabel: 'Turn on the breach check',
+      off: 'Off',
+      checkNow: 'Check now',
+      tryAgain: 'Try again',
+      checkedAt: 'Checked {{time}}',
+      notChecked: 'Not checked yet',
+      checking: 'Checking {{done}} of {{total}}…',
+      checkingShort: 'Checking passwords…',
+      partial: '{{done}} of {{total}} checked.',
+      errors: {
+        offline: "Couldn't reach Have I Been Pwned. Check your connection and try again.",
+        rateLimited: 'Have I Been Pwned asked to slow down. Try again in a few minutes.',
+        server: 'Have I Been Pwned answered with an error. Try again later.',
+        badResponse: "Have I Been Pwned sent an answer the app couldn't read. Try again later.",
+      },
     },
     vault: {
       lockedTitle: 'Your vault is locked',
@@ -1494,6 +1524,13 @@ const en = {
         passwordLogin: {
           title: 'Signs in with a password',
           text: 'A key is safer for {{host}}. Generate one and add it to the server.',
+        },
+        breachedPassword: {
+          title: 'Password found in data breaches',
+          text_one:
+            'Seen {{times}} time in leaked password lists, which attackers try first. Change it everywhere you use it.',
+          text_other:
+            'Seen {{times}} times in leaked password lists, which attackers try first. Change it everywhere you use it.',
         },
       },
     },
@@ -1569,6 +1606,31 @@ const en = {
       hostsFileConflict: {
         title: 'Name listed with different addresses',
         text: '{{name}} is listed with {{addresses}}. The first entry wins, so it goes to {{address}}.',
+      },
+      strictHostKeyCheckingOff: {
+        title: 'Host keys accepted without asking',
+        text: "StrictHostKeyChecking {{value}} makes ssh trust any server it hasn't seen before, so a first connection could reach an impostor unnoticed. Without it, ssh asks again.",
+        textDiscarded:
+          'StrictHostKeyChecking {{value}} accepts any key without asking, and UserKnownHostsFile /dev/null forgets every key. Anyone between you and the server can pose as it.',
+      },
+      knownHostsDiscarded: {
+        title: 'Host keys are never saved',
+        text: "UserKnownHostsFile {{value}} forgets every server's key, so ssh can't notice when one changes.",
+      },
+      agentForwarding: {
+        title: 'Agent forwarding is on',
+        textWildcard:
+          "Every server this applies to can sign in elsewhere with your keys while you're connected. Turn it on only for the hosts that need it.",
+        text: "This server can sign in elsewhere with your keys while you're connected. Keep it only if you need it there.",
+      },
+      tooManyAgentKeys: {
+        title: 'Too many keys offered',
+        text_one:
+          'ssh-agent holds {{count}} key, and ssh may try it on {{hosts}} before the key the host names. Servers usually stop after 6 tries with "Too many authentication failures". IdentitiesOnly yes makes ssh offer only the named key.',
+        text_other:
+          'ssh-agent holds {{count}} keys, and ssh may try them all on {{hosts}} before the key the host names. Servers usually stop after 6 tries with "Too many authentication failures". IdentitiesOnly yes makes ssh offer only the named key.',
+        hostsMore_one: '{{list}} and {{count}} more',
+        hostsMore_other: '{{list}} and {{count}} more',
       },
     },
   },

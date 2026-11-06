@@ -153,8 +153,8 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     the app's data folder (mode 0600): a dismissed host as an HMAC-SHA-256 of its user,
     host and port under a random key of that file, never as the host or the command.
     Turning it off in **Settings → Shell history** stops all reading.
-- **Minimal network access.** The app sends none of your data anywhere. Its only
-  requests are:
+- **Minimal network access.** The app sends none of your data anywhere (the optional
+  breach check sends 5 hex characters of each password's hash). Its only requests are:
   - the update check, which downloads `latest.json` from this repository's GitHub
     Releases at startup and every six hours (can be turned off in Settings);
   - `ssh-keyscan` and `ssh` when you explicitly check a host key, test a connection or
@@ -164,6 +164,7 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     host's port (or its first jump host's), closed at once without sending anything.
     The address comes from `ssh -G` for a host alias, never from the page, so the page
     can't point it elsewhere.
+  - the audit's breach check, only after you turn it on (off by default; see below).
 - **Why a connection failed.** A connection test runs `ssh -v`, so a failure can say
   which keys were offered. The extra lines go no further than the app's memory: what
   you read leaves them out (and the server's pre-login banner, as before), and the
@@ -174,6 +175,28 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   that turns an old algorithm back on (`HostKeyAlgorithms +ssh-rsa`, …) only changes
   the host's block in the editor, for you to review and save, which confirms it like
   any other change.
+- **Breach check (optional, off by default).** The audit can look up saved passwords in
+  Have I Been Pwned's Pwned Passwords, with k-anonymity. The page only turns it on or
+  off and asks for a check; the rest happens in Rust, and passwords and their hashes
+  never reach the page.
+  - For each password the vault rates (outside the recycle bin, not empty), the app
+    computes its SHA-1 hash and sends only the first 5 hex characters to
+    `https://api.pwnedpasswords.com/range/<prefix>`, with `Add-Padding: true` and the
+    user agent `SSH-Key-Manager`. The server answers with the hash suffixes it knows
+    under that prefix (hundreds of them, padded with made-up ones so the size of the
+    answer says nothing either), and the app compares the rest of the hash on this
+    computer. The service sees your IP address and which ranges you asked for, never a
+    password or a whole hash.
+  - Requests go over HTTPS only (no redirects, certificates checked against the
+    system's roots), one at a time and at most ten a second; an answer larger than
+    1 MiB or not in the range format is discarded. A failure stops the check and is
+    shown; the audit then waits five minutes before trying by itself again.
+  - Results stay in memory, keyed by an HMAC-SHA-256 of each password under a random
+    key that exists only in memory, so unchanged passwords aren't asked about again
+    while the vault is unlocked (the audit asks again after a day, "Check now" at
+    once). Locking the vault drops them, with that key. Nothing about the check is
+    written to disk except whether it is on (`breaches.json` in the app's data
+    folder), and range prefixes are never logged.
 - **Signed updates.** An update is installed only if its signature matches the public key
   built into the app (`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`).
   - The update check runs in Rust. The page can ask for a check or an install, but can't
@@ -258,6 +281,11 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     windows can't open. Links open in your browser, and only `http` and `https` links.
   - Permission fixes apply only what the app's own audit found inside `~/.ssh`, and only
     ever remove permissions.
+  - Config fixes from the audit apply only what its rules offer for the file at that
+    moment, and to the version of the file the page saw: they remove a
+    `StrictHostKeyChecking no`, `UserKnownHostsFile /dev/null` or `ForwardAgent` line,
+    or add `IdentitiesOnly yes` to blocks the audit names. They never add a directive
+    that needs the confirmation above.
 
 ## Browser autofill
 

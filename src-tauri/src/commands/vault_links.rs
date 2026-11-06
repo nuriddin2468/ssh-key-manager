@@ -16,6 +16,7 @@ use sshkm_core::vault::{
 use sshkm_core::{ErrorCode, SecretString};
 use tauri::{AppHandle, State};
 
+use super::audit_checks;
 use super::keys::{agent_comment, find_key, private_path};
 use super::{Shared, blocking};
 use crate::error::{AppError, AppResult};
@@ -141,6 +142,7 @@ pub async fn run_vault_audit(app: AppHandle, state: State<'_, Shared>) -> AppRes
             findings: Vec::new(),
         };
         if !state.vault.is_unlocked() {
+            audit_checks::vault_locked();
             let exists = vault::probe(&state.vault.paths())?.exists;
             return Ok(idle(if exists {
                 VaultState::Locked
@@ -156,16 +158,18 @@ pub async fn run_vault_audit(app: AppHandle, state: State<'_, Shared>) -> AppRes
             .unwrap_or_default();
         let input = VaultAuditInput::new(&keys, &hosts);
         // Quiet: the audit page refetches by itself.
-        match state
-            .vault
-            .with_quietly(&app, |vault| Ok(vault.audit(&input)))
-        {
+        match state.vault.with_quietly(&app, |vault| {
+            Ok(audit_checks::vault_findings(&app, state, vault, &input))
+        }) {
             Ok(findings) => Ok(VaultAudit {
                 state: VaultState::Unlocked,
                 findings,
             }),
             // It locked in the meantime.
-            Err(error) if error.code() == ErrorCode::VaultLocked => Ok(idle(VaultState::Locked)),
+            Err(error) if error.code() == ErrorCode::VaultLocked => {
+                audit_checks::vault_locked();
+                Ok(idle(VaultState::Locked))
+            }
             Err(error) => Err(error),
         }
     })

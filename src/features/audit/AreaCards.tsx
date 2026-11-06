@@ -11,7 +11,7 @@ import { useTranslation } from 'react-i18next';
 import type { Severity } from '@/bindings/Severity';
 import { Tile, type Tone } from '@/components/ui/Tile';
 import { cn } from '@/lib/cn';
-import { type Area, CHECKS, type CheckId, SEVERITY_COLORS } from './model';
+import { type Area, type AuditItem, CHECKS, type CheckId, SEVERITY_COLORS } from './model';
 
 /** Each area looks like its page in the sidebar. */
 export const AREA_LOOK: Record<Area, { tone: Tone; Icon: LucideIcon }> = {
@@ -32,8 +32,10 @@ export type CheckResults = Map<CheckId, { count: number; worst: Severity | null 
 interface AreaCardsProps {
   areas: Area[];
   results: CheckResults;
-  /** The vault is locked: its checks didn't run. */
-  locked: boolean;
+  /** The open findings, counted by their own severity. */
+  items: readonly AuditItem[];
+  /** Checks that didn't run: the vault's while it is locked, the breach check while it is off. */
+  notRun: ReadonlySet<CheckId>;
   selected: Area | null;
   onSelect: (area: Area | null) => void;
 }
@@ -42,7 +44,7 @@ interface AreaCardsProps {
  * One card per area with how its checks went. A card filters the findings
  * below to its area; choosing it again shows them all.
  */
-export function AreaCards({ areas, results, locked, selected, onSelect }: AreaCardsProps) {
+export function AreaCards({ areas, results, items, notRun, selected, onSelect }: AreaCardsProps) {
   const { t } = useTranslation();
   return (
     <fieldset className="m-0 grid min-w-0 grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-2.5 border-0 p-0">
@@ -50,13 +52,15 @@ export function AreaCards({ areas, results, locked, selected, onSelect }: AreaCa
       {areas.map((area) => {
         const { tone, Icon } = AREA_LOOK[area];
         const checks = CHECKS.filter((check) => check.area === area);
-        const notRun = area === 'passwords' && locked;
-        const failing = checks
+        const ran = checks.filter((check) => !notRun.has(check.id));
+        // Only a locked vault keeps a whole area from running.
+        const locked = ran.length === 0;
+        const failing = ran
           .map((check) => results.get(check.id))
           .filter((result) => result && result.count > 0);
-        const passed = notRun ? 0 : checks.length - failing.length;
+        const passed = ran.length - failing.length;
         const counts = { critical: 0, warning: 0, info: 0 };
-        for (const result of failing) if (result?.worst) counts[result.worst] += result.count;
+        for (const item of items) if (item.area === area) counts[item.severity] += 1;
         const worst = (['critical', 'warning', 'info'] as const).find((s) => counts[s] > 0);
         const pressed = selected === area;
         return (
@@ -79,19 +83,19 @@ export function AreaCards({ areas, results, locked, selected, onSelect }: AreaCa
               <span className="min-w-0 flex-1 truncate font-semibold">
                 {t(`audit.areas.${area}`)}
               </span>
-              {notRun ? null : (
+              {locked ? null : (
                 <span className="text-[12px] text-subtle tabular-nums">
-                  {passed}/{checks.length}
+                  {passed}/{ran.length}
                 </span>
               )}
             </span>
             <span
               className={cn(
                 'flex items-center gap-1.5 text-[12.5px]',
-                notRun ? 'text-subtle' : worst ? SEVERITY_TEXT[worst] : 'text-ok',
+                locked ? 'text-subtle' : worst ? SEVERITY_TEXT[worst] : 'text-ok',
               )}
             >
-              {notRun ? (
+              {locked ? (
                 <>
                   <LockKeyhole aria-hidden="true" className="size-3.5" strokeWidth={2} />
                   {t('audit.areaLocked')}
@@ -119,7 +123,7 @@ export function AreaCards({ areas, results, locked, selected, onSelect }: AreaCa
                     key={check.id}
                     className="h-1 flex-1 rounded-full"
                     style={{
-                      background: notRun
+                      background: notRun.has(check.id)
                         ? 'rgb(255 255 255 / 0.08)'
                         : worstOfCheck
                           ? SEVERITY_COLORS[worstOfCheck]

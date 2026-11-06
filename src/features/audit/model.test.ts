@@ -1,15 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import type { Finding } from '@/bindings/Finding';
+import type { HostEntry } from '@/bindings/HostEntry';
 import type { VaultFinding } from '@/bindings/VaultFinding';
+import i18n from '@/i18n';
 import {
   automaticFixes,
   bySeverity,
   CHECKS,
   checkResults,
+  findingSubject,
+  findingText,
   sshItem,
   vaultItem,
   worstSeverity,
 } from './model';
+import { fixLabelKey } from './useFix';
 
 function ssh(
   id: string,
@@ -107,5 +112,66 @@ describe('automatic fixes', () => {
       vaultItem(weak),
     ]);
     expect(fixes.map((fix) => fix.kind)).toEqual(['fixPermissions', 'regeneratePublic']);
+  });
+});
+
+describe('config settings', () => {
+  const t = i18n.getFixedT('en');
+  const strict = (knownHostsDiscarded: boolean) =>
+    ssh(
+      'strict',
+      {
+        kind: 'strictHostKeyCheckingOff',
+        value: 'no',
+        patterns: ['lab-*'],
+        knownHostsDiscarded,
+      },
+      knownHostsDiscarded ? 'critical' : 'warning',
+      { kind: 'removeConfigOption', hostId: 2, key: 'StrictHostKeyChecking', value: 'no' },
+    );
+  const tooMany = ssh(
+    'tooManyAgentKeys',
+    { kind: 'tooManyAgentKeys', agentKeys: 8, hosts: ['gh github.com', 'build'] },
+    'warning',
+    { kind: 'addIdentitiesOnly', hostIds: [0, 7] },
+  );
+
+  it('belong to the config area and need a click to fix', () => {
+    expect(sshItem(strict(false)).area).toBe('config');
+    expect(sshItem(tooMany).area).toBe('config');
+    expect(automaticFixes([sshItem(strict(true)), sshItem(tooMany)])).toEqual([]);
+    expect(fixLabelKey(strict(false))).toBe('audit.action.removeConfigOption');
+    expect(fixLabelKey(tooMany)).toBe('audit.action.addIdentitiesOnly');
+  });
+
+  it('say what the setting does', () => {
+    expect(findingText(t, strict(false))).toMatch(/^StrictHostKeyChecking no makes ssh trust/);
+    expect(findingText(t, strict(true))).toContain('UserKnownHostsFile /dev/null');
+    const many = { ...tooMany.kind, hosts: ['a', 'b', 'c', 'd', 'e'] };
+    expect(findingText(t, { ...tooMany, kind: many })).toContain('on a, b, c and 2 more before');
+    expect(findingText(t, tooMany)).toContain(
+      'holds 8 keys, and ssh may try them all on gh github.com, build',
+    );
+    const forwarding = (wildcard: boolean) =>
+      findingText(
+        t,
+        ssh('fwd', { kind: 'agentForwarding', value: 'yes', patterns: ['*'], wildcard }, 'info'),
+      );
+    expect(forwarding(true)).toMatch(/^Every server/);
+    expect(forwarding(false)).toMatch(/^This server/);
+  });
+
+  it('name their block, or the file before the first one', () => {
+    const block = { ...strict(false), subject: { keyId: null, hostId: 2, path: '/h/.ssh/config' } };
+    const hosts = [
+      { id: 2, kind: 'match', patterns: [], criteria: 'host lab-1' } as unknown as HostEntry,
+    ];
+    expect(findingSubject(block, new Map(), hosts, (p) => p)).toBe('Match host lab-1');
+    // The block as the audit saw it, once the config changed.
+    expect(findingSubject(block, new Map(), [], (p) => p)).toBe('Host lab-*');
+    const global = { ...tooMany, subject: { keyId: null, hostId: null, path: '/h/.ssh/config' } };
+    expect(findingSubject(global, new Map(), [], (p) => p.replace('/h', '~'))).toBe(
+      '~/.ssh/config',
+    );
   });
 });

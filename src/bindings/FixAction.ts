@@ -32,4 +32,20 @@ path: string, } | { "kind": "turnOffHostsEntry",
 /**
  * 1-based line in the hosts file.
  */
-line: number, };
+line: number, } | { "kind": "removeConfigOption", 
+/**
+ * The block (`None`: global section).
+ */
+hostId: number | null, 
+/**
+ * The keyword as written.
+ */
+key: string, 
+/**
+ * The value as written.
+ */
+value: string, } | { "kind": "addIdentitiesOnly", 
+/**
+ * The blocks.
+ */
+hostIds: Array<number>, };

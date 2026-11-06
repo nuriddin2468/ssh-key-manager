@@ -40,6 +40,9 @@ real `~/.ssh`. Its modules:
     crate's only `unsafe` code).
 - `audit`: pure rules over the data above. Findings carry machine-readable kinds and
   parameters, so the UI can localise them.
+  - `audit/config_risks.rs` reads `ssh_config` settings (host key checking, agent
+    forwarding, `IdentitiesOnly` against the number of agent keys) and applies the
+    fixes it offers, and only those (`apply_config_fix`).
 - `diagnose`: why an `ssh` run failed, read from what it printed (with `-v` for
   connection tests): a cause, the jump host it happened at, and the lines that show
   it. Its tests run over real OpenSSH output from macOS, Linux and Windows
@@ -55,6 +58,9 @@ real `~/.ssh`. Its modules:
     master password.
   - Entry summaries and details never contain a password or 2FA secret; those are
     read one at a time.
+  - `breach` checks passwords against Have I Been Pwned with k-anonymity: it makes
+    the SHA-1 range prefixes to ask for and matches the answers, without networking,
+    and keeps results under an HMAC of each password with a key held in memory.
   - Every change is written atomically after a backup. Before each operation the
     vault re-reads a database changed elsewhere (a synced folder); a write over such
     a change fails with `conflict` and is kept as a separate copy.
@@ -177,6 +183,10 @@ translates.
   it after inactivity or sleep; each lock emits `vault-locked`. Copied passwords go
   from Rust to the clipboard, marked to stay out of clipboard history, and are
   cleared after a while.
+- **Breach check.** `commands/audit_checks.rs`, off until the user turns it on. The
+  vault audit starts it in the background for passwords without a result; it asks
+  `api.pwnedpasswords.com` for one range at a time (reqwest, the updater's TLS), and
+  its results are dropped on `vault-locked`. The page polls `breach_status`.
 - **Menu.** The macOS menu bar with keyboard shortcuts.
 - **Tray.** `src-tauri/src/tray/`: with **Settings → Background** on, closing the window
   hides it and an icon in the tray (the menu bar on macOS) stays. Its menu shows the

@@ -5160,6 +5160,8 @@ dependencies = [
  "notify",
  "portable-pty",
  "rand_core 0.6.4",
+ "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "sha2 0.10.9",

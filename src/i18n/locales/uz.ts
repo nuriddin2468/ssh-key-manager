@@ -1415,6 +1415,8 @@ const uz = {
     leadInfo: 'Faqat tavsiyalar qoldi. Vaqtingiz boʻlganda koʻrib chiqing.',
     leadClear: 'Hozir eʼtibor talab qiladigan narsa yoʻq.',
     checksPassed: '{{total}} ta tekshiruvdan {{passed}} tasi oʻtdi',
+    checksOff_one: '{{count}} tasi oʻchiq',
+    checksOff_other: '{{count}} tasi oʻchiq',
     fixAuto_one: 'Avtomatik tuzatish: {{count}} ta',
     fixAuto_other: 'Avtomatik tuzatish: {{count}} ta',
     fixAutoHint: 'Fayl ruxsatlari va yetishmayotgan .pub fayllar. Boshqa hech narsa oʻzgarmaydi.',
@@ -1450,10 +1452,14 @@ const uz = {
       keyFiles: 'Kalit fayllari mos, ortiqcha nusxalar yoʻq',
       folderPermissions: '~/.ssh va config himoyalangan',
       identityFiles: 'Configda koʻrsatilgan kalitlar mavjud',
+      hostKeys: 'ssh serverlar kalitini tekshiradi',
+      agentForwarding: 'Agentni uzatish faqat kerakli joyda',
+      agentKeys: 'ssh serverlarga faqat kerakli kalitlarni taklif qiladi',
       redirects: 'Nomlar haqiqiy serverlarga yoʻnaltiriladi',
       hostsEntries: 'Ziddiyatli yoki muddati oʻtgan yozuvlar yoʻq',
       weak: 'Zaif parollar yoʻq',
       reused: 'Takroriy parollar yoʻq',
+      breached: 'Maʼlum sizib chiqishlarda parollar yoʻq',
       old: 'Bir yildan eski parollar yoʻq',
       links: 'Saqlangan iboralar va parollar mavjud kalit va xostlarga tegishli',
       passwordLogin: 'Serverlarga parol emas, kalit bilan kiriladi',
@@ -1479,6 +1485,8 @@ const uz = {
     hideIgnored: 'Yashirish',
     restore: 'Qaytarish',
     privacy: 'Tekshiruvlar shu kompyuterda bajariladi. Hech narsa hech qayerga yuborilmaydi.',
+    privacyBreaches:
+      'Tekshiruvlar shu kompyuterda bajariladi. Sizib chiqishlar tekshiruvi Have I Been Pwned ga har bir parol SHA-1 xeshining faqat dastlabki 5 belgisini yuboradi.',
     action: {
       fixPermissions: 'Ruxsatlarni tuzatish',
       addPassphrase: 'Parol iborasi qoʻshish',
@@ -1488,6 +1496,29 @@ const uz = {
       openHost: 'Xostni ochish',
       openHostsFile: 'Hosts faylini ochish',
       turnOff: 'Oʻchirish',
+      removeConfigOption: 'Sozlamani olib tashlash',
+      addIdentitiesOnly: 'IdentitiesOnly qoʻshish',
+    },
+    breaches: {
+      label: 'Parollarni maʼlum sizib chiqishlar boʻyicha tekshirish',
+      hint: 'Har bir parol SHA-1 xeshining dastlabki 5 belgisini Have I Been Pwned ga (api.pwnedpasswords.com) yuboradi, qolganini shu kompyuterda solishtiradi. Parollarning oʻzi kompyuterdan chiqmaydi.',
+      turnOn: 'Yoqish',
+      turnOnLabel: 'Sizib chiqishlar tekshiruvini yoqish',
+      off: 'Oʻchiq',
+      checkNow: 'Hozir tekshirish',
+      tryAgain: 'Qayta urinish',
+      checkedAt: 'Tekshirildi: {{time}}',
+      notChecked: 'Hali tekshirilmagan',
+      checking: 'Tekshirilmoqda: {{done}} / {{total}}…',
+      checkingShort: 'Parollar tekshirilmoqda…',
+      partial: '{{total}} tadan {{done}} tasi tekshirildi.',
+      errors: {
+        offline: 'Have I Been Pwned bilan bogʻlanib boʻlmadi. Ulanishni tekshirib, qayta urining.',
+        rateLimited:
+          'Have I Been Pwned biroz kutishni soʻradi. Bir necha daqiqadan soʻng qayta urining.',
+        server: 'Have I Been Pwned xato bilan javob berdi. Keyinroq qayta urining.',
+        badResponse: 'Have I Been Pwned javobini oʻqib boʻlmadi. Keyinroq qayta urining.',
+      },
     },
     vault: {
       lockedTitle: 'Ombor qulflangan',
@@ -1519,6 +1550,13 @@ const uz = {
         passwordLogin: {
           title: 'Parol bilan kirish',
           text: '{{host}} uchun kalit xavfsizroq. Kalit yarating va uni serverga qoʻshing.',
+        },
+        breachedPassword: {
+          title: 'Parol sizib chiqqan bazalarda bor',
+          text_one:
+            'Sizib chiqqan parollar roʻyxatlarida {{times}} marta uchraydi, hujumchilar esa ularni birinchi sinaydi. Uni ishlatilgan hamma joyda almashtiring.',
+          text_other:
+            'Sizib chiqqan parollar roʻyxatlarida {{times}} marta uchraydi, hujumchilar esa ularni birinchi sinaydi. Uni ishlatilgan hamma joyda almashtiring.',
         },
       },
     },
@@ -1594,6 +1632,31 @@ const uz = {
       hostsFileConflict: {
         title: 'Nom turli manzillar bilan koʻrsatilgan',
         text: '{{name}} {{addresses}} manzillari bilan koʻrsatilgan. Birinchi yozuv ishlaydi, shuning uchun nom {{address}} ga olib boradi.',
+      },
+      strictHostKeyCheckingOff: {
+        title: 'Xost kalitlari soʻralmasdan qabul qilinadi',
+        text: 'StrictHostKeyChecking {{value}} tufayli ssh har qanday yangi serverga ishonadi, shuning uchun birinchi ulanish sezdirmasdan soxta serverga tushishi mumkin. Bu sozlamasiz ssh yana soʻraydi.',
+        textDiscarded:
+          'StrictHostKeyChecking {{value}} har qanday kalitni soʻramasdan qabul qiladi, UserKnownHostsFile /dev/null esa barcha kalitlarni unutadi. Siz bilan server orasidagi har qanday vositachi oʻzini server deb koʻrsata oladi.',
+      },
+      knownHostsDiscarded: {
+        title: 'Xost kalitlari saqlanmaydi',
+        text: 'UserKnownHostsFile {{value}} serverlar kalitini unutadi, shuning uchun ssh kalit oʻzgarganini sezmaydi.',
+      },
+      agentForwarding: {
+        title: 'Agentni uzatish yoqilgan',
+        textWildcard:
+          'Bu tegishli boʻlgan har bir server siz ulanganingizda kalitlaringiz bilan boshqa joylarga kira oladi. Uni faqat kerakli xostlar uchun yoqing.',
+        text: 'Bu server siz ulanganingizda kalitlaringiz bilan boshqa joylarga kira oladi. Faqat shu yerda kerak boʻlsa qoldiring.',
+      },
+      tooManyAgentKeys: {
+        title: 'Juda koʻp kalit taklif qilinadi',
+        text_one:
+          'ssh-agentda {{count}} ta kalit bor va ssh uni {{hosts}} da xost uchun koʻrsatilgan kalitdan oldin sinab koʻrishi mumkin. Serverlar odatda 6 urinishdan keyin «Too many authentication failures» bilan toʻxtaydi. IdentitiesOnly yes bilan ssh faqat koʻrsatilgan kalitni taklif qiladi.',
+        text_other:
+          'ssh-agentda {{count}} ta kalit bor va ssh ularning hammasini {{hosts}} da xost uchun koʻrsatilgan kalitdan oldin sinab koʻrishi mumkin. Serverlar odatda 6 urinishdan keyin «Too many authentication failures» bilan toʻxtaydi. IdentitiesOnly yes bilan ssh faqat koʻrsatilgan kalitni taklif qiladi.',
+        hostsMore_one: '{{list}} va yana {{count}} ta',
+        hostsMore_other: '{{list}} va yana {{count}} ta',
       },
     },
   },

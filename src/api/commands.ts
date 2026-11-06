@@ -5,6 +5,7 @@ import type { AddFromVaultReport } from '@/bindings/AddFromVaultReport';
 import type { AgentView } from '@/bindings/AgentView';
 import type { AuditReport } from '@/bindings/AuditReport';
 import type { BackgroundStatus } from '@/bindings/BackgroundStatus';
+import type { BreachStatus } from '@/bindings/BreachStatus';
 import type { BrowserStatus } from '@/bindings/BrowserStatus';
 import type { ConfigFile } from '@/bindings/ConfigFile';
 import type { ConnectionEvent } from '@/bindings/ConnectionEvent';
@@ -17,6 +18,7 @@ import type { EntryInput } from '@/bindings/EntryInput';
 import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { Environment } from '@/bindings/Environment';
 import type { Exported } from '@/bindings/Exported';
+import type { FixAction } from '@/bindings/FixAction';
 import type { GenerateKeyRequest } from '@/bindings/GenerateKeyRequest';
 import type { GenerateOptions } from '@/bindings/GenerateOptions';
 import type { HistoryScan } from '@/bindings/HistoryScan';
@@ -158,6 +160,12 @@ export const api = {
   audit: () => call<AuditReport>('run_audit'),
   fixPermissions: (items: PermissionFix[]) => call<number>('fix_permissions', { items }),
   vaultAudit: () => call<VaultAudit>('run_vault_audit'),
+  // The audit's config fixes and breach check (src-tauri/src/commands/audit_checks.rs).
+  fixConfig: (fix: FixAction, revision: string) =>
+    call<ConfigFile>('fix_config', { fix, revision }),
+  breachStatus: () => call<BreachStatus>('breach_status'),
+  breachSetEnabled: (enabled: boolean) => call<BreachStatus>('breach_set_enabled', { enabled }),
+  breachCheck: () => call<BreachStatus>('breach_check'),
 
   vaultStatus: () => call<VaultStatus>('vault_status'),
   /** Returns the recovery key, to be shown once. */

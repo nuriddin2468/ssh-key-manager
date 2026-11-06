@@ -16,6 +16,8 @@ import type { KeysView } from '@/bindings/KeysView';
 import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostEntry } from '@/bindings/KnownHostEntry';
 import type { PermissionFix } from '@/bindings/PermissionFix';
+import type { VaultAudit } from '@/bindings/VaultAudit';
+import { auditChecksHandlers, configSettingsFindings } from './auditChecks';
 import { backgroundHandlers } from './background';
 import { browserHandlers } from './browser';
 import { diagnosed, diagnoseHandlers, diagnoseHostSpecs } from './diagnose';
@@ -138,6 +140,7 @@ let hostSpecs: { patterns: string[]; options: HostOption[] }[] = [
       opt('User', 'deploy'),
       opt('Port', '2222'),
       opt('IdentityFile', '~/.ssh/id_ed25519_work'),
+      opt('ForwardAgent', 'yes'),
     ],
   },
   {
@@ -176,10 +179,15 @@ let hostSpecs: { patterns: string[]; options: HostOption[] }[] = [
       opt('HostName', 'vpn.example.org'),
       opt('User', 'root'),
       opt('IdentityFile', '~/.ssh/vpn_key'),
+      opt('StrictHostKeyChecking', 'no'),
+      opt('UserKnownHostsFile', '/dev/null'),
     ],
   },
   ...diagnoseHostSpecs,
-  { patterns: ['*'], options: [opt('AddKeysToAgent', 'yes'), opt('UseKeychain', 'yes')] },
+  {
+    patterns: ['*'],
+    options: [opt('AddKeysToAgent', 'yes'), opt('UseKeychain', 'yes'), opt('ForwardAgent', 'yes')],
+  },
 ];
 
 let known: KnownHostEntry[] = [
@@ -354,6 +362,7 @@ function audit(): AuditReport {
     });
   }
   findings.push(...hostsFileFindings());
+  findings.push(...configSettingsFindings(hostSpecs, agentLoaded.size, `${DIR}/config`));
   const order = { critical: 0, warning: 1, info: 2 };
   findings.sort((a, b) => order[a.severity] - order[b.severity]);
   const count = (s: Finding['severity']) => findings.filter((f) => f.severity === s).length;
@@ -504,6 +513,14 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   ...nearbyHandlers,
   ...shellHistoryHandlers(hosts),
   ...historyHandlers,
+  ...auditChecksHandlers({
+    specs: () => hostSpecs,
+    configFile,
+    vaultAudit: async () =>
+      (await vaultLinkHandlers({ keys: () => keys, hosts, agent: agentLoaded }).run_vault_audit?.(
+        {},
+      )) as VaultAudit,
+  }),
   ...serverKeysHandlers({
     keys: () => keys,
     batchLogin: keyTest,

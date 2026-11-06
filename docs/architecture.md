@@ -174,15 +174,21 @@ translates.
   from Rust to the clipboard, marked to stay out of clipboard history, and are
   cleared after a while.
 - **Menu.** The macOS menu bar with keyboard shortcuts.
+- **Quick search.** `src-tauri/src/quick/`: a system-wide shortcut
+  (`tauri-plugin-global-shortcut`, saved in `quick.json`) or the tray menu opens a
+  small window (`quick.html`, `src/quick/`) that connects to a host, copies through
+  `vault_copy` and unlocks the vault; its capability allows only that. Escape or a
+  copy gives the focus back to the app that was in front (`sshkm_os::focus` on
+  macOS).
 - **Tray.** `src-tauri/src/tray/`: with **Settings → Background** on, closing the window
   hides it and an icon in the tray (the menu bar on macOS) stays. Its menu shows the
   vault's state and locks it, connects to recent hosts, names a Nearby conversation
-  waiting for the user, and quits. One worker rebuilds the menu when the vault, `~/.ssh`
-  or Nearby change, or the language does. On Linux the icon needs the AppIndicator
-  library, which `sshkm_os::tray` checks for first.
+  waiting for the user, opens quick search, and quits. One worker rebuilds the menu
+  when the vault, `~/.ssh` or Nearby change, or the language does. On Linux the icon
+  needs the AppIndicator library, which `sshkm_os::tray` checks for first.
 - **Permissions.** `build.rs` lists every command, so each gets a Tauri permission and a
   window calls only what its capability names: the main window all, the unlock window
-  three.
+  three, the quick search window seven.
 
 ## UI
 
@@ -196,6 +202,11 @@ translates.
   its DOM renderer on Linux (WebKitGTK often renders on the CPU) and WebGL elsewhere.
 - i18next with English, Russian and Uzbek. A test keeps the translations' keys and
   placeholders in sync.
+- The command palette (⌘K / Ctrl+K, `src/features/palette/`) searches hosts, keys,
+  the unlocked vault's entries, pages, actions and tools: exact matches first, then
+  prefixes, then the rest, recently run items first within each. `>`, `@` and `#`
+  narrow it to actions, hosts or passwords. The quick search window uses the same
+  search and list.
 - `pnpm dev` in a browser uses `src/mocks/backend.ts` instead of Tauri, so the UI can be
   built and reviewed without the native shell. Production builds never include it.
 

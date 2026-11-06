@@ -8,7 +8,8 @@ use std::path::Path;
 /// permission of each, and then lets a window call only the commands its
 /// capability allows: the main window all of them
 /// ([`write_main_window_set`]), the browser's unlock window
-/// (`capabilities/unlock.json`) only those that unlock the vault.
+/// (`capabilities/unlock.json`) only those that unlock the vault, the quick
+/// search window (`capabilities/quick.json`) only what it lists and does.
 const COMMANDS: &[&str] = &[
     "set_ui_language",
     "get_environment",
@@ -120,6 +121,11 @@ const COMMANDS: &[&str] = &[
     "browser_revoke",
     "background_status",
     "background_set_enabled",
+    "quick_status",
+    "quick_set_shortcut",
+    "quick_items",
+    "quick_connect",
+    "quick_close",
     "update_check",
     "update_install",
 ];

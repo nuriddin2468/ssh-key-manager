@@ -17,6 +17,7 @@ import { PairingDialog } from '@/features/nearby/PairingDialog';
 import { useNearbyEvents } from '@/features/nearby/queries';
 import { SyncDialog } from '@/features/nearby/SyncDialog';
 import { OverviewPage } from '@/features/overview/OverviewPage';
+import { CommandPalette } from '@/features/palette/CommandPalette';
 import { useVaultFileEvents } from '@/features/passwords/files';
 import { PasswordsPage } from '@/features/passwords/PasswordsPage';
 import { useVaultEvents } from '@/features/passwords/useVaultEvents';
@@ -104,6 +105,7 @@ function Shell() {
       <BrowserPairing />
       <PairingDialog />
       <SyncDialog />
+      <CommandPalette />
     </div>
   );
 }

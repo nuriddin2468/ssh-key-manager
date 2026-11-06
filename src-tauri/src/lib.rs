@@ -13,6 +13,7 @@ mod history;
 mod menu;
 pub mod nearby;
 mod process;
+pub mod quick;
 mod state;
 pub mod terminal;
 mod tray;
@@ -47,7 +48,8 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             tray::show_window(app);
         }))
-        .plugin(tauri_plugin_updater::Builder::new().build());
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(quick::plugin());
 
     builder
         .plugin(navigation_guard())
@@ -184,6 +186,11 @@ pub fn run() {
             commands::browser::browser_revoke,
             commands::background::background_status,
             commands::background::background_set_enabled,
+            commands::quick::quick_status,
+            commands::quick::quick_set_shortcut,
+            commands::quick::quick_items,
+            commands::quick::quick_connect,
+            commands::quick::quick_close,
             commands::updates::update_check,
             commands::updates::update_install,
         ])
@@ -256,7 +263,8 @@ fn lock_on_minimize(window: &tauri::Window, event: &WindowEvent) {
     }
 }
 
-/// Shared state, background watchers, the macOS menu and the tray icon.
+/// Shared state, background watchers, the macOS menu, the tray icon and the
+/// quick search shortcut.
 fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let paths = SshPaths::detect()?;
     let hosts_file = hosts_file::system_path();
@@ -285,6 +293,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     menu::install(app)?;
     let background = tray::Background::install(app.handle(), &data_dir);
     app.manage(background);
+    app.manage(quick::Quick::install(app.handle(), &data_dir));
     Ok(())
 }
 

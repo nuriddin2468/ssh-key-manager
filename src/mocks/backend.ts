@@ -21,6 +21,7 @@ import { browserHandlers } from './browser';
 import { historyHandlers, recordCheck } from './history';
 import { hostsFileFindings, hostsFileHandlers } from './hostsFile';
 import { nearbyHandlers } from './nearby';
+import { paletteHandlers } from './palette';
 import { serverKeysHandlers } from './serverKeys';
 import { terminalHandlers } from './terminal';
 import { vaultHandlers, vaultKeyTest } from './vault';
@@ -497,6 +498,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   ...vaultFilesHandlers,
   ...browserHandlers,
   ...backgroundHandlers,
+  ...paletteHandlers({ hosts, entries: () => vaultHandlers.vault_entries?.({}) }),
   ...terminalHandlers(hosts),
   ...nearbyHandlers,
   ...historyHandlers,

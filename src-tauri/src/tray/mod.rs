@@ -5,8 +5,9 @@
 //! user's own devices on Nearby, terminal sessions and the vault's timers
 //! carry on. The icon's menu brings the window back and offers what needs no
 //! window: the vault's state, locking it and unlocking it (in the small
-//! unlock window, [`crate::browser::unlock`]), connecting to a host, a Nearby
-//! conversation waiting for the user, and quitting. A conversation that
+//! unlock window, [`crate::browser::unlock`]), quick search
+//! ([`crate::quick`]), connecting to a host, a Nearby conversation waiting
+//! for the user, and quitting. A conversation that
 //! starts waiting while the window is hidden brings the window back by
 //! itself, as a browser's pairing request already does: both come only from
 //! something the user started or allowed, and time out.
@@ -53,7 +54,7 @@ const SETTINGS_FILE: &str = "background.json";
 const TRAY_ID: &str = "main";
 /// How the page is told what to show: the event the macOS menu bar sends
 /// its commands with (`useAppEvents`).
-const PAGE_EVENT: &str = "menu";
+pub(crate) const PAGE_EVENT: &str = "menu";
 /// Changes coming close together make one rebuild.
 const SETTLE: Duration = Duration::from_millis(150);
 
@@ -406,6 +407,7 @@ fn act(app: &AppHandle, id: &str) {
     };
     match id {
         menu::OPEN | menu::NEARBY => show_window(app),
+        menu::QUICK => crate::quick::open(app),
         menu::ALL_HOSTS => page("new-session"),
         // Touch ID or Windows Hello, else the small unlock window: the main
         // window stays as it is.

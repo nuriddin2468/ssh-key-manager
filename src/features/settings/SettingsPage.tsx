@@ -17,6 +17,7 @@ import { Switch } from '@/components/ui/Switch';
 import { Tile, type Tone } from '@/components/ui/Tile';
 import { LifetimeSelect } from '@/features/agent/LifetimeSelect';
 import { BrowserAutofillSection } from '@/features/browser/BrowserAutofillSection';
+import { QuickSearchSection } from '@/features/palette/QuickSearchSection';
 import { METHOD_NAME } from '@/features/passwords/device';
 import { VaultLocationSection } from '@/features/passwords/files';
 import { AUTO_LOCK_MINUTES, CLIPBOARD_SECONDS } from '@/features/passwords/model';
@@ -117,6 +118,7 @@ export function SettingsPage() {
           <PasswordsGroup />
           <VaultLocationSection />
           <BackgroundSection />
+          <QuickSearchSection />
           <BrowserAutofillSection />
 
           <Group title={t('settings.folders')}>

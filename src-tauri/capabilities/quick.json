@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "quick",
+  "description": "The quick search window (src/quick/mod.rs): the hosts and the vault's entries without secrets, copying a user name, password or 2FA code through the vault's own copy, unlocking the vault, connecting and closing itself. Nothing else of the app.",
+  "windows": ["quick"],
+  "permissions": [
+    "allow-quick-items",
+    "allow-quick-connect",
+    "allow-quick-close",
+    "allow-vault-copy",
+    "allow-vault-status",
+    "allow-vault-unlock",
+    "allow-vault-unlock-device"
+  ]
+}

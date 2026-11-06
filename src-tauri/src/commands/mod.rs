@@ -11,6 +11,7 @@ pub mod hosts_file;
 pub mod keys;
 pub mod known_hosts;
 pub mod nearby;
+pub mod quick;
 pub mod remote;
 pub mod terminal;
 pub mod updates;

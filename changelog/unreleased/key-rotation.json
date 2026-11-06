@@ -1,0 +1,6 @@
+{
+  "kind": "new",
+  "en": "Key rotation: replace an old SSH key with a new Ed25519 key on every server that uses it. The app installs and checks the new key, updates your hosts, and removes the old key only where the new one works.",
+  "ru": "Ротация ключа: замените старый SSH-ключ новым Ed25519 на всех серверах, где он используется. Приложение установит и проверит новый ключ, обновит хосты и удалит старый только там, где новый работает.",
+  "uz": "Kalit rotatsiyasi: eski SSH kalitini u ishlatiladigan barcha serverlarda yangi Ed25519 kaliti bilan almashtiring. Ilova yangi kalitni oʻrnatadi va tekshiradi, xostlarni yangilaydi va eskisini faqat yangisi ishlagan joyda olib tashlaydi."
+}

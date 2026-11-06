@@ -1,0 +1,6 @@
+{
+  "kind": "new",
+  "en": "Network tools: SSH ping with the server's version, a port check, a DNS lookup that shows what your hosts file changes, and a TLS certificate check.",
+  "ru": "Сетевые инструменты: SSH-пинг с версией сервера, проверка порта, DNS-запрос с учётом файла hosts и проверка TLS-сертификата.",
+  "uz": "Tarmoq vositalari: server versiyasi bilan SSH ping, port tekshiruvi, hosts fayli oʻzgartirganlarini koʻrsatadigan DNS soʻrovi va TLS sertifikatini tekshirish."
+}

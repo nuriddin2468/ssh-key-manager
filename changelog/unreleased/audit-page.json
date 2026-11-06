@@ -1,0 +1,6 @@
+{
+  "kind": "improved",
+  "en": "The audit page is clearer: its colour follows the most serious problem, password findings count in the total, cards and chips filter by area and severity, safe fixes run with one button, and a list shows every check that ran.",
+  "ru": "Страница аудита стала понятнее: её цвет зависит от самой серьёзной проблемы, находки по паролям входят в общий счёт, карточки и фильтры отбирают по области и серьёзности, безопасные исправления запускаются одной кнопкой, а список показывает все проверки.",
+  "uz": "Audit sahifasi tushunarliroq boʻldi: rangi eng jiddiy muammoga qarab oʻzgaradi, parollar boʻyicha topilmalar umumiy hisobga kiradi, kartalar va filtrlar soha hamda jiddiylik boʻyicha saralaydi, xavfsiz tuzatishlar bitta tugma bilan bajariladi, roʻyxat esa barcha tekshiruvlarni koʻrsatadi."
+}

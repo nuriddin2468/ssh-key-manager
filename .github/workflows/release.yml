@@ -22,6 +22,13 @@ name: Release
 #            APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
 #   Windows: configure signing in tauri.conf.json (bundle.windows) or Azure Trusted Signing
 # Without them the builds still succeed, unsigned.
+#
+# Once the release is published, the browser extension of the same version goes
+# to the stores for review (the `extension-stores` job, with the secrets of the
+# `extension-stores` environment; .github/scripts/extension_stores.py names
+# them). A store without its secrets is skipped. The extension is built in a
+# job without secrets, as the app is, and the store job only uploads what it
+# built.
 
 on:
   push:
@@ -259,3 +266,76 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+
+  extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm extension:package
+      # The stores get the version the tag names, which the app has too.
+      - name: Check the version
+        shell: python3 -I {0}
+        run: |
+          import json, os, sys
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          with open("src-tauri/tauri.conf.json", encoding="utf-8") as file:
+              app = json.load(file)["version"]
+          with open("extension/manifest.json", encoding="utf-8") as file:
+              extension = json.load(file)["version"]
+          if not tag == f"v{app}" == f"v{extension}":
+              sys.exit(f"tag {tag}, app {app}, extension {extension}: they must agree")
+      # addons.mozilla.org reviewers rebuild the bundled scripts from this.
+      - name: Pack the source
+        run: git archive --format=zip -o "extension/dist/ssh-key-manager-source-${GITHUB_REF_NAME#v}.zip" HEAD
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: extension
+          path: extension/dist/ssh-key-manager-*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  extension-stores:
+    needs: [extension, publish]
+    runs-on: ubuntu-latest
+    # The only job that can read the stores' credentials. It runs nothing from
+    # the build: the upload script uses Python's standard library alone.
+    environment: extension-stores
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: extension
+          path: ${{ runner.temp }}/extension
+      # Each store on its own: one failing doesn't keep the others from trying.
+      - name: Chrome Web Store
+        if: ${{ !cancelled() }}
+        env:
+          CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+          CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+        run: python3 -I .github/scripts/extension_stores.py chrome "$RUNNER_TEMP/extension" "${GITHUB_REF_NAME#v}"
+      - name: Firefox Add-ons
+        if: ${{ !cancelled() }}
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: python3 -I .github/scripts/extension_stores.py firefox "$RUNNER_TEMP/extension" "${GITHUB_REF_NAME#v}"
+      - name: Edge Add-ons
+        if: ${{ !cancelled() }}
+        env:
+          EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
+          EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
+          EDGE_PRODUCT_ID: ${{ secrets.EDGE_PRODUCT_ID }}
+        run: python3 -I .github/scripts/extension_stores.py edge "$RUNNER_TEMP/extension" "${GITHUB_REF_NAME#v}"

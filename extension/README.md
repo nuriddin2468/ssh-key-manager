@@ -72,7 +72,10 @@ pnpm extension:package
 ```
 
 This writes `extension/dist/ssh-key-manager-chromium-<version>.zip` for the Chrome Web
-Store: the Chromium build without the manifest's `key`, which the store keeps itself.
+Store and Edge Add-ons (the Chromium build without the manifest's `key`, which the store
+keeps itself) and `ssh-key-manager-firefox-<version>.zip` for addons.mozilla.org. Each
+release sends them to the stores by itself (see
+[store/README.md](store/README.md#automatic-publishing)).
 [store/README.md](store/README.md) walks through the dashboard, with the listing texts,
 privacy answers and images in [store/](store/). The item's id,
 `lkmgdcanagjeajepncgokapkbihahddb`, is in `CHROMIUM_EXTENSION_IDS` in

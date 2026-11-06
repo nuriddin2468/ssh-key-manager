@@ -1,9 +1,11 @@
-// Packs extension/dist/chromium (run build.mjs first) into the zip uploaded
-// to the Chrome Web Store: extension/dist/ssh-key-manager-chromium-<version>.zip.
-// The store keeps the item's key itself, so the manifest's `key` is left out:
-// it is the item's public key, there so unpacked builds get the store's id.
+// Packs extension/dist (run build.mjs first) into the zips the stores take:
+// - extension/dist/ssh-key-manager-chromium-<version>.zip for the Chrome Web
+//   Store and Edge Add-ons. The store keeps the item's key itself, so the
+//   manifest's `key` is left out: it is the item's public key, there so
+//   unpacked builds get the store's id.
+// - extension/dist/ssh-key-manager-firefox-<version>.zip for addons.mozilla.org.
 // Entries are sorted and dated 1980-01-01, so the same build always gives the
-// same zip.
+// same zips.
 
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
@@ -11,7 +13,6 @@ import { fileURLToPath } from 'node:url';
 import { deflateRawSync } from 'node:zlib';
 
 const root = dirname(fileURLToPath(import.meta.url));
-const build = join(root, 'dist', 'chromium');
 
 const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
   let c = n;
@@ -76,20 +77,27 @@ function zip(files) {
   return Buffer.concat([...local, directory, end]);
 }
 
-const files = [];
-for (const entry of await readdir(build, { recursive: true, withFileTypes: true })) {
-  if (!entry.isFile() || entry.name.startsWith('.')) continue;
-  const path = join(entry.parentPath, entry.name);
-  files.push([relative(build, path).split(sep).join('/'), await readFile(path)]);
+/** Zips extension/dist/<target> without the manifest's `key`. */
+async function pack(target) {
+  const build = join(root, 'dist', target);
+  const files = [];
+  for (const entry of await readdir(build, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile() || entry.name.startsWith('.')) continue;
+    const path = join(entry.parentPath, entry.name);
+    files.push([relative(build, path).split(sep).join('/'), await readFile(path)]);
+  }
+  files.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+
+  const at = files.findIndex(([name]) => name === 'manifest.json');
+  if (at < 0) throw new Error(`extension/dist/${target} has no manifest.json: run build.mjs first`);
+  const manifest = JSON.parse(files[at][1].toString('utf8'));
+  delete manifest.key;
+  files[at][1] = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+
+  const name = `ssh-key-manager-${target}-${manifest.version}.zip`;
+  await writeFile(join(root, 'dist', name), zip(files));
+  console.log(`extension/dist/${name} (${files.length} files)`);
 }
-files.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 
-const at = files.findIndex(([name]) => name === 'manifest.json');
-if (at < 0) throw new Error('extension/dist/chromium has no manifest.json: run build.mjs first');
-const manifest = JSON.parse(files[at][1].toString('utf8'));
-delete manifest.key;
-files[at][1] = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
-
-const name = `ssh-key-manager-chromium-${manifest.version}.zip`;
-await writeFile(join(root, 'dist', name), zip(files));
-console.log(`extension/dist/${name} (${files.length} files)`);
+await pack('chromium');
+await pack('firefox');

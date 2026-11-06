@@ -12,6 +12,7 @@ pub mod keys;
 pub mod known_hosts;
 pub mod nearby;
 pub mod remote;
+pub mod shell_history;
 pub mod terminal;
 pub mod updates;
 pub mod vault;

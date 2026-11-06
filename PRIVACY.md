@@ -140,6 +140,14 @@ in `nearby.json` in the app's data folder, so the app knows the key is someone
 else's. For each of your other computers, the app keeps what it needs to tell what
 changed since the last sync: hashes, never the hosts themselves, in the same folder.
 
+If you say yes to **Find hosts in your shell history?** on the Hosts page, the app reads
+your zsh, bash, fish and PowerShell history on this computer when you open Hosts, to
+suggest servers you connect to. Only the servers (user, address, port and a few
+connection options) are taken from it; your commands, and passwords typed into them,
+are never shown, kept or sent anywhere. The app keeps your answer and the suggestions
+you dismissed, as hashes rather than the servers, in `shell-history.json` in its data
+folder. You can turn this off in **Settings → Shell history**.
+
 For each browser you connect, the app records in your vault the browser's name, your
 computer's name and the date you connected. You can disconnect a browser in
 **Settings → Browser autofill**. [SECURITY.md](SECURITY.md) describes in detail how the

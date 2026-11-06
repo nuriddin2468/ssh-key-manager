@@ -33,6 +33,7 @@ import { fileManagerName } from '@/lib/platform';
 import { type Settings, updateSettings, useSettings } from '@/lib/settings';
 import { checkForUpdates, installUpdate, useUpdateState } from '@/lib/updater';
 import { BackgroundSection } from './BackgroundSection';
+import { ShellHistorySection } from './ShellHistorySection';
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -114,6 +115,7 @@ export function SettingsPage() {
             </Row>
           </Group>
 
+          <ShellHistorySection />
           <PasswordsGroup />
           <VaultLocationSection />
           <BackgroundSection />

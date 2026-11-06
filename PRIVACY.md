@@ -6,7 +6,8 @@ of their code.
 
 **In short:** neither the app nor the extension sends your data to us or to anyone
 else. There are no accounts, no servers of ours, no analytics and no ads. The
-extension talks only to the app on your own computer.
+extension talks only to the app on your own computer. (The app's optional breach
+check sends 5 characters of each password's hash to Have I Been Pwned; see below.)
 
 ## The browser extension
 
@@ -108,7 +109,16 @@ It goes online only:
   **Settings → Updates**;
 - when you ask it to reach a server: checking a host key, testing a connection or
   opening a terminal session;
-- for a DNS lookup when you ask where a name leads.
+- for a DNS lookup when you ask where a name leads;
+- if you turn on the audit's breach check (it is off until you do), to look up your
+  saved passwords in [Have I Been Pwned](https://haveibeenpwned.com/Passwords). For
+  each password it sends only the first 5 characters of the password's SHA-1 hash to
+  `api.pwnedpasswords.com`, gets back the hashes known to start with them, and compares
+  the rest on your computer. Your passwords, and their full hashes, never leave it. The
+  service sees your IP address and those 5 characters. Have I Been Pwned's own
+  [privacy policy](https://haveibeenpwned.com/Privacy) applies to it. The app keeps the
+  results in memory until the vault locks, and stores only whether the check is on, in
+  `breaches.json` in its data folder.
 
 It talks to the local network only for **Nearby**, and only when you ask:
 
@@ -164,4 +174,4 @@ Questions about privacy: [open an issue](https://github.com/nuriddin2468/ssh-key
 Security problems: report them privately through
 [GitHub security advisories](https://github.com/nuriddin2468/ssh-key-manager/security/advisories/new).
 
-Last updated: 4 November 2026.
+Last updated: 6 November 2026.

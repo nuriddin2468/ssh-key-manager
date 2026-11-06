@@ -1,10 +1,10 @@
 import { ChevronRight, CircleAlert, CircleCheck, CircleDashed } from 'lucide-react';
-import { useId } from 'react';
+import { type ReactNode, useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Tile } from '@/components/ui/Tile';
 import { cn } from '@/lib/cn';
 import { AREA_LOOK, type CheckResults } from './AreaCards';
-import { type Area, CHECKS } from './model';
+import { type Area, CHECKS, type CheckId } from './model';
 
 const SEVERITY_TEXT = {
   critical: 'text-critical',
@@ -17,8 +17,16 @@ interface ChecksListProps {
   results: CheckResults;
   /** The vault is locked: its checks didn't run. */
   locked: boolean;
+  /** Checks that didn't run (the vault's while it is locked, the breach check while it is off). */
+  notRun: ReadonlySet<CheckId>;
+  /** More at the end of a check's row, e.g. a way to turn it on. */
+  extras?: Partial<Record<CheckId, ReactNode>>;
+  /** More at the end of an area's card, e.g. its settings. */
+  footers?: Partial<Record<Area, ReactNode>>;
   passed: number;
   total: number;
+  /** Checks the user turned off. */
+  off: number;
   open: boolean;
   onToggle: () => void;
 }
@@ -31,8 +39,12 @@ export function ChecksList({
   areas,
   results,
   locked,
+  notRun,
+  extras,
+  footers,
   passed,
   total,
+  off,
   open,
   onToggle,
 }: ChecksListProps) {
@@ -56,6 +68,7 @@ export function ChecksList({
           {t('audit.checksTitle')}
           <span className="ml-1 text-[12.5px] font-normal text-subtle">
             {t('audit.checksPassed', { passed, total })}
+            {off > 0 ? ` · ${t('audit.checksOff', { count: off })}` : null}
           </span>
         </button>
       </h2>
@@ -63,7 +76,7 @@ export function ChecksList({
         <div id={listId} className="grid grid-cols-[repeat(auto-fit,minmax(320px,1fr))] gap-2.5">
           {areas.map((area) => {
             const { tone, Icon } = AREA_LOOK[area];
-            const notRun = area === 'passwords' && locked;
+            const areaLocked = area === 'passwords' && locked;
             return (
               <div key={area} className="glass flex flex-col gap-1 rounded-2xl p-3">
                 <h3 className="flex items-center gap-2 px-1 pb-1 text-[12.5px] font-semibold text-fg-2">
@@ -71,7 +84,7 @@ export function ChecksList({
                     <Icon className="size-3" strokeWidth={2.25} />
                   </Tile>
                   {t(`audit.areas.${area}`)}
-                  {notRun ? (
+                  {areaLocked ? (
                     <span className="ml-auto text-[12px] font-normal text-subtle">
                       {t('audit.checkNotRun')}
                     </span>
@@ -80,8 +93,9 @@ export function ChecksList({
                 <ul className="flex flex-col">
                   {CHECKS.filter((check) => check.area === area).map((check) => {
                     const result = results.get(check.id);
-                    const worst = notRun ? null : (result?.worst ?? null);
-                    const StatusIcon = notRun ? CircleDashed : worst ? CircleAlert : CircleCheck;
+                    const skipped = notRun.has(check.id);
+                    const worst = skipped ? null : (result?.worst ?? null);
+                    const StatusIcon = skipped ? CircleDashed : worst ? CircleAlert : CircleCheck;
                     return (
                       <li
                         key={check.id}
@@ -91,14 +105,15 @@ export function ChecksList({
                           aria-hidden="true"
                           className={cn(
                             'mt-px size-4 shrink-0',
-                            notRun ? 'text-faint' : worst ? SEVERITY_TEXT[worst] : 'text-ok',
+                            skipped ? 'text-faint' : worst ? SEVERITY_TEXT[worst] : 'text-ok',
                           )}
                           strokeWidth={2}
                         />
-                        <span className={cn('flex-1', notRun ? 'text-subtle' : 'text-fg-2')}>
+                        <span className={cn('flex-1', skipped ? 'text-subtle' : 'text-fg-2')}>
                           {t(`audit.checks.${check.id}`)}
                         </span>
-                        {notRun ? null : worst ? (
+                        {areaLocked ? null : extras?.[check.id]}
+                        {skipped ? null : worst ? (
                           <span
                             className={cn(
                               'shrink-0 text-[12px] tabular-nums',
@@ -114,6 +129,7 @@ export function ChecksList({
                     );
                   })}
                 </ul>
+                {footers?.[area]}
               </div>
             );
           })}

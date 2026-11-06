@@ -19,6 +19,8 @@ const FIX_LABELS = {
   regeneratePublic: 'audit.action.regeneratePublic',
   removeIdentityFile: 'audit.action.removeIdentityFile',
   turnOffHostsEntry: 'audit.action.turnOff',
+  removeConfigOption: 'audit.action.removeConfigOption',
+  addIdentitiesOnly: 'audit.action.addIdentitiesOnly',
 } as const;
 
 /** The label of a finding's one-click fix, or of "open" when there is none. */
@@ -62,6 +64,11 @@ export function useFix(keysById: ReadonlyMap<string, KeyView>) {
           return api
             .removeIdentityFile(action.hostId, action.path, configRevision)
             .then(() => undefined);
+        case 'removeConfigOption':
+        case 'addIdentitiesOnly':
+          // Applied only if the audit still offers it for the file at this
+          // revision, as for removeIdentityFile.
+          return api.fixConfig(action, configRevision).then(() => undefined);
         case 'addPassphrase':
           return undefined;
         case 'turnOffHostsEntry': {

@@ -21,6 +21,7 @@
 //! instead.
 
 mod audit;
+mod breach;
 mod browsers;
 mod contacts;
 mod export;
@@ -45,6 +46,9 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 pub use self::audit::{VaultAuditInput, VaultFinding, VaultFindingKind};
+pub use self::breach::{
+    BreachCache, BreachQuery, MAX_RANGE_BYTES, PADDING_HEADER, RANGE_URL, RangePrefix,
+};
 pub use self::browsers::{BrowserKeys, KeysUsed, PairedBrowser};
 pub use self::contacts::Contact;
 pub use self::generator::{GenerateOptions, Strength, generate, strength};

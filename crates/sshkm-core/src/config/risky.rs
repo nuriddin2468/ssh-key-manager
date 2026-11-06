@@ -285,7 +285,7 @@ fn may_match_one_host(a: &str, b: &str) -> bool {
 /// `name` against a pattern of `*` (any run) and `?` (any one byte), byte by
 /// byte as OpenSSH's `match_pattern()`. Goes back only to the last `*`, so a
 /// pattern of many stars takes no more than length times length steps.
-fn matches_pattern(pattern: &[u8], name: &[u8]) -> bool {
+pub(crate) fn matches_pattern(pattern: &[u8], name: &[u8]) -> bool {
     let (mut p, mut n) = (0, 0);
     // Where the last `*` was, and how much of `name` it takes so far.
     let mut star: Option<(usize, usize)> = None;

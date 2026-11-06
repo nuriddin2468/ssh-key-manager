@@ -50,6 +50,13 @@ describe('vaultFindingText', () => {
     expect(old(3)).toBe('Unchanged for over 3 years, since May 4, 2023.');
   });
 
+  it('counts how often a breached password was seen', () => {
+    const breached = finding({ kind: { kind: 'breachedPassword', count: 2590000 } });
+    expect(vaultFindingTitle(t, breached)).toBe('Password found in data breaches');
+    expect(vaultFindingText(t, breached, titles, 'en')).toMatch(/^Seen 2,590,000 times in leaked/);
+    expect(vaultFindingTarget(breached).route).toEqual({ page: 'passwords', entryId: 'e1' });
+  });
+
   it('names the host of a host entry', () => {
     const login = finding({ kind: { kind: 'passwordLogin', host: 'prod-api' } });
     expect(vaultFindingText(t, login, titles, 'en')).toContain('prod-api');

@@ -56,6 +56,12 @@ portable-pty = "0.9"
 sshkm-os = { path = "../crates/sshkm-os" }
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
+# The audit's breach check (commands/audit_checks.rs) asks Have I Been Pwned
+# over HTTPS with the HTTP client, TLS provider and timer the updater
+# already uses, so these add no crate to the build.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+tokio = { version = "1", default-features = false, features = ["time"] }
 
 [dev-dependencies]
 sshkm-core = { path = "../crates/sshkm-core", features = ["ts"] }

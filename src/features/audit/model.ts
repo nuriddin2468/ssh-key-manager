@@ -10,6 +10,9 @@ import { IGNORE_PREFIX } from './vaultModel';
 
 export const SEVERITY_ORDER: Severity[] = ['critical', 'warning', 'info'];
 
+/** Hosts a finding names before it says how many more there are. */
+const HOSTS_NAMED = 3;
+
 export const SEVERITY_COLORS: Record<Severity, string> = {
   critical: '#FF6B6B',
   warning: '#FFB547',
@@ -76,6 +79,33 @@ export function findingText(t: TFunction, finding: Finding): string {
         addresses: kind.addresses.join(', '),
         address: kind.addresses[0] ?? '',
       });
+    case 'strictHostKeyCheckingOff':
+      return t(
+        kind.knownHostsDiscarded
+          ? 'audit.kinds.strictHostKeyCheckingOff.textDiscarded'
+          : 'audit.kinds.strictHostKeyCheckingOff.text',
+        { value: kind.value },
+      );
+    case 'knownHostsDiscarded':
+      return t('audit.kinds.knownHostsDiscarded.text', { value: kind.value });
+    case 'agentForwarding':
+      return t(
+        kind.wildcard
+          ? 'audit.kinds.agentForwarding.textWildcard'
+          : 'audit.kinds.agentForwarding.text',
+      );
+    case 'tooManyAgentKeys': {
+      // A long config would make the sentence a list.
+      const shown = kind.hosts.slice(0, HOSTS_NAMED).join(', ');
+      const more = kind.hosts.length - HOSTS_NAMED;
+      return t('audit.kinds.tooManyAgentKeys.text', {
+        count: kind.agentKeys,
+        hosts:
+          more > 0
+            ? t('audit.kinds.tooManyAgentKeys.hostsMore', { list: shown, count: more })
+            : shown,
+      });
+    }
     default:
       return t(`audit.kinds.${kind.kind}.text`);
   }
@@ -96,9 +126,11 @@ export function findingSubject(
   if (keyId) return keysById.get(keyId)?.name ?? keyId.split('#').pop() ?? keyId;
   if (hostId !== null) {
     const host = hosts.find((h) => h.id === hostId);
+    if (host?.kind === 'match') return `Match ${host.criteria ?? ''}`.trim();
     if (host) return `Host ${host.patterns.join(' ') || host.criteria || ''}`.trim();
   }
-  if (finding.kind.kind === 'identityFileMissing') {
+  // The block as the audit saw it, if the config has changed since.
+  if (hostId !== null && 'patterns' in finding.kind && finding.kind.patterns.length > 0) {
     return `Host ${finding.kind.patterns.join(' ')}`;
   }
   return path ? displayPath(path) : '';
@@ -127,10 +159,14 @@ export const CHECKS = [
   },
   { id: 'folderPermissions', area: 'config', kinds: ['sshDirPermissions', 'configPermissions'] },
   { id: 'identityFiles', area: 'config', kinds: ['identityFileMissing'] },
+  { id: 'hostKeys', area: 'config', kinds: ['strictHostKeyCheckingOff', 'knownHostsDiscarded'] },
+  { id: 'agentForwarding', area: 'config', kinds: ['agentForwarding'] },
+  { id: 'agentKeys', area: 'config', kinds: ['tooManyAgentKeys'] },
   { id: 'redirects', area: 'hostsFile', kinds: ['hostsFileRedirect'] },
   { id: 'hostsEntries', area: 'hostsFile', kinds: ['hostsFileConflict', 'hostsFileExpired'] },
   { id: 'weak', area: 'passwords', kinds: ['weakPassword'] },
   { id: 'reused', area: 'passwords', kinds: ['reusedPassword'] },
+  { id: 'breached', area: 'passwords', kinds: ['breachedPassword'] },
   { id: 'old', area: 'passwords', kinds: ['oldPassword'] },
   { id: 'links', area: 'passwords', kinds: ['keyNotFound', 'hostNotFound'] },
   { id: 'passwordLogin', area: 'passwords', kinds: ['passwordLogin'] },

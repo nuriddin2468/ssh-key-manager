@@ -127,7 +127,7 @@ export function NearbyPage() {
 
         <section
           aria-labelledby="nearby-device"
-          className="relative flex flex-wrap items-center gap-[18px] overflow-hidden rounded-[20px] border border-orange-400/20 bg-[linear-gradient(135deg,rgb(234_88_12/0.18),rgb(255_255_255/0.03)_60%)] px-6 py-5 shadow-[inset_0_1px_0_rgb(255_255_255/0.06)]"
+          className="relative flex shrink-0 flex-wrap items-center gap-[18px] overflow-hidden rounded-[20px] border border-orange-400/20 bg-[linear-gradient(135deg,rgb(234_88_12/0.18),rgb(255_255_255/0.03)_60%)] px-6 py-5 shadow-[inset_0_1px_0_rgb(255_255_255/0.06)]"
         >
           <Tile tone="orange" size={56} glow>
             <Laptop className="size-[26px]" strokeWidth={1.8} />

@@ -394,15 +394,17 @@ mod tests {
              \tUserKnownHostsFile NUL\n",
         );
         let found = findings(&config, Some("/h/.ssh/config"), None);
-        assert_eq!(
-            ids(&found),
-            [
-                "strictHostKeyCheckingOff:host:lab-*",
-                "knownHostsDiscarded:host:lab-*",
-                "strictHostKeyCheckingOff:host:build",
-                "knownHostsDiscarded:host:scratch",
-            ]
-        );
+        let mut expected = vec![
+            "strictHostKeyCheckingOff:host:lab-*",
+            "knownHostsDiscarded:host:lab-*",
+            "strictHostKeyCheckingOff:host:build",
+            "knownHostsDiscarded:host:scratch",
+        ];
+        // `NUL` is the null device only on Windows.
+        if cfg!(windows) {
+            expected.push("knownHostsDiscarded:host:win");
+        }
+        assert_eq!(ids(&found), expected);
         let lab = by_id(&found, "strictHostKeyCheckingOff:host:lab-*");
         assert_eq!(lab.severity, Severity::Critical);
         assert_eq!(

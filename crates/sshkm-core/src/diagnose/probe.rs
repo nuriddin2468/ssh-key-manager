@@ -106,7 +106,9 @@ mod tests {
         assert_eq!(open.addresses, ["127.0.0.1"]);
 
         drop(listener);
-        let closed = probe("127.0.0.1", port, Duration::from_secs(2));
+        // Windows tries a refused connection again for about two seconds
+        // before it says so; elsewhere the answer is immediate.
+        let closed = probe("127.0.0.1", port, Duration::from_secs(10));
         assert_eq!(closed.outcome, ProbeOutcome::Refused);
     }
 

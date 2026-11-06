@@ -20,8 +20,10 @@ and reviewers need a working app to test with. So:
 
 1. ~~Upload once to create the item, then send us its id and public key.~~ Done: see
    [step 3](#3-create-the-item-done).
-2. Merge, and release the app as 0.4.0, with the extension at 0.4.0.
-3. Upload the 0.4.0 package and submit it for review.
+2. ~~Merge, and release the app as 0.4.0, with the extension at 0.4.0.~~ Done.
+3. ~~Upload the 0.4.0 package and submit it for review.~~ Done: the extension is
+   approved and published. Later versions go to the store with each release
+   ([automatic publishing](#automatic-publishing)).
 
 Fill in the listing, Privacy and other tabs whenever you like and save them as a
 draft. Only **Submit for review** waits for step 3.
@@ -54,9 +56,9 @@ This writes `extension/dist/ssh-key-manager-chromium-<version>.zip`, for example
 
 ## 3. Create the item: done
 
-The item is `lkmgdcanagjeajepncgokapkbihahddb`. Its store page will be
-`https://chromewebstore.google.com/detail/lkmgdcanagjeajepncgokapkbihahddb` once it
-is published.
+The item is `lkmgdcanagjeajepncgokapkbihahddb`. Its store page is
+<https://chromewebstore.google.com/detail/ssh-key-manager/lkmgdcanagjeajepncgokapkbihahddb>; **Settings → Browser autofill** in the app links to it
+(`CHROME_WEB_STORE` in `src/features/browser/BrowserAutofillSection.tsx`).
 
 - Its public key (**Package → View public key**) is the `key` in
   `extension/manifest.json`, so unpacked dev builds get the store's id too.

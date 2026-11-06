@@ -44,6 +44,8 @@ SSH Key Manager is a desktop app for the SSH setup you already have.
 
 **[Get the latest release →](https://github.com/nuriddin2468/ssh-key-manager/releases/latest)**
 
+The browser extension for autofill is in the [Chrome Web Store](https://chromewebstore.google.com/detail/ssh-key-manager/lkmgdcanagjeajepncgokapkbihahddb) (Chrome, Edge, Brave and other Chromium browsers); turn it on in **Settings → Browser autofill**.
+
 Want the newest version before a release? Every change to the `main` branch is built automatically.
 
 1. Open the [latest builds](https://github.com/nuriddin2468/ssh-key-manager/actions/workflows/build.yml) and pick the top green run.
@@ -115,7 +117,7 @@ Builds are not code-signed yet (it's on the [roadmap](#roadmap)), so your system
 - It locks itself after a few idle minutes, when the computer sleeps and when the screen locks.
 - Works with the rest of the app: a new key's passphrase can be generated and saved for you, keys unlock in the agent with their saved passphrase, a server's saved password and 2FA code are used to test the connection, and a guided step moves a server from a password to a key.
 - Import from Bitwarden, 1Password, Chrome, Edge, Firefox, Apple Passwords or KeePassXC; export as a KeePass copy or CSV. The Audit points out weak, reused and old passwords.
-- Browser autofill (optional): the SSH Key Manager extension for Chrome, Edge and Firefox fills a site's saved logins on that site only, and offers to save new ones. Each browser is connected once, with a code you compare in the app.
+- Browser autofill (optional): the SSH Key Manager extension for Chrome, Edge and Firefox ([Chrome Web Store](https://chromewebstore.google.com/detail/ssh-key-manager/lkmgdcanagjeajepncgokapkbihahddb)) fills a site's saved logins on that site only, and offers to save new ones. Each browser is connected once, with a code you compare in the app.
 
 **Terminal**
 - Connect to a server in the app: sessions open in tabs and keep running while you use other sections.

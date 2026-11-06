@@ -15,7 +15,7 @@ import {
   Trash2,
   TriangleAlert,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
@@ -269,6 +269,7 @@ function TunnelRow({
   const reason = reasonText(t, view);
   const failure = state.state === 'failed' || state.state === 'retrying' ? state.failure : null;
   const [details, setDetails] = useState(false);
+  const outputId = useId();
   const Icon = KIND_ICON[tunnel.kind];
 
   const toggle = useAppMutation((next: boolean) => api.tunnelSetOn(tunnel.id, next));
@@ -308,8 +309,10 @@ function TunnelRow({
             </Badge>
           ) : null}
         </div>
-        <span className="truncate font-mono text-[12px] text-subtle">
-          {tunnel.name.trim() ? `${forwardText(t, tunnel)} · ` : ''}
+        <span className="truncate text-[12px] text-subtle">
+          {tunnel.name.trim() ? (
+            <span className="font-mono">{forwardText(t, tunnel)} · </span>
+          ) : null}
           {t(`tunnels.kind.${tunnel.kind}`)} · {t('tunnels.via', { alias: tunnel.alias })}
         </span>
         <div aria-live="polite" className="mt-1 flex min-w-0 flex-col gap-1">
@@ -322,7 +325,14 @@ function TunnelRow({
                 className={cn('size-2 shrink-0 rounded-full', DOT[status.tone])}
               />
             )}
-            {status.text}
+            {state.state === 'retrying' ? (
+              <>
+                <span aria-hidden="true">{status.text}</span>
+                <span className="sr-only">{t('tunnels.state.reconnecting')}</span>
+              </>
+            ) : (
+              status.text
+            )}
             {view.prompt ? (
               <span className="text-muted">
                 {' — '}
@@ -340,6 +350,7 @@ function TunnelRow({
             <button
               type="button"
               aria-expanded={details}
+              aria-controls={outputId}
               onClick={() => setDetails(!details)}
               className="pressable flex w-fit items-center gap-1 rounded-md text-[12px] font-medium text-subtle hover:text-fg"
             >
@@ -349,7 +360,9 @@ function TunnelRow({
               />
               {t('tunnels.output')}
             </button>
-            {details ? <OutputBox text={failure.output} /> : null}
+            <div id={outputId} hidden={!details}>
+              <OutputBox text={failure.output} />
+            </div>
           </div>
         ) : null}
       </div>
@@ -361,7 +374,7 @@ function TunnelRow({
         ) : null}
         {view.browserUrl && state.state === 'up' ? (
           <IconButton
-            label={t('tunnels.openBrowser')}
+            label={t('tunnels.openBrowser', { name: title })}
             icon={<ExternalLink className="size-4" strokeWidth={2} />}
             onClick={open}
           />

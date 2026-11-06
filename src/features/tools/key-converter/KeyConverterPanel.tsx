@@ -302,6 +302,7 @@ function Convert({
   );
   const add = useAppMutation(() => api.keyConvertImport({ ...args, fileName }), {
     success: (key) => t('toolSsh.convert.imported', { name: key.name }),
+    onSuccess: (key) => setFileName(uniqueName(key.name, [...taken, key.name])),
   });
   const save = useAppMutation(() => api.keyConvertSave({ ...args, format }), {
     success: (saved) => (saved ? t('toolSsh.convert.saved', { path: saved }) : undefined),
@@ -354,6 +355,7 @@ function Convert({
               repeat={repeat}
               onChange={setNext}
               onRepeatChange={setRepeat}
+              label={t('toolSsh.convert.newPassphrase')}
             />
           </div>
           <p className="text-[12px] text-subtle">

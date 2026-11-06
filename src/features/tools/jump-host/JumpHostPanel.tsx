@@ -195,7 +195,9 @@ export function JumpHostPanel() {
           disabled={!bastion || chosen.length === 0}
           loading={save.isPending && save.variables !== null}
         >
-          {t('toolSsh.jump.save', { count: Math.max(chosen.length, 1) })}
+          {chosen.length > 0
+            ? t('toolSsh.jump.save', { count: chosen.length })
+            : t('toolSsh.jump.saveEmpty')}
         </Button>
       </div>
 

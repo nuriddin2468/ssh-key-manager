@@ -130,6 +130,33 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - An answer you choose to save goes into the vault only after the session has signed
     in. On Windows, where the app can't tell when that happens, the terminal never saves
     answers. Terminal output and answers are never logged.
+  - Tunnels (Tools → Tunnels) use the same interactive channel: a saved secret is
+    given once, a new host key is trusted only after your "Trust", and anything else is
+    asked of you on the Tunnels page. A tunnel that reconnects by itself gets saved
+    secrets again but never trusts a host key without you.
+- **SSH tools.** The Tools page's SSH tools change nothing behind your back.
+  - A tunnel is one `ssh -N` per forward, with `ExitOnForwardFailure` (no half-working
+    tunnel) and no connection sharing (`ControlPath none`), so it neither rides on nor
+    carries other `ssh` sessions. Local and SOCKS tunnels listen on `localhost` unless
+    you pick "All addresses", which the app marks as open to your network. Every value
+    that reaches `ssh` (alias, address, host, port) is checked first. Tunnels stop when
+    the app quits and keep running while the window is closed to the tray, where the
+    menu counts them and stops them all. Their definitions are in `tunnels.json` in the
+    app's data folder (mode 0600): hosts, ports, names, never a secret.
+  - The ProxyJump wizard and "Add to ~/.ssh/config" of a tunnel edit `~/.ssh/config`
+    through the host editor's path: a backup first, refused if the file changed
+    meanwhile, and a native confirmation for lines that say which server gets access.
+  - The key converter decrypts keys in Rust only; the page sees fingerprints and the
+    public key. Converted keys go into `~/.ssh` only as new files (0600), or where you
+    pick in a system save dialog, never over a file in `~/.ssh`. New passphrases use
+    the formats' strong options (OpenSSH bcrypt, PuTTY v3 Argon2id, PKCS#8 PBES2 with
+    PBKDF2-SHA256 and AES-256); PEM, whose encryption is one round of MD5, is written
+    only without a passphrase, and the app says so. The key derivation settings a file
+    asks for (PuTTY's Argon2, PKCS#8's PBKDF2) are bounded, as bcrypt rounds are.
+  - An `authorized_keys` line is built and checked in Rust and read back as `sshd`
+    reads it before it is shown or installed. Installing it goes over stdin through the
+    same script as installing a key, and never replaces a line that has the key
+    already.
 - **Browser autofill** (optional, off by default) lets the SSH Key Manager extension for
   Chrome, Edge and Firefox fill and save logins from the vault. See
   [Browser autofill](#browser-autofill) below.
@@ -139,6 +166,7 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     Releases at startup and every six hours (can be turned off in Settings);
   - `ssh-keyscan` and `ssh` when you explicitly check a host key, test a connection or
     open a terminal session;
+  - `ssh` for each tunnel you turn on, for as long as it is on;
   - a DNS lookup when you ask where a name leads.
 - **Signed updates.** An update is installed only if its signature matches the public key
   built into the app (`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`).

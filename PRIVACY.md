@@ -101,6 +101,8 @@ The app keeps your data on your computer:
 - Your SSH files stay where they are.
 - The password vault is an encrypted KeePass file, in the app's data folder or a
   folder you choose.
+- Tunnels you save are kept in `tunnels.json` in the app's data folder: their hosts,
+  ports, addresses and names, never a password.
 
 It goes online only:
 
@@ -108,6 +110,8 @@ It goes online only:
   **Settings → Updates**;
 - when you ask it to reach a server: checking a host key, testing a connection or
   opening a terminal session;
+- for each tunnel you turn on, for as long as it is on: it stays connected to that
+  server, and the port it forwards carries what you and your apps send through it;
 - for a DNS lookup when you ask where a name leads.
 
 It talks to the local network only for **Nearby**, and only when you ask:

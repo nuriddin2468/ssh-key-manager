@@ -12,6 +12,8 @@ interface PassphraseFieldsProps {
   autoFocus?: boolean;
   /** Show the text, e.g. after a passphrase was generated. */
   visible?: boolean;
+  /** The first field's label; "Passphrase" by default. */
+  label?: string;
 }
 
 const SEGMENT_COLORS = ['', '#FF6B6B', '#FFB547', '#5EEAD4', '#14B8A6'];
@@ -24,6 +26,7 @@ export function PassphraseFields({
   onRepeatChange,
   autoFocus,
   visible = false,
+  label,
 }: PassphraseFieldsProps) {
   const { t } = useTranslation();
   const strength = passphraseStrength(value);
@@ -35,7 +38,7 @@ export function PassphraseFields({
     <>
       <div className="flex min-w-0 flex-col gap-1.5">
         <TextField
-          label={t('generate.passphrase')}
+          label={label ?? t('generate.passphrase')}
           type={type}
           autoComplete="new-password"
           value={value}

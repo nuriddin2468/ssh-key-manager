@@ -2,6 +2,7 @@ import { KeyRound, LockKeyhole, PlugZap, SquareTerminal, Terminal } from 'lucide
 import { type MouseEvent, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
+import { useEnvironment } from '@/api/queries';
 import { useRouter } from '@/app/router';
 import type { ConnectionEvent } from '@/bindings/ConnectionEvent';
 import type { HostEntry } from '@/bindings/HostEntry';
@@ -10,9 +11,11 @@ import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
+import { causeTitle } from '@/features/diagnose/model';
 import { useConnect } from '@/features/terminal/connect';
 import { useTerminals } from '@/features/terminal/TerminalProvider';
 import { cn } from '@/lib/cn';
+import { shownDiagnosis } from './login';
 import {
   gitService,
   hostLabel,
@@ -65,14 +68,17 @@ export function HostCard({
   const git = gitService(host);
 
   // The editor shows the result of its own host; other cards say what failed.
+  const home = useEnvironment().data?.paths.home;
   const onResult = useCallback(
-    ({ run }: CheckResult) => {
+    ({ run, context }: CheckResult) => {
       if (run.ok || selected) return;
+      const diagnosis = shownDiagnosis(run, context);
       toast.error(t('hosts.list.checkFailed', { alias: label }), {
+        description: diagnosis ? causeTitle(t, diagnosis, label, home) : undefined,
         action: { label: t('hosts.list.details'), onClick: onSelect },
       });
     },
-    [selected, label, onSelect, t],
+    [selected, label, onSelect, t, home],
   );
   const check = useHostCheck(host, { onResult });
   const status = concrete

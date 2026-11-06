@@ -263,6 +263,7 @@ mod tests {
         ConnectionTest {
             ok,
             output: output.to_owned(),
+            diagnosis: None,
             prompts: prompts
                 .iter()
                 .map(|(kind, outcome)| AskedPrompt {

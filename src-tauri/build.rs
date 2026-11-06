@@ -31,6 +31,8 @@ const COMMANDS: &[&str] = &[
     "test_connection",
     "connection_history",
     "clear_connection_history",
+    "diagnose_probe",
+    "diagnose_fix_permissions",
     "install_public_key",
     "server_keys",
     "nearby_status",

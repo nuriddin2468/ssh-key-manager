@@ -40,6 +40,10 @@ real `~/.ssh`. Its modules:
     crate's only `unsafe` code).
 - `audit`: pure rules over the data above. Findings carry machine-readable kinds and
   parameters, so the UI can localise them.
+- `diagnose`: why an `ssh` run failed, read from what it printed (with `-v` for
+  connection tests): a cause, the jump host it happened at, and the lines that show
+  it. Its tests run over real OpenSSH output from macOS, Linux and Windows
+  (`diagnose/testdata`). `probe` checks that a TCP port answers.
 - `vault`: the password vault, two files side by side.
   - `vault.kdbx` is a standard KeePass database (KDBX 4.1, Argon2id, ChaCha20). Its
     password is the _vault secret_: a random 256-bit recovery key, shown once, which

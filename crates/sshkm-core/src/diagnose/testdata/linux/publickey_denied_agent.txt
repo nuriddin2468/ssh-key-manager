@@ -1,0 +1,45 @@
+OpenSSH_8.9p1 Ubuntu-3ubuntu0.10, OpenSSL 3.0.2 15 Mar 2022
+debug1: Reading configuration data /home/alice/.ssh/config
+debug1: /home/alice/.ssh/config line 4: Applying options for prod
+debug1: Reading configuration data /etc/ssh/ssh_config
+debug1: /etc/ssh/ssh_config line 19: include /etc/ssh/ssh_config.d/*.conf matched no files
+debug1: /etc/ssh/ssh_config line 21: Applying options for *
+debug1: Connecting to 10.0.4.12 [10.0.4.12] port 22.
+debug1: Connection established.
+debug1: identity file /home/alice/.ssh/id_ed25519_work type 3
+debug1: identity file /home/alice/.ssh/id_ed25519_work-cert type -1
+debug1: Local version string SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.10
+debug1: Remote protocol version 2.0, remote software version OpenSSH_8.2p1 Ubuntu-4ubuntu0.11
+debug1: compat_banner: match: OpenSSH_8.2p1 Ubuntu-4ubuntu0.11 pat OpenSSH* compat 0x04000000
+debug1: Authenticating to 10.0.4.12:22 as 'ubuntu'
+debug1: load_hostkeys: fopen /home/alice/.ssh/known_hosts2: No such file or directory
+debug1: SSH2_MSG_KEXINIT sent
+debug1: SSH2_MSG_KEXINIT received
+debug1: kex: algorithm: curve25519-sha256
+debug1: kex: host key algorithm: ssh-ed25519
+debug1: kex: server->client cipher: chacha20-poly1305@openssh.com MAC: <implicit> compression: none
+debug1: kex: client->server cipher: chacha20-poly1305@openssh.com MAC: <implicit> compression: none
+debug1: expecting SSH2_MSG_KEX_ECDH_REPLY
+debug1: SSH2_MSG_KEX_ECDH_REPLY received
+debug1: Server host key: ssh-ed25519 SHA256:hFwMDKX0zB4m9p6xU7Tq3wqVJ1t0eNfB1kP2xYd9a8c
+debug1: Host '10.0.4.12' is known and matches the ED25519 host key.
+debug1: Found key in /home/alice/.ssh/known_hosts:7
+debug1: rekey out after 134217728 blocks
+debug1: SSH2_MSG_NEWKEYS sent
+debug1: expecting SSH2_MSG_NEWKEYS
+debug1: SSH2_MSG_NEWKEYS received
+debug1: rekey in after 134217728 blocks
+debug1: Will attempt key: alice@laptop ED25519 SHA256:Zx9yQe1R0r9cGkT2mJb0FqgWnDk3p8a7HlU1sVwXyZ4 agent
+debug1: Will attempt key: /home/alice/.ssh/id_ed25519_work ED25519 SHA256:7fQvYkS3u1dGm0bL2pX9wHcN4rE6tA8iO5jU0yKzMv1 explicit
+debug1: SSH2_MSG_EXT_INFO received
+debug1: kex_input_ext_info: server-sig-algs=<ssh-ed25519,sk-ssh-ed25519@openssh.com,ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-dss,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,sk-ecdsa-sha2-nistp256@openssh.com>
+debug1: SSH2_MSG_SERVICE_ACCEPT received
+Authorized access only. All activity is logged.
+debug1: Authentications that can continue: publickey
+debug1: Next authentication method: publickey
+debug1: Offering public key: alice@laptop ED25519 SHA256:Zx9yQe1R0r9cGkT2mJb0FqgWnDk3p8a7HlU1sVwXyZ4 agent
+debug1: Authentications that can continue: publickey
+debug1: Offering public key: /home/alice/.ssh/id_ed25519_work ED25519 SHA256:7fQvYkS3u1dGm0bL2pX9wHcN4rE6tA8iO5jU0yKzMv1 explicit
+debug1: Authentications that can continue: publickey
+debug1: No more authentication methods to try.
+ubuntu@10.0.4.12: Permission denied (publickey).

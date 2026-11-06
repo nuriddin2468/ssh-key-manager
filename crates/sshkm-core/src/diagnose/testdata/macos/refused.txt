@@ -1,0 +1,6 @@
+OpenSSH_9.9p2, LibreSSL 3.3.6
+debug1: Reading configuration data /dev/null
+debug1: Authenticator provider $SSH_SK_PROVIDER did not resolve; disabling
+debug1: Connecting to 127.0.0.1 [127.0.0.1] port 56731.
+debug1: connect to address 127.0.0.1 port 56731: Connection refused
+ssh: connect to host 127.0.0.1 port 56731: Connection refused

@@ -19,6 +19,7 @@ import type { SignIn } from '@/bindings/SignIn';
 import type { TerminalEvent } from '@/bindings/TerminalEvent';
 import type { TerminalInfo } from '@/bindings/TerminalInfo';
 import type { VaultStatus } from '@/bindings/VaultStatus';
+import { sampleFailure, sessionDiagnosis } from './diagnose';
 import { recordSession } from './history';
 import { vaultHandlers } from './vault';
 
@@ -91,7 +92,13 @@ function fail(session: Session, reason: FailReason, output: string, saved = fals
   write(session, output.replace(/\n/g, '\r\n'));
   setState(session, {
     phase: 'failed',
-    failure: { reason, saved, exitCode: 255, output },
+    failure: {
+      reason,
+      saved,
+      exitCode: 255,
+      output,
+      diagnosis: sessionDiagnosis(session.info.alias, output),
+    },
   });
 }
 
@@ -265,7 +272,12 @@ async function run(session: Session, askPassword: boolean) {
         );
       }
       return;
-    default:
+    default: {
+      const sample = sampleFailure(session.info.alias);
+      if (sample) {
+        fail(session, sample.reason, `${sample.output}\n`);
+        return;
+      }
       connect(session, {
         password: 'vault',
         oneTimeCode: 'vault',
@@ -273,6 +285,7 @@ async function run(session: Session, askPassword: boolean) {
         passphrase: null,
       });
       banner(session);
+    }
   }
 }
 

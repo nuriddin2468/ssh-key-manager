@@ -3,9 +3,17 @@ import { useTranslation } from 'react-i18next';
 import { useEnvironment } from '@/api/queries';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
+import { diagnosisKey, type HostFacts } from '@/features/diagnose/model';
+import { type DiagnoseFixes, WhyItFailed } from '@/features/diagnose/WhyItFailed';
 import { cn } from '@/lib/cn';
 import { displayPath } from '@/lib/format';
-import { loginMessage, type MessageAction, type RunContext, type SshRun } from './login';
+import {
+  loginMessage,
+  type MessageAction,
+  type RunContext,
+  type SshRun,
+  shownDiagnosis,
+} from './login';
 
 interface LoginResultProps {
   run: SshRun;
@@ -15,6 +23,8 @@ interface LoginResultProps {
   vaultLocked?: boolean;
   /** Fixes offered as a button when the result calls for one. */
   onAction?: Partial<Record<MessageAction, () => void>>;
+  /** A failed check shows why it failed, with these fixes. */
+  diagnose?: { facts: HostFacts; onFix: DiagnoseFixes; publicKey?: string };
   onClose?: () => void;
   /** The title of a success, in place of the usual one (a git service's greeting, say). */
   okTitle?: string;
@@ -30,6 +40,7 @@ export function LoginResult({
   alias,
   vaultLocked,
   onAction,
+  diagnose,
   onClose,
   okTitle,
   role,
@@ -46,6 +57,7 @@ export function LoginResult({
     key: displayPath(message.values?.key ?? '', home),
   };
   const ok = message.tone === 'ok';
+  const diagnosis = diagnose ? shownDiagnosis(run, context) : null;
   const fix = message.action ? onAction?.[message.action] : undefined;
   const Icon = ok ? CheckCircle2 : XCircle;
   const title =
@@ -71,32 +83,43 @@ export function LoginResult({
         className={cn('mt-0.5 size-4 shrink-0', ok ? 'text-ok' : 'text-critical')}
         strokeWidth={2}
       />
-      <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
-        <span className="font-medium">{title}</span>
-        {message.detail ? (
-          <span className="text-[12.5px] leading-[18px] text-muted">
-            {t(`hosts.vault.result.${message.detail}`, values)}
-          </span>
-        ) : null}
-        {fix && message.action ? (
-          <Button size="sm" className="mt-1" onClick={fix}>
-            {t(`hosts.vault.result.${message.action}`)}
-          </Button>
-        ) : null}
-        {run.output ? (
-          // Scrolls when long, so it takes focus for keyboard scrolling.
-          <section
-            aria-label={t('hosts.vault.result.output')}
-            // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be reachable by keyboard
-            tabIndex={0}
-            className="mt-0.5 max-h-24 w-full overflow-auto rounded-md"
-          >
-            <pre className="selectable font-mono text-[11.5px] leading-[17px] whitespace-pre-wrap text-fg-2">
-              {run.output}
-            </pre>
-          </section>
-        ) : null}
-      </div>
+      {diagnosis && diagnose ? (
+        <WhyItFailed
+          key={diagnosisKey(diagnosis)}
+          diagnosis={diagnosis}
+          alias={alias}
+          facts={diagnose.facts}
+          onFix={diagnose.onFix}
+          publicKey={diagnose.publicKey}
+        />
+      ) : (
+        <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
+          <span className="font-medium">{title}</span>
+          {message.detail ? (
+            <span className="text-[12.5px] leading-[18px] text-muted">
+              {t(`hosts.vault.result.${message.detail}`, values)}
+            </span>
+          ) : null}
+          {fix && message.action ? (
+            <Button size="sm" className="mt-1" onClick={fix}>
+              {t(`hosts.vault.result.${message.action}`)}
+            </Button>
+          ) : null}
+          {run.output ? (
+            // Scrolls when long, so it takes focus for keyboard scrolling.
+            <section
+              aria-label={t('hosts.vault.result.output')}
+              // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be reachable by keyboard
+              tabIndex={0}
+              className="mt-0.5 max-h-24 w-full overflow-auto rounded-md"
+            >
+              <pre className="selectable font-mono text-[11.5px] leading-[17px] whitespace-pre-wrap text-fg-2">
+                {run.output}
+              </pre>
+            </section>
+          ) : null}
+        </div>
+      )}
       {onClose ? (
         <IconButton label={t('common.close')} icon={<X className="size-3.5" />} onClick={onClose} />
       ) : null}

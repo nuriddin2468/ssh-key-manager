@@ -6,6 +6,7 @@
 //! JSON object) on the same channel, in order.
 
 use serde::{Deserialize, Serialize};
+use sshkm_core::diagnose::Diagnosis;
 use sshkm_core::{ErrorCode, SecretString};
 
 use crate::askpass::PromptAccount;
@@ -134,6 +135,9 @@ pub struct Failure {
     /// What `ssh` printed, without terminal escapes. Never holds an answer:
     /// those go through askpass, not the terminal.
     pub output: String,
+    /// Why it failed, read from `output` (the terminal runs `ssh` without
+    /// `-v`, so its debug lines stay off the screen).
+    pub diagnosis: Option<Diagnosis>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

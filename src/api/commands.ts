@@ -39,6 +39,7 @@ import type { NearbyStatus } from '@/bindings/NearbyStatus';
 import type { OpenOptions } from '@/bindings/OpenOptions';
 import type { OtpCode } from '@/bindings/OtpCode';
 import type { PermissionFix } from '@/bindings/PermissionFix';
+import type { PortProbe } from '@/bindings/PortProbe';
 import type { PromptAnswer } from '@/bindings/PromptAnswer';
 import type { ReceivedGroup } from '@/bindings/ReceivedGroup';
 import type { SavedHost } from '@/bindings/SavedHost';
@@ -112,6 +113,10 @@ export const api = {
   /** Checks and in-app terminal sessions by alias, newest first. */
   connectionHistory: () => call<Record<string, ConnectionEvent[]>>('connection_history'),
   clearConnectionHistory: (alias: string) => call<void>('clear_connection_history', { alias }),
+  /** Connects to the host's port, or its first jump host's, and closes at once; `unsupported` behind a ProxyCommand. */
+  diagnoseProbe: (alias: string) => call<PortProbe>('diagnose_probe', { alias }),
+  /** The audit's permission fix for a file ssh refused, by the path ssh printed; `false` if the audit offers none. */
+  diagnoseFixPermissions: (path: string) => call<boolean>('diagnose_fix_permissions', { path }),
   installPublicKey: (alias: string, keyId: string) =>
     call<KeyInstall>('install_public_key', { alias, keyId }),
   /** Reads the host's `~/.ssh/authorized_keys` after the change, if any, in one sign-in. */

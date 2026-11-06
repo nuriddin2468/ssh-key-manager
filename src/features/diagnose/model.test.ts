@@ -41,6 +41,8 @@ describe('diagnosisMessage', () => {
     expect(message.title).toBe('keysRejectedPasswordToo');
     expect(message.detail).toBe('keysRejectedPasswordTooDetail');
     expect(message.unlockVault).toBe(true);
+    // Keys only: the saved password wouldn't help.
+    expect(diagnosisMessage(rejected, facts({ vaultLocked: true })).unlockVault).toBe(false);
   });
 
   it('edits the password in the open vault, or opens it first', () => {

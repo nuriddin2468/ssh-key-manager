@@ -91,7 +91,8 @@ export function diagnosisMessage(diagnosis: Diagnosis, facts: HostFacts): Diagno
   switch (cause.kind) {
     case 'keysRejected': {
       const install: DiagnoseFix = facts.passwordSaved ? 'installKey' : 'copyPublicKey';
-      const extra = { unlockVault: facts.vaultLocked };
+      // A locked vault matters only if the server takes its saved password.
+      const extra = { unlockVault: facts.vaultLocked && cause.passwordAllowed };
       if (facts.keyLocked) return message('keysRejected', ['addToAgent', install], extra);
       if (!facts.hasKey) return message('keysRejectedNoKey', ['chooseKey'], extra);
       return message(

@@ -154,20 +154,27 @@ export function WhyItFailed({
       </p>
 
       {keys.length > 0 ? (
-        <div className="mt-0.5 flex w-full flex-col gap-0.5">
+        <div className="mt-1.5 flex w-full min-w-0 flex-col gap-0.5">
           <span className="text-[12px] text-subtle">{t('diagnose.offered')}</span>
-          <ul className="flex flex-col gap-0.5">
+          <ul className="flex min-w-0 flex-col gap-0.5">
             {keys.map((key) => (
+              // One line each: the name first; a long fingerprint is cut,
+              // whole in its tooltip (and when copied or read out).
               <li
                 key={`${key.name}${key.fingerprint ?? ''}`}
-                className="selectable font-mono text-[11.5px] leading-[17px] text-fg-2"
-                style={{ overflowWrap: 'anywhere' }}
+                className="selectable flex min-w-0 items-baseline gap-1.5 font-mono text-[11.5px] leading-[17px]"
               >
-                {displayPath(key.name, home)}
-                {key.keyType ? <span className="text-subtle"> · {key.keyType}</span> : null}
-                {key.fingerprint ? <span className="text-subtle"> · {key.fingerprint}</span> : null}
+                <span className="max-w-[60%] shrink-0 truncate text-fg-2" title={key.name}>
+                  {displayPath(key.name, home)}
+                </span>
+                {key.keyType ? <span className="shrink-0 text-subtle">{key.keyType}</span> : null}
+                {key.fingerprint ? (
+                  <span className="min-w-0 truncate text-subtle" title={key.fingerprint}>
+                    {key.fingerprint}
+                  </span>
+                ) : null}
                 {key.agent ? (
-                  <span className="font-sans text-subtle"> · {t('diagnose.fromAgent')}</span>
+                  <span className="shrink-0 font-sans text-subtle">{t('diagnose.fromAgent')}</span>
                 ) : null}
               </li>
             ))}
@@ -177,7 +184,7 @@ export function WhyItFailed({
 
       {changed?.fingerprint || changed?.knownHosts ? (
         <div
-          className="selectable mt-0.5 flex flex-col gap-0.5 font-mono text-[11.5px] leading-[17px] text-fg-2"
+          className="selectable mt-1.5 flex flex-col gap-0.5 font-mono text-[11.5px] leading-[17px] text-fg-2"
           style={{ overflowWrap: 'anywhere' }}
         >
           {changed.fingerprint ? (
@@ -205,7 +212,7 @@ export function WhyItFailed({
       ) : null}
 
       {fixes.length > 0 || actions ? (
-        <div className="mt-1 flex flex-wrap gap-2">
+        <div className="mt-2 flex flex-wrap gap-2">
           {fixes.map((fix, index) => (
             <Button
               key={fix}

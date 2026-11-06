@@ -22,6 +22,7 @@ import { historyHandlers, recordCheck } from './history';
 import { hostsFileFindings, hostsFileHandlers } from './hostsFile';
 import { nearbyHandlers } from './nearby';
 import { serverKeysHandlers } from './serverKeys';
+import { sshToolsHandlers } from './sshTools';
 import { terminalHandlers } from './terminal';
 import { vaultHandlers, vaultKeyTest } from './vault';
 import { vaultFilesHandlers } from './vaultFiles';
@@ -498,6 +499,20 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   ...browserHandlers,
   ...backgroundHandlers,
   ...terminalHandlers(hosts),
+  ...sshToolsHandlers({
+    hosts,
+    config: configFile,
+    revision: () => revisionOf(hostSpecs),
+    setOptions: (id, options) => {
+      const spec = hostSpecs[id];
+      if (spec) hostSpecs[id] = { ...spec, options };
+    },
+    keys: () => keysView().keys,
+    addKey: (partial) => {
+      keys.push(key({ ...partial, modified: new Date().toISOString() }));
+      return keysView().keys.find((k) => k.name === partial.name) as KeyView;
+    },
+  }),
   ...nearbyHandlers,
   ...historyHandlers,
   ...serverKeysHandlers({

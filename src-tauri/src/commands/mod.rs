@@ -3,16 +3,24 @@
 
 pub mod agent;
 pub mod audit;
+pub mod audit_checks;
 pub mod background;
 pub mod browser;
 pub mod config;
+pub mod diagnose;
 pub mod environment;
+pub mod envs;
 pub mod hosts_file;
+pub mod key_rotation;
 pub mod keys;
 pub mod known_hosts;
 pub mod nearby;
+pub mod quick;
 pub mod remote;
+pub mod shell_history;
+pub mod ssh_tools;
 pub mod terminal;
+pub mod tools_net;
 pub mod updates;
 pub mod vault;
 pub mod vault_files;

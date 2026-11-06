@@ -1,5 +1,5 @@
-// The small window that unlocks the vault when the browser asks
-// (src-tauri/src/browser/unlock.rs). Its capability lets it call only the
+// The small window that unlocks the vault when the browser or the tray menu
+// asks (src-tauri/src/browser/unlock.rs). Its capability lets it call only the
 // unlock commands, so it loads none of the main window's pages.
 
 import { QueryClientProvider } from '@tanstack/react-query';

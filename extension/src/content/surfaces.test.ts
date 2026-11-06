@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { press } from '../test/user';
 import { LoginMenu, SaveBanner, SETTLE_MS, Settling, uncovered, uncoveredAt } from './surfaces';
 
 const LOGIN = { id: 'e1', title: 'Bank', username: 'alice', exact: true };
@@ -177,12 +178,43 @@ describe('the menu', () => {
 });
 
 describe('the banner', () => {
+  const field = (banner: SaveBanner) =>
+    inside(banner).root.querySelector<HTMLInputElement>('input.input');
+
   it('names only the site for a login typed on another site', () => {
     const banner = new SaveBanner({ onSave: vi.fn(), onDismiss: vi.fn() });
     banner.show({ id: 'p1', site: 'bank.example', username: '', mode: 'save', elsewhere: true });
-    expect(inside(banner).root.querySelector('.sub')).toBeNull();
+    expect(field(banner)).toBeNull();
     banner.show({ id: 'p1', site: 'bank.example', username: 'alice', mode: 'save' });
-    expect(inside(banner).root.querySelector('.sub')?.textContent).toBe('alice');
+    expect(field(banner)?.value).toBe('alice');
+  });
+
+  it('saves with the username the user put in its field', async () => {
+    vi.spyOn(performance, 'now').mockReturnValue(10_000);
+    const onSave = vi.fn(async () => ({ ok: true, message: 'Saved' }));
+    const banner = new SaveBanner({ onSave, onDismiss: vi.fn() });
+    const offer = { id: 'p1', site: 'bank.example', username: '', mode: 'save' as const };
+    banner.show(offer);
+    const input = field(banner);
+    expect(input?.value).toBe('');
+    expect(input?.getAttribute('aria-label')).toBeTruthy();
+    if (!input) return;
+    input.value = ' alice@bank.example ';
+    vi.spyOn(performance, 'now').mockReturnValue(10_000 + SETTLE_MS);
+    press(input, 'Enter');
+    await microtasks();
+    expect(onSave).toHaveBeenCalledWith(offer, 'alice@bank.example');
+  });
+
+  it('keeps the key presses in its field from the page', () => {
+    const banner = new SaveBanner({ onSave: vi.fn(), onDismiss: vi.fn() });
+    banner.show({ id: 'p1', site: 'bank.example', username: '', mode: 'save' });
+    const heard = vi.fn();
+    document.addEventListener('keydown', heard);
+    const input = field(banner);
+    if (input) press(input, 'a');
+    document.removeEventListener('keydown', heard);
+    expect(heard).not.toHaveBeenCalled();
   });
 });
 

@@ -12,6 +12,8 @@ import {
   ShieldCheck,
   Sparkle,
   SquareTerminal,
+  Variable,
+  Wrench,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -28,9 +30,12 @@ import {
 import { type Page, type Route, useRouter } from '@/app/router';
 import { Logo } from '@/components/Logo';
 import { Tile, type Tone } from '@/components/ui/Tile';
+import { useEnvs } from '@/features/envs/queries';
 import { useSessionCounts } from '@/features/terminal/TerminalProvider';
+import { TOOLS } from '@/features/tools/registry';
 import { cn } from '@/lib/cn';
 import { platform } from '@/lib/platform';
+import { useSettings } from '@/lib/settings';
 import { useUpdateState } from '@/lib/updater';
 
 const PLATFORM_NAMES = { macos: 'macOS', windows: 'Windows', linux: 'Linux' } as const;
@@ -50,9 +55,14 @@ export function Sidebar() {
   const audit = useAudit();
   const vault = useVaultStatus();
   const vaultEntries = useVaultEntries();
+  const envs = useEnvs();
   const sessions = useSessionCounts();
 
-  const findings = audit.data ? audit.data.counts.critical + audit.data.counts.warning : 0;
+  const ignored = useSettings().ignoredFindings;
+  // Critical findings and warnings the user hasn't set aside on the audit page.
+  const findings = (audit.data?.findings ?? []).filter(
+    (finding) => finding.severity !== 'info' && !ignored.includes(finding.id),
+  ).length;
   const unlocked = agent.data?.identities.length ?? 0;
   const running = agent.data?.status.available ?? false;
   const update = useUpdateState();
@@ -130,6 +140,28 @@ export function Sidebar() {
             }
             onClick={() => navigate({ page: 'passwords' })}
           />
+          <NavItem
+            label={t('nav.envs')}
+            tone="lime"
+            icon={Variable}
+            active={route.page === 'envs'}
+            count={
+              vaultState === 'unlocked'
+                ? envs.data?.filter((env) => !env.inTrash).length
+                : undefined
+            }
+            trailing={
+              vaultState === 'locked' ? (
+                <LockKeyhole
+                  role="img"
+                  aria-label={t('nav.vaultLocked')}
+                  className="ml-auto size-3.5 text-subtle"
+                  strokeWidth={2}
+                />
+              ) : undefined
+            }
+            onClick={() => navigate({ page: 'envs' })}
+          />
         </NavGroup>
         <NavGroup label={t('nav.groupSessions')}>
           <NavItem
@@ -168,6 +200,8 @@ export function Sidebar() {
           />
         </NavGroup>
         <div className="flex flex-col gap-px">
+          {/* Shown once there is a tool (src/features/tools). */}
+          {TOOLS.length > 0 ? item('tools', t('nav.tools'), 'cyan', Wrench) : null}
           <NavItem
             label={t('nav.settings')}
             tone="slate"

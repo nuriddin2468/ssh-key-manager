@@ -340,7 +340,10 @@ export function hostTarget(host: HostEntry, via: (jump: string) => string): stri
 
 const MONO_TONES: Tone[] = ['indigo', 'teal', 'pink', 'orange', 'blue', 'violet', 'amber', 'rose'];
 
-export function hostMonogram(host: HostEntry): { text: string; tone: Tone } {
+export function hostMonogram(host: Pick<HostEntry, 'kind' | 'patterns' | 'isWildcard'>): {
+  text: string;
+  tone: Tone;
+} {
   const label = host.kind === 'match' ? 'match' : (host.patterns[0] ?? '?');
   if (host.isWildcard && label.includes('*')) return { text: '*', tone: 'blue' };
   const words = label

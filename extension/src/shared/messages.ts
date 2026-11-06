@@ -14,9 +14,12 @@ export type ToBackground =
   | { kind: 'unlock' }
   /** A login form was sent with these values. */
   | { kind: 'capture'; username: string; password: string }
+  /** The first step of a two-step login was sent with this username. */
+  | { kind: 'username'; username: string }
   /** The save offer waiting for this tab, if any. */
   | { kind: 'pendingSave' }
-  | { kind: 'save'; id: string }
+  /** Save it, with the username in the banner's field if it has one. */
+  | { kind: 'save'; id: string; username?: string }
   | { kind: 'dismissSave'; id: string };
 
 /** From the background to a tab's top frame. */

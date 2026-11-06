@@ -15,6 +15,12 @@ function close(): void {
 }
 
 /**
+ * Who asked (`unlock.html?for=…`, src-tauri/src/browser/unlock.rs): the
+ * browser, to fill a login, or the user from the tray menu.
+ */
+const fromTray = new URLSearchParams(window.location.search).get('for') === 'tray';
+
+/**
  * The master password, and Touch ID or Windows Hello where it is set up,
  * in a window of the app's own: never in the browser, where a page could
  * draw a look-alike. The app closes the window once the vault is unlocked,
@@ -53,7 +59,9 @@ export function UnlockWindow() {
         </Tile>
         <div className="flex min-w-0 flex-col">
           <h1 className="text-[14px] font-semibold">{t('passwords.unlockVaultTitle')}</h1>
-          <p className="text-[12px] text-subtle">{t('browser.unlockFor')}</p>
+          <p className="text-[12px] text-subtle">
+            {fromTray ? t('app.name') : t('browser.unlockFor')}
+          </p>
         </div>
       </header>
       {/* Until the status comes, nothing to say: not even that there is no way in. */}

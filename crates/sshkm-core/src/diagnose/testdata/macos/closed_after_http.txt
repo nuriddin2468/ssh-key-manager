@@ -1,0 +1,13 @@
+OpenSSH_9.9p2, LibreSSL 3.3.6
+debug1: Reading configuration data /dev/null
+debug1: Authenticator provider $SSH_SK_PROVIDER did not resolve; disabling
+debug1: Connecting to 127.0.0.1 [127.0.0.1] port 56781.
+debug1: fd 3 clearing O_NONBLOCK
+debug1: Connection established.
+debug1: identity file /Users/alice/.ssh/good type 3
+debug1: identity file /Users/alice/.ssh/good-cert type -1
+debug1: Local version string SSH-2.0-OpenSSH_9.9
+debug1: kex_exchange_identification: banner line 0: HTTP/1.1 400 Bad Request
+debug1: kex_exchange_identification: banner line 1: 
+kex_exchange_identification: Connection closed by remote host
+Connection closed by 127.0.0.1 port 56781

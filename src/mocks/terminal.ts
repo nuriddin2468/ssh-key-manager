@@ -19,6 +19,7 @@ import type { SignIn } from '@/bindings/SignIn';
 import type { TerminalEvent } from '@/bindings/TerminalEvent';
 import type { TerminalInfo } from '@/bindings/TerminalInfo';
 import type { VaultStatus } from '@/bindings/VaultStatus';
+import { sampleFailure, sessionDiagnosis } from './diagnose';
 import { recordSession } from './history';
 import { vaultHandlers } from './vault';
 
@@ -35,6 +36,8 @@ interface Session {
   ended: boolean;
   /** Answers to "save" once signed in. */
   saves: ('password' | 'passphrase')[];
+  /** A local shell's variables (`openLocalShell`); `env` lists them. */
+  vars?: [string, string][];
 }
 
 const sessions = new Map<number, Session>();
@@ -52,10 +55,13 @@ function setState(session: Session, state: SessionState) {
   if (session.ended) return;
   session.info.phase = state.phase;
   const { alias, startedAt } = session.info;
-  if (state.phase === 'connected') recordSession(alias, startedAt, { signedIn: true });
-  if (state.phase === 'failed') recordSession(alias, startedAt, { failed: state.failure.reason });
-  if (state.phase === 'ended') {
-    recordSession(alias, startedAt, { durationSecs: state.durationSecs });
+  // A local shell stays out of the connection history.
+  if (!session.vars) {
+    if (state.phase === 'connected') recordSession(alias, startedAt, { signedIn: true });
+    if (state.phase === 'failed') recordSession(alias, startedAt, { failed: state.failure.reason });
+    if (state.phase === 'ended') {
+      recordSession(alias, startedAt, { durationSecs: state.durationSecs });
+    }
   }
   if (state.phase === 'ended' || state.phase === 'failed') {
     session.ended = true;
@@ -91,13 +97,23 @@ function fail(session: Session, reason: FailReason, output: string, saved = fals
   write(session, output.replace(/\n/g, '\r\n'));
   setState(session, {
     phase: 'failed',
-    failure: { reason, saved, exitCode: 255, output },
+    failure: {
+      reason,
+      saved,
+      exitCode: 255,
+      output,
+      diagnosis: sessionDiagnosis(session.info.alias, output),
+    },
   });
 }
 
 const RESET = '\x1b[0m';
 
 function prompt(session: Session) {
+  if (session.vars) {
+    write(session, `\x1b[1;32mdev@macbook${RESET}:\x1b[1;34m~/Projects${RESET}$ `);
+    return;
+  }
   const user = session.info.user ?? 'dev';
   write(session, `\x1b[1;32m${user}@${session.info.alias}${RESET}:\x1b[1;34m~${RESET}$ `);
 }
@@ -265,7 +281,12 @@ async function run(session: Session, askPassword: boolean) {
         );
       }
       return;
-    default:
+    default: {
+      const sample = sampleFailure(session.info.alias);
+      if (sample) {
+        fail(session, sample.reason, `${sample.output}\n`);
+        return;
+      }
       connect(session, {
         password: 'vault',
         oneTimeCode: 'vault',
@@ -273,6 +294,7 @@ async function run(session: Session, askPassword: boolean) {
         passphrase: null,
       });
       banner(session);
+    }
   }
 }
 
@@ -288,11 +310,17 @@ function command(session: Session, line: string) {
     case 'exit':
     case 'logout':
       out('logout');
-      out(`Connection to ${session.info.host ?? session.info.alias} closed.`);
+      if (!session.vars) out(`Connection to ${session.info.host ?? session.info.alias} closed.`);
       end(session, 0);
       return;
     case 'whoami':
       out(user);
+      break;
+    case 'env':
+    case 'printenv':
+      for (const [key, value] of session.vars ?? [['SHELL', '/bin/bash']]) {
+        out(`${key}=${value.replace(/\n/g, '\r\n')}`);
+      }
       break;
     case 'ls':
       out('\x1b[1;34mapp\x1b[0m  deploy.sh  \x1b[1;34mlogs\x1b[0m  README.md');
@@ -390,4 +418,44 @@ export function terminalHandlers(hosts: () => HostEntry[]): Record<string, Handl
     terminal_list: () => [...sessions.values()].map((session) => ({ ...session.info })),
     terminal_open_external: () => undefined,
   };
+}
+
+/**
+ * A local shell with a secret environment's variables, for `envs_run`
+ * (mocks/envs.ts): it starts connected, `env` lists the variables, and it
+ * stays out of the connection history.
+ */
+export function openLocalShell(label: string, vars: [string, string][], emit: Emit): TerminalInfo {
+  nextId += 1;
+  const session: Session = {
+    info: {
+      id: nextId,
+      alias: label,
+      user: null,
+      host: null,
+      proxyJump: null,
+      startedAt: new Date().toISOString(),
+      phase: 'connected',
+    },
+    emit,
+    waiting: null,
+    line: '',
+    connectedAt: Date.now(),
+    ended: false,
+    saves: [],
+    vars,
+  };
+  sessions.set(session.info.id, session);
+  setTimeout(() => {
+    setState(session, {
+      phase: 'connected',
+      signIn: { password: null, oneTimeCode: null, key: null, passphrase: null },
+    });
+    write(
+      session,
+      `\x1b[2m${vars.length} variables of ${label} are set in this shell.${RESET}\r\n`,
+    );
+    prompt(session);
+  }, 50);
+  return { ...session.info };
 }

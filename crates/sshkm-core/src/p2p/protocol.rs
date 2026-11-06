@@ -204,6 +204,24 @@ pub enum Item {
     /// The sender's public key as one OpenSSH line, and the name of its file
     /// there (without `.pub`).
     PublicKey { name: String, key: String },
+    /// A secret environment from the vault, with its variables' values. The
+    /// receiver adds it as a new environment.
+    Environment {
+        project: String,
+        name: String,
+        notes: String,
+        variables: Vec<EnvVariable>,
+    },
+}
+
+/// One variable of an [`Item::Environment`].
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvVariable {
+    pub name: String,
+    pub value: String,
+    pub secret: bool,
+    pub note: String,
 }
 
 /// One entry of a hosts file group. A comment does not go over.
@@ -274,6 +292,16 @@ pub enum ItemSummary {
         fingerprint: String,
         comment: String,
     },
+    #[serde(rename_all = "camelCase")]
+    Environment {
+        project: String,
+        name: String,
+        /// How many variables it has, and how many of them are secret.
+        variables: u32,
+        secrets: u32,
+        /// The first few variables' names.
+        names: Vec<String>,
+    },
 }
 
 /// Most host keys one host may bring.
@@ -290,6 +318,9 @@ const MAX_GROUP_BYTES: usize = 256 * 1024;
 const MAX_GROUP_NAME: usize = 64;
 /// How many entries a group's summary names.
 const SUMMARY_NAMES: usize = 3;
+/// Most bytes of names, values and notes one environment may bring, so its
+/// message stays under [`MAX_MESSAGE`] even with every character escaped.
+const MAX_ENVIRONMENT_BYTES: usize = 384 * 1024;
 
 impl Item {
     pub fn summary(&self) -> ItemSummary {
@@ -364,6 +395,22 @@ impl Item {
                         .unwrap_or_default(),
                 }
             }
+            Self::Environment {
+                project,
+                name,
+                variables,
+                ..
+            } => ItemSummary::Environment {
+                project: project.clone(),
+                name: name.clone(),
+                variables: count(variables.len()),
+                secrets: count(variables.iter().filter(|var| var.secret).count()),
+                names: variables
+                    .iter()
+                    .take(SUMMARY_NAMES)
+                    .map(|var| var.name.clone())
+                    .collect(),
+            },
         }
     }
 
@@ -436,8 +483,57 @@ impl Item {
             }
             Self::HostsGroup { name, entries } => check_group(name, entries),
             Self::PublicKey { name, key } => check_public_key(name, key),
+            Self::Environment {
+                project,
+                name,
+                notes,
+                variables,
+            } => check_environment(project, name, notes, variables),
         }
     }
+}
+
+/// See [`Item::check`]: names a project, an environment and a variable may
+/// have, values without control characters other than line breaks and tabs,
+/// and a size that fits one message.
+fn check_environment(
+    project: &str,
+    name: &str,
+    notes: &str,
+    variables: &[EnvVariable],
+) -> Result<()> {
+    for label in [project, name] {
+        if label.trim().is_empty() || label.chars().count() > MAX_NAME || label.contains('/') {
+            return Err(Error::invalid(format!("not a name: {label:?}")));
+        }
+        text(label, false)?;
+    }
+    text(notes, true)?;
+    if variables.len() > crate::vault::envs::MAX_VARIABLES {
+        return Err(Error::invalid("too many variables"));
+    }
+    let mut bytes = project.len() + name.len() + notes.len();
+    for (index, var) in variables.iter().enumerate() {
+        if !crate::vault::envs::is_valid_name(&var.name) {
+            return Err(Error::invalid(format!(
+                "not a variable name: {:?}",
+                var.name
+            )));
+        }
+        if variables[..index]
+            .iter()
+            .any(|other| other.name == var.name)
+        {
+            return Err(Error::invalid(format!("{} comes twice", var.name)));
+        }
+        text(&var.value, true)?;
+        text(&var.note, false)?;
+        bytes += var.name.len() + var.value.len() + var.note.len();
+    }
+    if bytes > MAX_ENVIRONMENT_BYTES {
+        return Err(Error::invalid("the environment is too large"));
+    }
+    Ok(())
 }
 
 /// See [`Item::check`].
@@ -870,6 +966,80 @@ mod tests {
             &key.replacen("ssh-ed25519", "ssh-ed25519-cert-v01@openssh.com", 1)
         ));
         assert!(with("id", "-----BEGIN OPENSSH PRIVATE KEY-----"));
+    }
+
+    fn environment() -> Item {
+        let var = |name: &str, value: &str, secret: bool| EnvVariable {
+            name: name.into(),
+            value: value.into(),
+            secret,
+            note: String::new(),
+        };
+        Item::Environment {
+            project: "shop".into(),
+            name: "prod".into(),
+            notes: "eu".into(),
+            variables: vec![
+                var("PORT", "80", false),
+                var("API_KEY", "s3cret", true),
+                var("CERT", "line 1\nline 2", true),
+                var("EMPTY", "", false),
+            ],
+        }
+    }
+
+    #[test]
+    fn environments_are_summarised_without_values() {
+        let item = environment();
+        assert_eq!(
+            item.summary(),
+            ItemSummary::Environment {
+                project: "shop".into(),
+                name: "prod".into(),
+                variables: 4,
+                secrets: 2,
+                names: vec!["PORT".into(), "API_KEY".into(), "CERT".into()],
+            }
+        );
+        assert!(!format!("{item:?}").contains("s3cret"));
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(json.starts_with(r#"{"type":"environment","project":"shop""#));
+        assert_eq!(serde_json::from_str::<Item>(&json).unwrap(), item);
+    }
+
+    #[test]
+    fn checks_environments() {
+        assert!(environment().check().is_ok());
+        let with = |change: &dyn Fn(&mut String, &mut Vec<EnvVariable>)| {
+            let mut item = environment();
+            if let Item::Environment {
+                name, variables, ..
+            } = &mut item
+            {
+                change(name, variables);
+            }
+            item.check().is_err()
+        };
+        assert!(with(&|name, _| name.clear()));
+        assert!(with(&|name, _| *name = "a/b".into()));
+        assert!(with(&|name, _| *name = "a\nb".into()));
+        assert!(with(&|_, vars| vars[0].name = "$(x)".into()));
+        assert!(with(&|_, vars| vars[1].name = "PORT".into()));
+        assert!(with(&|_, vars| vars[0].value = "a\u{1b}[2J".into()));
+        assert!(with(&|_, vars| vars[0].note = "two\nlines".into()));
+        assert!(with(&|_, vars| {
+            for (index, var) in vars.iter_mut().enumerate() {
+                var.value = "x".repeat(60 * 1024);
+                var.name = format!("V{index}");
+            }
+            let more = vars[0].clone();
+            for index in 0..4 {
+                vars.push(EnvVariable {
+                    name: format!("W{index}"),
+                    ..more.clone()
+                });
+            }
+        }));
     }
 
     #[test]

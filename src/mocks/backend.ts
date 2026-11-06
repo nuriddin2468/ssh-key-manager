@@ -16,13 +16,22 @@ import type { KeysView } from '@/bindings/KeysView';
 import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostEntry } from '@/bindings/KnownHostEntry';
 import type { PermissionFix } from '@/bindings/PermissionFix';
+import type { VaultAudit } from '@/bindings/VaultAudit';
+import { auditChecksHandlers, configSettingsFindings } from './auditChecks';
 import { backgroundHandlers } from './background';
 import { browserHandlers } from './browser';
+import { diagnosed, diagnoseHandlers, diagnoseHostSpecs } from './diagnose';
+import { envsHandlers } from './envs';
 import { historyHandlers, recordCheck } from './history';
 import { hostsFileFindings, hostsFileHandlers } from './hostsFile';
 import { nearbyHandlers } from './nearby';
+import { paletteHandlers } from './palette';
+import { ROTATION_HOSTS, rotationHandlers } from './rotation';
 import { serverKeysHandlers } from './serverKeys';
+import { shellHistoryHandlers } from './shellHistory';
+import { sshToolsHandlers } from './sshTools';
 import { terminalHandlers } from './terminal';
+import { toolsNetHandlers } from './toolsNet';
 import { vaultHandlers, vaultKeyTest } from './vault';
 import { vaultFilesHandlers } from './vaultFiles';
 import { vaultLinkHandlers } from './vaultLinks';
@@ -136,6 +145,7 @@ let hostSpecs: { patterns: string[]; options: HostOption[] }[] = [
       opt('User', 'deploy'),
       opt('Port', '2222'),
       opt('IdentityFile', '~/.ssh/id_ed25519_work'),
+      opt('ForwardAgent', 'yes'),
     ],
   },
   {
@@ -174,9 +184,16 @@ let hostSpecs: { patterns: string[]; options: HostOption[] }[] = [
       opt('HostName', 'vpn.example.org'),
       opt('User', 'root'),
       opt('IdentityFile', '~/.ssh/vpn_key'),
+      opt('StrictHostKeyChecking', 'no'),
+      opt('UserKnownHostsFile', '/dev/null'),
     ],
   },
-  { patterns: ['*'], options: [opt('AddKeysToAgent', 'yes'), opt('UseKeychain', 'yes')] },
+  ...diagnoseHostSpecs,
+  ...ROTATION_HOSTS,
+  {
+    patterns: ['*'],
+    options: [opt('AddKeysToAgent', 'yes'), opt('UseKeychain', 'yes'), opt('ForwardAgent', 'yes')],
+  },
 ];
 
 let known: KnownHostEntry[] = [
@@ -351,6 +368,7 @@ function audit(): AuditReport {
     });
   }
   findings.push(...hostsFileFindings());
+  findings.push(...configSettingsFindings(hostSpecs, agentLoaded.size, `${DIR}/config`));
   const order = { critical: 0, warning: 1, info: 2 };
   findings.sort((a, b) => order[a.severity] - order[b.severity]);
   const count = (s: Finding['severity']) => findings.filter((f) => f.severity === s).length;
@@ -486,7 +504,7 @@ function withHistory(check: (args: Record<string, unknown>) => unknown) {
       }
       return result;
     };
-    const result = check(args);
+    const result = diagnosed(String(args.alias), check(args));
     return result instanceof Promise ? result.then(recorded) : recorded(result);
   };
 }
@@ -495,17 +513,49 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   ...vaultHandlers,
   ...vaultLinkHandlers({ keys: () => keys, hosts, agent: agentLoaded }),
   ...vaultFilesHandlers,
+  ...envsHandlers,
   ...browserHandlers,
   ...backgroundHandlers,
+  ...paletteHandlers({ hosts, entries: () => vaultHandlers.vault_entries?.({}) }),
   ...terminalHandlers(hosts),
+  ...sshToolsHandlers({
+    hosts,
+    config: configFile,
+    revision: () => revisionOf(hostSpecs),
+    setOptions: (id, options) => {
+      const spec = hostSpecs[id];
+      if (spec) hostSpecs[id] = { ...spec, options };
+    },
+    keys: () => keysView().keys,
+    addKey: (partial) => {
+      keys.push(key({ ...partial, modified: new Date().toISOString() }));
+      return keysView().keys.find((k) => k.name === partial.name) as KeyView;
+    },
+  }),
   ...nearbyHandlers,
+  ...shellHistoryHandlers(hosts),
   ...historyHandlers,
+  ...auditChecksHandlers({
+    specs: () => hostSpecs,
+    configFile,
+    vaultAudit: async () =>
+      (await vaultLinkHandlers({ keys: () => keys, hosts, agent: agentLoaded }).run_vault_audit?.(
+        {},
+      )) as VaultAudit,
+  }),
   ...serverKeysHandlers({
     keys: () => keys,
     batchLogin: keyTest,
     vaultLogin: (alias) => vaultTest({ alias }) as ReturnType<typeof keyTest>,
   }),
+  // The key rotation's demo servers; every other host as above.
+  ...rotationHandlers({
+    keys: () => keysView().keys,
+    batchLogin: keyTest,
+    vaultLogin: (alias) => vaultTest({ alias }) as ReturnType<typeof keyTest>,
+  }),
   vault_test_connection: withHistory(vaultTest),
+  ...diagnoseHandlers,
   get_environment: (): Environment => ({
     paths: { home: HOME, dir: DIR, config: `${DIR}/config`, knownHosts: `${DIR}/known_hosts` },
     platform: 'macos',
@@ -655,6 +705,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     return { status: saved.length ? 'match' : 'unknown', offered, saved, error: null };
   },
   ...hostsFileHandlers,
+  ...toolsNetHandlers,
   run_audit: audit,
   fix_permissions: ({ items }) => {
     for (const item of items as PermissionFix[]) {

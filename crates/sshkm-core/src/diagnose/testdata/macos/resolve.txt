@@ -1,0 +1,4 @@
+OpenSSH_9.9p2, LibreSSL 3.3.6
+debug1: Reading configuration data /dev/null
+debug1: Authenticator provider $SSH_SK_PROVIDER did not resolve; disabling
+ssh: Could not resolve hostname nope.invalid: nodename nor servname provided, or not known

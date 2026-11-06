@@ -4,11 +4,11 @@ use std::time::Duration;
 
 use sshkm_core::config::{HostEdit, Risk, RiskyDirective, SshConfig, validate_text};
 use sshkm_core::paths::display_path;
-use sshkm_core::{ErrorCode, SecretString, fsutil, keys};
+use sshkm_core::{ErrorCode, SecretString, diagnose, fsutil, keys};
 use tauri::{AppHandle, State};
 
 use super::keys::{find_key, private_path};
-use super::remote::{check_alias, combined, run_ssh, with_timeout_note};
+use super::remote::{SshRun, check_alias, combined, run_ssh, with_timeout_note};
 use super::{Shared, blocking};
 use crate::askpass::Secrets;
 use crate::confirm::{self, Localized};
@@ -22,11 +22,10 @@ const SHOWN_DIRECTIVES: usize = 8;
 /// Characters of a value shown in the confirmation; the rest are counted.
 const SHOWN_CHARS: usize = 300;
 
-/// `ssh` prints a server's pre-login banner and keyboard-interactive
-/// instructions only at log level `INFO` and above, so the output a test
-/// shows holds what the server printed after sign-in. Errors (`Permission
-/// denied`, `Host key verification failed`, …) are still printed.
-const NO_BANNER: &[&str] = &["-o", "LogLevel=ERROR"];
+/// A test runs `ssh -v`, so a failure can say which keys were offered (see
+/// [`diagnose`]). The output it shows leaves out what `-v` adds, the
+/// server's pre-login banner among it (see [`diagnose::readable`]).
+const CHECK: &[&str] = &[super::diagnose::VERBOSE];
 
 #[tauri::command]
 pub async fn read_config(state: State<'_, Shared>) -> AppResult<ConfigFile> {
@@ -195,16 +194,23 @@ pub fn connection_test(
 ) -> AppResult<ConnectionTest> {
     check_alias(alias)?;
     let timeout = Duration::from_secs(if secrets.is_empty() { 20 } else { 30 });
-    let run = run_ssh(state, alias, NO_BANNER, &["exit"], secrets, None, timeout)?;
-    let text = combined(&run.output);
-    let checked = ConnectionTest {
-        ok: signed_in(run.output.code),
-        output: with_timeout_note(text, &run.output),
-        prompts: run.prompts,
-    };
+    let run = run_ssh(state, alias, CHECK, &["exit"], secrets, None, timeout)?;
+    let checked = checked(alias, &run, signed_in(run.output.code));
     // The check ran either way; a history that cannot be written only misses it.
     let _ = state.history.record_check(alias, &checked);
     Ok(checked)
+}
+
+/// A check's result from its run of `ssh -v`: what the user reads, and why
+/// it failed if it did.
+pub fn checked(alias: &str, run: &SshRun, ok: bool) -> ConnectionTest {
+    let text = combined(&run.output);
+    ConnectionTest {
+        ok,
+        output: with_timeout_note(diagnose::readable(&text), &run.output),
+        prompts: run.prompts.clone(),
+        diagnosis: (!ok).then(|| super::diagnose::diagnosis(alias, &text, run.output.timed_out)),
+    }
 }
 
 /// What became of each host's checks and in-app terminal sessions, newest
@@ -240,7 +246,7 @@ pub fn config_file(state: &AppState) -> AppResult<ConfigFile> {
 
 /// The config file, if it is still at `revision`; fails with `conflict`
 /// otherwise.
-fn load_at(state: &AppState, revision: &str) -> AppResult<SshConfig> {
+pub(crate) fn load_at(state: &AppState, revision: &str) -> AppResult<SshConfig> {
     let config = SshConfig::load(&state.paths.config)?;
     fsutil::ensure_revision(&state.paths.config, &config.revision(), revision)?;
     Ok(config)
@@ -590,7 +596,7 @@ mod tests {
 
     #[test]
     fn connection_test_trusts_the_exit_code_only() {
-        assert_eq!(NO_BANNER, ["-o", "LogLevel=ERROR"]);
+        assert_eq!(CHECK, ["-v"]);
         assert!(signed_in(Some(0)));
         // GitHub: "successfully authenticated, but … no shell access".
         assert!(signed_in(Some(1)));

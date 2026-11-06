@@ -1,0 +1,6 @@
+{
+  "kind": "notice",
+  "en": "From this version, ⇧⌘Space (Ctrl+Shift+Space on Windows and Linux) opens quick search from any app. If another app of yours uses it, change or turn it off in Settings → Quick search.",
+  "ru": "С этой версии ⇧⌘Space (Ctrl+Shift+Space на Windows и Linux) открывает быстрый поиск из любого приложения. Если это сочетание нужно другой программе, измените или выключите его в Настройки → Быстрый поиск.",
+  "uz": "Shu versiyadan boshlab ⇧⌘Space (Windows va Linux’da Ctrl+Shift+Space) istalgan ilovadan tezkor qidiruvni ochadi. Bu birikma boshqa dasturingizga kerak boʻlsa, uni Sozlamalar → Tezkor qidiruvda oʻzgartiring yoki oʻchiring."
+}

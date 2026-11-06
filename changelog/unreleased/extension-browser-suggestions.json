@@ -1,0 +1,6 @@
+{
+  "kind": "new",
+  "en": "Browser extension: a switch in its popup turns off the browser’s own offers to save passwords and its form suggestions, so only SSH Key Manager shows under login fields.",
+  "ru": "Расширение браузера: переключатель в его окне выключает собственные предложения браузера сохранить пароль и подсказки в формах, чтобы под полями входа был только SSH Key Manager.",
+  "uz": "Brauzer kengaytmasi: uning oynasidagi tugma brauzerning parolni saqlash takliflari va shakl maslahatlarini oʻchiradi, shunda kirish maydonlari ostida faqat SSH Key Manager qoladi."
+}

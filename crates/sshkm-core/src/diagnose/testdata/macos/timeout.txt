@@ -1,0 +1,6 @@
+OpenSSH_9.9p2, LibreSSL 3.3.6
+debug1: Reading configuration data /dev/null
+debug1: Authenticator provider $SSH_SK_PROVIDER did not resolve; disabling
+debug1: Connecting to 10.255.255.1 [10.255.255.1] port 22.
+debug1: connect to address 10.255.255.1 port 22: Operation timed out
+ssh: connect to host 10.255.255.1 port 22: Operation timed out

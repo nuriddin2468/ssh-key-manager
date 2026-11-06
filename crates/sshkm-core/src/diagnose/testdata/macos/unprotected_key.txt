@@ -1,0 +1,52 @@
+OpenSSH_9.9p2, LibreSSL 3.3.6
+debug1: Reading configuration data /dev/null
+debug1: Authenticator provider $SSH_SK_PROVIDER did not resolve; disabling
+debug1: Connecting to 127.0.0.1 [127.0.0.1] port 56690.
+debug1: fd 3 clearing O_NONBLOCK
+debug1: Connection established.
+debug1: identity file /Users/alice/.ssh/badperm type 3
+debug1: identity file /Users/alice/.ssh/badperm-cert type -1
+debug1: Local version string SSH-2.0-OpenSSH_9.9
+debug1: Remote protocol version 2.0, remote software version OpenSSH_9.9
+debug1: compat_banner: match: OpenSSH_9.9 pat OpenSSH* compat 0x04000000
+debug1: Authenticating to 127.0.0.1:56690 as 'alice'
+debug1: SSH2_MSG_KEXINIT sent
+debug1: SSH2_MSG_KEXINIT received
+debug1: kex: algorithm: sntrup761x25519-sha512
+debug1: kex: host key algorithm: ssh-ed25519
+debug1: kex: server->client cipher: chacha20-poly1305@openssh.com MAC: <implicit> compression: none
+debug1: kex: client->server cipher: chacha20-poly1305@openssh.com MAC: <implicit> compression: none
+debug1: expecting SSH2_MSG_KEX_ECDH_REPLY
+debug1: SSH2_MSG_KEX_ECDH_REPLY received
+debug1: Server host key: ssh-ed25519 SHA256:LEfeRJzBJFyPZhmBm/WtlM18LQP2wnqvxSp1itp9BIM
+debug1: Host '[127.0.0.1]:56690' is known and matches the ED25519 host key.
+debug1: Found key in /Users/alice/.ssh/known_hosts:1
+debug1: ssh_packet_send2_wrapped: resetting send seqnr 3
+debug1: rekey out after 134217728 blocks
+debug1: SSH2_MSG_NEWKEYS sent
+debug1: Sending SSH2_MSG_EXT_INFO
+debug1: expecting SSH2_MSG_NEWKEYS
+debug1: ssh_packet_read_poll2: resetting read seqnr 3
+debug1: SSH2_MSG_NEWKEYS received
+debug1: rekey in after 134217728 blocks
+debug1: SSH2_MSG_EXT_INFO received
+debug1: kex_ext_info_client_parse: server-sig-algs=<ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,sk-ssh-ed25519@openssh.com,sk-ecdsa-sha2-nistp256@openssh.com,rsa-sha2-512,rsa-sha2-256>
+debug1: kex_ext_info_check_ver: publickey-hostbound@openssh.com=<0>
+debug1: kex_ext_info_check_ver: ping@openssh.com=<0>
+debug1: SSH2_MSG_SERVICE_ACCEPT received
+debug1: SSH2_MSG_EXT_INFO received
+debug1: kex_ext_info_client_parse: server-sig-algs=<ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,sk-ssh-ed25519@openssh.com,sk-ecdsa-sha2-nistp256@openssh.com,rsa-sha2-512,rsa-sha2-256>
+debug1: Authentications that can continue: publickey
+debug1: Next authentication method: publickey
+debug1: Will attempt key: /Users/alice/.ssh/badperm ED25519 SHA256:y6Kk3Z4iG7Vn39b5vYmfYnAC2/082aejhyOCDEMoAUY explicit
+debug1: Offering public key: /Users/alice/.ssh/badperm ED25519 SHA256:y6Kk3Z4iG7Vn39b5vYmfYnAC2/082aejhyOCDEMoAUY explicit
+debug1: Server accepts key: /Users/alice/.ssh/badperm ED25519 SHA256:y6Kk3Z4iG7Vn39b5vYmfYnAC2/082aejhyOCDEMoAUY explicit
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+@         WARNING: UNPROTECTED PRIVATE KEY FILE!          @
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+Permissions 0644 for '/Users/alice/.ssh/badperm' are too open.
+It is required that your private key files are NOT accessible by others.
+This private key will be ignored.
+Load key "/Users/alice/.ssh/badperm": bad permissions
+debug1: No more authentication methods to try.
+alice@127.0.0.1: Permission denied (publickey).

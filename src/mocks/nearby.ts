@@ -35,6 +35,7 @@ import {
   MOCK_CONTACTS_EVENT,
   MOCK_DEVICES_EVENT,
 } from '@/features/nearby/queries';
+import { envSummary } from './envs';
 import { hostsFileInfo } from './hostsFile';
 import { vaultHandlers } from './vault';
 
@@ -118,6 +119,8 @@ function summary(request: SendRequest): ItemSummary {
         comment: 'dev@macbook-pro',
       };
     }
+    case 'environment':
+      return envSummary(request.envId);
   }
 }
 
@@ -134,6 +137,8 @@ function receivedName(item: ItemSummary, peer: string): string {
       return /^id_[a-z0-9_]+$/.test(item.name)
         ? `${item.name}-${peer.replace(/[^A-Za-z0-9_.]+/g, '-')}`
         : item.name;
+    case 'environment':
+      return `${item.project} / ${item.name}`;
   }
 }
 

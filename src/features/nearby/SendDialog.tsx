@@ -17,13 +17,15 @@ export type Sendable =
   | { type: 'password'; entryId: string; hasOtp: boolean }
   | { type: 'host'; alias: string }
   | { type: 'hostsGroup'; name: string }
-  | { type: 'publicKey'; keyId: string };
+  | { type: 'publicKey'; keyId: string }
+  | { type: 'environment'; envId: string };
 
 const DESCRIPTIONS = {
   password: 'nearby.send.passwordText',
   host: 'nearby.send.hostText',
   hostsGroup: 'nearby.send.groupText',
   publicKey: 'nearby.send.keyText',
+  environment: 'envs.share.sendText',
 } as const satisfies Record<Sendable['type'], string>;
 
 interface SendDialogProps {

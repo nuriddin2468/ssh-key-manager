@@ -103,6 +103,7 @@ Then choose **Russian** in the language menu and fill in:
 | Single purpose description       | [en.md → Single purpose description](en.md#single-purpose-description)                                           |
 | Justification: `nativeMessaging` | [en.md → nativeMessaging](en.md#permission-justification-nativemessaging)                                        |
 | Justification: `storage`         | [en.md → storage](en.md#permission-justification-storage)                                                        |
+| Justification: `privacy`         | [en.md → privacy](en.md#permission-justification-privacy)                                                        |
 | Host permission justification    | [en.md → Host permission justification](en.md#host-permission-justification)                                     |
 | Are you using remote code?       | **No, I am not using remote code** ([why](en.md#remote-code))                                                    |
 | Data usage                       | Tick **Personally identifiable information** and **Authentication information** only ([table](en.md#data-usage)) |

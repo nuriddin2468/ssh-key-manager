@@ -47,6 +47,7 @@ const OFFERED = {
   host: 'nearby.send.offeredHost',
   hostsGroup: 'nearby.send.offeredGroup',
   publicKey: 'nearby.send.offeredKey',
+  environment: 'envs.share.offered',
 } as const satisfies Record<ItemSummary['type'], string>;
 
 /**
@@ -219,7 +220,9 @@ export function PairingDialog() {
                   ? t('nearby.send.receivedHost', { name: phase.name })
                   : phase.item.type === 'publicKey'
                     ? t('nearby.send.receivedKey', { name: phase.name })
-                    : t('nearby.send.receivedPassword', { name: phase.name })}
+                    : phase.item.type === 'environment'
+                      ? t('envs.share.received', { name: phase.name })
+                      : t('nearby.send.receivedPassword', { name: phase.name })}
               </OkBox>
             ) : null}
             {phase.type === 'received' && phase.keysDiffer ? (
@@ -373,7 +376,9 @@ export function PairingDialog() {
                                     key.name === phase.name && key.fingerprint === item.fingerprint,
                                 )?.id,
                               }
-                            : { page: 'passwords' },
+                            : item.type === 'environment'
+                              ? { page: 'envs' }
+                              : { page: 'passwords' },
                       );
                     }}
                   >
@@ -381,7 +386,9 @@ export function PairingDialog() {
                       ? t('nearby.send.openHosts')
                       : phase.item.type === 'publicKey'
                         ? t('nearby.send.openKeys')
-                        : t('nearby.send.openPasswords')}
+                        : phase.item.type === 'environment'
+                          ? t('envs.share.open')
+                          : t('nearby.send.openPasswords')}
                   </Button>
                 ) : null}
                 <Button

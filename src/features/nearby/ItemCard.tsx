@@ -1,4 +1,11 @@
-import { FolderTree, KeyRound, type LucideIcon, RectangleEllipsis, Server } from 'lucide-react';
+import {
+  FolderTree,
+  KeyRound,
+  type LucideIcon,
+  RectangleEllipsis,
+  Server,
+  Variable,
+} from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ItemSummary } from '@/bindings/ItemSummary';
@@ -75,6 +82,22 @@ export function ItemCard({ item }: { item: ItemSummary }) {
           details: item.fingerprint,
           wrapDetails: true,
           badge: item.keyType ? <Badge mono>{keyTypeBadge(item.keyType)}</Badge> : null,
+        };
+      case 'environment':
+        return {
+          tone: 'lime',
+          Icon: Variable,
+          label: t('envs.share.item'),
+          title: `${item.project} / ${item.name}`,
+          monoTitle: false,
+          details: `${item.names.join(', ')}${item.variables > item.names.length ? ', …' : ''}`,
+          badge: (
+            <Badge>
+              {item.secrets > 0
+                ? t('envs.countsWithSecrets', { count: item.variables, secrets: item.secrets })
+                : t('envs.counts', { count: item.variables })}
+            </Badge>
+          ),
         };
     }
   })();

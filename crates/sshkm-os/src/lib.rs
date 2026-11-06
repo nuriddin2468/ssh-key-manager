@@ -12,6 +12,7 @@
 //!   Keychain, Windows Credential Manager, Linux Secret Service).
 //! - `pipe` (Windows): check who serves a named pipe before sending to it.
 //! - [`tray`]: whether the system can show a tray icon at all.
+//! - [`focus`]: give the focus back to the app the user was in.
 //!
 //! Every call that can wait for the user (a biometric prompt, a keychain
 //! access dialog, a locked Secret Service collection) blocks the calling
@@ -26,6 +27,7 @@
 
 pub mod biometrics;
 mod error;
+pub mod focus;
 #[cfg(target_os = "windows")]
 pub mod pipe;
 pub mod screen_lock;

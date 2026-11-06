@@ -1,0 +1,3 @@
+ssh: connect to host bastion.example.net port 22: Connection timed out
+kex_exchange_identification: Connection closed by remote host
+Connection closed by UNKNOWN port 65535

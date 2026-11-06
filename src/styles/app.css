@@ -221,6 +221,15 @@
   --glow-a: rgb(219 39 119 / 0.22);
   --glow-b: rgb(124 58 237 / 0.08);
 }
+[data-section="envs"] {
+  --accent-1: #d9f99d;
+  --accent-2: #84cc16;
+  --accent-ink: #1a2e05;
+  --accent-text: #ecfccb;
+  --accent-rgb: 163 230 53;
+  --glow-a: rgb(101 163 13 / 0.22);
+  --glow-b: rgb(37 99 235 / 0.08);
+}
 [data-section="terminal"] {
   --accent-1: #86efac;
   --accent-2: #22c55e;
@@ -237,6 +246,15 @@
   --accent-text: #fed7aa;
   --accent-rgb: 251 146 60;
   --glow-a: rgb(234 88 12 / 0.22);
+  --glow-b: rgb(124 58 237 / 0.08);
+}
+[data-section="tools"] {
+  --accent-1: #67e8f9;
+  --accent-2: #06b6d4;
+  --accent-ink: #042f37;
+  --accent-text: #a5f3fc;
+  --accent-rgb: 34 211 238;
+  --glow-a: rgb(8 145 178 / 0.22);
   --glow-b: rgb(124 58 237 / 0.08);
 }
 [data-section="settings"] {

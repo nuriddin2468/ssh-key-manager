@@ -14,6 +14,7 @@ import {
   type FormEvent,
   type ReactNode,
   useCallback,
+  useEffect,
   useId,
   useMemo,
   useRef,
@@ -36,6 +37,10 @@ import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '@/compo
 import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
 import { Tooltip } from '@/components/ui/Tooltip';
+import { legacyOption } from '@/features/diagnose/model';
+import { takeHostFix } from '@/features/diagnose/pending';
+import { useHostFacts } from '@/features/diagnose/useHostFacts';
+import type { DiagnoseFixes } from '@/features/diagnose/WhyItFailed';
 import { HostResolution } from '@/features/hostsFile/HostResolution';
 import { CheckHostKeyDialog } from '@/features/known/CheckHostKeyDialog';
 import type { KnownHostsRemoval } from '@/features/known/removal';
@@ -63,6 +68,7 @@ import {
   isConcrete,
   METHOD_LABEL,
   optionProblem,
+  optionRow,
   previewLines,
   sameEdit,
   suppressedOption,
@@ -295,6 +301,53 @@ export function HostEditor({ host, hosts, onClose }: HostEditorProps) {
       ? { editPassword: () => openPassword('edit'), addOtp: () => openPassword('otp') }
       : {}),
   };
+  // "Why it failed": fixes that open a dialog here, or change the form for
+  // the user to review in the preview and save.
+  const server = useRef<HTMLDivElement>(null);
+  const hostFacts = useHostFacts(host, form.identityFile);
+  const factsKey = hostFacts.key;
+  const reveal = (element: HTMLElement | null | undefined) => {
+    element?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    element?.focus({ preventScroll: true });
+  };
+  const diagnoseFixes: DiagnoseFixes = {
+    checkHostKey: () => openHostKey(true),
+    ...(saved
+      ? {
+          installKey: () =>
+            openSwitch({ alias, entryId: saved.id, keyPath: form.identityFile.trim() }),
+        }
+      : {}),
+    ...(withVault ? { editPassword: () => openPassword('edit') } : {}),
+    ...(factsKey
+      ? { addToAgent: () => dialogs.unlockKey(factsKey, undefined, () => void check.checkNow()) }
+      : {}),
+    chooseKey: () =>
+      reveal(
+        signIn.current?.querySelector<HTMLElement>('[data-card=key] button') ??
+          signIn.current?.querySelector<HTMLElement>('[role=radio][data-state=checked]'),
+      ),
+    openHost: () => reveal(server.current?.querySelectorAll<HTMLElement>('input')[1]),
+    identitiesOnly: () => {
+      setForm((f) => ({ ...f, identitiesOnly: true }));
+      toast.info(t('diagnose.identitiesOnlySet'));
+    },
+    allowLegacy: (diagnosis) => {
+      const option = legacyOption(diagnosis);
+      if (!option) return;
+      const same = (key: string) => key.toLowerCase() === option.key.toLowerCase();
+      setForm((f) => ({
+        ...f,
+        other: [...f.other.filter((o) => !same(o.key)), optionRow(option.key, option.value)],
+      }));
+      toast.info(t('diagnose.legacyAdded', { option: `${option.key} ${option.value}` }));
+    },
+  };
+  // A fix asked for in the terminal runs once the editor can make it.
+  useEffect(() => {
+    const pending = takeHostFix(hostAliases(host), (fix) => Boolean(diagnoseFixes[fix]));
+    if (pending) diagnoseFixes[pending.fix]?.(pending.diagnosis);
+  });
   // Connect and Check run the saved block, and need ssh.
   const runReason = sshMissing
     ? t('hosts.editor.noSsh')
@@ -470,6 +523,11 @@ export function HostEditor({ host, hosts, onClose }: HostEditorProps) {
             okTitle={okTitle}
             vaultLocked={vault.vault === 'locked'}
             onAction={{ ...fixes, ...unlockFix(test.run) }}
+            diagnose={{
+              facts: hostFacts.facts,
+              onFix: diagnoseFixes,
+              publicKey: hostFacts.key?.publicKey ?? undefined,
+            }}
             onClose={() => {
               check.clearResult();
               header.current
@@ -490,13 +548,15 @@ export function HostEditor({ host, hosts, onClose }: HostEditorProps) {
         ) : (
           <div className="flex min-w-0 flex-[999_1_400px] flex-col gap-[18px]">
             <Section legend={t('hosts.editor.server')}>
-              <ServerFields
-                form={form}
-                set={set}
-                errors={dirty ? errors : { port: errors.port }}
-                // Patterns say how to write more of them.
-                aliasHint={concrete ? t('hosts.editor.aliasHint') : t('hosts.aliasHint')}
-              />
+              <div ref={server} className="contents">
+                <ServerFields
+                  form={form}
+                  set={set}
+                  errors={dirty ? errors : { port: errors.port }}
+                  // Patterns say how to write more of them.
+                  aliasHint={concrete ? t('hosts.editor.aliasHint') : t('hosts.aliasHint')}
+                />
+              </div>
             </Section>
 
             <HostResolution form={form} />

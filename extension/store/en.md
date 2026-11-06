@@ -98,7 +98,15 @@ The extension talks to the SSH Key Manager desktop app on the user's computer, w
 ### Permission justification: storage
 
 ```text
-After the user sends a login form, the username and password wait in chrome.storage.session (memory only, never written to disk) until the user answers the "Save login for <site>?" banner, which may appear on the next page. They are removed when the user answers, closes the tab or quits the browser, and are offered for three minutes at most. The extension uses no local or sync storage.
+After the user sends a login form, the username and password wait in chrome.storage.session (memory only, never written to disk) until the user answers the "Save login for <site>?" banner, which may appear on the next page. They are removed when the user answers, closes the tab or quits the browser, and are offered for three minutes at most. The username sent with the first step of a two-step sign-in waits there too, for five minutes, to name the password sent on the next page. The extension uses no local or sync storage.
+```
+
+### Permission justification: privacy
+
+The dashboard asks for this because of `optional_permissions`.
+
+```text
+Optional, and asked for only when the user turns off "Browser's own suggestions" in the extension's popup. The extension then sets privacy.services.passwordSavingEnabled and privacy.services.autofillAddressEnabled to false, so the browser's own password offers and suggestions don't cover the extension's menu under login fields. Turning the switch on again clears both settings, which gives them back to the user's own choice. The extension reads and changes no other setting.
 ```
 
 ### Host permission justification

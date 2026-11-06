@@ -34,6 +34,8 @@ interface TerminalsValue {
   setActive: (key: string) => void;
   /** Opens a session to `alias` in a new tab and shows it. */
   open: (alias: string, options?: OpenOptions) => void;
+  /** Opens a local shell with the environment's variables in a new tab and shows it. */
+  openEnv: (envId: string, label: string) => void;
   /** Starts the tab's session again, in the same tab. */
   reconnect: (key: string, options?: OpenOptions) => void;
   /** Disconnects (if live) and removes the tab. Ask first for live tabs. */
@@ -145,7 +147,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
   );
 
   const start = useCallback(
-    (key: string, alias: string, options: OpenOptions) => {
+    (key: string, alias: string, options: OpenOptions, env?: string) => {
       const generation = (generations.current.get(key) ?? 0) + 1;
       generations.current.set(key, generation);
       const screen = screens.current.get(key);
@@ -156,8 +158,10 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
           screens.current.get(key)?.write(new Uint8Array(message));
         else onEvent(key, message);
       };
-      api
-        .terminalOpen(alias, size, { askPassword: options.askPassword ?? false }, onMessage)
+      const opening = env
+        ? api.envsRun(env, size, onMessage)
+        : api.terminalOpen(alias, size, { askPassword: options.askPassword ?? false }, onMessage);
+      opening
         .then((info) => {
           if (generations.current.get(key) !== generation) {
             void api.terminalClose(info.id);
@@ -177,7 +181,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
           const appError = AppError.from(error);
           // The only input `terminal_open` refuses is the alias.
           const detail =
-            appError.code === 'invalid_input'
+            appError.code === 'invalid_input' && !env
               ? t('terminal.failed.aliasRefused', { alias })
               : appError.code === 'not_found' || appError.code === 'unsupported'
                 ? appError.message
@@ -235,6 +239,17 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
     [ensureScreen, start],
   );
 
+  const openEnv = useCallback(
+    (envId: string, label: string) => {
+      const tab = newTab(label, envId);
+      ensureScreen(tab.key);
+      setTabs((list) => [...list, tab]);
+      setActiveKey(tab.key);
+      start(tab.key, label, {}, envId);
+    },
+    [ensureScreen, start],
+  );
+
   const disconnect = useCallback((key: string) => {
     const id = sessions.current.get(key);
     if (id !== undefined) void api.terminalClose(id).catch(() => undefined);
@@ -257,7 +272,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
         banner: null,
         keyChanged: false,
       }));
-      start(key, tab.alias, options);
+      start(key, tab.alias, options, tab.env);
       screens.current.get(key)?.focus();
     },
     [disconnect, start, update],
@@ -301,6 +316,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
       active,
       setActive: setActiveKey,
       open,
+      openEnv,
       reconnect,
       close,
       disconnect,
@@ -318,7 +334,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
       pickerOpen,
       setPickerOpen,
     }),
-    [tabs, active, open, reconnect, close, disconnect, answer, update, recent, pickerOpen],
+    [tabs, active, open, openEnv, reconnect, close, disconnect, answer, update, recent, pickerOpen],
   );
 
   return (

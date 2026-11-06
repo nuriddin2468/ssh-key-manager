@@ -58,7 +58,14 @@ const passwordPrompt: PromptRequest = {
 };
 
 function failure(change: Partial<Failure>): Failure {
-  return { reason: 'other', saved: false, exitCode: 255, output: '', ...change };
+  return {
+    reason: 'other',
+    saved: false,
+    exitCode: 255,
+    output: '',
+    diagnosis: null,
+    ...change,
+  };
 }
 
 describe('tab state', () => {

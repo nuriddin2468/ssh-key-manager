@@ -1,8 +1,12 @@
 import { useMutation } from '@tanstack/react-query';
 import {
+  ArrowLeft,
   Check,
+  ChevronRight,
+  Copy,
   FileSpreadsheet,
   FileUp,
+  Lightbulb,
   Lock,
   ShieldAlert,
   Trash2,
@@ -10,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import { api } from '@/api/commands';
 import { useVaultStatus } from '@/api/queries';
 import { toastError, useAppMutation } from '@/api/useAppMutation';
@@ -20,10 +25,14 @@ import { Button } from '@/components/ui/Button';
 import { CheckboxControl } from '@/components/ui/Checkbox';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
 import { Tile } from '@/components/ui/Tile';
+import { useBrowserStatus } from '@/features/browser/queries';
+import { copyText } from '@/lib/clipboard';
 import { cn } from '@/lib/cn';
 import { AppError } from '@/lib/ipc';
+import { platform } from '@/lib/platform';
 import { Callout } from './Callout';
 import { showFileError } from './errors';
+import { type ImportSource, sourcesFor } from './importSources';
 import { baseName } from './pickers';
 
 export interface ImportDialogProps {
@@ -32,31 +41,45 @@ export interface ImportDialogProps {
 }
 
 type Step =
-  | { kind: 'choose' }
-  | { kind: 'preview'; path: string; preview: ImportPreview; selected: ReadonlySet<number> }
-  | { kind: 'done'; path: string; count: number };
+  | { kind: 'source' }
+  | { kind: 'choose'; source: ImportSource }
+  | {
+      kind: 'preview';
+      source: ImportSource;
+      path: string;
+      preview: ImportPreview;
+      selected: ReadonlySet<number>;
+    }
+  | { kind: 'done'; source: ImportSource; path: string; count: number };
 
 /**
- * Imports a CSV export of another password manager: choose the file (in a
- * system dialog the backend opens, so the page never names a file to read),
- * check the rows (entries already in the vault start unchecked), import, then
- * move the plain-text file to the Trash.
+ * Imports logins from a browser or another password manager: say where they
+ * are now (the browsers on this computer first, any CSV file last), export
+ * them there as the guide says, choose the file (in a system dialog the
+ * backend opens, so the page never names a file to read), check the rows
+ * (entries already in the vault start unchecked), import, then move the
+ * plain-text file to the Trash. After a browser, it says how to stop the
+ * browser offering the same logins.
  */
 export function ImportDialog({ onDone }: ImportDialogProps) {
   const { t } = useTranslation();
   const doneId = useId();
   const status = useVaultStatus();
   const locked = status.data !== undefined && status.data.state !== 'unlocked';
-  const [step, setStep] = useState<Step>({ kind: 'choose' });
+  const [step, setStep] = useState<Step>({ kind: 'source' });
   const [error, setError] = useState<string | null>(null);
+  const installed = new Set(
+    (useBrowserStatus().data?.browsers ?? []).map((browser) => browser.name),
+  );
 
   const preview = useMutation({
-    mutationFn: () => api.vaultImportPreview(),
-    onSuccess: (picked) => {
+    mutationFn: (_source: ImportSource) => api.vaultImportPreview(),
+    onSuccess: (picked, source) => {
       if (!picked) return;
       const { path, preview } = picked;
       setStep({
         kind: 'preview',
+        source,
         path,
         preview,
         selected: new Set(preview.rows.filter((r) => !r.duplicateOf).map((r) => r.index)),
@@ -77,9 +100,11 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
   });
 
   const importRows = useAppMutation(
-    (vars: { path: string; indices: number[] }) => api.vaultImport(vars.indices),
+    (vars: { source: ImportSource; path: string; indices: number[] }) =>
+      api.vaultImport(vars.indices),
     {
-      onSuccess: (count, vars) => setStep({ kind: 'done', path: vars.path, count }),
+      onSuccess: (count, vars) =>
+        setStep({ kind: 'done', source: vars.source, path: vars.path, count }),
       onError: (appError) =>
         showFileError(t, appError, {
           invalid_input: t('vaultFiles.import.changed'),
@@ -93,10 +118,15 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
     onSuccess: onDone,
   });
 
-  const choose = () => {
+  const choose = (source: ImportSource) => {
     setError(null);
-    preview.mutate();
+    preview.mutate(source);
   };
+  const lockedNote = locked ? (
+    <Callout tone="info" icon={Lock}>
+      {t('vaultFiles.import.unlockFirst')}
+    </Callout>
+  ) : null;
 
   return (
     <DialogContent section="passwords" className="max-w-[760px]">
@@ -110,10 +140,31 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
         description={t('vaultFiles.import.description')}
       />
 
+      {step.kind === 'source' ? (
+        <>
+          <DialogBody>
+            <SourceStep
+              sources={sourcesFor(platform, installed)}
+              installed={installed}
+              onPick={(source) => {
+                setError(null);
+                setStep({ kind: 'choose', source });
+              }}
+            />
+            {lockedNote}
+          </DialogBody>
+          <DialogFooter>
+            <Button size="lg" onClick={onDone}>
+              {t('common.cancel')}
+            </Button>
+          </DialogFooter>
+        </>
+      ) : null}
+
       {step.kind === 'choose' ? (
         <>
           <DialogBody>
-            <p className="text-[13px] leading-5 text-fg-2">{t('vaultFiles.import.sources')}</p>
+            <GuideStep source={step.source} />
             <Callout
               tone="warning"
               icon={TriangleAlert}
@@ -121,11 +172,7 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
             >
               {t('vaultFiles.import.plaintext')}
             </Callout>
-            {locked ? (
-              <Callout tone="info" icon={Lock}>
-                {t('vaultFiles.import.unlockFirst')}
-              </Callout>
-            ) : null}
+            {lockedNote}
             {error ? (
               <p role="alert" className="text-[12.5px] text-critical">
                 {error}
@@ -133,6 +180,15 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
             ) : null}
           </DialogBody>
           <DialogFooter>
+            <Button
+              variant="ghost"
+              size="lg"
+              className="mr-auto"
+              icon={<ArrowLeft className="size-4" strokeWidth={2} />}
+              onClick={() => setStep({ kind: 'source' })}
+            >
+              {t('vaultFiles.import.back')}
+            </Button>
             <Button size="lg" onClick={onDone}>
               {t('common.cancel')}
             </Button>
@@ -143,7 +199,7 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
               autoFocus
               loading={preview.isPending}
               disabled={locked}
-              onClick={choose}
+              onClick={() => choose(step.source)}
             >
               {preview.isPending ? t('vaultFiles.import.reading') : t('vaultFiles.import.choose')}
             </Button>
@@ -158,10 +214,11 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
           selected={step.selected}
           onSelect={(selected) => setStep({ ...step, selected })}
           busy={importRows.isPending}
-          onChooseOther={choose}
+          onChooseOther={() => choose(step.source)}
           onCancel={onDone}
           onImport={() =>
             importRows.mutate({
+              source: step.source,
               path: step.path,
               indices: step.preview.rows
                 .map((r) => r.index)
@@ -190,6 +247,15 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
             >
               {t('vaultFiles.import.doneText', { file: baseName(step.path) })}
             </Callout>
+            {step.source.kind === 'browser' && step.source.name ? (
+              <Callout
+                tone="info"
+                icon={Lightbulb}
+                title={t('vaultFiles.import.cleanupTitle', { name: step.source.name })}
+              >
+                {t('vaultFiles.import.cleanupText', { name: step.source.name })}
+              </Callout>
+            ) : null}
           </DialogBody>
           <DialogFooter>
             <Button size="lg" onClick={onDone}>
@@ -416,4 +482,148 @@ function PreviewRow({
 /** `https://github.com/login/` → `github.com/login`. */
 function shortUrl(url: string): string {
   return url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/$/, '');
+}
+
+interface SourceStepProps {
+  sources: ImportSource[];
+  /** Browser names the app found on this computer. */
+  installed: ReadonlySet<string>;
+  onPick: (source: ImportSource) => void;
+}
+
+/** Where the passwords are now: browsers, password managers, then any CSV file. */
+function SourceStep({ sources, installed, onPick }: SourceStepProps) {
+  const { t } = useTranslation();
+  const headingId = useId();
+  const groups = [
+    { kind: 'browser', label: t('vaultFiles.import.fromBrowser') },
+    { kind: 'manager', label: t('vaultFiles.import.fromManager') },
+    { kind: 'file', label: t('vaultFiles.import.fromFile') },
+  ] as const;
+  return (
+    <div className="flex flex-col gap-3.5">
+      <h3 id={headingId} className="text-[14px] font-semibold">
+        {t('vaultFiles.import.whereFrom')}
+      </h3>
+      {groups.map((group) => {
+        const inGroup = sources.filter((source) => source.kind === group.kind);
+        if (inGroup.length === 0) return null;
+        return (
+          <div key={group.kind} className="flex flex-col gap-2">
+            <h4 className="text-[12px] font-semibold tracking-[0.02em] text-subtle">
+              {group.label}
+            </h4>
+            <ul className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-2">
+              {inGroup.map((source) => {
+                const Icon = source.icon;
+                const here = source.installName !== undefined && installed.has(source.installName);
+                const name = source.name ?? t('vaultFiles.import.otherSource');
+                const hint =
+                  source.kind === 'file'
+                    ? t('vaultFiles.import.otherHint')
+                    : here
+                      ? t('vaultFiles.import.onThisComputer')
+                      : undefined;
+                return (
+                  <li key={source.id} className={cn(source.kind === 'file' && 'col-span-full')}>
+                    <button
+                      type="button"
+                      onClick={() => onPick(source)}
+                      className="pressable-soft flex w-full min-w-0 items-center gap-2.5 rounded-[14px] border border-white/[0.09] bg-white/[0.03] p-2.5 text-left hover:bg-white/[0.06]"
+                    >
+                      <Tile tone={source.tone} size={30}>
+                        <Icon className="size-[15px]" strokeWidth={2} />
+                      </Tile>
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span className="truncate font-medium">{name}</span>
+                        {hint ? (
+                          <span
+                            className={cn(
+                              'flex items-center gap-1.5 text-[11.5px] leading-4',
+                              here ? 'text-ok' : 'text-subtle',
+                            )}
+                          >
+                            {here ? (
+                              <span aria-hidden="true" className="size-1.5 rounded-full bg-ok" />
+                            ) : null}
+                            {hint}
+                          </span>
+                        ) : null}
+                      </span>
+                      <ChevronRight
+                        aria-hidden="true"
+                        className="size-4 shrink-0 text-subtle"
+                        strokeWidth={2}
+                      />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** How to get the passwords out of `source`, step by step. */
+function GuideStep({ source }: { source: ImportSource }) {
+  const { t } = useTranslation();
+  const Icon = source.icon;
+  const name = source.name ?? '';
+  const copy = async (address: string) => {
+    try {
+      await copyText(address);
+      toast.success(t('vaultFiles.import.addressCopied'));
+    } catch (cause) {
+      toastError(t, cause);
+    }
+  };
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-3">
+        <Tile tone={source.tone} size={36}>
+          <Icon className="size-[18px]" strokeWidth={2} />
+        </Tile>
+        <div className="flex min-w-0 flex-col">
+          <h3 className="text-[14px] font-semibold">
+            {source.name
+              ? t('vaultFiles.import.guideTitle', { name })
+              : t('vaultFiles.import.guideTitleOther')}
+          </h3>
+          <p className="text-[12.5px] text-muted">{t('vaultFiles.import.guideLead')}</p>
+        </div>
+      </div>
+      <ol className="flex flex-col gap-2.5">
+        {[...source.steps, 'chooseFile' as const].map((step, index) => (
+          <li key={step} className="flex gap-3">
+            <span
+              aria-hidden="true"
+              className="grid size-6 shrink-0 place-items-center rounded-full border border-white/[0.12] bg-white/[0.05] text-[12px] font-semibold text-fg-2 tabular-nums"
+            >
+              {index + 1}
+            </span>
+            <div className="flex min-w-0 flex-1 flex-col gap-2 pt-0.5 text-[13px] leading-5 text-fg-2">
+              <p>{t(`vaultFiles.import.guide.${step}`, { name })}</p>
+              {step === 'open' && source.address ? (
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <code className="selectable field min-w-0 truncate rounded-lg px-2.5 py-1.5 font-mono text-[12.5px] text-fg">
+                    {source.address}
+                  </code>
+                  <Button
+                    size="sm"
+                    icon={<Copy className="size-3.5" strokeWidth={2} />}
+                    onClick={() => void copy(source.address ?? '')}
+                  >
+                    {t('vaultFiles.import.copyAddress')}
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
 }

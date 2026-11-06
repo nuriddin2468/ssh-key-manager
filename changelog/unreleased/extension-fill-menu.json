@@ -1,0 +1,6 @@
+{
+  "kind": "improved",
+  "en": "Browser extension: the login menu no longer opens over a login that’s already filled in; press Down Arrow to open it anyway. Logins for the username you typed come first.",
+  "ru": "Расширение браузера: меню логинов больше не открывается поверх уже заполненного входа — при необходимости откройте его стрелкой вниз. Логины с введённым именем пользователя показываются первыми.",
+  "uz": "Brauzer kengaytmasi: loginlar menyusi toʻldirilgan login ustida endi ochilmaydi — kerak boʻlsa, pastga strelkasi bilan oching. Kiritilgan foydalanuvchi nomidagi loginlar birinchi koʻrsatiladi."
+}

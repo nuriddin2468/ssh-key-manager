@@ -252,6 +252,7 @@ impl Bridge {
                 && state.sign_in.password == Some(Source::Vault),
             exit_code,
             output: output.trim().to_owned(),
+            diagnosis: None,
         }
     }
 

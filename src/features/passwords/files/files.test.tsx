@@ -24,6 +24,7 @@ const api = vi.hoisted(() => ({
   vaultStatus: vi.fn(),
   environment: vi.fn(),
   vaultImportPreview: vi.fn(),
+  browserStatus: vi.fn(),
   vaultImport: vi.fn(),
   vaultTrashImportFile: vi.fn(),
   vaultExportCsv: vi.fn(),
@@ -135,6 +136,7 @@ beforeEach(() => {
   for (const fn of [...Object.values(api), ...Object.values(pickers)]) fn.mockReset();
   api.vaultStatus.mockResolvedValue(status('unlocked'));
   api.environment.mockResolvedValue({ paths: { home: '/Users/me' } });
+  api.browserStatus.mockResolvedValue({ browsers: [] });
 });
 
 describe('ImportDialog', () => {
@@ -147,7 +149,9 @@ describe('ImportDialog', () => {
     api.vaultTrashImportFile.mockResolvedValue(undefined);
     renderWithProviders(<ImportDialog onDone={onDone} />, { inDialog: true });
 
+    await user.click(await screen.findByRole('button', { name: /^Bitwarden/ }));
     expect(screen.getByText('Export files aren’t encrypted')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Export from Bitwarden' })).toBeInTheDocument();
     await user.click(await screen.findByRole('button', { name: 'Choose CSV file…' }));
 
     expect(await screen.findByText('Format: Bitwarden')).toBeInTheDocument();
@@ -189,6 +193,7 @@ describe('ImportDialog', () => {
     const user = userEvent.setup();
     api.vaultImportPreview.mockResolvedValue(null);
     renderWithProviders(<ImportDialog onDone={vi.fn()} />, { inDialog: true });
+    await user.click(await screen.findByRole('button', { name: /^Another app or CSV file/ }));
     await user.click(await screen.findByRole('button', { name: 'Choose CSV file…' }));
     await waitFor(() => expect(api.vaultImportPreview).toHaveBeenCalled());
     expect(screen.getByRole('button', { name: 'Choose CSV file…' })).toBeEnabled();
@@ -200,6 +205,7 @@ describe('ImportDialog', () => {
     api.vaultImportPreview.mockRejectedValue({ code: 'unsupported', message: 'no password' });
     renderWithProviders(<ImportDialog onDone={vi.fn()} />, { inDialog: true });
 
+    await user.click(await screen.findByRole('button', { name: /^Another app or CSV file/ }));
     await user.click(await screen.findByRole('button', { name: 'Choose CSV file…' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'This file doesn’t look like a password export',
@@ -208,10 +214,45 @@ describe('ImportDialog', () => {
   });
 
   it('asks to unlock a locked vault first', async () => {
+    const user = userEvent.setup();
     api.vaultStatus.mockResolvedValue(status('locked'));
     renderWithProviders(<ImportDialog onDone={vi.fn()} />, { inDialog: true });
     expect(await screen.findByText('Unlock the vault to import passwords.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^Bitwarden/ }));
     expect(screen.getByRole('button', { name: 'Choose CSV file…' })).toBeDisabled();
+  });
+
+  it('offers the browsers on this computer first, any CSV file last', async () => {
+    const user = userEvent.setup();
+    api.browserStatus.mockResolvedValue({
+      browsers: [
+        { name: 'Firefox', registered: true },
+        { name: 'Vivaldi', registered: false },
+      ],
+    });
+    renderWithProviders(<ImportDialog onDone={vi.fn()} />, { inDialog: true });
+    await screen.findByRole('button', { name: /^Vivaldi/ });
+    const names = screen
+      .getAllByRole('button')
+      .map((button) => button.textContent ?? '')
+      .filter((name) => /Firefox|Vivaldi|Chrome|Bitwarden|CSV/.test(name));
+    expect(names.slice(0, 2)).toEqual(['VivaldiOn this computer', 'FirefoxOn this computer']);
+    expect(names[2]).toBe('Chrome');
+    expect(names.at(-1)).toMatch(/^Another app or CSV file/);
+
+    await user.click(screen.getByRole('button', { name: /^Firefox/ }));
+    expect(screen.getByText('about:logins')).toBeInTheDocument();
+  });
+
+  it('says how to stop a browser offering the logins it imported', async () => {
+    const user = userEvent.setup();
+    api.vaultImportPreview.mockResolvedValue({ path: CSV, preview: PREVIEW });
+    api.vaultImport.mockResolvedValue(2);
+    renderWithProviders(<ImportDialog onDone={vi.fn()} />, { inDialog: true });
+    await user.click(await screen.findByRole('button', { name: /^Chrome/ }));
+    await user.click(screen.getByRole('button', { name: 'Choose CSV file…' }));
+    await user.click(await screen.findByRole('button', { name: 'Import 2 entries' }));
+    expect(await screen.findByText('Stop Chrome offering them too')).toBeInTheDocument();
   });
 });
 

@@ -16,12 +16,12 @@ file, so KeePassXC and other KeePass apps open it too.
 | `paths` | `SshPaths` (`~/.ssh`, `%USERPROFILE%\.ssh`), `expand_tilde`, `display_path` (`~/…`). |
 | `fsutil` | `atomic_write` (temp file + fsync + rename, keeps permissions, follows symlinks), `write_new` (never overwrites), `backup` (timestamped copies, newest 20 kept). |
 | `keys` | `scan` a directory by content (OpenSSH, legacy PEM, PKCS#8, `.pub`), `inspect` one file, `generate` (Ed25519, RSA 3072/4096, ECDSA), `change_passphrase`, `load_private`, `regenerate_public`, `import`, `move_to_trash`. |
-| `config` | Lossless `ssh_config` model: byte-for-byte round trip, read view of `Host`/`Match` blocks, minimal-diff edits (`upsert_host`, `delete_host`, `remove_identity_file`), `identity_usage`. |
+| `config` | Lossless `ssh_config` model: byte-for-byte round trip, read view of `Host`/`Match` blocks, minimal-diff edits (`upsert_host`, `delete_host`, `remove_identity_file`, `remove_option`, `append_option`), `identity_usage`. |
 | `known_hosts` | Lossless `known_hosts` model: plain and hashed (`\|1\|salt\|hash`) entries, markers, matching with `*`/`?`/`!` and `[host]:port`, `remove_host`, `remove_lines`. |
 | `agent` | Synchronous `ssh-agent` client: status, list, add (lifetime / confirm constraints), remove, remove all. Unix socket or Windows named pipe. |
 | `perms` | Permission checks and fixes: Unix modes; Windows ACLs via one batched PowerShell call, compared by SID, fixed with `icacls`. |
-| `audit` | Findings (DSA, short RSA, no passphrase, open permissions, missing/mismatched `.pub`, duplicates, dangling `IdentityFile`, legacy format) with stable ids and one-click fixes. |
-| `vault` | The password vault: a KeePass KDBX 4.1 database (Argon2id, ChaCha20) whose password is a random recovery key, plus a key slots file that opens it with the master password or a device key. Entries with history and recycle bin, links to SSH hosts and keys, 2FA codes, conflict-safe writes for synced folders, a password/passphrase generator and zxcvbn strength. |
+| `audit` | Findings (DSA, short RSA, no passphrase, open permissions, missing/mismatched `.pub`, duplicates, dangling `IdentityFile`, legacy format, `StrictHostKeyChecking no`, `UserKnownHostsFile /dev/null`, `ForwardAgent`, too many agent keys without `IdentitiesOnly`) with stable ids and one-click fixes (`apply_config_fix` applies only those the rules offer). |
+| `vault` | The password vault: a KeePass KDBX 4.1 database (Argon2id, ChaCha20) whose password is a random recovery key, plus a key slots file that opens it with the master password or a device key. Entries with history and recycle bin, links to SSH hosts and keys, 2FA codes, conflict-safe writes for synced folders, a password/passphrase generator and zxcvbn strength, and a health audit that can include Have I Been Pwned results (k-anonymity range lookups prepared and matched here; the app does the HTTP). |
 
 All errors are one `Error` enum with a stable `code()` (`not_found`,
 `already_exists`, `invalid_input`, `wrong_passphrase`, `passphrase_required`,

@@ -1,9 +1,21 @@
 import { Check, ChevronDown, ChevronUp, Search, X } from 'lucide-react';
-import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
+import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useDialogs } from '@/app/dialogs';
+import type { Diagnosis } from '@/bindings/Diagnosis';
 import type { Failure } from '@/bindings/Failure';
+import type { HostEntry } from '@/bindings/HostEntry';
+import type { KeyView } from '@/bindings/KeyView';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
+import {
+  type DiagnoseFix,
+  diagnosisKey,
+  type HostFacts,
+  NO_FACTS,
+} from '@/features/diagnose/model';
+import { useHostFacts } from '@/features/diagnose/useHostFacts';
+import { type DiagnoseFixes, WhyItFailed } from '@/features/diagnose/WhyItFailed';
 import { cn } from '@/lib/cn';
 import { formatDuration } from '@/lib/format';
 import {
@@ -11,6 +23,7 @@ import {
   type Fix,
   failureView,
   type OpenFailure,
+  sessionDiagnosis,
   signInText,
   statusLine,
   type Tab,
@@ -26,6 +39,10 @@ interface SessionViewProps {
   onReconnect: (options?: { askPassword?: boolean }) => void;
   onCloseTab: () => void;
   onCompare: () => void;
+  /** The host's block, if the config has one for the alias. */
+  host?: HostEntry;
+  /** Opens the host's editor to make a fix there; absent without a block. */
+  onFixInHost?: (fix: DiagnoseFix, diagnosis: Diagnosis) => void;
 }
 
 /** The active tab's terminal and whatever covers it while it isn't usable. */
@@ -36,6 +53,8 @@ export function SessionView({
   onReconnect,
   onCloseTab,
   onCompare,
+  host: hostEntry,
+  onFixInHost,
 }: SessionViewProps) {
   const { t, i18n } = useTranslation();
   const host = useRef<HTMLDivElement>(null);
@@ -82,6 +101,8 @@ export function SessionView({
           failure={tab.state.failure}
           onReconnect={onReconnect}
           onCompare={onCompare}
+          host={hostEntry}
+          onFixInHost={onFixInHost}
         />
       ) : null}
       {tab.state.phase === 'ended' ? (
@@ -139,17 +160,107 @@ const FIX_LABELS = {
   compare: 'terminal.failed.compare',
 } as const satisfies Record<Exclude<Fix, 'output'>, string>;
 
-function Failed({
-  tab,
-  failure,
-  onReconnect,
-  onCompare,
-}: {
+interface FailedProps {
   tab: Tab;
   failure: Failure | OpenFailure;
   onReconnect: (options?: { askPassword?: boolean }) => void;
   onCompare: () => void;
+  host?: HostEntry;
+  onFixInHost?: (fix: DiagnoseFix, diagnosis: Diagnosis) => void;
+}
+
+function Failed(props: FailedProps) {
+  const diagnosis = sessionDiagnosis(props.failure);
+  if (!diagnosis) return <FailedPlain {...props} />;
+  return (
+    <FailedCard tab={props.tab}>
+      {props.host ? (
+        <HostDiagnosis {...props} host={props.host} diagnosis={diagnosis} />
+      ) : (
+        <SessionDiagnosis {...props} diagnosis={diagnosis} facts={NO_FACTS} />
+      )}
+    </FailedCard>
+  );
+}
+
+function HostDiagnosis(props: FailedProps & { host: HostEntry; diagnosis: Diagnosis }) {
+  const { facts, key } = useHostFacts(props.host);
+  return (
+    <SessionDiagnosis
+      {...props}
+      facts={facts}
+      hostKey={key}
+      publicKey={key?.publicKey ?? undefined}
+    />
+  );
+}
+
+/** "Why it failed" in the session's card, with fixes made here or in the host's editor. */
+function SessionDiagnosis({
+  tab,
+  diagnosis,
+  facts,
+  hostKey,
+  publicKey,
+  onReconnect,
+  onCompare,
+  onFixInHost,
+}: FailedProps & {
+  diagnosis: Diagnosis;
+  facts: HostFacts;
+  hostKey?: KeyView;
+  publicKey?: string;
 }) {
+  const { t } = useTranslation();
+  const dialogs = useDialogs();
+  const inHost = (fix: DiagnoseFix) =>
+    onFixInHost ? { [fix]: (d: Diagnosis) => onFixInHost(fix, d) } : {};
+  const onFix: DiagnoseFixes = {
+    checkHostKey: onCompare,
+    editPassword: () => onReconnect({ askPassword: true }),
+    ...(hostKey
+      ? { addToAgent: () => dialogs.unlockKey(hostKey, undefined, () => onReconnect()) }
+      : {}),
+    ...inHost('installKey'),
+    ...inHost('chooseKey'),
+    ...inHost('identitiesOnly'),
+    ...inHost('allowLegacy'),
+    ...inHost('openHost'),
+  };
+  return (
+    <WhyItFailed
+      key={diagnosisKey(diagnosis)}
+      diagnosis={diagnosis}
+      alias={tab.alias}
+      facts={facts}
+      onFix={onFix}
+      publicKey={publicKey}
+      heading="h2"
+      announce
+      actions={
+        <Button size="sm" onClick={() => onReconnect()}>
+          {t('terminal.failed.retry')}
+        </Button>
+      }
+    />
+  );
+}
+
+function FailedCard({ tab, children }: { tab: Tab; children: ReactNode }) {
+  return (
+    <div className="absolute inset-0 overflow-y-auto bg-terminal p-6">
+      <div className="mx-auto mt-[8vh] flex max-w-[520px] flex-col gap-3 rounded-[18px] border border-white/[0.07] bg-white/[0.02] p-[18px]">
+        <div className="flex items-center gap-2">
+          <StatusDot tab={tab} />
+          <span className="font-mono">{tab.alias}</span>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function FailedPlain({ tab, failure, onReconnect, onCompare }: FailedProps) {
   const { t } = useTranslation();
   const view: FailureView = failureView(t, tab, failure);
   const [outputShown, setOutputShown] = useState(false);

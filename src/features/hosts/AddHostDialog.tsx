@@ -13,15 +13,28 @@ import { configChangeError } from './fileErrors';
 import { ConfigPreview, HostFields, useHostErrors } from './HostFields';
 import { EMPTY_FORM, editFromForm, type HostForm, previewLines } from './model';
 
-/** Creates a `Host` block; the editor on the Hosts page takes over afterwards. */
-export function AddHostDialog({ onDone }: { onDone: () => void }) {
+/**
+ * Creates a `Host` block; the editor on the Hosts page takes over afterwards.
+ * `initial` fills the form in (a host found in the shell history), and
+ * `description` says where it came from.
+ */
+export function AddHostDialog({
+  onDone,
+  initial,
+  description,
+}: {
+  onDone: () => void;
+  initial?: HostForm;
+  description?: string;
+}) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const config = useConfig();
   const hosts = config.data?.view.hosts ?? [];
   const revision = config.data?.view.revision ?? '';
-  const [form, setForm] = useState<HostForm>(EMPTY_FORM);
-  const [touched, setTouched] = useState(false);
+  const [form, setForm] = useState<HostForm>(initial ?? EMPTY_FORM);
+  // A filled-in form shows its problems (a name in use) right away.
+  const [touched, setTouched] = useState(initial !== undefined);
   const set = <K extends keyof HostForm>(key: K, value: HostForm[K]) => {
     setTouched(true);
     setForm((f) => ({ ...f, [key]: value }));
@@ -57,7 +70,7 @@ export function AddHostDialog({ onDone }: { onDone: () => void }) {
             </Tile>
           }
           title={t('hosts.addTitle')}
-          description={t('hosts.addDescription')}
+          description={description ?? t('hosts.addDescription')}
         />
         <DialogBody>
           <HostFields

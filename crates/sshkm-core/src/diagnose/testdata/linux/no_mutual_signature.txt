@@ -1,0 +1,13 @@
+OpenSSH_9.6p1 Ubuntu-3ubuntu13.5, OpenSSL 3.0.13 30 Jan 2024
+debug1: Connecting to old-router [192.168.1.1] port 22.
+debug1: Connection established.
+debug1: Remote protocol version 2.0, remote software version OpenSSH_6.6.1
+debug1: Authenticating to old-router:22 as 'admin'
+debug1: Server host key: ssh-rsa SHA256:Kd8sN2vB5xC1zQ9wE4rT7yU0iO3pA6sD2fG5hJ8kL1m
+debug1: SSH2_MSG_SERVICE_ACCEPT received
+debug1: Authentications that can continue: publickey
+debug1: Next authentication method: publickey
+debug1: Offering public key: /home/alice/.ssh/id_rsa RSA SHA256:Rt5yU8iO1pA4sD7fG0hJ3kL6zX9cV2bN5mQ8wE1rT4y explicit
+debug1: send_pubkey_test: no mutual signature algorithm
+debug1: No more authentication methods to try.
+admin@old-router: Permission denied (publickey).

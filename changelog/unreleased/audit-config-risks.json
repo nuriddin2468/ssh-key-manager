@@ -1,0 +1,6 @@
+{
+  "kind": "new",
+  "en": "The audit checks ~/.ssh/config for risky settings — StrictHostKeyChecking no, UserKnownHostsFile /dev/null, ForwardAgent yes for every host, and too many agent keys without IdentitiesOnly — and fixes them in one click.",
+  "ru": "Аудит проверяет ~/.ssh/config на рискованные настройки — StrictHostKeyChecking no, UserKnownHostsFile /dev/null, ForwardAgent yes для всех хостов и слишком много ключей в агенте без IdentitiesOnly — и исправляет их в один клик.",
+  "uz": "Audit ~/.ssh/config faylini xavfli sozlamalarga tekshiradi — StrictHostKeyChecking no, UserKnownHostsFile /dev/null, barcha xostlar uchun ForwardAgent yes va IdentitiesOnly’siz agentdagi juda koʻp kalitlar — va ularni bir bosishda tuzatadi."
+}

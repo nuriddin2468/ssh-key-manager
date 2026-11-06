@@ -16,10 +16,12 @@ import { Tile } from '@/components/ui/Tile';
 import { useTerminals } from '@/features/terminal/TerminalProvider';
 import { cn } from '@/lib/cn';
 import { withViewTransition } from '@/lib/viewTransition';
+import { AddHostDialog } from './AddHostDialog';
 import { HostCard } from './HostCard';
 import { HostEditor } from './HostEditor';
-import { hostLabel, hostMethod } from './model';
+import { type HostForm, hostLabel, hostMethod } from './model';
 import { RawConfigDialog } from './RawConfigDialog';
+import { ShellHistorySuggestions } from './ShellHistorySuggestions';
 import { hostEvents } from './status';
 import { findHostEntry, hostAliases } from './vault';
 
@@ -30,6 +32,8 @@ export function HostsPage({ hostId }: { hostId?: number }) {
   const config = useConfig();
   const [query, setQuery] = useState('');
   const [rawOpen, setRawOpen] = useState(false);
+  // A host from the shell history, open in the Add Host dialog.
+  const [suggested, setSuggested] = useState<HostForm | null>(null);
   const search = useRef<HTMLInputElement>(null);
   useFindShortcut(search);
 
@@ -97,6 +101,7 @@ export function HostsPage({ hostId }: { hostId?: number }) {
       </Toolbar>
 
       <PageBody>
+        {config.data && !selected ? <ShellHistorySuggestions onAdd={setSuggested} /> : null}
         {config.isPending ? (
           <div className="grid flex-1 place-items-center text-subtle">
             <Spinner className="size-6" />
@@ -196,6 +201,18 @@ export function HostsPage({ hostId }: { hostId?: number }) {
 
       <Dialog open={rawOpen} onOpenChange={setRawOpen}>
         {rawOpen ? <RawConfigDialog onDone={() => setRawOpen(false)} /> : null}
+      </Dialog>
+      <Dialog
+        open={suggested !== null}
+        onOpenChange={(open) => (open ? undefined : setSuggested(null))}
+      >
+        {suggested ? (
+          <AddHostDialog
+            initial={suggested}
+            description={t('historyHosts.addDescription')}
+            onDone={() => setSuggested(null)}
+          />
+        ) : null}
       </Dialog>
     </>
   );

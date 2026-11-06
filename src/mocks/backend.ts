@@ -28,6 +28,7 @@ import { ROTATION_HOSTS, rotationHandlers } from './rotation';
 import { serverKeysHandlers } from './serverKeys';
 import { shellHistoryHandlers } from './shellHistory';
 import { terminalHandlers } from './terminal';
+import { toolsNetHandlers } from './toolsNet';
 import { vaultHandlers, vaultKeyTest } from './vault';
 import { vaultFilesHandlers } from './vaultFiles';
 import { vaultLinkHandlers } from './vaultLinks';
@@ -685,6 +686,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     return { status: saved.length ? 'match' : 'unknown', offered, saved, error: null };
   },
   ...hostsFileHandlers,
+  ...toolsNetHandlers,
   run_audit: audit,
   fix_permissions: ({ items }) => {
     for (const item of items as PermissionFix[]) {

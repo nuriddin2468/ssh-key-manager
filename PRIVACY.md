@@ -114,6 +114,10 @@ It goes online only:
 - for a DNS lookup when you ask where a name leads;
 - when a connection failed and you click **Check port**: it opens one connection to
   the server's port and closes it at once, without sending anything;
+- when you run a network check on the Tools page: SSH ping, the port check and the TLS
+  check connect to the host you name, and the DNS lookup asks your computer's DNS
+  servers about the name you type. Checking a certificate may make your system ask its
+  issuer whether it was revoked. Nothing about the checks is stored;
 - if you turn on the audit's breach check (it is off until you do), to look up your
   saved passwords in [Have I Been Pwned](https://haveibeenpwned.com/Passwords). For
   each password it sends only the first 5 characters of the password's SHA-1 hash to

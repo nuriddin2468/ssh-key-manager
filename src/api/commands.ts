@@ -13,12 +13,14 @@ import type { ConnectionTest } from '@/bindings/ConnectionTest';
 import type { Contact } from '@/bindings/Contact';
 import type { CopyField } from '@/bindings/CopyField';
 import type { CopyResult } from '@/bindings/CopyResult';
+import type { DnsReport } from '@/bindings/DnsReport';
 import type { EntryDetail } from '@/bindings/EntryDetail';
 import type { EntryInput } from '@/bindings/EntryInput';
 import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { Environment } from '@/bindings/Environment';
 import type { Exported } from '@/bindings/Exported';
 import type { FixAction } from '@/bindings/FixAction';
+import type { GeneratedSecret } from '@/bindings/GeneratedSecret';
 import type { GenerateKeyRequest } from '@/bindings/GenerateKeyRequest';
 import type { GenerateOptions } from '@/bindings/GenerateOptions';
 import type { HistoryScan } from '@/bindings/HistoryScan';
@@ -42,18 +44,22 @@ import type { NearbyStatus } from '@/bindings/NearbyStatus';
 import type { OpenOptions } from '@/bindings/OpenOptions';
 import type { OtpCode } from '@/bindings/OtpCode';
 import type { PermissionFix } from '@/bindings/PermissionFix';
+import type { PortCheck } from '@/bindings/PortCheck';
 import type { PortProbe } from '@/bindings/PortProbe';
 import type { PromptAnswer } from '@/bindings/PromptAnswer';
 import type { ReceivedGroup } from '@/bindings/ReceivedGroup';
 import type { SavedHost } from '@/bindings/SavedHost';
 import type { SecretField } from '@/bindings/SecretField';
+import type { SecretPreset } from '@/bindings/SecretPreset';
 import type { SendRequest } from '@/bindings/SendRequest';
 import type { ServerKeys } from '@/bindings/ServerKeys';
 import type { ServerKeysAction } from '@/bindings/ServerKeysAction';
+import type { SshPing } from '@/bindings/SshPing';
 import type { Strength } from '@/bindings/Strength';
 import type { SyncDecisions } from '@/bindings/SyncDecisions';
 import type { TerminalEvent } from '@/bindings/TerminalEvent';
 import type { TerminalInfo } from '@/bindings/TerminalInfo';
+import type { TlsReport } from '@/bindings/TlsReport';
 import type { VaultAudit } from '@/bindings/VaultAudit';
 import type { VaultLocation } from '@/bindings/VaultLocation';
 import type { VaultSettings } from '@/bindings/VaultSettings';
@@ -166,6 +172,17 @@ export const api = {
   hostsBackups: () => call<HostsBackup[]>('list_hosts_backups'),
   restoreHostsBackup: (vars: { path: string; flushDns: boolean }) =>
     call<HostsApplyResult>('restore_hosts_backup', vars),
+  toolsGenerateSecret: (preset: SecretPreset) =>
+    call<GeneratedSecret>('tools_generate_secret', { preset }),
+  /** Copies like a vault password: out of clipboard history, cleared after a while. */
+  toolsCopySecret: (text: string) => call<CopyResult>('tools_copy_secret', { text }),
+  toolsSshPing: (vars: { host: string; port: number; samples: number }) =>
+    call<SshPing>('tools_ssh_ping', vars),
+  toolsPortCheck: (vars: { host: string; port: number; timeoutMs: number }) =>
+    call<PortCheck>('tools_port_check', vars),
+  /** Asks the computer's DNS servers, over the network. */
+  toolsDnsLookup: (name: string) => call<DnsReport>('tools_dns_lookup', { name }),
+  toolsTlsCheck: (vars: { host: string; port: number }) => call<TlsReport>('tools_tls_check', vars),
 
   audit: () => call<AuditReport>('run_audit'),
   fixPermissions: (items: PermissionFix[]) => call<number>('fix_permissions', { items }),

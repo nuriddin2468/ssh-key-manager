@@ -5208,6 +5208,8 @@ dependencies = [
  "rand_core 0.6.4",
  "rsa",
  "rust-argon2",
+ "rustls",
+ "rustls-platform-verifier",
  "secrecy",
  "serde",
  "serde_json",
@@ -5225,6 +5227,7 @@ dependencies = [
  "url",
  "uuid",
  "windows 0.62.2",
+ "windows-registry",
  "zeroize",
  "zxcvbn",
 ]

@@ -28,6 +28,10 @@ psl = "2.1.246"
 rand_core = { version = "0.6", features = ["getrandom"] }
 rsa = { version = "0.9", features = ["pem", "std"] }
 rust-argon2 = "3.0.0"
+# The Tools page's TLS check; the versions and features the updater already
+# builds, so these add no crate.
+rustls = { version = "0.23.46", default-features = false, features = ["std", "ring", "tls12"] }
+rustls-platform-verifier = "0.7.1"
 secrecy = { version = "0.10.3", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
@@ -50,6 +54,8 @@ zxcvbn = { version = "3.1.1", default-features = false }
 [target.'cfg(windows)'.dependencies]
 # Creates a CSV export with its access list in place (perms/private_file.rs).
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem"] }
+# The DNS servers of the network adapters (net/dns.rs); already in the build.
+windows-registry = "0.6.1"
 
 # The workspace lints, except that `unsafe_code` is `deny` instead of `forbid`:
 # one Windows module, `perms/private_file.rs`, creates files with their access

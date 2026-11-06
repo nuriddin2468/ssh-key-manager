@@ -17,6 +17,7 @@ pub mod nearby;
 pub mod remote;
 pub mod shell_history;
 pub mod terminal;
+pub mod tools_net;
 pub mod updates;
 pub mod vault;
 pub mod vault_files;

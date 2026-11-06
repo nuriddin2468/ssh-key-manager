@@ -351,6 +351,7 @@ const uz = {
       placeholder: 'Xostga ulanish yoki parolni nusxalash',
       unlock: 'Omborni ochish',
       unlockDetail: 'Parollar, foydalanuvchi nomlari va 2FA kodlarini nusxalash uchun',
+      lockedNoMatches: '«{{query}}» boʻyicha hech narsa yoʻq. Parollar qulflangan',
       back: 'Qidiruvga qaytish',
     },
     settings: {

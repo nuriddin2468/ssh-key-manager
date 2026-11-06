@@ -34,6 +34,8 @@ interface PaletteSearchProps {
   busy?: string | null;
   /** Above the footer: what went wrong with the last item run. */
   notice?: ReactNode;
+  /** Before the field instead of the magnifier: the app's logo in a window of its own. */
+  icon?: ReactNode;
   inputRef?: Ref<HTMLInputElement>;
   className?: string;
 }
@@ -59,6 +61,7 @@ export function PaletteSearch({
   prefixes,
   busy,
   notice,
+  icon,
   inputRef,
   className,
 }: PaletteSearchProps) {
@@ -104,7 +107,9 @@ export function PaletteSearch({
   return (
     <div className={cn('flex min-h-0 flex-col', className)}>
       <div className="flex h-[52px] shrink-0 items-center gap-3 border-b border-white/[0.07] px-4">
-        <Search aria-hidden="true" className="size-[18px] shrink-0 text-subtle" strokeWidth={2} />
+        {icon ?? (
+          <Search aria-hidden="true" className="size-[18px] shrink-0 text-subtle" strokeWidth={2} />
+        )}
         <input
           ref={inputRef}
           type="text"

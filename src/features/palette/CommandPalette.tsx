@@ -403,7 +403,7 @@ function PaletteDialog({ onClose }: { onClose: () => void }) {
             chosen.current = null;
             item?.run();
           }}
-          className="pointer-events-auto relative flex h-fit max-h-[min(560px,calc(100vh-12vh-16px))] w-full max-w-[640px] flex-col overflow-clip rounded-[18px] border border-white/10 bg-[linear-gradient(180deg,rgb(26_31_46/0.98),rgb(15_18_28/0.98))] text-fg shadow-[0_40px_80px_-24px_rgb(0_0_0/0.8),inset_0_1px_0_rgb(255_255_255/0.06)] outline-none data-[state=open]:animate-dialog-in"
+          className="pointer-events-auto relative flex h-fit max-h-[min(560px,calc(100vh-12vh-16px))] w-full max-w-[640px] flex-col overflow-clip rounded-[22px] border border-white/10 bg-[linear-gradient(180deg,rgb(26_31_46/0.98),rgb(15_18_28/0.98))] text-fg shadow-[0_40px_80px_-24px_rgb(0_0_0/0.8),inset_0_1px_0_rgb(255_255_255/0.06)] outline-none data-[state=open]:animate-dialog-in"
         >
           <RDialog.Title className="sr-only">{t('palette.title')}</RDialog.Title>
           <RDialog.Description className="sr-only">{t('palette.description')}</RDialog.Description>

@@ -343,6 +343,7 @@ const en = {
       placeholder: 'Connect to a host or copy a password',
       unlock: 'Unlock the vault',
       unlockDetail: 'To copy passwords, user names and 2FA codes',
+      lockedNoMatches: 'Nothing matches “{{query}}”. Passwords are locked',
       back: 'Back to search',
     },
     settings: {

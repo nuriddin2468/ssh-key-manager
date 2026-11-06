@@ -95,11 +95,23 @@ describe('rank', () => {
 
   it('finds items by their keywords, below title matches', () => {
     const items = [
-      item('a', 'web', { keywords: ['deploy@10.0.0.5'] }),
+      item('a', 'web', { keywords: ['deploy@10.0.0.5'], primary: true }),
       item('b', '10.0.0.5-backup'),
     ];
     expect(titles(items, '10.0.0.5')).toEqual(['b', 'a']);
     expect(rank(items, '10.0.0.5')[1]?.positions).toEqual([]);
+  });
+
+  it('matches keywords only at word starts, and only for main actions', () => {
+    const keywords = ['dev@macbook-pro', 'SHA256:xyzPROabc'];
+    const items = [
+      item('key:open', 'id_ed25519', { keywords, primary: true, verbs: ['Open key'] }),
+      item('key:copy', 'id_ed25519', { keywords, verbs: ['Copy public key', 'copy'] }),
+      item('other:open', 'id_rsa', { keywords: ['SHA256:aaPROaa'], primary: true }),
+    ];
+    expect(titles(items, 'pro')).toEqual(['key:open']);
+    // Naming the action brings its item back.
+    expect(titles(items, 'copy macbook')).toEqual(['key:copy']);
   });
 
   it('returns nothing for an empty query', () => {

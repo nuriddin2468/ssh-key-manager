@@ -114,11 +114,22 @@ export function normalizeQuery(query: string): string {
 const better = (a: Match | null, b: Match | null): Match | null =>
   !b ? a : !a || b.tier > a.tier || (b.tier === a.tier && b.score > a.score) ? b : a;
 
+/**
+ * A keyword matches only from the start of one of its words: "pro" finds
+ * "dev@macbook-pro", not a fingerprint that happens to hold the letters.
+ */
 function matchKeywords(item: Searchable, needle: string): Match | null {
   let best: Match | null = null;
   for (const keyword of item.keywords ?? []) {
     const match = matchText(keyword, needle);
-    if (match) {
+    const start = match?.positions[0];
+    const atWord =
+      match &&
+      (match.tier >= TIER.prefix ||
+        (match.tier === TIER.contains &&
+          start !== undefined &&
+          SEPARATOR.test(fold(keyword)[start - 1] ?? '')));
+    if (match && atWord) {
       // A keyword never outranks a title's prefix, and leaves nothing to highlight.
       const tier = Math.min(match.tier, TIER.contains) as Tier;
       best = better(best, { tier, score: match.score - 100, positions: [] });
@@ -129,13 +140,15 @@ function matchKeywords(item: Searchable, needle: string): Match | null {
 
 /**
  * How `item` matches `query` (normalized, not empty): its title, else its
- * keywords. Words that start one of its verbs may come first or last
- * ("connect prod", "prod ssh"); they then must, and the rest must match.
+ * keywords, which find only an object's main action, so a host name or a
+ * key's comment doesn't bring every action along. Words that start one of
+ * its verbs may come first or last ("connect prod", "prod ssh"); they then
+ * must, and the rest must match.
  */
 export function matchItem(item: Searchable, query: string): Match | null {
   const whole = matchText(item.title, query);
   if (whole && whole.tier >= TIER.prefix) return whole;
-  let best = better(whole, matchKeywords(item, query));
+  let best = better(whole, item.primary ? matchKeywords(item, query) : null);
 
   const verbWords = item.verbs.flatMap((verb) => fold(verb).split(/\s+/)).filter(Boolean);
   const isVerb = (token: string) =>

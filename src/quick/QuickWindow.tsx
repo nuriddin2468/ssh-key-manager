@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
 import { queryClient, useVaultStatus } from '@/api/queries';
 import { errorMessage } from '@/api/useAppMutation';
+import { Logo } from '@/components/Logo';
 import { Button } from '@/components/ui/Button';
 import { TextField } from '@/components/ui/TextField';
 import { Tile } from '@/components/ui/Tile';
@@ -176,7 +177,10 @@ export function QuickWindow() {
     if (!unlockItem || scope === 'hosts' || scope === 'actions') return found;
     const locked: Section = {
       id: 'locked',
-      label: t('palette.groups.locked'),
+      label:
+        text && found.length === 0
+          ? t('palette.quick.lockedNoMatches', { query: text })
+          : t('palette.groups.locked'),
       items: [{ item: unlockItem, tier: 0, score: 0, positions: [] }],
     };
     // With nothing typed, unlocking comes first: the passwords wait behind it.
@@ -221,6 +225,8 @@ export function QuickWindow() {
           prefixes={['@', '#']}
           busy={busy}
           notice={problem}
+          // The window opens over other apps: it says whose it is.
+          icon={<Logo size={22} />}
           inputRef={input}
           className="flex-1"
         />

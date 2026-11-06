@@ -101,6 +101,32 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     links and firmlinks don't get around it), and cells that a spreadsheet would run as
     a formula are defused, except passwords. Files to import are also picked in a
     system dialog. Imported CSV files can be moved to the Trash right after import.
+  - Secret environments (the **Environments** page) are entries of the same vault:
+    one per environment, in the group `Environments/<project>`, with a custom field
+    per variable; a secret variable's field is protected like a password. Lists,
+    details, import previews and comparisons sent to the interface carry names, flags
+    and notes, never values: a value reaches it only when you choose to show it (or
+    load it to edit it), and copying goes from Rust straight to the clipboard,
+    cleared like a password when the variable is secret. Two environments are
+    compared inside the Rust process; only the names that differ come out.
+  - A `.env` file to import is picked in a system dialog the app opens itself and
+    read again when you import, at most 1 MiB; nothing in it is expanded or run, and
+    lines it can't read are reported by number, never quoted. The app never changes
+    or deletes it.
+  - Exporting an environment writes it in plain text (`.env`, JSON, YAML, shell
+    `export` lines, a Docker env file, or a Kubernetes Secret, whose base64 hides
+    nothing), to a file picked in a system save dialog, with the same protections as
+    the CSV export: mode 0600 (or the private access list on Windows), never in
+    `~/.ssh`, never over the vault's files. Shell lines quote every value in `'…'`,
+    so sourcing the file runs nothing a value holds. When the file would be inside a
+    Git working tree that doesn't ignore it (`git check-ignore`; without `git`, any
+    working tree counts), nothing is written until you confirm in the app.
+  - **Run in terminal** starts your own shell (`$SHELL` as a login shell, or
+    `%ComSpec%` on Windows) in the in-app terminal with the variables added to its
+    environment. Nothing is written to disk, but the shell and everything it starts
+    hold the values in their environment: other programs running as you can read a
+    process's environment (`/proc/<pid>/environ` on Linux, `ps -E` on macOS), and the
+    shell may save the commands you type in its history.
 - **Answering `ssh` prompts.** To log in with a password or one-time code, the app acts
   as `ssh`'s askpass program.
   - The secret goes over a local socket only this user can reach (a private 0700
@@ -646,8 +672,8 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   are closed at once.
   The users have three minutes to compare the codes.
 - **Sending.** After pairing, or straight away between contacts, the side that
-  connected may send one item: a vault entry, a host, a hosts file group or a public
-  key. The UI only names it; the backend reads it from the vault, `~/.ssh` or the
+  connected may send one item: a vault entry, a secret environment, a host, a hosts
+  file group or a public key. The UI only names it; the backend reads it from the vault, `~/.ssh` or the
   hosts file. First goes a summary with nothing secret in it (title and username,
   alias, address and jump host, a group's name, size and first names, or a key's name,
   type, fingerprint and comment); the item itself goes only after the other user
@@ -665,6 +691,14 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   certificate authority's, since `ssh` would then accept the sender's key next to its
   own; it keeps its own and warns instead. A 2FA secret
   goes only if the sender ticks it; a key's passphrase never goes.
+- **An environment arrives as a new one.** Its summary names the project, the
+  environment, how many variables (and secrets) it has and the first three names;
+  the values go only after the other user accepts. The receiver checks every name
+  (variable names are letters, digits and `_`), refuses control characters other
+  than line breaks and tabs in values, and takes at most 1000 variables and 384 KiB.
+  It is saved as a new environment: one of the same name in that project gets a
+  number (`prod 2`), so a sender can never replace or add to an environment the
+  receiver has.
 - **A hosts file group is never written on arrival.** The hosts file decides where
   names lead for every program, so a received group only becomes a change on the
   Hosts file page: the user sees the diff and saves it with the administrator

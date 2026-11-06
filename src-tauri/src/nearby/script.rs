@@ -189,7 +189,9 @@ impl Side for Script {
         let name = match item {
             Item::Password { title, .. } => title.clone(),
             Item::Host { alias, .. } => alias.clone(),
-            Item::HostsGroup { name, .. } | Item::PublicKey { name, .. } => name.clone(),
+            Item::HostsGroup { name, .. }
+            | Item::PublicKey { name, .. }
+            | Item::Environment { name, .. } => name.clone(),
         };
         Ok((name, false))
     }

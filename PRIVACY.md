@@ -104,6 +104,10 @@ The app keeps your data on your computer:
   folder you choose.
 - Tunnels you save are kept in `tunnels.json` in the app's data folder: their hosts,
   ports, addresses and names, never a password.
+- Secret environments (the variables of your `.env` files) are kept in the same
+  encrypted vault. A `.env` file you import is only read; a file you export is
+  written where you choose, in plain text, and a shell you run with an environment
+  gets its values in memory only.
 
 It goes online only:
 
@@ -148,8 +152,9 @@ It talks to the local network only for **Nearby**, and only when you ask:
   network for ten minutes and accepts connections from other copies of the app.
 - When you pair two computers, they talk directly to each other over an encrypted
   connection. Nothing goes through a server, ours or anyone else's.
-- When you send a password, a host, a group of your hosts file or your public key, it
-  goes only to the computer you pick, and only after its user accepts it. A hosts file
+- When you send a password, a secret environment, a host, a group of your hosts file
+  or your public key, it goes only to the computer you pick, and only after its user
+  accepts it. A hosts file
   group goes with its addresses and names, without comments; a public key goes
   without its private key.
 - When you add one of your own computers, the one that has your vault gives it the

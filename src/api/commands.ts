@@ -18,7 +18,16 @@ import type { DnsReport } from '@/bindings/DnsReport';
 import type { EntryDetail } from '@/bindings/EntryDetail';
 import type { EntryInput } from '@/bindings/EntryInput';
 import type { EntrySummary } from '@/bindings/EntrySummary';
+import type { EnvComparison } from '@/bindings/EnvComparison';
+import type { EnvDetail } from '@/bindings/EnvDetail';
+import type { EnvExport } from '@/bindings/EnvExport';
+import type { EnvFormat } from '@/bindings/EnvFormat';
+import type { EnvImported } from '@/bindings/EnvImported';
+import type { EnvImportPick } from '@/bindings/EnvImportPick';
+import type { EnvInput } from '@/bindings/EnvInput';
 import type { Environment } from '@/bindings/Environment';
+import type { EnvSummary } from '@/bindings/EnvSummary';
+import type { EnvVarInput } from '@/bindings/EnvVarInput';
 import type { Exported } from '@/bindings/Exported';
 import type { FixAction } from '@/bindings/FixAction';
 import type { GeneratedSecret } from '@/bindings/GeneratedSecret';
@@ -33,7 +42,9 @@ import type { HostsBackup } from '@/bindings/HostsBackup';
 import type { HostsChange } from '@/bindings/HostsChange';
 import type { HostsFileInfo } from '@/bindings/HostsFileInfo';
 import type { HostsPreview } from '@/bindings/HostsPreview';
+import type { ImportChoice } from '@/bindings/ImportChoice';
 import type { ImportPick } from '@/bindings/ImportPick';
+import type { ImportTarget } from '@/bindings/ImportTarget';
 import type { KeyFileFormat } from '@/bindings/KeyFileFormat';
 import type { KeyFileInfo } from '@/bindings/KeyFileInfo';
 import type { KeyInstall } from '@/bindings/KeyInstall';
@@ -384,6 +395,44 @@ export const api = {
   vaultUseFile: (path: string) => call<VaultLocation>('vault_use_file', { path }),
   /** Back to the app's folder: move the files there, or switch to the vault there. */
   vaultUseDefault: (moveFiles: boolean) => call<VaultLocation>('vault_use_default', { moveFiles }),
+
+  // Secret environments in the vault (src-tauri/src/commands/envs.rs). Values
+  // come only from `envsReveal`; copying and running go without the page.
+  envsList: () => call<EnvSummary[]>('envs_list'),
+  envsGet: (id: string) => call<EnvDetail>('envs_get', { id }),
+  envsCreate: (input: EnvInput) => call<EnvDetail>('envs_create', { input }),
+  envsUpdate: (id: string, input: EnvInput) => call<EnvDetail>('envs_update', { id, input }),
+  /** Adds a variable (`previous` null) or changes the one named `previous`. */
+  envsSetVar: (id: string, previous: string | null, input: EnvVarInput) =>
+    call<EnvDetail>('envs_set_var', { id, previous, input }),
+  envsRemoveVar: (id: string, name: string) => call<EnvDetail>('envs_remove_var', { id, name }),
+  envsReveal: (id: string, name: string) => call<string>('envs_reveal', { id, name }),
+  envsCopy: (id: string, name: string) => call<CopyResult>('envs_copy', { id, name }),
+  envsTrash: (id: string) => call<void>('envs_trash', { id }),
+  envsRestore: (id: string) => call<void>('envs_restore', { id }),
+  envsDelete: (id: string) => call<void>('envs_delete', { id }),
+  envsCompare: (left: string, right: string) =>
+    call<EnvComparison>('envs_compare', { left, right }),
+  /** Opens a system file dialog; `null` when it was cancelled. */
+  envsImportPick: () => call<EnvImportPick | null>('envs_import_pick'),
+  envsImport: (target: ImportTarget, choices: ImportChoice[]) =>
+    call<EnvImported>('envs_import', { target, choices }),
+  /** Opens a save dialog; `null` when it was cancelled. Not written while `repository` is set. */
+  envsExport: (id: string, format: EnvFormat) =>
+    call<EnvExport | null>('envs_export', { id, format }),
+  envsExportAnyway: () => call<EnvExport>('envs_export_anyway'),
+  /** Starts the user's shell with the environment's variables, like `terminalOpen`. */
+  envsRun: (
+    id: string,
+    size: { cols: number; rows: number },
+    onMessage: (message: TerminalMessage) => void,
+  ) =>
+    call<TerminalInfo>('envs_run', {
+      id,
+      cols: size.cols,
+      rows: size.rows,
+      events: isTauri() ? new Channel<TerminalMessage>(onMessage) : onMessage,
+    }),
 
   // Running on with the window closed, and the tray icon
   // (src-tauri/src/commands/background.rs).

@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   Sparkle,
   SquareTerminal,
+  Variable,
   Wrench,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -29,6 +30,7 @@ import {
 import { type Page, type Route, useRouter } from '@/app/router';
 import { Logo } from '@/components/Logo';
 import { Tile, type Tone } from '@/components/ui/Tile';
+import { useEnvs } from '@/features/envs/queries';
 import { useSessionCounts } from '@/features/terminal/TerminalProvider';
 import { TOOLS } from '@/features/tools/registry';
 import { cn } from '@/lib/cn';
@@ -53,6 +55,7 @@ export function Sidebar() {
   const audit = useAudit();
   const vault = useVaultStatus();
   const vaultEntries = useVaultEntries();
+  const envs = useEnvs();
   const sessions = useSessionCounts();
 
   const ignored = useSettings().ignoredFindings;
@@ -136,6 +139,28 @@ export function Sidebar() {
               ) : undefined
             }
             onClick={() => navigate({ page: 'passwords' })}
+          />
+          <NavItem
+            label={t('nav.envs')}
+            tone="lime"
+            icon={Variable}
+            active={route.page === 'envs'}
+            count={
+              vaultState === 'unlocked'
+                ? envs.data?.filter((env) => !env.inTrash).length
+                : undefined
+            }
+            trailing={
+              vaultState === 'locked' ? (
+                <LockKeyhole
+                  role="img"
+                  aria-label={t('nav.vaultLocked')}
+                  className="ml-auto size-3.5 text-subtle"
+                  strokeWidth={2}
+                />
+              ) : undefined
+            }
+            onClick={() => navigate({ page: 'envs' })}
           />
         </NavGroup>
         <NavGroup label={t('nav.groupSessions')}>

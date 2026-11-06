@@ -189,6 +189,20 @@ impl Side for Terminal {
                 println!("Got the public key {name}: {key}");
                 Ok((name.clone(), false))
             }
+            Item::Environment {
+                project,
+                name,
+                variables,
+                ..
+            } => {
+                // Names only: the values are secrets, even here.
+                println!("Got the environment {project} / {name}:");
+                for var in variables {
+                    let secret = if var.secret { " (secret)" } else { "" };
+                    println!("  {}{secret}", var.name);
+                }
+                Ok((format!("{project} / {name}"), false))
+            }
         }
     }
 
@@ -353,6 +367,12 @@ fn describe(item: &ItemSummary) -> String {
         ItemSummary::PublicKey {
             name, fingerprint, ..
         } => format!("the public key {name} ({fingerprint})"),
+        ItemSummary::Environment {
+            project,
+            name,
+            variables,
+            ..
+        } => format!("the environment {project} / {name} ({variables} variables)"),
     }
 }
 

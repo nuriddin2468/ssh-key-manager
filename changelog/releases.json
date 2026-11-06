@@ -1,0 +1,230 @@
+[
+  {
+    "version": "0.7.0",
+    "date": "2026-11-06",
+    "changes": [
+      {
+        "kind": "notice",
+        "en": "On macOS and Windows, closing the window no longer quits the app: it keeps running in the tray (the menu bar on macOS). To quit, choose Quit SSH Key Manager in its menu, or turn this off in Settings → Background.",
+        "ru": "На macOS и Windows закрытие окна больше не завершает приложение: оно продолжает работать в трее (на macOS — в строке меню). Чтобы выйти, выберите «Выйти из SSH Key Manager» в его меню или выключите это в Настройки → Работа в фоне.",
+        "uz": "macOS va Windows’da oynani yopish endi ilovadan chiqmaydi: u treyda (macOS’da menyu satrida) ishlashda davom etadi. Chiqish uchun uning menyusida «SSH Key Manager’dan chiqish»ni tanlang yoki buni Sozlamalar → Fon rejimida oʻchiring."
+      },
+      {
+        "kind": "new",
+        "en": "With the window closed, browser autofill, your devices and terminal sessions keep working. The tray menu shows whether the vault is locked, locks it and connects to recent hosts.",
+        "ru": "При закрытом окне продолжают работать автозаполнение в браузере, ваши устройства и сессии терминала. Меню в трее показывает, заблокировано ли хранилище, блокирует его и подключается к недавним хостам.",
+        "uz": "Oyna yopiq boʻlsa ham brauzerda avtomatik toʻldirish, qurilmalaringiz va terminal seanslari ishlayveradi. Treydagi menyu ombor qulflanganmi yoki yoʻqligini koʻrsatadi, uni qulflaydi va soʻnggi xostlarga ulanadi."
+      },
+      {
+        "kind": "new",
+        "en": "Unlock in SSH Key Manager, in the browser extension, now asks in the app, with Touch ID, Windows Hello or a small window of its own, so the master password is never typed in the browser.",
+        "ru": "«Разблокировать в SSH Key Manager» в расширении для браузера теперь спрашивает в самом приложении — через Touch ID, Windows Hello или в отдельном маленьком окне, — так что мастер-пароль никогда не вводится в браузере.",
+        "uz": "Brauzer kengaytmasidagi «SSH Key Managerda ochish» endi ilovaning oʻzida soʻraydi: Touch ID, Windows Hello yoki alohida kichik oyna orqali. Shu sababli asosiy parol hech qachon brauzerda kiritilmaydi."
+      },
+      {
+        "kind": "new",
+        "en": "The browser extension is in the Chrome Web Store, for Chrome, Edge, Brave and other Chromium browsers.",
+        "ru": "Расширение для браузера появилось в Chrome Web Store — для Chrome, Edge, Brave и других браузеров на Chromium.",
+        "uz": "Brauzer kengaytmasi Chrome Web Store’da: Chrome, Edge, Brave va Chromium asosidagi boshqa brauzerlar uchun."
+      }
+    ]
+  },
+  {
+    "version": "0.6.0",
+    "date": "2026-11-04",
+    "changes": [
+      {
+        "kind": "security",
+        "en": "Before a browser fills a login on a page for the first time, the app asks with Touch ID, Windows Hello or a system dialog, so neither a page nor a program that copied the extension’s keys can answer for you.",
+        "ru": "Прежде чем браузер впервые заполнит логин на странице, приложение спрашивает через Touch ID, Windows Hello или системное окно, так что ни страница, ни программа, скопировавшая ключи расширения, не ответит за вас.",
+        "uz": "Brauzer sahifada loginni birinchi marta toʻldirishidan oldin ilova Touch ID, Windows Hello yoki tizim oynasi orqali soʻraydi. Shuning uchun sizning oʻrningizga na sahifa, na kengaytma kalitlarini nusxalagan dastur javob bera oladi."
+      },
+      {
+        "kind": "security",
+        "en": "Fixes from a security review of the whole app: lines in ~/.ssh/config that run a program are confirmed even when unusual characters hide them, and Nearby, the vault and browser autofill are harder to misuse. SECURITY.md has the details.",
+        "ru": "Исправления по итогам проверки безопасности всего приложения: строки в ~/.ssh/config, запускающие программу, подтверждаются, даже если их скрывают необычные символы, а «Рядом», хранилищем и автозаполнением сложнее злоупотребить. Подробности в SECURITY.md.",
+        "uz": "Butun ilova xavfsizligini tekshirish natijasidagi tuzatishlar: ~/.ssh/config’dagi dastur ishga tushiradigan qatorlar gʻalati belgilar ostiga yashirilgan boʻlsa ham tasdiqlanadi, «Yaqin atrofda», ombor va avtomatik toʻldirishdan suiisteʼmol qilish qiyinroq. Batafsil SECURITY.md’da."
+      },
+      {
+        "kind": "new",
+        "en": "Nearby: send a password or a host to another computer on the same network. The other computer sees what it is and saves it only if you accept.",
+        "ru": "«Рядом»: отправляйте пароль или хост на другой компьютер в той же сети. Тот компьютер видит, что пришло, и сохраняет это, только если вы согласитесь.",
+        "uz": "«Yaqin atrofda»: parol yoki xostni shu tarmoqdagi boshqa kompyuterga yuboring. U kompyuter nima kelganini koʻradi va faqat siz rozi boʻlsangiz saqlaydi."
+      },
+      {
+        "kind": "new",
+        "en": "My devices: move the vault to your new computer and keep hosts in step between your computers with Sync now. Two different vaults are never merged.",
+        "ru": "«Мои устройства»: перенесите хранилище на новый компьютер и держите хосты одинаковыми на своих компьютерах кнопкой «Синхронизировать сейчас». Два разных хранилища никогда не объединяются.",
+        "uz": "«Mening qurilmalarim»: omborni yangi kompyuteringizga koʻchiring va «Hozir sinxronlash» bilan kompyuterlaringizdagi xostlarni bir xil saqlang. Ikki xil ombor hech qachon birlashtirilmaydi."
+      },
+      {
+        "kind": "new",
+        "en": "Keys on the server…, in a host’s menu, lists the keys in the server’s authorized_keys, adds one of yours and removes one after asking. It never offers to remove this computer’s only way in.",
+        "ru": "«Ключи на сервере…» в меню хоста показывает ключи из authorized_keys на сервере, добавляет ваш ключ и удаляет ключ после подтверждения. Убрать единственный способ входа с этого компьютера не предлагается.",
+        "uz": "Xost menyusidagi «Serverdagi kalitlar…» serverdagi authorized_keys’dagi kalitlarni koʻrsatadi, kalitingizni qoʻshadi va tasdiqlagach kalitni oʻchiradi. Bu kompyuterning yagona kirish yoʻlini oʻchirishni taklif qilmaydi."
+      },
+      {
+        "kind": "improved",
+        "en": "Hosts are cards that show whether each server lets you in, with Check and Connect, and the editor lists recent connections.",
+        "ru": "Хосты теперь показаны карточками: видно, пускает ли сервер, есть «Проверить» и «Подключиться», а в редакторе — последние подключения.",
+        "uz": "Xostlar endi kartochkalarda: server kirgizadimi yoki yoʻqmi koʻrinadi, «Tekshirish» va «Ulanish» bor, muharrirda esa soʻnggi ulanishlar."
+      },
+      {
+        "kind": "improved",
+        "en": "Saved key passphrases and host passwords show in place, masked, with show and copy, and a locked vault opens in a dialog on the page you’re on.",
+        "ru": "Сохранённые пароли ключей и хостов видны прямо на месте — скрытыми, с кнопками «Показать» и «Копировать», а заблокированное хранилище открывается в окне на той же странице.",
+        "uz": "Saqlangan kalit va xost parollari oʻz joyida yashirin holda, «Koʻrsatish» va «Nusxalash» bilan koʻrinadi, qulflangan ombor esa shu sahifaning oʻzida oynada ochiladi."
+      },
+      {
+        "kind": "fixed",
+        "en": "Check no longer says the server refused your keys when a key only needs its passphrase: the app asks for it first.",
+        "ru": "«Проверить» больше не сообщает, что сервер не принял ваши ключи, когда ключу просто нужен пароль: приложение сначала спрашивает его.",
+        "uz": "«Tekshirish» endi kalitga shunchaki parol kerak boʻlganda server kalitlaringizni qabul qilmadi demaydi: ilova avval parolni soʻraydi."
+      },
+      {
+        "kind": "fixed",
+        "en": "Dialogs no longer scroll sideways.",
+        "ru": "Окна больше не прокручиваются вбок.",
+        "uz": "Oynalar endi yon tomonga aylantirilmaydi."
+      }
+    ]
+  },
+  {
+    "version": "0.5.0",
+    "date": "2026-11-03",
+    "changes": [
+      {
+        "kind": "security",
+        "en": "Saved key passphrases and host-key answers never go to a prompt the server wrote, and older OpenSSH versions no longer fill in saved secrets through a jump host.",
+        "ru": "Сохранённые пароли ключей и ответы о ключах хостов никогда не попадают в запрос, написанный сервером, а старые версии OpenSSH больше не подставляют сохранённые секреты через промежуточный хост.",
+        "uz": "Saqlangan kalit parollari va xost kalitlari haqidagi javoblar hech qachon server yozgan soʻrovga tushmaydi, OpenSSH’ning eski versiyalari esa endi saqlangan sirlarni oraliq xost orqali kiritmaydi."
+      },
+      {
+        "kind": "security",
+        "en": "Touch ID unlock turns off when fingerprints change, and Windows Hello unlock is bound to a Windows Hello key.",
+        "ru": "Разблокировка через Touch ID выключается, когда меняются отпечатки пальцев, а разблокировка через Windows Hello привязана к ключу Windows Hello.",
+        "uz": "Barmoq izlari oʻzgarsa, Touch ID orqali qulfdan chiqarish oʻchadi, Windows Hello orqali qulfdan chiqarish esa Windows Hello kalitiga bogʻlangan."
+      },
+      {
+        "kind": "security",
+        "en": "Changes that make ssh run a program, weaken the vault’s protection or add or remove a key’s passphrase are confirmed in a system dialog.",
+        "ru": "Изменения, из-за которых ssh запускает программу, ослабевает защита хранилища или у ключа появляется либо пропадает пароль, подтверждаются в системном окне.",
+        "uz": "ssh’ni dastur ishga tushirishga majbur qiladigan, ombor himoyasini susaytiradigan yoki kalit parolini qoʻshadigan yoxud olib tashlaydigan oʻzgarishlar tizim oynasida tasdiqlanadi."
+      },
+      {
+        "kind": "security",
+        "en": "Browser autofill ignores events a page makes up, refuses sandboxed frames and won’t accept a pick the page has covered or moved.",
+        "ru": "Автозаполнение в браузере не реагирует на события, которые подделывает страница, отказывает фреймам в песочнице и не принимает выбор, если страница закрыла или сдвинула меню.",
+        "uz": "Brauzerda avtomatik toʻldirish sahifa soxtalashtirgan hodisalarga eʼtibor bermaydi, sandbox’dagi freymlarni rad etadi va sahifa menyuni yopib qoʻygan yoki surgan boʻlsa, tanlovni qabul qilmaydi."
+      }
+    ]
+  },
+  {
+    "version": "0.4.0",
+    "date": "2026-11-03",
+    "changes": [
+      {
+        "kind": "new",
+        "en": "Browser autofill: an extension for Chrome, Edge and Firefox fills in a site’s logins from the vault on that site only, and offers to save new ones.",
+        "ru": "Автозаполнение в браузере: расширение для Chrome, Edge и Firefox подставляет логины сайта из хранилища только на этом сайте и предлагает сохранить новые.",
+        "uz": "Brauzerda avtomatik toʻldirish: Chrome, Edge va Firefox uchun kengaytma saytning loginlarini ombordan faqat oʻsha saytda toʻldiradi va yangilarini saqlashni taklif qiladi."
+      },
+      {
+        "kind": "new",
+        "en": "Move hosts file entries between groups by dragging them.",
+        "ru": "Записи файла hosts можно перетаскивать между группами.",
+        "uz": "Hosts fayli yozuvlarini guruhlar orasida sudrab koʻchirish mumkin."
+      }
+    ]
+  },
+  {
+    "version": "0.3.1",
+    "date": "2026-11-03",
+    "changes": [
+      {
+        "kind": "fixed",
+        "en": "The installed app no longer opens to a blank window.",
+        "ru": "Установленное приложение больше не открывается с пустым окном.",
+        "uz": "Oʻrnatilgan ilova endi boʻsh oyna bilan ochilmaydi."
+      }
+    ]
+  },
+  {
+    "version": "0.3.0",
+    "date": "2026-11-03",
+    "changes": [
+      {
+        "kind": "new",
+        "en": "Password vault: keep server passwords, key passphrases and 2FA codes encrypted with a master password, and unlock it with Touch ID or Windows Hello. It can be imported, exported and kept in a folder of your choice.",
+        "ru": "Хранилище паролей: пароли серверов, пароли ключей и коды 2FA зашифрованы мастер-паролем, а открыть хранилище можно через Touch ID или Windows Hello. Его можно импортировать, экспортировать и держать в любой папке.",
+        "uz": "Parollar ombori: server parollari, kalit parollari va 2FA kodlari asosiy parol bilan shifrlanadi, omborni esa Touch ID yoki Windows Hello bilan ochish mumkin. Uni import, eksport qilish va istalgan papkada saqlash mumkin."
+      },
+      {
+        "kind": "new",
+        "en": "A terminal in the app connects to your hosts and fills in their saved passwords and passphrases.",
+        "ru": "Терминал в приложении подключается к вашим хостам и сам подставляет сохранённые пароли.",
+        "uz": "Ilovadagi terminal xostlaringizga ulanadi va ularning saqlangan parollarini oʻzi kiritadi."
+      },
+      {
+        "kind": "improved",
+        "en": "The host editor is grouped around how you sign in, and Settings moved into the sidebar menu.",
+        "ru": "Редактор хоста сгруппирован вокруг того, как вы входите на сервер, а настройки переехали в меню боковой панели.",
+        "uz": "Xost muharriri serverga qanday kirishingiz atrofida guruhlangan, sozlamalar esa yon paneldagi menyuga koʻchdi."
+      }
+    ]
+  },
+  {
+    "version": "0.2.2",
+    "date": "2026-11-02",
+    "changes": [
+      {
+        "kind": "new",
+        "en": "Hosts file: view, check and edit /etc/hosts, with groups and temporary entries.",
+        "ru": "Файл hosts: просмотр, проверка и правка /etc/hosts, с группами и временными записями.",
+        "uz": "Hosts fayli: /etc/hosts’ni koʻrish, tekshirish va tahrirlash, guruhlar va vaqtinchalik yozuvlar bilan."
+      },
+      {
+        "kind": "fixed",
+        "en": "On Linux, the window no longer lags on computers with an NVIDIA graphics card.",
+        "ru": "На Linux окно больше не тормозит на компьютерах с видеокартой NVIDIA.",
+        "uz": "Linux’da NVIDIA videokartali kompyuterlarda oyna endi sekin ishlamaydi."
+      }
+    ]
+  },
+  {
+    "version": "0.2.1",
+    "date": "2026-11-02",
+    "changes": [
+      {
+        "kind": "fixed",
+        "en": "On Linux, the app no longer refreshes over and over while it watches ~/.ssh.",
+        "ru": "На Linux приложение больше не обновляется снова и снова, пока следит за ~/.ssh.",
+        "uz": "Linux’da ilova ~/.ssh’ni kuzatayotganda endi qayta-qayta yangilanmaydi."
+      }
+    ]
+  },
+  {
+    "version": "0.2.0",
+    "date": "2026-11-02",
+    "changes": [
+      {
+        "kind": "new",
+        "en": "Manage your SSH keys, the hosts in ~/.ssh/config, known_hosts and ssh-agent on macOS, Windows and Linux.",
+        "ru": "Управляйте SSH-ключами, хостами в ~/.ssh/config, known_hosts и ssh-agent на macOS, Windows и Linux.",
+        "uz": "SSH kalitlari, ~/.ssh/config’dagi xostlar, known_hosts va ssh-agent’ni macOS, Windows va Linux’da boshqaring."
+      },
+      {
+        "kind": "new",
+        "en": "The app checks for updates and installs them itself.",
+        "ru": "Приложение само проверяет обновления и устанавливает их.",
+        "uz": "Ilova yangilanishlarni oʻzi tekshiradi va oʻrnatadi."
+      },
+      {
+        "kind": "fixed",
+        "en": "On Windows, the app finds ssh-agent through the OpenSSH pipe when SSH_AUTH_SOCK isn’t one.",
+        "ru": "На Windows приложение находит ssh-agent через канал OpenSSH, когда SSH_AUTH_SOCK им не является.",
+        "uz": "Windows’da SSH_AUTH_SOCK OpenSSH kanali boʻlmasa, ilova ssh-agent’ni shu kanal orqali topadi."
+      }
+    ]
+  }
+]

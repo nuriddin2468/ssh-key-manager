@@ -60,6 +60,10 @@ cargo test --workspace --all-features
 - **Secrets.** Never log or serialise key material or passphrases.
 - **Commits and pull requests.** Keep them small and focused, and describe the user-visible
   change.
+- **Release notes.** A pull request that changes what users see adds a note, in English,
+  Russian and Uzbek, to `changelog/unreleased/`. The app shows these notes before it updates,
+  so people know what changes and what to watch for. [changelog/README.md](changelog/README.md)
+  says how to write one.
 
 ## License of contributions
 
@@ -80,11 +84,13 @@ There are three workflows:
 
 To publish a release:
 
-1. Bump the version in `package.json`, `Cargo.toml`, `src-tauri/tauri.conf.json` and
-   `extension/manifest.json` (the browser extension ships with the app, and a test fails
-   if its version differs), and commit it to `main` as `Release 0.2.0`. `ci.yml` and
-   `build.yml` skip a commit whose message starts with `Release `, since `release.yml`
-   builds it from the tag.
+1. Run `pnpm release 0.2.0`. It moves the notes in `changelog/unreleased/` into
+   `changelog/releases.json` and `CHANGELOG.md`, and sets the version in `package.json`,
+   `Cargo.toml`, `Cargo.lock`, `src-tauri/tauri.conf.json` and `extension/manifest.json`
+   (the browser extension ships with the app). Read the notes it prints, then commit
+   everything to `main` as `Release 0.2.0`. `ci.yml` and `build.yml` skip a commit whose
+   message starts with `Release `, since `release.yml` builds it from the tag, and
+   `release.yml` refuses a tag whose version has no notes.
 2. Push a tag:
 
    ```bash
@@ -93,8 +99,9 @@ To publish a release:
 
 3. Wait for the workflow. The three platforms build first. Then the `sign` job, after
    approval in the `release` environment, signs the update bundles and creates the draft
-   release, and the release is published. Installed apps then offer the update within a
-   few hours: they read `latest.json` from the latest release. If a build fails, nothing
+   release with the version's notes, and the release is published. Installed apps then
+   offer the update within a few hours: they read `latest.json` from the latest release,
+   which also carries the notes of the last 20 releases in every language. If a build fails, nothing
    is released: fix the problem and re-run the failed jobs, or delete the tag and push it
    again.
 4. The extension goes to the stores by itself: once the release is published, the

@@ -25,3 +25,4 @@ Thumbs.db
 
 # Local tooling
 .claude/
+__pycache__/

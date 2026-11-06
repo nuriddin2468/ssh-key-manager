@@ -23,6 +23,13 @@ name: Release
 #   Windows: configure signing in tauri.conf.json (bundle.windows) or Azure Trusted Signing
 # Without them the builds still succeed, unsigned.
 #
+# The release notes come from changelog/releases.json, which
+# `node scripts/changelog.mjs release <version>` fills in (changelog/README.md).
+# The GitHub release shows the version's section of CHANGELOG.md, and
+# latest.json carries the notes of the last releases in every language, for the
+# app to show before it updates. A tag without notes for its version fails
+# before anything is built.
+#
 # Once the release is published, the browser extension of the same version goes
 # to the stores for review (the `extension-stores` job, with the secrets of the
 # `extension-stores` environment; .github/scripts/extension_stores.py names
@@ -64,6 +71,8 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - name: Check the release notes
+        run: node scripts/changelog.mjs check
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
         with:
           toolchain: stable
@@ -136,7 +145,8 @@ jobs:
     permissions:
       contents: write
     env:
-      NOTES: |-
+      # Under the version's notes on the GitHub release.
+      FOOTER: |-
         Which file to download: see [Download](https://github.com/nuriddin2468/ssh-key-manager#download) in the README.
 
         [Code signing policy](https://github.com/nuriddin2468/ssh-key-manager#code-signing-policy)
@@ -201,8 +211,8 @@ jobs:
               with open(path + ".sig", encoding="ascii") as sig:
                   if key_id(sig.read()) != trusted:
                       sys.exit(f"{name}.sig is not by the key in plugins.updater.pubkey")
-      # The manifest as tauri-action wrote it. The updater looks up
-      # `{os}-{arch}-{installer}` first, then `{os}-{arch}`.
+      # The manifest as tauri-action wrote it, plus the release notes. The
+      # updater looks up `{os}-{arch}-{installer}` first, then `{os}-{arch}`.
       - name: Write latest.json
         shell: python3 -I {0}
         run: |
@@ -213,6 +223,21 @@ jobs:
               sys.exit(f"unexpected tag: {tag}")
           with open("src-tauri/tauri.conf.json", encoding="utf-8") as file:
               version = json.load(file)["version"]
+          # The build jobs checked that releases.json starts with this version
+          # and that CHANGELOG.md was made from it.
+          with open("changelog/releases.json", encoding="utf-8") as file:
+              releases = json.load(file)
+          if releases[0]["version"] != version:
+              sys.exit(f"changelog/releases.json has no notes for {version}")
+          with open("CHANGELOG.md", encoding="utf-8") as file:
+              section = re.search(
+                  rf"^## {re.escape(version)} \(.*?\)\n\n(.*?)(?=\n## |\Z)", file.read(), re.M | re.S
+              )
+          if not section:
+              sys.exit(f"CHANGELOG.md has no section for {version}")
+          notes = section.group(1).strip()
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "notes.md"), "w", encoding="utf-8") as out:
+              out.write(f"{notes}\n\n{os.environ['FOOTER']}\n")
           base = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{tag}"
           folder = os.path.join(os.environ["RUNNER_TEMP"], "release")
           files = os.listdir(folder)
@@ -237,9 +262,12 @@ jobs:
                   platforms[key] = {"signature": signature, "url": f"{base}/{found[0]}"}
           manifest = {
               "version": version,
-              "notes": os.environ["NOTES"],
+              "notes": notes,
               "pub_date": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
               "platforms": platforms,
+              # The app lists every version newer than its own from here, so
+              # someone a few releases behind sees what each one changed.
+              "changelog": releases[:20],
           }
           with open(os.path.join(folder, "latest.json"), "w", encoding="utf-8") as out:
               json.dump(manifest, out, indent=2)
@@ -251,9 +279,10 @@ jobs:
           cd "$RUNNER_TEMP/release"
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber ./*
+            gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/notes.md"
           else
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
-              --title "SSH Key Manager $GITHUB_REF_NAME" --notes "$NOTES" ./*
+              --title "SSH Key Manager $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" ./*
           fi
 
   publish:

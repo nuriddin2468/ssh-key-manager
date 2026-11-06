@@ -14,6 +14,7 @@ pub mod key_rotation;
 pub mod keys;
 pub mod known_hosts;
 pub mod nearby;
+pub mod quick;
 pub mod remote;
 pub mod shell_history;
 pub mod ssh_tools;

@@ -55,6 +55,8 @@ pub fn install(app: &App) -> tauri::Result<()> {
         .build()?;
 
     let view = SubmenuBuilder::new(handle, "View")
+        .item(&item("palette", "Command Palette…", "CmdOrCtrl+K")?)
+        .separator()
         .item(&item("nav-overview", "Overview", "CmdOrCtrl+1")?)
         .item(&item("nav-keys", "Keys", "CmdOrCtrl+2")?)
         .item(&item("nav-hosts", "Hosts", "CmdOrCtrl+3")?)

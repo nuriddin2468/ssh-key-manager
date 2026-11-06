@@ -162,6 +162,33 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     reads it before it is shown or installed. Installing it goes over stdin through the
     same script as installing a key, and never replaces a line that has the key
     already.
+- **Quick search.** A system-wide key combination (⇧⌘Space on macOS,
+  Ctrl+Shift+Space elsewhere; it can be changed or turned off in **Settings → Quick
+  search**) or the tray menu opens a small window to connect to a host, copy a
+  password, user name or 2FA code, or unlock the vault.
+  - The combination is registered with the system (`tauri-plugin-global-shortcut`),
+    which reports that one combination and no other keys. Running the app with
+    `--quick-search` opens the same window in the running app (for desktops that
+    give apps no global shortcuts, such as Wayland); it shows nothing to the
+    program that ran it. A combination without
+    Ctrl, Alt or ⌘ / the Windows key is refused, so it can't take a key used for
+    typing.
+  - The window's capability (`capabilities/quick.json`) allows only what it does:
+    the hosts and the vault's entries without their secrets (`quick_items`, which
+    doesn't count as activity), the vault's own copy (`vault_copy`: out of
+    clipboard history, cleared after 30 seconds by default), the three unlock
+    commands, connecting and closing. It can't reveal a password, read an entry's
+    details or the config, or change anything; a test checks this.
+  - A password never reaches the window: it goes from Rust to the clipboard as
+    when copied in the main window. Unlocking asks for the master password, or
+    Touch ID / Windows Hello, in the window itself, as the unlock window does.
+  - The window stays above others and closes on Escape, after a copy, and when it
+    loses the focus, so it doesn't stay open with the vault's entry names behind
+    other windows. After Escape or a copy, the app that was in front gets the focus
+    back.
+  - The in-app command palette (⌘K) and quick search remember recently run items
+    by id (`host:<alias>:connect`, `entry:<uuid>:password`) in the webview's local
+    storage; never a secret or a query.
 - **Browser autofill** (optional, off by default) lets the SSH Key Manager extension for
   Chrome, Edge and Firefox fill and save logins from the vault. See
   [Browser autofill](#browser-autofill) below.
@@ -345,7 +372,8 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     each window its own. Every command of the app needs a permission (`build.rs` lists
     them, and a test checks the list against the commands registered), so a window
     can call only what its capability names: the main window all of them, the
-    browser's unlock window only the three that unlock the vault.
+    browser's unlock window only the three that unlock the vault, the quick search
+    window only what it lists and does (see "Quick search" above).
   - The window only shows the app's own page: navigating elsewhere is refused and new
     windows can't open. Links open in your browser, and only `http` and `https` links.
   - Permission fixes apply only what the app's own audit found inside `~/.ssh`, and only

@@ -51,6 +51,8 @@ import type { PermissionFix } from '@/bindings/PermissionFix';
 import type { PortCheck } from '@/bindings/PortCheck';
 import type { PortProbe } from '@/bindings/PortProbe';
 import type { PromptAnswer } from '@/bindings/PromptAnswer';
+import type { QuickItems } from '@/bindings/QuickItems';
+import type { QuickStatus } from '@/bindings/QuickStatus';
 import type { ReceivedGroup } from '@/bindings/ReceivedGroup';
 import type { SavedHost } from '@/bindings/SavedHost';
 import type { SecretField } from '@/bindings/SecretField';
@@ -388,6 +390,19 @@ export const api = {
   backgroundStatus: () => call<BackgroundStatus>('background_status'),
   backgroundSetEnabled: (enabled: boolean) =>
     call<BackgroundStatus>('background_set_enabled', { enabled }),
+
+  // Quick search: its shortcut, and what its window lists and does
+  // (src-tauri/src/commands/quick.rs).
+  quickStatus: () => call<QuickStatus>('quick_status'),
+  /** `shortcut` such as `Shift+Super+Space`; `null` for the default. */
+  quickSetShortcut: (enabled: boolean, shortcut: string | null) =>
+    call<QuickStatus>('quick_set_shortcut', { enabled, shortcut }),
+  /** Hosts, and the vault's entries without secrets (`null` while it is locked). */
+  quickItems: () => call<QuickItems>('quick_items'),
+  /** Closes the quick window and opens a session to `alias` in the main window. */
+  quickConnect: (alias: string) => call<void>('quick_connect', { alias }),
+  /** Closes the quick window; `back` gives the focus to the app the user was in. */
+  quickClose: (back: boolean) => call<void>('quick_close', { back }),
 
   // Browser autofill (src-tauri/src/commands/browser.rs).
   browserStatus: () => call<BrowserStatus>('browser_status'),

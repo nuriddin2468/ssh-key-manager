@@ -16,6 +16,7 @@ pub const HOSTS_SHOWN: usize = 8;
 // The macOS menu bar's handler sees these ids too and passes them to the
 // page, which knows none of them.
 pub const OPEN: &str = "tray:open";
+pub const QUICK: &str = "tray:quick";
 pub const NEARBY: &str = "tray:nearby";
 /// Followed by the alias.
 pub const HOST: &str = "tray:host:";
@@ -89,6 +90,10 @@ pub fn items(input: &Input) -> Vec<Item> {
             "Открыть SSH Key Manager",
             "SSH Key Manager’ni ochish",
         ),
+    ));
+    items.push(action(
+        QUICK,
+        text("Quick Search…", "Быстрый поиск…", "Tezkor qidiruv…"),
     ));
 
     if let Some(waiting) = &input.waiting {
@@ -348,6 +353,7 @@ mod tests {
             [
                 "label",
                 OPEN,
+                QUICK,
                 "-",
                 &format!("[{HOST}web - {ALL_HOSTS}]"),
                 "-",
@@ -369,8 +375,11 @@ mod tests {
             }),
             tunnels: &[],
         });
-        assert_eq!(ids(&items), ["label", OPEN, "-", NEARBY, "-", UNLOCK, QUIT]);
-        assert!(matches!(&items[3], Item::Action { text, .. } if text.starts_with("Laptop")));
+        assert_eq!(
+            ids(&items),
+            ["label", OPEN, QUICK, "-", NEARBY, "-", UNLOCK, QUIT]
+        );
+        assert!(matches!(&items[4], Item::Action { text, .. } if text.starts_with("Laptop")));
     }
 
     #[test]
@@ -383,7 +392,7 @@ mod tests {
             waiting: None,
             tunnels: &[],
         });
-        assert_eq!(ids(&items), [OPEN, "-", QUIT]);
+        assert_eq!(ids(&items), [OPEN, QUICK, "-", QUIT]);
     }
 
     #[test]

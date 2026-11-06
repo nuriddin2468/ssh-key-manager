@@ -178,6 +178,15 @@ are never shown, kept or sent anywhere. The app keeps your answer and the sugges
 you dismissed, as hashes rather than the servers, in `shell-history.json` in its data
 folder. You can turn this off in **Settings → Shell history**.
 
+**Quick search** listens for one key combination anywhere on your computer (⇧⌘Space
+on macOS, Ctrl+Shift+Space elsewhere, unless you change it or turn it off in
+**Settings → Quick search**): the system tells the app only when that combination is
+pressed, never about other keys. The command palette and quick search remember the
+last few things you ran from them (a host's name, a key's or an entry's internal
+identifier, an action) in the app's local storage, so they come first next time;
+never a password or anything you typed. Your choice of combination is kept in
+`quick.json` in the app's data folder.
+
 For each browser you connect, the app records in your vault the browser's name, your
 computer's name and the date you connected. You can disconnect a browser in
 **Settings → Browser autofill**. [SECURITY.md](SECURITY.md) describes in detail how the

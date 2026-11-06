@@ -2,20 +2,21 @@
 //! menu bar) that stays meanwhile.
 //!
 //! With the setting on, closing the window hides it: browser autofill, the
-//! user's own devices on Nearby, terminal sessions and the vault's timers
-//! carry on. The icon's menu brings the window back and offers what needs no
-//! window: the vault's state, locking it and unlocking it (in the small
-//! unlock window, [`crate::browser::unlock`]), connecting to a host, a Nearby
-//! conversation waiting for the user, and quitting. A conversation that
+//! user's own devices on Nearby, terminal sessions, tunnels and the vault's
+//! timers carry on. The icon's menu brings the window back and offers what
+//! needs no window: the vault's state, locking it and unlocking it (in the
+//! small unlock window, [`crate::browser::unlock`]), the tunnels that are on
+//! and stopping them, connecting to a host, a Nearby conversation waiting
+//! for the user, and quitting. A conversation that
 //! starts waiting while the window is hidden brings the window back by
 //! itself, as a browser's pairing request already does: both come only from
 //! something the user started or allowed, and time out.
 //!
 //! One worker thread rebuilds the menu whenever what it shows may have
-//! changed ([`refresh`]): the vault locked or unlocked, `~/.ssh` changed, a Nearby
-//! conversation started or stopped waiting, the window lost focus (the user
-//! may head for the icon next, after unlocking or connecting in the window),
-//! or the language changed. It sets the menu only if it came out different.
+//! changed ([`refresh`]): the vault locked or unlocked, `~/.ssh` changed, a
+//! tunnel changed, a Nearby conversation started or stopped waiting, the
+//! window lost focus (the user may head for the icon next, after unlocking or
+//! connecting in the window), or the language changed. It sets the menu only if it came out different.
 //!
 //! The setting is on by default on macOS and Windows, which always have a
 //! place for the icon. On Linux it is off by default, and can't be turned on
@@ -47,6 +48,7 @@ use crate::confirm::Localized;
 use crate::error::{AppError, AppResult};
 use crate::nearby::SharedNearby;
 use crate::nearby::pairing::PairingPhase;
+use crate::tunnels::SharedTunnels;
 use crate::vault::LockReason;
 
 const SETTINGS_FILE: &str = "background.json";
@@ -123,6 +125,7 @@ impl Background {
             crate::vault::UNLOCKED_EVENT,
             crate::watcher::EVENT,
             crate::vault_watcher::EVENT,
+            crate::tunnels::CHANGED_EVENT,
         ] {
             let handle = app.clone();
             app.listen_any(event, move |_| refresh(&handle));
@@ -363,11 +366,16 @@ fn items(app: &AppHandle) -> Vec<Item> {
             .asks_user()
             .then_some(Waiting { peer: pairing.peer })
     });
+    let tunnels = app
+        .try_state::<SharedTunnels>()
+        .map(|tunnels| tunnels.active())
+        .unwrap_or_default();
     menu::items(&Input {
         vault,
         aliases: &aliases,
         history: &history,
         waiting,
+        tunnels: &tunnels,
     })
 }
 
@@ -416,6 +424,12 @@ fn act(app: &AppHandle, id: &str) {
             }
         }
         menu::QUIT => quit(app),
+        menu::TUNNELS => page("tool:tunnels"),
+        menu::STOP_TUNNELS => {
+            if let Some(tunnels) = app.try_state::<SharedTunnels>() {
+                tunnels.stop_all();
+            }
+        }
         _ => {
             if let Some(alias) = id.strip_prefix(menu::HOST)
                 && crate::commands::remote::check_alias(alias).is_ok()

@@ -75,7 +75,7 @@ pub fn install_key(
 
 /// Options of a run that only runs its command: no forwarding, no tty, no
 /// configured `RemoteCommand` in the way.
-const COMMAND_ONLY: &[&str] = &[
+pub(crate) const COMMAND_ONLY: &[&str] = &[
     "-o",
     "RemoteCommand=none",
     "-o",
@@ -414,12 +414,12 @@ fn public_line(info: &KeyInfo) -> AppResult<String> {
     Ok(line.to_owned())
 }
 
-fn has_line(text: &str, wanted: &str) -> bool {
+pub(crate) fn has_line(text: &str, wanted: &str) -> bool {
     text.lines().any(|line| line.trim() == wanted)
 }
 
-const ADDED: &str = "sshkm:added";
-const PRESENT: &str = "sshkm:present";
+pub(crate) const ADDED: &str = "sshkm:added";
+pub(crate) const PRESENT: &str = "sshkm:present";
 const REMOVED: &str = "sshkm:removed";
 const ABSENT: &str = "sshkm:absent";
 const BEGIN: &str = "sshkm:begin";

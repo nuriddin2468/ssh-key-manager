@@ -13,6 +13,7 @@
 //! `ProxyCommand`, `LocalCommand`, `RemoteCommand` and `KnownHostsCommand`,
 //! which take the rest of the line literally.
 
+mod jump;
 mod lexer;
 mod risky;
 

@@ -240,7 +240,7 @@ pub fn config_file(state: &AppState) -> AppResult<ConfigFile> {
 
 /// The config file, if it is still at `revision`; fails with `conflict`
 /// otherwise.
-fn load_at(state: &AppState, revision: &str) -> AppResult<SshConfig> {
+pub(crate) fn load_at(state: &AppState, revision: &str) -> AppResult<SshConfig> {
     let config = SshConfig::load(&state.paths.config)?;
     fsutil::ensure_revision(&state.paths.config, &config.revision(), revision)?;
     Ok(config)

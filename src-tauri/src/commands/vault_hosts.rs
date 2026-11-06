@@ -120,7 +120,7 @@ pub async fn vault_test_key_login(
 /// never gets a passphrase: [`run_ssh`] switches keyboard-interactive off
 /// unless a 2FA code is saved, and its session refuses a server's prompt
 /// that asks for one.
-fn saved_secrets(state: &AppState, app: &AppHandle, alias: &str) -> AppResult<Secrets> {
+pub(crate) fn saved_secrets(state: &AppState, app: &AppHandle, alias: &str) -> AppResult<Secrets> {
     let scanned = keys::scan(&state.paths.dir)
         .map(|scan| scan.keys)
         .unwrap_or_default();

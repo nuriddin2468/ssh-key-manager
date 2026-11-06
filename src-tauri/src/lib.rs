@@ -16,6 +16,7 @@ mod process;
 mod state;
 pub mod terminal;
 mod tray;
+pub mod tunnels;
 mod types;
 mod vault;
 mod vault_watcher;
@@ -97,6 +98,19 @@ pub fn run() {
             commands::config::clear_connection_history,
             commands::remote::install_public_key,
             commands::remote::server_keys,
+            commands::ssh_tools::tunnel_list,
+            commands::ssh_tools::tunnel_save,
+            commands::ssh_tools::tunnel_delete,
+            commands::ssh_tools::tunnel_set_on,
+            commands::ssh_tools::tunnel_answer,
+            commands::ssh_tools::tunnel_stop_all,
+            commands::ssh_tools::tunnel_export,
+            commands::ssh_tools::set_proxy_jump,
+            commands::ssh_tools::key_convert_inspect,
+            commands::ssh_tools::key_convert_import,
+            commands::ssh_tools::key_convert_save,
+            commands::ssh_tools::authorized_line,
+            commands::ssh_tools::install_authorized_line,
             commands::nearby::nearby_status,
             commands::nearby::nearby_set_name,
             commands::nearby::nearby_set_visible,
@@ -201,6 +215,12 @@ pub fn run() {
             {
                 bridge.stop();
             }
+            // Tunnels run on with the window in the tray, not past the app.
+            if let RunEvent::Exit = event
+                && let Some(tunnels) = app.try_state::<tunnels::SharedTunnels>()
+            {
+                tunnels.stop_all();
+            }
             // The Dock icon of an app whose window is hidden.
             #[cfg(target_os = "macos")]
             if let RunEvent::Reopen {
@@ -281,6 +301,9 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     browser::unlock::watch(app.handle());
     app.manage(bridge);
     app.manage(nearby);
+    let tunnels = Arc::new(tunnels::Tunnels::new(&data_dir));
+    tunnels.attach(app.handle().clone());
+    app.manage(tunnels);
     #[cfg(target_os = "macos")]
     menu::install(app)?;
     let background = tray::Background::install(app.handle(), &data_dir);

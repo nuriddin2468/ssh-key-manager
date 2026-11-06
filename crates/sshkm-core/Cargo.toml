@@ -21,6 +21,10 @@ ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }
 hkdf = "0.12.4"
 hmac = "0.12"
 keepass = { version = "0.17.0", features = ["save_kdbx4", "totp"] }
+# MD5 fingerprints, and keys of PEM files that OpenSSL encrypted.
+md-5 = "0.10"
+# Encrypted PKCS#8 keys.
+pbkdf2 = "0.12"
 p256 = { version = "0.13", features = ["ecdh", "pem", "pkcs8"] }
 p384 = { version = "0.13", features = ["pem", "pkcs8"] }
 p521 = { version = "0.13", features = ["pem", "pkcs8"] }

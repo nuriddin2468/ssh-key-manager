@@ -9,8 +9,11 @@
 //! The public half of an OpenSSH private key is stored unencrypted, so
 //! encrypted keys get a fingerprint and public key without a passphrase.
 
+pub mod convert;
 mod legacy;
 mod ops;
+mod ppk;
+mod randomart;
 #[cfg(test)]
 pub(crate) mod testdata;
 

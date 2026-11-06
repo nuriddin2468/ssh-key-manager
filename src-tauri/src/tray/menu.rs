@@ -8,6 +8,7 @@ use time::format_description::well_known::Rfc3339;
 use crate::commands::remote::check_alias;
 use crate::confirm::Localized;
 use crate::history::{HostHistory, Via};
+use crate::tunnels::Active;
 
 /// Hosts the Connect submenu lists before "All hosts…".
 pub const HOSTS_SHOWN: usize = 8;
@@ -22,6 +23,9 @@ pub const ALL_HOSTS: &str = "tray:hosts";
 pub const LOCK: &str = "tray:lock";
 pub const UNLOCK: &str = "tray:unlock";
 pub const QUIT: &str = "tray:quit";
+/// The Tunnels tool, and stopping every tunnel.
+pub const TUNNELS: &str = "tray:tunnels";
+pub const STOP_TUNNELS: &str = "tray:tunnels:stop";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Vault {
@@ -44,6 +48,8 @@ pub struct Input<'a> {
     pub aliases: &'a [String],
     pub history: &'a HostHistory,
     pub waiting: Option<Waiting>,
+    /// The tunnels that are on, in the Tunnels tool's order.
+    pub tunnels: &'a [Active],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +110,11 @@ pub fn items(input: &Input) -> Vec<Item> {
         items.push(action(NEARBY, waiting));
     }
 
+    if !input.tunnels.is_empty() {
+        items.push(Item::Separator);
+        items.push(tunnels(input.tunnels));
+    }
+
     let hosts = hosts(input.aliases, input.history);
     if !hosts.is_empty() {
         items.push(Item::Separator);
@@ -147,6 +158,55 @@ pub fn items(input: &Input) -> Vec<Item> {
         ),
     ));
     items
+}
+
+/// "Tunnels: 2 on", with each tunnel, stopping them all and the tool.
+fn tunnels(tunnels: &[Active]) -> Item {
+    let mut items: Vec<Item> = tunnels
+        .iter()
+        .map(|tunnel| {
+            let label = &tunnel.label;
+            Item::Label(if tunnel.waiting {
+                Localized::new(
+                    format!("{label} — waiting for your answer"),
+                    format!("{label} — ждёт вашего ответа"),
+                    format!("{label} — javobingizni kutmoqda"),
+                )
+                .pick()
+                .to_owned()
+            } else {
+                label.clone()
+            })
+        })
+        .collect();
+    items.push(Item::Separator);
+    items.push(action(
+        STOP_TUNNELS,
+        text(
+            "Stop All Tunnels",
+            "Остановить все туннели",
+            "Barcha tunnellarni toʻxtatish",
+        ),
+    ));
+    items.push(action(
+        TUNNELS,
+        text(
+            "Show Tunnels…",
+            "Показать туннели…",
+            "Tunnellarni koʻrsatish…",
+        ),
+    ));
+    let count = tunnels.len();
+    Item::Submenu {
+        text: Localized::new(
+            format!("Tunnels: {count} on"),
+            format!("Туннели: включено {count}"),
+            format!("Tunnellar: {count} ta yoqilgan"),
+        )
+        .pick()
+        .to_owned(),
+        items,
+    }
 }
 
 /// The aliases the Connect submenu lists: those with a terminal session,
@@ -281,6 +341,7 @@ mod tests {
             aliases: &aliases,
             history: &history,
             waiting: None,
+            tunnels: &[],
         });
         assert_eq!(
             ids(&items),
@@ -306,6 +367,7 @@ mod tests {
             waiting: Some(Waiting {
                 peer: Some("Laptop".into()),
             }),
+            tunnels: &[],
         });
         assert_eq!(ids(&items), ["label", OPEN, "-", NEARBY, "-", UNLOCK, QUIT]);
         assert!(matches!(&items[3], Item::Action { text, .. } if text.starts_with("Laptop")));
@@ -319,7 +381,45 @@ mod tests {
             aliases: &[],
             history: &history,
             waiting: None,
+            tunnels: &[],
         });
         assert_eq!(ids(&items), [OPEN, "-", QUIT]);
+    }
+
+    #[test]
+    fn tunnels_that_are_on_get_a_submenu_to_stop_them() {
+        let history = HostHistory::new();
+        let tunnels = [
+            Active {
+                label: "8080 → localhost:80 (web)".into(),
+                waiting: false,
+            },
+            Active {
+                label: "SOCKS 1080 (db)".into(),
+                waiting: true,
+            },
+        ];
+        let items = items(&Input {
+            vault: Vault::Missing,
+            aliases: &[],
+            history: &history,
+            waiting: None,
+            tunnels: &tunnels,
+        });
+        assert_eq!(
+            ids(&items),
+            [
+                OPEN,
+                "-",
+                &format!("[label label - {STOP_TUNNELS} {TUNNELS}]"),
+                "-",
+                QUIT
+            ]
+        );
+        let Item::Submenu { text, items } = &items[2] else {
+            panic!("no submenu");
+        };
+        assert!(text.contains('2'));
+        assert!(matches!(&items[1], Item::Label(label) if label.starts_with("SOCKS 1080 (db) — ")));
     }
 }

@@ -21,6 +21,8 @@
 //! - [`agent`]: a small synchronous client for the system `ssh-agent`.
 //! - [`authorized_keys`]: the keys an `authorized_keys` file lets in, read
 //!   from a server's copy.
+//! - [`authorized_line`]: one `authorized_keys` line with options, checked.
+//! - [`tunnels`]: saved port forwards and the `ssh` that holds each open.
 //! - [`perms`]: permission checks and fixes (Unix modes, Windows ACLs).
 //! - [`audit`]: security findings computed from all of the above.
 //! - [`diagnose`]: why an `ssh` run failed, read from what it printed.
@@ -49,6 +51,7 @@
 pub mod agent;
 pub mod audit;
 pub mod authorized_keys;
+pub mod authorized_line;
 pub mod browser;
 pub mod config;
 pub mod diagnose;
@@ -64,6 +67,7 @@ pub mod perms;
 pub mod shell_history;
 pub mod sync;
 mod text;
+pub mod tunnels;
 pub mod vault;
 
 pub use error::{Error, ErrorCode, ErrorInfo, Result};

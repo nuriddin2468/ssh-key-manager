@@ -414,12 +414,12 @@ fn public_line(info: &KeyInfo) -> AppResult<String> {
     Ok(line.to_owned())
 }
 
-fn has_line(text: &str, wanted: &str) -> bool {
+pub(crate) fn has_line(text: &str, wanted: &str) -> bool {
     text.lines().any(|line| line.trim() == wanted)
 }
 
-const ADDED: &str = "sshkm:added";
-const PRESENT: &str = "sshkm:present";
+pub(crate) const ADDED: &str = "sshkm:added";
+pub(crate) const PRESENT: &str = "sshkm:present";
 const REMOVED: &str = "sshkm:removed";
 const ABSENT: &str = "sshkm:absent";
 const BEGIN: &str = "sshkm:begin";

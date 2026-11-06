@@ -15,10 +15,14 @@ real `~/.ssh`. Its modules:
 - `keys`: scans, inspects, generates, imports and re-encrypts keys.
   - OpenSSH format, plus unencrypted legacy PEM and PKCS#8.
   - Keys get the same SHA-256 fingerprints `ssh-keygen -l` prints.
+  - `convert` turns a key into another format (OpenSSH, PuTTY `.ppk` v2 and v3 in
+    `ppk`, PEM, PKCS#8), encrypted ones included, and shows its SHA-256 and MD5
+    fingerprints and randomart (`randomart`, as `ssh-keygen -lv` draws it).
 - `config`: a lossless model of `ssh_config`.
   - Unmodified files round-trip byte for byte.
   - Edits change only the lines they touch.
   - New hosts go before a trailing `Host *` block, because the first match wins.
+  - `jump` sets `ProxyJump` in several blocks at once, refusing circles.
 - `known_hosts`: a lossless model, including matching of hashed (`|1|`) entries.
 - `hosts_file`: a lossless, editable model of the system hosts file (`/etc/hosts`,
   `%SystemRoot%\System32\drivers\etc\hosts`).
@@ -47,6 +51,10 @@ real `~/.ssh`. Its modules:
   connection tests): a cause, the jump host it happened at, and the lines that show
   it. Its tests run over real OpenSSH output from macOS, Linux and Windows
   (`diagnose/testdata`). `probe` checks that a TCP port answers.
+- `tunnels`: saved port forwards (local, remote, SOCKS), checked before anything
+  reaches `ssh`, and the `ssh -N` arguments of each.
+- `authorized_line`: one `authorized_keys` line with options (`restrict`, `from=`,
+  `command=`, `expiry-time=`, the `no-…` flags), read back as `sshd` reads it.
 - `vault`: the password vault, two files side by side, and the password generator
   (with the Tools page's presets: database, shell and `.env` passwords, tokens, UUIDs,
   framework keys, Wi-Fi passwords, passphrases and PINs).
@@ -201,11 +209,22 @@ translates.
   `api.pwnedpasswords.com` for one range at a time (reqwest, the updater's TLS), and
   its results are dropped on `vault-locked`. The page polls `breach_status`.
 - **Menu.** The macOS menu bar with keyboard shortcuts.
+- **Tunnels.** `src-tauri/src/tunnels/`: the Tools page's port forwards, defined in
+  `sshkm_core::tunnels` and kept in `tunnels.json` in the app's data folder.
+  - One supervisor thread per tunnel that is on runs `ssh -N` with the forward,
+    `ExitOnForwardFailure` and `ServerAliveInterval`, its prompts answered by the
+    terminal's prompt bridge through an interactive askpass session.
+  - `LogLevel=VERBOSE`'s `Authenticated to …` line tells when signing in is done;
+    `failure` reads why `ssh` stopped. With auto-reconnect a tunnel starts again
+    after a growing wait, unless what stopped it needs the user.
+  - Every change goes to the page as `tunnels-changed`, and to the tray menu. Tunnels
+    stop when the app quits.
 - **Tray.** `src-tauri/src/tray/`: with **Settings → Background** on, closing the window
   hides it and an icon in the tray (the menu bar on macOS) stays. Its menu shows the
-  vault's state and locks it, connects to recent hosts, names a Nearby conversation
-  waiting for the user, and quits. One worker rebuilds the menu when the vault, `~/.ssh`
-  or Nearby change, or the language does. On Linux the icon needs the AppIndicator
+  vault's state and locks it, counts the tunnels that are on and stops them, connects
+  to recent hosts, names a Nearby conversation waiting for the user, and quits. One
+  worker rebuilds the menu when the vault, `~/.ssh`, a tunnel or Nearby change, or the
+  language does. On Linux the icon needs the AppIndicator
   library, which `sshkm_os::tray` checks for first.
 - **Permissions.** `build.rs` lists every command, so each gets a Tauri permission and a
   window calls only what its capability names: the main window all, the unlock window

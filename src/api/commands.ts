@@ -4,6 +4,7 @@ import { Channel, isTauri } from '@tauri-apps/api/core';
 import type { AddFromVaultReport } from '@/bindings/AddFromVaultReport';
 import type { AgentView } from '@/bindings/AgentView';
 import type { AuditReport } from '@/bindings/AuditReport';
+import type { AuthorizedLine } from '@/bindings/AuthorizedLine';
 import type { BackgroundStatus } from '@/bindings/BackgroundStatus';
 import type { BreachStatus } from '@/bindings/BreachStatus';
 import type { BrowserStatus } from '@/bindings/BrowserStatus';
@@ -33,11 +34,14 @@ import type { HostsChange } from '@/bindings/HostsChange';
 import type { HostsFileInfo } from '@/bindings/HostsFileInfo';
 import type { HostsPreview } from '@/bindings/HostsPreview';
 import type { ImportPick } from '@/bindings/ImportPick';
+import type { KeyFileFormat } from '@/bindings/KeyFileFormat';
+import type { KeyFileInfo } from '@/bindings/KeyFileInfo';
 import type { KeyInstall } from '@/bindings/KeyInstall';
 import type { KeyLoginCheck } from '@/bindings/KeyLoginCheck';
 import type { KeysView } from '@/bindings/KeysView';
 import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostsFile } from '@/bindings/KnownHostsFile';
+import type { LineOptions } from '@/bindings/LineOptions';
 import type { MyDevice } from '@/bindings/MyDevice';
 import type { NameLookup } from '@/bindings/NameLookup';
 import type { NearbyStatus } from '@/bindings/NearbyStatus';
@@ -60,6 +64,8 @@ import type { SyncDecisions } from '@/bindings/SyncDecisions';
 import type { TerminalEvent } from '@/bindings/TerminalEvent';
 import type { TerminalInfo } from '@/bindings/TerminalInfo';
 import type { TlsReport } from '@/bindings/TlsReport';
+import type { Tunnel } from '@/bindings/Tunnel';
+import type { TunnelView } from '@/bindings/TunnelView';
 import type { VaultAudit } from '@/bindings/VaultAudit';
 import type { VaultLocation } from '@/bindings/VaultLocation';
 import type { VaultSettings } from '@/bindings/VaultSettings';
@@ -140,6 +146,47 @@ export const api = {
   /** Reads the host's `~/.ssh/authorized_keys` after the change, if any, in one sign-in. */
   serverKeys: (alias: string, action: ServerKeysAction) =>
     call<ServerKeys>('server_keys', { alias, action }),
+
+  // The SSH tools of the Tools page (src-tauri/src/commands/ssh_tools.rs).
+  tunnelList: () => call<TunnelView[]>('tunnel_list'),
+  /** An empty `id` adds one; `already_exists` if another tunnel listens on its port. */
+  tunnelSave: (tunnel: Tunnel) => call<TunnelView>('tunnel_save', { tunnel }),
+  tunnelDelete: (id: string) => call<void>('tunnel_delete', { id }),
+  tunnelSetOn: (id: string, on: boolean) => call<TunnelView>('tunnel_set_on', { id, on }),
+  /** Returns false if the prompt no longer waits. */
+  tunnelAnswer: (id: string, prompt: number, answer: PromptAnswer) =>
+    call<boolean>('tunnel_answer', { id, prompt, answer }),
+  tunnelStopAll: () => call<void>('tunnel_stop_all'),
+  /** Adds the tunnel's `LocalForward`/`RemoteForward`/`DynamicForward` line to its host's block. */
+  tunnelExport: (id: string, revision: string) =>
+    call<ConfigFile>('tunnel_export', { id, revision }),
+  /** `jump: null` removes `ProxyJump` from the blocks `targets`. */
+  setProxyJump: (jump: string | null, targets: number[], revision: string) =>
+    call<ConfigFile>('set_proxy_jump', { jump, targets, revision }),
+  /** With a passphrase, an encrypted key is opened too (`wrong_passphrase` if it doesn't). */
+  keyConvertInspect: (path: string, passphrase: string | null) =>
+    call<KeyFileInfo>('key_convert_inspect', { path, passphrase }),
+  /** Adds the key to ~/.ssh in the OpenSSH format, never over a file. */
+  keyConvertImport: (vars: {
+    path: string;
+    passphrase: string | null;
+    fileName: string;
+    newPassphrase: string | null;
+    comment: string | null;
+  }) => call<KeyView>('key_convert_import', vars),
+  /** Asks where to save in a system dialog; `null` if cancelled. */
+  keyConvertSave: (vars: {
+    path: string;
+    passphrase: string | null;
+    format: KeyFileFormat;
+    newPassphrase: string | null;
+    comment: string | null;
+  }) => call<string | null>('key_convert_save', vars),
+  authorizedLine: (publicKey: string, options: LineOptions) =>
+    call<AuthorizedLine>('authorized_line', { publicKey, options }),
+  /** Signs in with the vault's saved password for the host if it is unlocked. */
+  installAuthorizedLine: (alias: string, line: string) =>
+    call<KeyInstall>('install_authorized_line', { alias, line }),
 
   knownHosts: () => call<KnownHostsFile>('read_known_hosts'),
   findKnownHosts: (host: string, port: number | null) =>

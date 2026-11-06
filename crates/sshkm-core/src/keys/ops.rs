@@ -374,21 +374,33 @@ pub fn import(dir: &Path, source: &Path, file_name: Option<&str>) -> Result<KeyI
             .ok_or_else(|| Error::invalid("source has no usable file name"))?
             .to_owned(),
     };
-    validate_file_name(&name)?;
-    let dest = dir.join(&name);
+    let source_pub = sibling_pub(source);
+    let public = match fsutil::read_limited(&source_pub, MAX_KEY_FILE_SIZE).map(|b| classify(&b)) {
+        Ok(Content::Public(key)) => Some(key),
+        _ => derived_public(&opened),
+    };
+    write_pair(dir, &name, &private_text, public.as_ref())
+}
+
+/// Writes a private key's text and its public key as `<name>` (0600) and
+/// `<name>.pub` (0644) in `dir`, created with mode 0700 if missing. Existing
+/// files are never overwritten, and a pair the app can't read back is
+/// removed again. What [`import`] and converting a key into `~/.ssh` end in.
+pub(super) fn write_pair(
+    dir: &Path,
+    name: &str,
+    private_text: &str,
+    public: Option<&PublicKey>,
+) -> Result<KeyInfo> {
+    validate_file_name(name)?;
+    let dest = dir.join(name);
     let dest_pub = sibling_pub(&dest);
     for p in [&dest, &dest_pub] {
         if fs::symlink_metadata(p).is_ok() {
             return Err(Error::AlreadyExists(p.display().to_string()));
         }
     }
-
-    let source_pub = sibling_pub(source);
-    let public = match fsutil::read_limited(&source_pub, MAX_KEY_FILE_SIZE).map(|b| classify(&b)) {
-        Ok(Content::Public(key)) => Some(key),
-        _ => derived_public(&opened),
-    };
-    let public_text = public.as_ref().map(public_line).transpose()?;
+    let public_text = public.map(public_line).transpose()?;
 
     fsutil::ensure_private_dir(dir)?;
     fsutil::write_new(&dest, private_text.as_bytes(), 0o600)?;
@@ -511,7 +523,7 @@ enum Opened {
 }
 
 /// Reads a key file into memory that is zeroized afterwards.
-fn read_private_text(path: &Path) -> Result<Zeroizing<String>> {
+pub(super) fn read_private_text(path: &Path) -> Result<Zeroizing<String>> {
     let meta = fs::metadata(path).map_err(|e| Error::io(e, path))?;
     if !meta.is_file() {
         return Err(Error::invalid(format!("not a file: {}", path.display())));
@@ -546,7 +558,7 @@ fn open_private(text: &str, path: &Path) -> Result<Opened> {
     }
 }
 
-fn unlock(key: PrivateKey, passphrase: Option<&SecretString>) -> Result<PrivateKey> {
+pub(super) fn unlock(key: PrivateKey, passphrase: Option<&SecretString>) -> Result<PrivateKey> {
     if !key.is_encrypted() {
         return Ok(key);
     }

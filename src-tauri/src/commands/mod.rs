@@ -16,6 +16,7 @@ pub mod known_hosts;
 pub mod nearby;
 pub mod remote;
 pub mod shell_history;
+pub mod ssh_tools;
 pub mod terminal;
 pub mod tools_net;
 pub mod updates;

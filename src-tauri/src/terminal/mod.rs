@@ -24,7 +24,7 @@
 
 pub mod bridge;
 mod external;
-mod store;
+pub(crate) mod store;
 pub(crate) mod text;
 pub mod types;
 
@@ -244,13 +244,13 @@ impl Terminals {
 
 /// What `ssh -G` says about `alias`; `None` if it cannot read its
 /// configuration (the session then shows `ssh`'s own error).
-fn resolve(alias: &str) -> Option<Resolved> {
+pub(crate) fn resolve(alias: &str) -> Option<Resolved> {
     let output = process::run("ssh", &["-G", "--", alias], Duration::from_secs(10)).ok()?;
     output.success.then(|| Resolved::parse(&output.stdout))
 }
 
 /// The account `ssh`'s prompts name for this host.
-fn account(resolved: &Resolved) -> Option<PromptAccount> {
+pub(crate) fn account(resolved: &Resolved) -> Option<PromptAccount> {
     let host = resolved
         .host_key_alias
         .clone()

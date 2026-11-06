@@ -272,7 +272,7 @@ pub fn agent_comment(info: &KeyInfo) -> String {
     }
 }
 
-fn find_view(state: &AppState, key_id: &str) -> AppResult<KeyView> {
+pub(crate) fn find_view(state: &AppState, key_id: &str) -> AppResult<KeyView> {
     key_views(state)?
         .keys
         .into_iter()

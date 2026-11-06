@@ -220,7 +220,7 @@ fn protection(text: &str) -> Protection {
 }
 
 /// The `Name: value` header lines right after the first BEGIN line.
-fn header_fields(text: &str) -> Vec<(&str, &str)> {
+pub(crate) fn header_fields(text: &str) -> Vec<(&str, &str)> {
     text.lines()
         .map(str::trim)
         .skip_while(|l| !l.starts_with("-----BEGIN "))
@@ -269,7 +269,7 @@ fn is_encrypted_pkcs8_der(der: &[u8]) -> bool {
 
 /// Base64-decodes the body of the first PEM block, skipping RFC 1421 headers.
 /// `None` if the block is not terminated or not valid Base64.
-fn pem_body(text: &str) -> Option<Zeroizing<Vec<u8>>> {
+pub(crate) fn pem_body(text: &str) -> Option<Zeroizing<Vec<u8>>> {
     let mut lines = text
         .lines()
         .map(str::trim)
@@ -333,7 +333,7 @@ fn decode_pkcs8(pem: &str) -> Option<(KeyAlgorithm, KeypairData)> {
 }
 
 /// Reads one DER TLV: `(tag, contents, rest)`.
-fn der_tlv(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
+pub(crate) fn der_tlv(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
     let (&tag, rest) = input.split_first()?;
     let (&first, mut rest) = rest.split_first()?;
     let len = if first < 0x80 {
@@ -424,7 +424,7 @@ fn pkcs8_ec_by_scalar(der: &[u8]) -> Option<(KeyAlgorithm, KeypairData)> {
     sec1_by_scalar(inner)
 }
 
-fn ec_p256(sk: &p256::SecretKey) -> KeypairData {
+pub(crate) fn ec_p256(sk: &p256::SecretKey) -> KeypairData {
     use p256::elliptic_curve::sec1::ToEncodedPoint;
     let public = sk.public_key().to_encoded_point(false);
     KeypairData::Ecdsa(EcdsaKeypair::NistP256 {
@@ -433,7 +433,7 @@ fn ec_p256(sk: &p256::SecretKey) -> KeypairData {
     })
 }
 
-fn ec_p384(sk: &p384::SecretKey) -> KeypairData {
+pub(crate) fn ec_p384(sk: &p384::SecretKey) -> KeypairData {
     use p384::elliptic_curve::sec1::ToEncodedPoint;
     let public = sk.public_key().to_encoded_point(false);
     KeypairData::Ecdsa(EcdsaKeypair::NistP384 {
@@ -442,7 +442,7 @@ fn ec_p384(sk: &p384::SecretKey) -> KeypairData {
     })
 }
 
-fn ec_p521(sk: &p521::SecretKey) -> KeypairData {
+pub(crate) fn ec_p521(sk: &p521::SecretKey) -> KeypairData {
     use p521::elliptic_curve::sec1::ToEncodedPoint;
     let public = sk.public_key().to_encoded_point(false);
     KeypairData::Ecdsa(EcdsaKeypair::NistP521 {

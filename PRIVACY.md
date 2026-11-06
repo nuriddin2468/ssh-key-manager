@@ -102,6 +102,8 @@ The app keeps your data on your computer:
 - Your SSH files stay where they are.
 - The password vault is an encrypted KeePass file, in the app's data folder or a
   folder you choose.
+- Tunnels you save are kept in `tunnels.json` in the app's data folder: their hosts,
+  ports, addresses and names, never a password.
 
 It goes online only:
 
@@ -118,6 +120,8 @@ It goes online only:
   check connect to the host you name, and the DNS lookup asks your computer's DNS
   servers about the name you type. Checking a certificate may make your system ask its
   issuer whether it was revoked. Nothing about the checks is stored;
+- for each tunnel you turn on, for as long as it is on: it stays connected to that
+  server, and the port it forwards carries what you and your apps send through it;
 - if you turn on the audit's breach check (it is off until you do), to look up your
   saved passwords in [Have I Been Pwned](https://haveibeenpwned.com/Passwords). For
   each password it sends only the first 5 characters of the password's SHA-1 hash to

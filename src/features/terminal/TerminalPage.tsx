@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Dialog } from '@/components/ui/Dialog';
 import { Tile } from '@/components/ui/Tile';
+import { requestHostFix } from '@/features/diagnose/pending';
 import { fileChangeError } from '@/features/hosts/fileErrors';
 import { CheckHostKeyDialog } from '@/features/known/CheckHostKeyDialog';
 import type { KnownHostsRemoval } from '@/features/known/removal';
@@ -91,6 +92,7 @@ export function TerminalPage({ connect, nonce }: { connect?: string; nonce?: num
 
   const screen = tab ? terminals.screen(tab.key) : undefined;
   const hostId = tab ? hostIdOf(config.data?.view.hosts, tab.alias) : undefined;
+  const hostEntry = config.data?.view.hosts.find((host) => host.id === hostId);
   const prompt = tab?.prompt && tab.promptOpen ? tab.prompt : null;
 
   return (
@@ -132,6 +134,15 @@ export function TerminalPage({ connect, nonce }: { connect?: string; nonce?: num
                 onReconnect={(options) => terminals.reconnect(tab.key, options)}
                 onCloseTab={() => terminals.close(tab.key)}
                 onCompare={() => setChecking(tab.info?.host ?? tab.alias)}
+                host={hostEntry}
+                onFixInHost={
+                  hostId === undefined
+                    ? undefined
+                    : (fix, diagnosis) => {
+                        requestHostFix(tab.alias, fix, diagnosis);
+                        navigate({ page: 'hosts', hostId });
+                      }
+                }
               />
               {findOpen && screen ? (
                 <FindBar screen={screen} onClose={() => setFindOpen(false)} />

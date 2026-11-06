@@ -923,6 +923,148 @@ const uz = {
       },
     },
   },
+  diagnose: {
+    title: 'Nega ulanmadi',
+    atHop: '{{hop}} oraliq xostida',
+    output: 'ssh chiqishi',
+    offered: 'ssh taklif qilgan kalitlar',
+    fromAgent: 'ssh-agentdan',
+    newKey: 'Server kaliti hozir: {{fingerprint}}',
+    savedKey: 'Saqlangan kalit: {{knownHosts}}',
+    permissionsFixed: 'Ruxsatlar tuzatildi. Qayta tekshiring.',
+    permissionsNotOffered: 'Audit bu fayl uchun tuzatish taklif qilmaydi.',
+    identitiesOnlySet: 'Faqat shu xost kaliti taklif qilinadi. Qoʻllash uchun xostni saqlang.',
+    legacyAdded: '{{option}} shu xostga qoʻshildi. Qoʻllash uchun uni saqlang.',
+    publicKeyCopied:
+      'Ochiq kalit nusxalandi. Server administratoridan uni ~/.ssh/authorized_keys ga qoʻshishni soʻrang.',
+    cause: {
+      keysRejected: 'Server kalitlaringizni qabul qilmadi',
+      keysRejectedDetail:
+        'ssh taklif qilgan kalitlarning hech biri serverdagi authorized_keys faylida yoʻq. Kalitingizni serverga oʻrnating yoki unda bor kalitni tanlang.',
+      keysRejectedPasswordToo: 'Server kalitlaringizni qabul qilmadi',
+      keysRejectedPasswordTooDetail:
+        'Server parolni ham qabul qiladi, lekin bu tekshiruv uni sinamadi. Kalitni saqlangan parol bilan oʻrnating yoki avval parolni saqlang.',
+      keysRejectedNoKey: 'Server ssh sinagan hech bir kalitni qabul qilmadi',
+      keysRejectedNoKeyDetail:
+        'Bu xost uchun kalit tanlanmagan, shuning uchun ssh barcha kalitlaringizni sinab koʻrdi. Server biladigan kalitni tanlang.',
+      keyLocked: 'Server {{key}} kalitini qabul qiladi, lekin u qulflangan',
+      keyLockedDetail:
+        'Kalitda parol iborasi bor va u ssh-agentda yoʻq. Uni agentga qoʻshing va qayta tekshiring.',
+      identityFileMissing: 'Kalit fayli yoʻq',
+      identityFileMissingDetail:
+        'Xostning IdentityFile qatori {{path}} faylini koʻrsatadi, lekin bunday fayl yoʻq. Boshqa kalitni tanlang.',
+      passwordRejected: 'Server parolni qabul qilmadi',
+      passwordRejectedDetail:
+        'Saqlangan parol eskirgan boʻlishi mumkin. Uni yangilang va qayta tekshiring.',
+      passwordRequired: 'Server parol soʻrayapti',
+      passwordRequiredDetail:
+        'Bu server faqat parol bilan kiritadi, bu xost uchun esa parol saqlanmagan. Parolni saqlang va qayta tekshiring.',
+      tooManyAuthFailures: 'Juda koʻp kalit sinab koʻrildi',
+      tooManyAuthFailuresDetail:
+        'ssh server ruxsat berganidan koʻproq kalit taklif qildi va keraklisiga yetib bormadi. Faqat shu xost kalitini taklif qiling.',
+      tooManyAuthFailuresNoKey: 'Juda koʻp kalit sinab koʻrildi',
+      tooManyAuthFailuresNoKeyDetail:
+        'ssh server ruxsat berganidan koʻproq kalit taklif qildi. Bu xost uchun kalit tanlang, shunda ssh faqat uni taklif qiladi.',
+      hostKeyUnknown: 'Bu server kalitiga hali ishonilmagan',
+      hostKeyUnknownDetail:
+        'ssh notanish serverga ulanmaydi. Qoʻshishdan oldin uning kalitini oʻzingiz ishonadigan kalit bilan solishtiring.',
+      hostKeyChanged: 'Server kaliti oʻzgargan',
+      hostKeyChangedDetail:
+        'Bu server qayta oʻrnatilganda boʻladi, lekin ulanish tutib olinayotganini ham bildirishi mumkin. Saqlanganini almashtirishdan oldin yangi kalitni solishtiring. Ilova uni hech qachon siz uchun almashtirmaydi.',
+      timedOut: 'Server javob bermadi',
+      timedOutDetail:
+        '{{host}} {{port}}-portda oʻz vaqtida javob bermadi. Manzil va portni, VPN kerakligini va xavfsizlik devori toʻsmayotganini tekshiring.',
+      refused: '{{port}}-port yopiq',
+      refusedDetail:
+        '{{host}} javob berdi, lekin ulanishni rad etdi. Portni va SSH server ishlayotganini tekshiring.',
+      noRoute: 'Serverga yoʻl yoʻq',
+      noRouteDetail:
+        'Bu kompyuter {{host}} ga yoʻl topa olmayapti. Manzilni tekshiring va u joylashgan VPN yoki tarmoqqa ulaning.',
+      networkUnreachable: 'Kerakli tarmoqqa ulanmagansiz',
+      networkUnreachableDetail:
+        'Bu kompyuterda {{host}} ga olib boradigan tarmoq yoʻq. Ulanishni yoki VPN ni tekshiring.',
+      reset: 'Ulanish uzildi',
+      resetDetail:
+        '{{host}} kirishdan oldin ulanishni uzdi. Buni xavfsizlik devori yoki muvaffaqiyatsiz kirishlardan keyingi bloklash (fail2ban) qiladi. Biroz kuting va qayta urinib koʻring.',
+      closed: 'Server ulanishni yopdi',
+      closedDetail:
+        '{{host}} kirishdan oldin aloqani uzdi. Uning SSH serveri band boʻlishi, kim ulanishini cheklashi yoki boshqa portda ishlashi mumkin.',
+      notSsh: 'Bu SSH server emas',
+      notSshDetail:
+        '{{host}} ning {{port}}-portida nimadir javob beradi, lekin SSH protokolida emas. Portni tekshiring.',
+      networkOther: 'Serverga ulanib boʻlmadi',
+      networkOtherDetail:
+        'ssh {{host}} bilan ulanish ocha olmadi. Batafsil maʼlumot quyidagi chiqishda.',
+      nameNotResolved: '{{host}} topilmadi',
+      nameNotResolvedDetail:
+        'Bu nom uchun na DNS, na hosts fayli manzil bilmaydi. Yozilishini va u faqat VPN yoki mahalliy tarmoqda ishlamasligini tekshiring.',
+      configPermissions: 'ssh config faylingizni oʻqimayapti',
+      configPermissionsDetail:
+        '{{path}} faylini boshqa foydalanuvchilar oʻzgartira oladi, shuning uchun ssh uni rad etadi. Ruxsatlarni tuzating.',
+      keyPermissions: 'ssh boshqalar oʻqiy oladigan kalitni oʻtkazib yubordi',
+      keyPermissionsDetail:
+        '{{path}} faylini boshqa foydalanuvchilar oʻqiy oladi, shuning uchun ssh undan foydalanmaydi. Ruxsatlarni tuzating.',
+      legacyHostKey: 'Server eski xost kaliti turidan foydalanadi',
+      legacyHostKeyDetail:
+        'U faqat {{offer}} taklif qiladi, bu ssh esa ularni zaif deb oʻchirgan. Faqat shu xost uchun yoqish mumkin: {{option}}.',
+      legacyKeyExchange: 'Server eski kalit almashinuvidan foydalanadi',
+      legacyKeyExchangeDetail:
+        'U faqat {{offer}} taklif qiladi, bu ssh esa ularni zaif deb oʻchirgan. Faqat shu xost uchun yoqish mumkin: {{option}}.',
+      legacyCipher: 'Server eski shifrlardan foydalanadi',
+      legacyCipherDetail:
+        'U faqat {{offer}} taklif qiladi, bu ssh esa ularni zaif deb oʻchirgan. Faqat shu xost uchun yoqish mumkin: {{option}}.',
+      legacyMac: 'Server eski tekshiruv kodlaridan (MAC) foydalanadi',
+      legacyMacDetail:
+        'U faqat {{offer}} taklif qiladi, bu ssh esa ularni zaif deb oʻchirgan. Faqat shu xost uchun yoqish mumkin: {{option}}.',
+      legacySignature: 'Server faqat eski RSA imzolarini tekshiradi',
+      legacySignatureDetail:
+        'U RSA kalitingizni faqat SHA-1 bilan tekshira oladi, bu ssh esa uni oʻchirgan. Faqat shu xost uchun yoqish mumkin: {{option}}.',
+      legacyWarning: 'Eski algoritmlar zaifroq. Imkon boʻlganda serverni yangilang.',
+      nextHopUnreachable: 'Oraliq xost serverga yetib bora olmadi',
+      nextHopUnreachableDetail:
+        'Oraliq xost sizni kiritdi, lekin keyingisiga ulana olmadi ({{detail}}). Bu xost manzili va portini oraliq xost koʻrganidek tekshiring.',
+      forwardingProhibited: 'Oraliq xost yoʻnaltirishga ruxsat bermaydi',
+      forwardingProhibitedDetail:
+        'Uning SSH serverida yoʻnaltirish oʻchirilgan (AllowTcpForwarding), shuning uchun u ulanishni oʻtkaza olmaydi. Administratoridan ruxsat berishni soʻrang.',
+      proxyCommandFailed: 'Proksi buyrugʻi ishlamadi',
+      proxyCommandFailedDetail:
+        'Xostning ProxyCommand buyrugʻi server javob berishidan oldin toʻxtadi, masalan, dastur oʻrnatilmagani uchun. Uning xabari quyida.',
+      proxyClosed: 'Oraliq xost orqali ulanish yopildi',
+      proxyClosedDetail:
+        'Oraliq xost server javob berishidan oldin ulanishni uzdi. Batafsil maʼlumot quyidagi ssh chiqishida.',
+      unknown: 'Nomaʼlum xato',
+      unknownDetail: 'ssh ilova tanimaydigan sabab bilan toʻxtadi. U nima deganini quyida koʻring.',
+    },
+    fix: {
+      installKey: 'Kalitni oʻrnatish',
+      copyPublicKey: 'Ochiq kalitni nusxalash',
+      addToAgent: 'Agentga qoʻshish',
+      chooseKey: 'Kalitni tanlash',
+      editPassword: 'Parolni tahrirlash',
+      savePassword: 'Parolni saqlash',
+      identitiesOnly: 'Faqat shu kalit',
+      checkHostKey: 'Xost kalitini tekshirish',
+      probe: 'Portni tekshirish',
+      lookup: 'Manzilni qidirish',
+      fixPermissions: 'Ruxsatlarni tuzatish',
+      allowLegacy: 'Shu xostga ruxsat berish',
+      openHost: 'Xostni tahrirlash',
+      openAudit: 'Auditni ochish',
+      unlockVault: 'Omborni ochish',
+    },
+    probe: {
+      running: '{{port}}-port tekshirilmoqda…',
+      open: '{{host}} dagi {{port}}-port javob beradi: server bu yerdan ochiq.',
+      refused: '{{host}} dagi {{port}}-port yopiq: u yerda hech narsa tinglamayapti.',
+      timedOut:
+        '{{host}} dagi {{port}}-port javob bermadi. Xavfsizlik devori ulanishni tashlab yuborishi yoki xost faqat VPN orqali ochiq boʻlishi mumkin.',
+      unreachable: 'Bu kompyuterdan {{host}} ga yoʻl yoʻq.',
+      notResolved: '{{host}} ning bu kompyuterda manzili yoʻq.',
+      failed: '{{host}} dagi {{port}}-portni tekshirib boʻlmadi.',
+      proxyCommand:
+        'Bu xostga ProxyCommand orqali ulaniladi, shuning uchun uning portini bu yerdan tekshirib boʻlmaydi.',
+    },
+  },
   agent: {
     title: 'Agent',
     running: 'Ishlamoqda',

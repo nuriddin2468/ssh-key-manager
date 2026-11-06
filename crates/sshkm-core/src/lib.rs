@@ -23,6 +23,7 @@
 //!   from a server's copy.
 //! - [`perms`]: permission checks and fixes (Unix modes, Windows ACLs).
 //! - [`audit`]: security findings computed from all of the above.
+//! - [`diagnose`]: why an `ssh` run failed, read from what it printed.
 //! - [`vault`]: the encrypted password vault, its key slots and the password
 //!   generator.
 //! - [`p2p`]: two copies of the app talking over the local network: device
@@ -46,6 +47,7 @@ pub mod audit;
 pub mod authorized_keys;
 pub mod browser;
 pub mod config;
+pub mod diagnose;
 mod error;
 pub mod fsutil;
 pub mod hosts_file;

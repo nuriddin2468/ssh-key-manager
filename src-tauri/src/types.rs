@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use sshkm_core::agent::{AgentIdentity, AgentStatus};
 use sshkm_core::authorized_keys::AuthorizedKeys;
 use sshkm_core::config::{ConfigView, IdentityUsage};
+use sshkm_core::diagnose::Diagnosis;
 use sshkm_core::hosts_file::{HostsDiffLine, HostsFileView, HostsReadOnly};
 use sshkm_core::keys::{GenerateRequest, KeyInfo, SkippedFile};
 use sshkm_core::known_hosts::{KnownHostEntry, KnownHostsView};
@@ -267,6 +268,8 @@ pub struct ConnectionTest {
     /// saved secrets nothing is answered, but what was asked still shows: a
     /// key passphrase, say, or an unknown host key.
     pub prompts: Vec<AskedPrompt>,
+    /// Why it failed, read from what `ssh -v` printed; `None` if it signed in.
+    pub diagnosis: Option<Diagnosis>,
 }
 
 /// The result of adding a public key to a server's `~/.ssh/authorized_keys`.

@@ -1,0 +1,3 @@
+/bin/sh: 1: exec: cloudflared: not found
+kex_exchange_identification: Connection closed by remote host
+Connection closed by UNKNOWN port 65535

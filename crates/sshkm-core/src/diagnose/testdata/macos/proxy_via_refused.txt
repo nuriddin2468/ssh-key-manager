@@ -1,0 +1,32 @@
+OpenSSH_9.9p2, LibreSSL 3.3.6
+debug1: Reading configuration data /Users/alice/.ssh/config
+debug1: /Users/alice/.ssh/config line 16: Applying options for via-refused
+debug1: /Users/alice/.ssh/config line 38: Applying options for *
+debug1: Setting implicit ProxyCommand from ProxyJump: ssh -F /Users/alice/.ssh/config -v -W '[%h]:%p' jump-refused
+debug1: Authenticator provider $SSH_SK_PROVIDER did not resolve; disabling
+debug1: Executing proxy command: exec ssh -F /Users/alice/.ssh/config -v -W '[10.9.9.9]:22' jump-refused
+debug1: identity file /Users/alice/.ssh/id_rsa type -1
+debug1: identity file /Users/alice/.ssh/id_rsa-cert type -1
+debug1: identity file /Users/alice/.ssh/id_ecdsa type -1
+debug1: identity file /Users/alice/.ssh/id_ecdsa-cert type -1
+debug1: identity file /Users/alice/.ssh/id_ecdsa_sk type -1
+debug1: identity file /Users/alice/.ssh/id_ecdsa_sk-cert type -1
+debug1: identity file /Users/alice/.ssh/id_ed25519 type -1
+debug1: identity file /Users/alice/.ssh/id_ed25519-cert type -1
+debug1: identity file /Users/alice/.ssh/id_ed25519_sk type -1
+debug1: identity file /Users/alice/.ssh/id_ed25519_sk-cert type -1
+debug1: identity file /Users/alice/.ssh/id_xmss type -1
+debug1: identity file /Users/alice/.ssh/id_xmss-cert type -1
+debug1: identity file /Users/alice/.ssh/id_dsa type -1
+debug1: identity file /Users/alice/.ssh/id_dsa-cert type -1
+debug1: Local version string SSH-2.0-OpenSSH_9.9
+OpenSSH_9.9p2, LibreSSL 3.3.6
+debug1: Reading configuration data /Users/alice/.ssh/config
+debug1: /Users/alice/.ssh/config line 1: Applying options for jump-refused
+debug1: /Users/alice/.ssh/config line 38: Applying options for *
+debug1: Authenticator provider $SSH_SK_PROVIDER did not resolve; disabling
+debug1: Connecting to 127.0.0.1 [127.0.0.1] port 56792.
+debug1: connect to address 127.0.0.1 port 56792: Connection refused
+ssh: connect to host 127.0.0.1 port 56792: Connection refused
+kex_exchange_identification: Connection closed by remote host
+Connection closed by UNKNOWN port 65535

@@ -108,7 +108,13 @@ It goes online only:
   **Settings → Updates**;
 - when you ask it to reach a server: checking a host key, testing a connection or
   opening a terminal session;
-- for a DNS lookup when you ask where a name leads.
+- for a DNS lookup when you ask where a name leads;
+- when a connection failed and you click **Check port**: it opens one connection to
+  the server's port and closes it at once, without sending anything.
+
+When a connection fails, the app explains why from what `ssh` printed. It keeps
+that explanation only in memory, next to the test's result, and never stores or
+sends it.
 
 It talks to the local network only for **Nearby**, and only when you ask:
 

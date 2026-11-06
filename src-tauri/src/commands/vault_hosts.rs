@@ -10,10 +10,8 @@ use sshkm_core::vault::{EntryKind, EntrySummary, SecretField, Vault};
 use sshkm_core::{ExposeSecret, SecretString};
 use tauri::{AppHandle, State};
 
-use super::config::{connection_test, with_typed_passphrase};
-use super::remote::{
-    check_alias, combined, install_key, read_server_keys, run_ssh, with_timeout_note,
-};
+use super::config::{checked, connection_test, with_typed_passphrase};
+use super::remote::{check_alias, install_key, read_server_keys, run_ssh};
 use super::{Shared, blocking};
 use crate::askpass::Secrets;
 use crate::error::AppResult;
@@ -99,18 +97,14 @@ pub async fn vault_test_key_login(
                 "PasswordAuthentication=no",
                 "-o",
                 "KbdInteractiveAuthentication=no",
+                super::diagnose::VERBOSE,
             ],
             &["exit"],
             passphrases,
             None,
             Duration::from_secs(30),
         )?;
-        let text = combined(&run.output);
-        Ok(ConnectionTest {
-            ok: run.output.success,
-            output: with_timeout_note(text, &run.output),
-            prompts: run.prompts,
-        })
+        Ok(checked(&alias, &run, run.output.success))
     })
     .await
 }

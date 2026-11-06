@@ -39,8 +39,8 @@ use std::time::{Duration, Instant};
 use portable_pty::{
     ChildKiller, CommandBuilder, ExitStatus, MasterPty, PtySize, native_pty_system,
 };
-use sshkm_core::ErrorCode;
 use sshkm_core::agent::AgentClient;
+use sshkm_core::{ErrorCode, diagnose};
 use tauri::AppHandle;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use time::OffsetDateTime;
@@ -538,6 +538,14 @@ impl Terminal {
         drop(lock(&self.input).take());
 
         let exit_code = status.and_then(|s| s.signal().is_none().then(|| s.exit_code()));
+        let context = {
+            let info = lock(&self.info);
+            diagnose::Context {
+                host_name: info.host.clone(),
+                proxy_jump: info.proxy_jump.clone(),
+                timed_out: false,
+            }
+        };
         let state = {
             let progress = lock(&self.progress);
             let ended = SessionState::Ended {
@@ -553,9 +561,9 @@ impl Terminal {
                 ended
             } else {
                 let output = text::strip_escapes(&String::from_utf8_lossy(&progress.tail));
-                SessionState::Failed {
-                    failure: self.bridge.failure(&output, exit_code),
-                }
+                let mut failure = self.bridge.failure(&output, exit_code);
+                failure.diagnosis = Some(diagnose::diagnose(&failure.output, &context));
+                SessionState::Failed { failure }
             }
         };
         lock(&self.progress).phase = state.phase();

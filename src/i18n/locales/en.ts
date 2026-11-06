@@ -909,6 +909,146 @@ const en = {
       },
     },
   },
+  diagnose: {
+    title: 'Why it failed',
+    atHop: 'at the jump host {{hop}}',
+    output: 'What ssh said',
+    offered: 'Keys ssh offered',
+    fromAgent: 'from ssh-agent',
+    newKey: 'Server’s key now: {{fingerprint}}',
+    savedKey: 'Saved key: {{knownHosts}}',
+    permissionsFixed: 'Permissions fixed. Check again.',
+    permissionsNotOffered: 'The audit offers no fix for this file.',
+    identitiesOnlySet: 'Only this host’s key will be offered. Save the host to apply.',
+    legacyAdded: '{{option}} added to this host. Save it to apply.',
+    publicKeyCopied:
+      'Public key copied. Ask the server’s admin to add it to ~/.ssh/authorized_keys.',
+    cause: {
+      keysRejected: 'The server turned down your keys',
+      keysRejectedDetail:
+        'None of the keys ssh offered is in the server’s authorized_keys. Install your key on the server, or choose the key it already has.',
+      keysRejectedPasswordToo: 'The server turned down your keys',
+      keysRejectedPasswordTooDetail:
+        'It also takes a password, which this check didn’t try. Install your key with the saved password, or save the password first.',
+      keysRejectedNoKey: 'The server turned down every key ssh tried',
+      keysRejectedNoKeyDetail:
+        'No key is chosen for this host, so ssh tried all of yours. Choose the key the server knows.',
+      keyLocked: 'The server accepts {{key}}, but it’s locked',
+      keyLockedDetail:
+        'The key has a passphrase and isn’t in ssh-agent. Add it to the agent, then check again.',
+      identityFileMissing: 'The key file isn’t there',
+      identityFileMissingDetail:
+        'The host’s IdentityFile names {{path}}, which doesn’t exist. Choose another key.',
+      passwordRejected: 'The server turned down the password',
+      passwordRejectedDetail: 'The saved password may be out of date. Update it, then check again.',
+      passwordRequired: 'The server wants a password',
+      passwordRequiredDetail:
+        'This server signs in with a password only, and none is saved for this host. Save the password, then check again.',
+      tooManyAuthFailures: 'Too many keys tried',
+      tooManyAuthFailuresDetail:
+        'ssh offered more keys than the server allows before it got to the right one. Offer only this host’s key.',
+      tooManyAuthFailuresNoKey: 'Too many keys tried',
+      tooManyAuthFailuresNoKeyDetail:
+        'ssh offered more keys than the server allows. Choose this host’s key, and ssh offers only that one.',
+      hostKeyUnknown: 'This server’s key isn’t trusted yet',
+      hostKeyUnknownDetail:
+        'ssh stops at a server it doesn’t know. Compare its key with one you trust before you add it.',
+      hostKeyChanged: 'The server’s key has changed',
+      hostKeyChangedDetail:
+        'This happens after a server is reinstalled, but it can also mean someone is intercepting the connection. Compare the new key before you replace the saved one. The app never replaces it for you.',
+      timedOut: 'The server didn’t answer',
+      timedOutDetail:
+        'No reply from {{host}} on port {{port}} in time. Check the address and port, whether you need a VPN, and whether a firewall blocks it.',
+      refused: 'Port {{port}} is closed',
+      refusedDetail:
+        '{{host}} answered but refused the connection. Check the port, and that the SSH server is running.',
+      noRoute: 'No route to the server',
+      noRouteDetail:
+        'This computer can’t find a way to {{host}}. Check the address, and connect to the VPN or network it’s on.',
+      networkUnreachable: 'Not connected to that network',
+      networkUnreachableDetail:
+        'This computer has no network that leads to {{host}}. Check your connection or VPN.',
+      reset: 'The connection was cut',
+      resetDetail:
+        '{{host}} reset the connection before signing in. A firewall, or a ban after failed sign-ins (fail2ban), does this. Wait a little and try again.',
+      closed: 'The server closed the connection',
+      closedDetail:
+        '{{host}} hung up before signing in. Its SSH server may be overloaded, limit who can connect, or not be on this port.',
+      notSsh: 'That isn’t an SSH server',
+      notSshDetail:
+        'Something answers on port {{port}} of {{host}}, but it doesn’t speak SSH. Check the port.',
+      networkOther: 'Couldn’t connect to the server',
+      networkOtherDetail: 'ssh couldn’t open a connection to {{host}}. See what it said below.',
+      nameNotResolved: '{{host}} wasn’t found',
+      nameNotResolvedDetail:
+        'Neither DNS nor the hosts file has an address for this name. Check the spelling, and whether it works only on a VPN or local network.',
+      configPermissions: 'ssh won’t read your config file',
+      configPermissionsDetail:
+        'Other users can change {{path}}, so ssh refuses it. Fix its permissions.',
+      keyPermissions: 'ssh skipped a key others can read',
+      keyPermissionsDetail:
+        'Other users can read {{path}}, so ssh won’t use it. Fix its permissions.',
+      legacyHostKey: 'The server uses an old host key type',
+      legacyHostKeyDetail:
+        'It offers only {{offer}}, which this ssh turned off as weak. You can turn it on for this host alone with {{option}}.',
+      legacyKeyExchange: 'The server uses an old key exchange',
+      legacyKeyExchangeDetail:
+        'It offers only {{offer}}, which this ssh turned off as weak. You can turn it on for this host alone with {{option}}.',
+      legacyCipher: 'The server uses old ciphers',
+      legacyCipherDetail:
+        'It offers only {{offer}}, which this ssh turned off as weak. You can turn it on for this host alone with {{option}}.',
+      legacyMac: 'The server uses old integrity checks (MACs)',
+      legacyMacDetail:
+        'It offers only {{offer}}, which this ssh turned off as weak. You can turn it on for this host alone with {{option}}.',
+      legacySignature: 'The server checks only old RSA signatures',
+      legacySignatureDetail:
+        'It can check your RSA key only with SHA-1, which this ssh turned off. You can turn it on for this host alone with {{option}}.',
+      legacyWarning: 'Old algorithms are weaker. Update the server when you can.',
+      nextHopUnreachable: 'The jump host couldn’t reach the server',
+      nextHopUnreachableDetail:
+        'The jump host let you in but couldn’t connect onward ({{detail}}). Check this host’s address and port as the jump host sees them.',
+      forwardingProhibited: 'The jump host doesn’t allow forwarding',
+      forwardingProhibitedDetail:
+        'Its SSH server has forwarding turned off (AllowTcpForwarding), so it can’t carry the connection. Ask its admin to allow it.',
+      proxyCommandFailed: 'The proxy command failed',
+      proxyCommandFailedDetail:
+        'The host’s ProxyCommand stopped before the server answered, for instance because the program isn’t installed. See what it said below.',
+      proxyClosed: 'The connection through the jump host closed',
+      proxyClosedDetail:
+        'The jump host stopped before the server answered. See what ssh said below.',
+      unknown: 'Unknown error',
+      unknownDetail: 'ssh stopped for a reason the app doesn’t recognize. Here’s what it said.',
+    },
+    fix: {
+      installKey: 'Install key',
+      copyPublicKey: 'Copy public key',
+      addToAgent: 'Add to agent',
+      chooseKey: 'Choose key',
+      editPassword: 'Edit password',
+      savePassword: 'Save password',
+      identitiesOnly: 'Offer only this key',
+      checkHostKey: 'Check host key',
+      probe: 'Check port',
+      lookup: 'Look up name',
+      fixPermissions: 'Fix permissions',
+      allowLegacy: 'Allow for this host',
+      openHost: 'Edit host',
+      openAudit: 'Open Audit',
+      unlockVault: 'Unlock vault',
+    },
+    probe: {
+      running: 'Checking port {{port}}…',
+      open: 'Port {{port}} on {{host}} answers: the server is reachable from here.',
+      refused: 'Port {{port}} on {{host}} is closed: nothing listens there.',
+      timedOut:
+        'Port {{port}} on {{host}} didn’t answer. A firewall may drop the connection, or the host is reachable only over a VPN.',
+      unreachable: 'There’s no way to {{host}} from this computer.',
+      notResolved: '{{host}} has no address on this computer.',
+      failed: 'Couldn’t check port {{port}} on {{host}}.',
+      proxyCommand:
+        'This host is reached through a ProxyCommand, so its port can’t be checked from here.',
+    },
+  },
   agent: {
     title: 'Agent',
     running: 'Running',

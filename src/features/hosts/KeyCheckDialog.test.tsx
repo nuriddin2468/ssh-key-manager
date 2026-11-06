@@ -53,7 +53,7 @@ const work: KeyView = {
   usedBy: [],
 };
 
-const signedIn: ConnectionTest = { ok: true, output: '', prompts: [] };
+const signedIn: ConnectionTest = { ok: true, output: '', prompts: [], diagnosis: null };
 
 function show(state: 'locked' | 'unlocked') {
   api.vaultStatus.mockResolvedValue({

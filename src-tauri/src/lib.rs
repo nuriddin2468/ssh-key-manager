@@ -95,6 +95,8 @@ pub fn run() {
             commands::config::test_connection,
             commands::config::connection_history,
             commands::config::clear_connection_history,
+            commands::diagnose::diagnose_probe,
+            commands::diagnose::diagnose_fix_permissions,
             commands::remote::install_public_key,
             commands::remote::server_keys,
             commands::nearby::nearby_status,

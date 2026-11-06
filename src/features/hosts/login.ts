@@ -3,6 +3,7 @@
 // messages `ssh` always prints in English.
 
 import type { AskedPrompt } from '@/bindings/AskedPrompt';
+import type { Diagnosis } from '@/bindings/Diagnosis';
 import type { PromptKind } from '@/bindings/PromptKind';
 import type { PromptOutcome } from '@/bindings/PromptOutcome';
 import type en from '@/i18n/locales/en';
@@ -14,6 +15,8 @@ export interface SshRun {
   prompts: readonly AskedPrompt[];
   /** Key installs: the key was added (`false`: it was there already). */
   added?: boolean;
+  /** Checks: why it failed, read from what ssh printed. */
+  diagnosis?: Diagnosis | null;
 }
 
 export type Explanation =
@@ -77,6 +80,20 @@ export function explain(run: SshRun): Explanation {
     return { kind: 'passphraseMissing', key: passphrase.kind.key };
   }
   return denied ? { kind: 'keysRejected' } : { kind: 'failed' };
+}
+
+/**
+ * The diagnosis a failed check shows as "Why it failed", or null where the
+ * prompts already tell more: a password, code or passphrase asked for, a
+ * host key declined.
+ */
+export function shownDiagnosis(run: SshRun, context: RunContext): Diagnosis | null {
+  const { diagnosis } = run;
+  if (run.ok || !diagnosis || (context !== 'test' && context !== 'vaultTest')) return null;
+  const kind = explain(run).kind;
+  return kind === 'failed' || kind === 'keysRejected' || kind === 'hostKeyChanged'
+    ? diagnosis
+    : null;
 }
 
 /** What the run was for; the same outcome reads differently in each. */

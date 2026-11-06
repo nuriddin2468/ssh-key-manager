@@ -18,6 +18,7 @@ import type { KnownHostEntry } from '@/bindings/KnownHostEntry';
 import type { PermissionFix } from '@/bindings/PermissionFix';
 import { backgroundHandlers } from './background';
 import { browserHandlers } from './browser';
+import { diagnosed, diagnoseHandlers, diagnoseHostSpecs } from './diagnose';
 import { historyHandlers, recordCheck } from './history';
 import { hostsFileFindings, hostsFileHandlers } from './hostsFile';
 import { nearbyHandlers } from './nearby';
@@ -176,6 +177,7 @@ let hostSpecs: { patterns: string[]; options: HostOption[] }[] = [
       opt('IdentityFile', '~/.ssh/vpn_key'),
     ],
   },
+  ...diagnoseHostSpecs,
   { patterns: ['*'], options: [opt('AddKeysToAgent', 'yes'), opt('UseKeychain', 'yes')] },
 ];
 
@@ -486,7 +488,7 @@ function withHistory(check: (args: Record<string, unknown>) => unknown) {
       }
       return result;
     };
-    const result = check(args);
+    const result = diagnosed(String(args.alias), check(args));
     return result instanceof Promise ? result.then(recorded) : recorded(result);
   };
 }
@@ -506,6 +508,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     vaultLogin: (alias) => vaultTest({ alias }) as ReturnType<typeof keyTest>,
   }),
   vault_test_connection: withHistory(vaultTest),
+  ...diagnoseHandlers,
   get_environment: (): Environment => ({
     paths: { home: HOME, dir: DIR, config: `${DIR}/config`, knownHosts: `${DIR}/known_hosts` },
     platform: 'macos',

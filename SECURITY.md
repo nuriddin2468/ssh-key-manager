@@ -139,7 +139,21 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     Releases at startup and every six hours (can be turned off in Settings);
   - `ssh-keyscan` and `ssh` when you explicitly check a host key, test a connection or
     open a terminal session;
-  - a DNS lookup when you ask where a name leads.
+  - a DNS lookup when you ask where a name leads;
+  - after a failed connection, when you choose "Check port": one TCP connection to the
+    host's port (or its first jump host's), closed at once without sending anything.
+    The address comes from `ssh -G` for a host alias, never from the page, so the page
+    can't point it elsewhere.
+- **Why a connection failed.** A connection test runs `ssh -v`, so a failure can say
+  which keys were offered. The extra lines go no further than the app's memory: what
+  you read leaves them out (and the server's pre-login banner, as before), and the
+  diagnosis keeps only the lines about the failure, since others can hold the values
+  of environment variables `ssh` sends (`SendEnv`). Answers never pass through them:
+  they go through askpass. The terminal runs `ssh` without `-v` and reads its usual
+  messages. A fix never trusts a host key for you: it opens the host key check. One
+  that turns an old algorithm back on (`HostKeyAlgorithms +ssh-rsa`, …) only changes
+  the host's block in the editor, for you to review and save, which confirms it like
+  any other change.
 - **Signed updates.** An update is installed only if its signature matches the public key
   built into the app (`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`).
   - The update check runs in Rust. The page can ask for a check or an install, but can't

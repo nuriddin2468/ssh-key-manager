@@ -32,8 +32,9 @@ import { useVaultMutation } from '@/features/passwords/vault';
 import { LANGUAGE_NAMES, LANGUAGES, type Language, setLanguage, storedLanguage } from '@/i18n';
 import { displayPath } from '@/lib/format';
 import { fileManagerName } from '@/lib/platform';
+import { showReleaseNotes } from '@/lib/releaseNotes';
 import { type Settings, updateSettings, useSettings } from '@/lib/settings';
-import { checkForUpdates, installUpdate, useUpdateState } from '@/lib/updater';
+import { checkForUpdates, showUpdateNotes, useUpdateState } from '@/lib/updater';
 import { BackgroundSection } from './BackgroundSection';
 import { ShellHistorySection } from './ShellHistorySection';
 
@@ -151,6 +152,11 @@ export function SettingsPage() {
               />
             </Row>
             <UpdateRow />
+            <Row label={t('updates.history')}>
+              <Button size="sm" onClick={() => showReleaseNotes({ kind: 'history' })}>
+                {t('updates.whatsNew')}
+              </Button>
+            </Row>
           </Group>
 
           <Group title={t('settings.about')}>
@@ -365,13 +371,14 @@ function UpdateRow() {
   return (
     <Row label={status}>
       {update.status === 'available' || update.status === 'downloading' ? (
+        // The update is installed from its notes, so they're read first.
         <Button
           size="sm"
           variant="primary"
           loading={update.status === 'downloading'}
-          onClick={() => void installUpdate()}
+          onClick={showUpdateNotes}
         >
-          {t('updates.install')}
+          {t('updates.whatsNew')}
         </Button>
       ) : (
         <Button

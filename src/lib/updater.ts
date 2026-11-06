@@ -1,18 +1,24 @@
 import { Channel, isTauri } from '@tauri-apps/api/core';
 import { createElement, useEffect, useSyncExternalStore } from 'react';
 import { toast } from 'sonner';
+import type { Release } from '@/bindings/Release';
+import type { UpdateOffer } from '@/bindings/UpdateOffer';
 import { UpdateToast } from '@/components/UpdateToast';
 import i18n from '@/i18n';
 import { call } from '@/lib/ipc';
+import { showReleaseNotes } from '@/lib/releaseNotes';
 
 /**
  * The updater runs in Rust (`src-tauri/src/commands/updates.rs`), with the
  * release server and key from `tauri.conf.json`; the page can only ask.
  */
 const updates = {
-  /** The newer version the release server offers, or `null`. */
-  check: () => call<string | null>('update_check'),
-  /** Installs the version the last check found and restarts into it. */
+  /** The newer version the release server offers, with its notes, or `null`. */
+  check: () => call<UpdateOffer | null>('update_check'),
+  /**
+   * Backs up the SSH and vault files, installs the version the last check
+   * found and restarts into it.
+   */
   install: (onProgress: (percent: number) => void) =>
     call<void>('update_install', { progress: new Channel<number>(onProgress) }),
 };
@@ -22,7 +28,8 @@ export type UpdateState =
   | { status: 'idle' }
   | { status: 'checking' }
   | { status: 'upToDate' }
-  | { status: 'available'; version: string }
+  /** `releases` are the notes of each version since this one, newest first. */
+  | { status: 'available'; version: string; releases: Release[] }
   | { status: 'downloading'; version: string; percent: number | null }
   | { status: 'error' };
 
@@ -63,14 +70,14 @@ export async function checkForUpdates({ quiet = false } = {}): Promise<void> {
   set({ status: 'checking' });
   try {
     // `pnpm dev` in a browser has nothing to update.
-    const version = isTauri() ? await updates.check() : null;
-    if (!version) {
+    const found = isTauri() ? await updates.check() : null;
+    if (!found) {
       set({ status: 'upToDate' });
       if (!quiet) toast.success(i18n.t('updates.upToDate'), { id: TOAST_ID });
       return;
     }
-    set({ status: 'available', version });
-    if (!quiet || announced !== version) offer(version);
+    set({ status: 'available', version: found.version, releases: found.releases });
+    if (!quiet || announced !== found.version) offer(found);
   } catch (error) {
     set({ status: 'error' });
     if (!quiet) toast.error(i18n.t('updates.error'), { id: TOAST_ID, description: reason(error) });
@@ -80,7 +87,7 @@ export async function checkForUpdates({ quiet = false } = {}): Promise<void> {
 /** Downloads and installs the update found by the last check, then restarts into it. */
 export async function installUpdate(): Promise<void> {
   if (state.status !== 'available') return;
-  const { version } = state;
+  const { version, releases } = state;
   const progress = (percent: number | null) => {
     set({ status: 'downloading', version, percent });
     toast.loading(i18n.t('updates.downloading', { version }), {
@@ -96,7 +103,7 @@ export async function installUpdate(): Promise<void> {
       if (state.status === 'downloading' && state.percent !== percent) progress(percent);
     });
   } catch (error) {
-    set({ status: 'available', version });
+    set({ status: 'available', version, releases });
     toast.error(i18n.t('updates.installFailed'), { id: TOAST_ID, description: reason(error) });
   }
 }
@@ -111,16 +118,27 @@ export function useAutomaticUpdates(enabled: boolean): void {
   }, [enabled]);
 }
 
-function offer(version: string): void {
+/** Opens the notes of the version the last check found, to install it from there. */
+export function showUpdateNotes(): void {
+  if (state.status !== 'available') return;
+  showReleaseNotes({ kind: 'offer', version: state.version, releases: state.releases });
+}
+
+/**
+ * Offers the update. Its button opens the release notes, where the update
+ * is installed, so what changes is read before it does.
+ */
+function offer({ version, releases }: UpdateOffer): void {
   announced = version;
   toast.custom(
     () =>
       createElement(UpdateToast, {
         version,
+        releases,
         onLater: () => toast.dismiss(OFFER_ID),
-        onInstall: () => {
+        onShowNotes: () => {
           toast.dismiss(OFFER_ID);
-          void installUpdate();
+          showUpdateNotes();
         },
       }),
     { id: OFFER_ID, duration: Number.POSITIVE_INFINITY },

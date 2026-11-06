@@ -2,6 +2,7 @@ import { render, renderHook, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ReactElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { UpdateOffer } from '@/bindings/UpdateOffer';
 import type { UpdateState } from './updater';
 
 const call = vi.fn();
@@ -26,13 +27,22 @@ vi.mock('@tauri-apps/api/core', () => ({
 vi.mock('@/lib/ipc', () => ({ call }));
 vi.mock('sonner', () => ({ toast }));
 
+const RELEASES: UpdateOffer['releases'] = [
+  {
+    version: '0.2.0',
+    date: '2026-11-06',
+    changes: [{ kind: 'fixed', en: 'Fixed a thing.', ru: null, uz: null }],
+  },
+];
+
 /** The backend: `update_check` finds `version`; `update_install` reports `progress`. */
 function backend(version: string | null, progress: number[] = []) {
   const install = vi.fn(async (args: { progress: FakeChannel<number> }) => {
     for (const percent of progress) args.progress.onmessage(percent);
   });
+  const offer: UpdateOffer | null = version ? { version, releases: RELEASES } : null;
   call.mockImplementation(async (command: string, args?: unknown) => {
-    if (command === 'update_check') return version;
+    if (command === 'update_check') return offer;
     if (command === 'update_install') return install(args as { progress: FakeChannel<number> });
     throw new Error(`unexpected command ${command}`);
   });
@@ -75,7 +85,11 @@ describe('checkForUpdates', () => {
     const { checkForUpdates, useUpdateState } = await load();
     await checkForUpdates({ quiet: true });
     await checkForUpdates({ quiet: true });
-    expect(currentStatus(useUpdateState)).toEqual({ status: 'available', version: '0.2.0' });
+    expect(currentStatus(useUpdateState)).toEqual({
+      status: 'available',
+      version: '0.2.0',
+      releases: RELEASES,
+    });
     expect(toast.custom).toHaveBeenCalledOnce();
 
     await checkForUpdates();
@@ -116,7 +130,11 @@ describe('installUpdate', () => {
     await checkForUpdates();
     await installUpdate();
 
-    expect(currentStatus(useUpdateState)).toEqual({ status: 'available', version: '0.2.0' });
+    expect(currentStatus(useUpdateState)).toEqual({
+      status: 'available',
+      version: '0.2.0',
+      releases: RELEASES,
+    });
     expect(toast.error).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ description: 'bad signature' }),
@@ -141,16 +159,44 @@ describe('the update offer', () => {
     render(content());
   }
 
-  it('installs from its button', async () => {
+  it('opens the release notes, to install from there', async () => {
     const { install } = backend('0.2.0');
     const { checkForUpdates } = await load();
+    const { useReleaseNotes } = await import('./releaseNotes');
     await checkForUpdates();
     renderOffer();
 
     expect(screen.getByText('Version 0.2.0 is available')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Update and restart' }));
+    await userEvent.click(screen.getByRole('button', { name: 'What’s new' }));
     expect(toast.dismiss).toHaveBeenCalledWith('update-offer');
-    await vi.waitFor(() => expect(install).toHaveBeenCalledOnce());
+    expect(renderHook(() => useReleaseNotes()).result.current).toEqual({
+      kind: 'offer',
+      version: '0.2.0',
+      releases: RELEASES,
+    });
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it('flags security fixes and what to read first', async () => {
+    call.mockResolvedValue({
+      version: '0.2.0',
+      releases: [
+        {
+          version: '0.2.0',
+          date: '2026-11-06',
+          changes: [
+            { kind: 'security', en: 'Safer.', ru: null, uz: null },
+            { kind: 'notice', en: 'Read this.', ru: null, uz: null },
+          ],
+        },
+      ],
+    } satisfies UpdateOffer);
+    const { checkForUpdates } = await load();
+    await checkForUpdates();
+    renderOffer();
+
+    expect(screen.getByText('Security fixes')).toBeInTheDocument();
+    expect(screen.getByText('Read before updating')).toBeInTheDocument();
   });
 
   it('can be put off', async () => {

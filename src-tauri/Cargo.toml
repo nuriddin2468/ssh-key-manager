@@ -58,6 +58,9 @@ sshkm-os = { path = "../crates/sshkm-os" }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
+# Compares release versions, as the updater does; the version it uses, so this
+# adds no crate to the build.
+semver = "1"
 # The audit's breach check (commands/audit_checks.rs) asks Have I Been Pwned
 # over HTTPS with the HTTP client, TLS provider and timer the updater
 # already uses, so these add no crate to the build.

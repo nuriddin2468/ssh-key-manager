@@ -4,7 +4,8 @@
 //! With the setting on, closing the window hides it: browser autofill, the
 //! user's own devices on Nearby, terminal sessions and the vault's timers
 //! carry on. The icon's menu brings the window back and offers what needs no
-//! window: the vault's state and locking it, connecting to a host, a Nearby
+//! window: the vault's state, locking it and unlocking it (in the small
+//! unlock window, [`crate::browser::unlock`]), connecting to a host, a Nearby
 //! conversation waiting for the user, and quitting. A conversation that
 //! starts waiting while the window is hidden brings the window back by
 //! itself, as a browser's pairing request already does: both come only from
@@ -406,7 +407,9 @@ fn act(app: &AppHandle, id: &str) {
     match id {
         menu::OPEN | menu::NEARBY => show_window(app),
         menu::ALL_HOSTS => page("new-session"),
-        menu::UNLOCK => page("nav-passwords"),
+        // Touch ID or Windows Hello, else the small unlock window: the main
+        // window stays as it is.
+        menu::UNLOCK => crate::browser::unlock::ask(app, crate::browser::unlock::Asker::Tray),
         menu::LOCK => {
             if let Some(state) = app.try_state::<Shared>() {
                 state.vault.lock(app, LockReason::Manual);

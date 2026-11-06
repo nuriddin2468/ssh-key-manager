@@ -352,7 +352,18 @@ the user's own Enter, click or key press. A page that sets the values and calls
 about once a second. Whether the banner appears still tells the page whether the login
 the user just typed there is saved, which is about a password the page was given
 anyway; the banner's size is the same whether it offers to save or to update, whatever
-the saved login's title.
+the saved login's title. The banner's username is a field the user can change (a form
+may send a password alone); key presses in it stop at the banner, but a page listening
+in the capture phase still sees them, which tells it the username of its own login. A
+login typed on another site gets no such field. The username sent with the first step
+of a two-step login waits in `storage.session` for five minutes, for that tab only,
+and names a password sent there without one on the same site.
+
+**The browser's own suggestions.** The popup can turn off the browser's "Offer to save
+passwords" (and in Chromium its address and earlier-entry suggestions) with the
+optional `privacy` permission, which it asks for only when the user turns them off.
+Turning them on again hands the settings back to the user's own choice. A setting the
+user's organization or another extension controls is left alone.
 
 **Pairing.**
 

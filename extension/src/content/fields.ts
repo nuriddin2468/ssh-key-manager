@@ -6,7 +6,9 @@
 // - its username is the field marked `autocomplete="username"` or `email`,
 //   else the last visible text-like field before the password;
 // - a form with a username but no password (the first step of a two-step
-//   login) gets the username alone, if the field looks like one.
+//   login) gets the username alone, if the field looks like one;
+// - a sent form whose username isn't shown (the second step of a two-step
+//   login) may still name it in a hidden field marked as the username.
 
 const TEXT_TYPES = new Set(['text', 'email', 'tel', '']);
 const USERNAME_HINT = /user|login|e-?mail|account|identifier|phone/i;
@@ -111,6 +113,23 @@ export function isPassword(input: HTMLInputElement): boolean {
   return input.type === 'password';
 }
 
+/** Whether the browser's own autofill filled `input`: its value isn't readable until the user acts. */
+export function autofilled(input: HTMLInputElement): boolean {
+  for (const selector of [':autofill', ':-webkit-autofill']) {
+    try {
+      return input.matches(selector);
+    } catch {
+      // Not known here (jsdom): try the next name.
+    }
+  }
+  return false;
+}
+
+/** Whether `field` already holds something: put in by the user, the page or the browser. */
+export function holdsValue(field: HTMLInputElement | null): boolean {
+  return field !== null && (field.value !== '' || autofilled(field));
+}
+
 function isNewPassword(input: HTMLInputElement): boolean {
   return autocomplete(input).includes('new-password');
 }
@@ -144,6 +163,33 @@ function inputs(scope: ParentNode): HTMLInputElement[] {
 
 function before(a: Node, b: Node): boolean {
   return Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+}
+
+/** Input types that never hold a username. */
+const NOT_USERNAME = new Set([
+  'password',
+  'checkbox',
+  'radio',
+  'submit',
+  'button',
+  'file',
+  'image',
+]);
+
+/**
+ * A username the page keeps out of sight next to a password: the second
+ * step of a two-step login often repeats it in a hidden field marked as the
+ * username, for password managers.
+ */
+function hiddenUsername(scope: ParentNode): string {
+  for (const input of scope.querySelectorAll('input')) {
+    if (NOT_USERNAME.has(input.type)) continue;
+    const hints = autocomplete(input);
+    const marked = hints.includes('username') || hints.includes('email') || input.type === 'email';
+    const value = input.value.trim();
+    if (marked && value) return value;
+  }
+  return '';
 }
 
 /** The username field that goes with `password`. */
@@ -204,6 +250,25 @@ export function typedIn(
   if (passwords.length === 0) return null;
   const password = passwords.filter(isNewPassword).at(-1) ?? passwords[0];
   if (!password) return null;
-  const username = usernameFor(scope, passwords[0] ?? password)?.value.trim() ?? '';
-  return { username, password: password.value };
+  const shown = usernameFor(scope, passwords[0] ?? password)?.value.trim() ?? '';
+  return { username: shown || hiddenUsername(scope), password: password.value };
+}
+
+/**
+ * The username sent with the first step of a two-step login: `field`'s
+ * value, if it is the only login field of its form. Empty otherwise.
+ */
+export function usernameStep(field: HTMLInputElement): string {
+  const fields = loginFieldsFor(field);
+  if (!fields || fields.password || fields.username !== field) return '';
+  return field.value.trim();
+}
+
+/** The username-only login field in `scope` that holds something, if there is one. */
+export function usernameStepIn(scope: ParentNode): string {
+  for (const input of inputs(scope)) {
+    const username = usernameStep(input);
+    if (username) return username;
+  }
+  return '';
 }

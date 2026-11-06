@@ -1,8 +1,10 @@
-//! Unlocking the vault when the browser asks, without the app's main window.
+//! Unlocking the vault without the app's main window: when the browser asks,
+//! and from the tray menu.
 //!
 //! The extension's "Unlock" on a login field sends [`Message::Unlock`]; the
 //! broker limits how often ([`super::broker::MAX_UNLOCKS`]) and asks here.
-//! The app then asks the user itself, outside the browser:
+//! The tray's "Unlock Vault…" asks here too ([`Asker::Tray`]). The app then
+//! asks the user itself, outside the browser:
 //!
 //! 1. With Touch ID or Windows Hello set up for the vault, the system prompt
 //!    and nothing else: an app in the tray stays there. The prompt's text is
@@ -55,6 +57,26 @@ const BACKGROUND: Color = Color(0x0A, 0x0D, 0x14, 0xFF);
 /// A Touch ID or Windows Hello prompt is up.
 static PROMPTING: AtomicBool = AtomicBool::new(false);
 
+/// Who asked to unlock, which the window says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Asker {
+    /// The browser extension, to fill a login.
+    Browser,
+    /// The user, from the tray menu.
+    Tray,
+}
+
+impl Asker {
+    /// The page with what it says: `unlock.html?for=…`.
+    fn page(self) -> String {
+        let asker = match self {
+            Self::Browser => "browser",
+            Self::Tray => "tray",
+        };
+        format!("{PAGE}?for={asker}")
+    }
+}
+
 /// Closes the unlock window whenever the vault is unlocked. Called once at
 /// start.
 pub fn watch(app: &AppHandle) {
@@ -70,7 +92,7 @@ pub fn watch(app: &AppHandle) {
 /// else (or if it is dismissed) the unlock window. A vault this computer
 /// opens only with its recovery key is unlocked in the main window, which
 /// comes forward instead. Returns at once.
-pub fn ask(app: &AppHandle) {
+pub fn ask(app: &AppHandle, asker: Asker) {
     if focus(app) || PROMPTING.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -81,7 +103,7 @@ pub fn ask(app: &AppHandle) {
         PROMPTING.store(false, Ordering::SeqCst);
         match ways {
             _ if unlocked => {}
-            Some(ways) if ways.master || ways.device => open(&app),
+            Some(ways) if ways.master || ways.device => open(&app, asker),
             _ => super::show_app(&app),
         }
     });
@@ -122,11 +144,11 @@ fn with_device(app: &AppHandle) -> bool {
             true
         }
         Err(error) if error.code() == ErrorCode::Cancelled => {
-            log::info!("browser: device unlock dismissed; asking in the unlock window");
+            log::info!("unlock: device unlock dismissed; asking in the unlock window");
             false
         }
         Err(error) => {
-            log::warn!("browser: device unlock failed ({error}); asking in the unlock window");
+            log::warn!("unlock: device unlock failed ({error}); asking in the unlock window");
             false
         }
     }
@@ -145,7 +167,7 @@ fn focus(app: &AppHandle) -> bool {
 
 /// Opens the unlock window, or brings it forward. If it can't be made, the
 /// main window comes forward on the vault instead, as before.
-fn open(app: &AppHandle) {
+fn open(app: &AppHandle, asker: Asker) {
     if focus(app) {
         return;
     }
@@ -154,7 +176,7 @@ fn open(app: &AppHandle) {
         "Разблокировка хранилища",
         "Omborni ochish",
     );
-    let built = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App(PAGE.into()))
+    let built = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App(asker.page().into()))
         .title(title.pick())
         .inner_size(WIDTH, HEIGHT)
         .resizable(false)
@@ -172,7 +194,7 @@ fn open(app: &AppHandle) {
             let _ = window.set_focus();
         }
         Err(error) => {
-            log::warn!("browser: no unlock window ({error}); showing the app");
+            log::warn!("unlock: no unlock window ({error}); showing the app");
             super::show_app(app);
         }
     }

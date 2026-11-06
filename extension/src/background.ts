@@ -8,6 +8,10 @@
 // most three minutes, only on pages of the site it was typed on, and dropped
 // at the next look after that or once the tab shows another site; its
 // password never goes back to a page.
+//
+// The username sent with the first step of a two-step login waits here too,
+// for five minutes, to name a password sent next in the same tab on the same
+// site without one.
 
 import {
   type CheckResult,
@@ -26,10 +30,14 @@ import type {
   ToBackground,
   ToContent,
 } from './shared/messages';
+import { applyWanted } from './shared/suggestions';
 
 const LOGINS_TTL = 10_000;
 const PENDING_TTL = 3 * 60_000;
+const USERNAME_TTL = 5 * 60_000;
 const MAX_FIELD = 4096;
+/** Longest username taken from the banner or a two-step login's first step. */
+const MAX_USERNAME = 256;
 
 interface Pending {
   id: string;
@@ -40,6 +48,13 @@ interface Pending {
   mode: 'save' | 'update';
   entryId?: string;
   title?: string;
+  at: number;
+}
+
+/** The username of a two-step login's first step, per tab. */
+interface Step {
+  origin: string;
+  username: string;
   at: number;
 }
 
@@ -144,9 +159,40 @@ async function dropPending(tabId: number, id?: string): Promise<void> {
   }
 }
 
-/** Keeps a typed login for the banner, if the vault doesn't have it as typed. */
-async function capture(tabId: number, origin: string, username: string, password: string) {
+async function loadSteps(): Promise<Record<string, Step>> {
+  const stored = await ext.storage.session.get('steps');
+  return (stored.steps ?? {}) as Record<string, Step>;
+}
+
+async function rememberUsername(tabId: number, origin: string, username: string): Promise<void> {
+  const all = await loadSteps();
+  all[tabId] = { origin, username, at: Date.now() };
+  await ext.storage.session.set({ steps: all });
+}
+
+async function forgetUsername(tabId: number): Promise<void> {
+  const all = await loadSteps();
+  if (!(tabId in all)) return;
+  delete all[tabId];
+  await ext.storage.session.set({ steps: all });
+}
+
+/** The username sent just before in this tab, on the same site as `origin`; empty if none. */
+async function usernameBefore(tabId: number, origin: string): Promise<string> {
+  const step = (await loadSteps())[tabId];
+  if (!step || Date.now() - step.at > USERNAME_TTL) return '';
+  const same = step.origin === origin || (await sameSite(step.origin, origin).catch(() => false));
+  return same ? step.username : '';
+}
+
+/**
+ * Keeps a typed login for the banner, if the vault doesn't have it as typed.
+ * One sent without a username takes the one the tab sent just before on the
+ * same site, if any: the first step of a two-step login.
+ */
+async function capture(tabId: number, origin: string, typed: string, password: string) {
   if (!password) return;
+  const username = typed || (await usernameBefore(tabId, origin));
   const check = await request<CheckResult>({ check: { origin, username, password } });
   if (!check.ok && check.problem !== 'locked') return;
   if (check.ok && check.value.status === 'saved') {
@@ -197,11 +243,16 @@ async function pendingFor(tabId: number, origin: string): Promise<PendingSaveRep
   };
 }
 
-/** Saves or updates the waiting login, checking again first: the vault may have changed. */
-async function save(tabId: number, id: string): Promise<SaveReply> {
+/**
+ * Saves or updates the waiting login, checking again first: the vault may
+ * have changed, and the user may have changed the username in the banner
+ * (`typed`; none for a banner without the field).
+ */
+async function save(tabId: number, id: string, typed?: string): Promise<SaveReply> {
   const pending = (await loadPending())[tabId];
   if (!pending || pending.id !== id) return { ok: false, problem: 'expired' };
-  const { origin, username, password } = pending;
+  const { origin, password } = pending;
+  const username = typed ?? pending.username;
   const check = await request<CheckResult>({ check: { origin, username, password } });
   if (!check.ok) return { ok: false, problem: check.problem };
   let done: Result<unknown> = { ok: true, value: null };
@@ -214,6 +265,7 @@ async function save(tabId: number, id: string): Promise<SaveReply> {
   }
   if (!done.ok) return { ok: false, problem: done.problem };
   await dropPending(tabId, id);
+  await forgetUsername(tabId);
   logins.delete(origin);
   return { ok: true, mode };
 }
@@ -246,10 +298,18 @@ async function handle(
         await capture(tabId, origin, message.username.trim(), message.password);
       }
       return null;
+    case 'username':
+      if (isString(message.username, MAX_USERNAME) && message.username.trim()) {
+        await rememberUsername(tabId, origin, message.username.trim());
+      }
+      return null;
     case 'pendingSave':
       return frameId === 0 ? pendingFor(tabId, origin) : null;
-    case 'save':
-      return isString(message.id, 64) ? save(tabId, message.id) : null;
+    case 'save': {
+      if (!isString(message.id, 64)) return null;
+      const typed = isString(message.username, MAX_USERNAME) ? message.username.trim() : undefined;
+      return save(tabId, message.id, typed);
+    }
     case 'dismissSave':
       if (isString(message.id, 64)) await dropPending(tabId, message.id);
       return null;
@@ -269,7 +329,13 @@ ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
+// The popup may have closed while the browser asked for the permission.
+ext.permissions.onAdded.addListener((added) => {
+  if (added.permissions?.includes('privacy')) void applyWanted();
+});
+
 ext.tabs.onRemoved.addListener((tabId) => {
   captures.forget(tabId);
   void dropPending(tabId);
+  void forgetUsername(tabId);
 });

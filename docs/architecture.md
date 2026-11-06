@@ -211,8 +211,10 @@ translates.
   one picked and passes sent login forms to the background, which offers to save them in
   a banner on the next page (naming only the site, if that page is another site's). It
   reacts only to trusted events, opens the menu only on the user's own click, Tab or
-  Down Arrow, and passes on only logins whose password the user typed (or the extension
+  Down Arrow (and over a password already filled in, only on Down Arrow), and passes on
+  only logins whose password the user typed (or the extension
   filled) and that the user sent. A menu item or banner button counts only once the
   surface has been shown, uncovered and untouched by the page, for half a second.
-- The popup shows the connection state; the connect page pairs the browser. Keys stay in
-  IndexedDB as non-extractable WebCrypto keys.
+- The popup shows the connection state and can turn off the browser's own password
+  suggestions (the optional `privacy` permission); the connect page pairs the browser.
+  Keys stay in IndexedDB as non-extractable WebCrypto keys.

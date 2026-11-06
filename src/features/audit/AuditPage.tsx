@@ -1,62 +1,133 @@
-import { Lock, RefreshCw, ShieldCheck, Wrench } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { Lock, RefreshCw, ShieldCheck } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
-import { invalidateAll, useAudit, useConfig, useEnvironment, useKeys } from '@/api/queries';
+import {
+  invalidateAll,
+  useAudit,
+  useConfig,
+  useEnvironment,
+  useKeys,
+  useVaultEntries,
+  useVaultStatus,
+} from '@/api/queries';
 import { useAppMutation } from '@/api/useAppMutation';
-import type { Finding } from '@/bindings/Finding';
+import { useDialogs } from '@/app/dialogs';
+import { useRouter } from '@/app/router';
+import type { FixAction } from '@/bindings/FixAction';
 import type { Severity } from '@/bindings/Severity';
 import { PageBody, Toolbar } from '@/components/layout/Toolbar';
 import { Button } from '@/components/ui/Button';
+import { Chip } from '@/components/ui/Chip';
 import { IconButton } from '@/components/ui/IconButton';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
+import { VaultIcon } from '@/features/keys/VaultControls';
 import { cn } from '@/lib/cn';
 import { displayPath } from '@/lib/format';
 import { updateSettings, useSettings } from '@/lib/settings';
+import { AreaCards } from './AreaCards';
+import { AuditSummary } from './AuditSummary';
+import { ChecksList } from './ChecksList';
 import { FindingRow } from './FindingRow';
 import {
+  AREAS,
+  type Area,
+  type AuditItem,
+  automaticFixes,
+  bySeverity,
+  CHECKS,
+  checkResults,
   findingSubject,
-  findingsByKey,
   findingText,
   findingTitle,
-  healthyKeyCount,
-  SEVERITY_COLORS,
   SEVERITY_ORDER,
+  sshItem,
+  vaultItem,
 } from './model';
 import { fixLabelKey, useFix } from './useFix';
-import { VaultAuditSection } from './VaultAuditSection';
+import { vaultFindingTarget, vaultFindingText, vaultFindingTitle } from './vaultModel';
 
-const CIRCUMFERENCE = 2 * Math.PI * 52;
+const FILTER_LABELS = {
+  critical: 'audit.filterCritical',
+  warning: 'audit.filterWarning',
+  info: 'audit.filterInfo',
+} as const;
 
+/**
+ * The audit of `~/.ssh`, the hosts file and the vault on one page: how things
+ * stand overall, each area's checks, the open findings (by area, filtered by
+ * area and severity) with their fixes, and every check that ran.
+ */
 export function AuditPage() {
   const { t, i18n } = useTranslation();
+  const { navigate } = useRouter();
+  const dialogs = useDialogs();
   const audit = useAudit();
   const keys = useKeys();
   const config = useConfig();
   const environment = useEnvironment();
   const settings = useSettings();
+  const vaultState = useVaultStatus().data?.state;
+  // Keyed by the state, so locking or unlocking the vault checks again.
+  const vaultAudit = useQuery({
+    queryKey: ['vault', 'audit', vaultState],
+    queryFn: api.vaultAudit,
+    enabled: vaultState !== undefined,
+  });
+  const entries = useVaultEntries();
+  const [area, setArea] = useState<Area | null>(null);
+  const [severity, setSeverity] = useState<Severity | null>(null);
   const [showIgnored, setShowIgnored] = useState(false);
+  const [checksOpen, setChecksOpen] = useState<boolean | null>(null);
 
   const keysById = useMemo(
     () => new Map((keys.data?.keys ?? []).map((k) => [k.id, k])),
     [keys.data],
   );
+  const titles = useMemo(
+    () => new Map((entries.data ?? []).map((entry) => [entry.id, entry.title])),
+    [entries.data],
+  );
   const { fix, pending } = useFix(keysById);
+
+  const vault = vaultAudit.data;
+  const hasVault = vault !== undefined && vault.state !== 'missing';
+  const locked = vault?.state === 'locked';
+  const areas = AREAS.filter((a) => a !== 'passwords' || hasVault);
   const ignored = new Set(settings.ignoredFindings);
-  const all = audit.data?.findings ?? [];
-  const open = all.filter((f) => !ignored.has(f.id));
-  const hidden = all.filter((f) => ignored.has(f.id));
-  const count = (severity: Severity) => open.filter((f) => f.severity === severity).length;
-  const totalKeys = keys.data?.keys.length ?? 0;
-  const healthy = healthyKeyCount(keys.data?.keys ?? [], findingsByKey(audit.data));
-  const permissionFixes = open.flatMap((f) =>
-    f.fix?.kind === 'fixPermissions' ? [{ path: f.fix.path, kind: f.fix.target }] : [],
+  const all = bySeverity([
+    ...(audit.data?.findings ?? []).map(sshItem),
+    ...(vault?.findings ?? []).map(vaultItem),
+  ]);
+  const open = all.filter((item) => !ignored.has(item.ignoreId));
+  const hidden = all.filter((item) => ignored.has(item.ignoreId));
+  const counts = { critical: 0, warning: 0, info: 0 };
+  for (const item of open) counts[item.severity] += 1;
+  const results = checkResults(open);
+  const ran = CHECKS.filter(
+    (check) => areas.includes(check.area) && !(locked && check.area === 'passwords'),
+  );
+  const passed = ran.filter((check) => (results.get(check.id)?.count ?? 0) === 0).length;
+  const automatic = automaticFixes(open);
+
+  const fixAll = useAppMutation(
+    async (actions: FixAction[]) => {
+      const permissions = actions.flatMap((action) =>
+        action.kind === 'fixPermissions' ? [{ path: action.path, kind: action.target }] : [],
+      );
+      let fixed = permissions.length > 0 ? await api.fixPermissions(permissions) : 0;
+      for (const action of actions) {
+        if (action.kind !== 'regeneratePublic') continue;
+        await api.regeneratePublic(action.keyId);
+        fixed += 1;
+      }
+      return fixed;
+    },
+    { success: (fixed) => t('audit.fixedAuto', { count: fixed }) },
   );
 
-  const fixAll = useAppMutation(api.fixPermissions, {
-    success: (fixed) => t('audit.fixedPermissions', { count: fixed }),
-  });
   const setIgnored = (id: string, value: boolean) =>
     updateSettings({
       ignoredFindings: value
@@ -64,30 +135,70 @@ export function AuditPage() {
         : settings.ignoredFindings.filter((other) => other !== id),
     });
 
-  const subject = (finding: Finding) =>
-    findingSubject(finding, keysById, config.data?.view.hosts ?? [], (path) =>
-      displayPath(path, environment.data?.paths.home),
-    );
-
-  let start = 0;
-  const gap = open.length > 1 ? 16 : 0;
-  const segments = SEVERITY_ORDER.map((severity) => {
-    const length = open.length ? (CIRCUMFERENCE * count(severity)) / open.length : 0;
-    const dash = Math.max(length - gap, 0);
-    const segment = { severity, dash, offset: -start };
-    start += length;
-    return segment;
-  });
-
-  const headline =
-    totalKeys === 0
-      ? t('audit.headlineNoKeys')
-      : healthy === totalKeys
-        ? t('audit.headlineAll', { count: totalKeys })
-        : t('audit.headlinePartial', { healthy, total: totalKeys });
+  const scope =
+    hasVault && !locked
+      ? t('audit.scopeVault', {
+          keys: keys.data?.keys.length ?? 0,
+          hosts: config.data?.view.hosts.length ?? 0,
+          passwords: entries.data?.filter((entry) => !entry.inTrash).length ?? 0,
+        })
+      : t('audit.scope', {
+          keys: keys.data?.keys.length ?? 0,
+          hosts: config.data?.view.hosts.length ?? 0,
+        });
   const checkedAt = audit.dataUpdatedAt
     ? new Intl.DateTimeFormat(i18n.language, { timeStyle: 'short' }).format(audit.dataUpdatedAt)
     : '';
+
+  const row = (item: AuditItem, muted: boolean) => {
+    const ignore = muted ? undefined : () => setIgnored(item.ignoreId, true);
+    const restore = muted ? () => setIgnored(item.ignoreId, false) : undefined;
+    if (item.source === 'ssh') {
+      const finding = item.finding;
+      return (
+        <FindingRow
+          key={item.ignoreId}
+          severity={finding.severity}
+          title={findingTitle(t, finding)}
+          text={findingText(t, finding)}
+          subject={findingSubject(finding, keysById, config.data?.view.hosts ?? [], (path) =>
+            displayPath(path, environment.data?.paths.home),
+          )}
+          actionLabel={t(fixLabelKey(finding))}
+          busy={pending === finding.fix}
+          onAction={() => fix(finding)}
+          muted={muted}
+          onIgnore={ignore}
+          onRestore={restore}
+        />
+      );
+    }
+    const finding = item.finding;
+    const target = vaultFindingTarget(finding);
+    return (
+      <FindingRow
+        key={item.ignoreId}
+        severity={finding.severity}
+        title={vaultFindingTitle(t, finding)}
+        text={vaultFindingText(t, finding, titles, i18n.language)}
+        subject={titles.get(finding.entryId) ?? ''}
+        actionLabel={t(target.label)}
+        onAction={() => navigate(target.route)}
+        muted={muted}
+        onIgnore={ignore}
+        onRestore={restore}
+      />
+    );
+  };
+
+  const shownAreas = areas.filter((a) => area === null || a === area);
+  const inView = open.filter(
+    (item) => shownAreas.includes(item.area) && (severity === null || item.severity === severity),
+  );
+  const lockedRowShown = locked && shownAreas.includes('passwords') && severity === null;
+  const inAreas = open.filter((item) => shownAreas.includes(item.area));
+  // With nothing open, the checks are what's left to show.
+  const checksShown = checksOpen ?? open.length === 0;
 
   return (
     <>
@@ -100,7 +211,10 @@ export function AuditPage() {
           variant="secondary"
           icon={
             <RefreshCw
-              className={cn('size-[15px]', audit.isFetching && 'animate-spin')}
+              className={cn(
+                'size-[15px]',
+                (audit.isFetching || vaultAudit.isFetching) && 'animate-spin',
+              )}
               strokeWidth={1.9}
             />
           }
@@ -115,147 +229,113 @@ export function AuditPage() {
           </div>
         ) : (
           <>
-            <section
-              aria-labelledby="audit-title"
-              className="flex flex-wrap items-center gap-[26px] rounded-[20px] border border-rose-400/20 bg-[linear-gradient(135deg,rgb(225_29_72/0.16),rgb(255_255_255/0.03)_60%)] px-[26px] py-[22px] shadow-[inset_0_1px_0_rgb(255_255_255/0.06)]"
-            >
-              <div className="relative grid size-[136px] shrink-0 place-items-center">
-                <svg
-                  role="img"
-                  aria-label={t('audit.ring', {
-                    total: open.length,
-                    critical: count('critical'),
-                    warning: count('warning'),
-                    info: count('info'),
-                  })}
-                  width="136"
-                  height="136"
-                  viewBox="0 0 136 136"
-                  className="absolute inset-0"
-                >
-                  <circle
-                    cx="68"
-                    cy="68"
-                    r="52"
-                    fill="none"
-                    stroke="rgb(255 255 255 / 0.07)"
-                    strokeWidth="12"
-                  />
-                  {segments.map((segment) =>
-                    segment.dash > 0 ? (
-                      <circle
-                        key={segment.severity}
-                        cx="68"
-                        cy="68"
-                        r="52"
-                        fill="none"
-                        stroke={SEVERITY_COLORS[segment.severity]}
-                        strokeWidth="12"
-                        strokeLinecap="round"
-                        strokeDasharray={`${segment.dash.toFixed(2)} ${CIRCUMFERENCE.toFixed(2)}`}
-                        strokeDashoffset={segment.offset.toFixed(2)}
-                        transform="rotate(-90 68 68)"
-                        className="transition-[stroke-dasharray,stroke-dashoffset] duration-500"
-                      />
-                    ) : null,
-                  )}
-                  {open.length === 0 ? (
-                    <circle
-                      cx="68"
-                      cy="68"
-                      r="52"
-                      fill="none"
-                      stroke="#5EEAD4"
-                      strokeWidth="12"
-                      opacity="0.8"
-                    />
-                  ) : null}
-                </svg>
-                <span className="relative flex flex-col items-center">
-                  <span className="text-[34px] leading-[38px] font-semibold tracking-[-0.03em] tabular-nums">
-                    {open.length}
-                  </span>
-                  <span className="text-[12px] text-muted">
-                    {t('audit.findings', { count: open.length })}
-                  </span>
-                </span>
-              </div>
-              <div className="flex min-w-[280px] flex-1 flex-col gap-1.5">
-                <span className="text-[12.5px] text-muted">
-                  {t('audit.scope', {
-                    keys: totalKeys,
-                    hosts: config.data?.view.hosts.length ?? 0,
-                  })}
-                </span>
-                <h2
-                  id="audit-title"
-                  className="text-[26px] leading-8 font-semibold tracking-[-0.02em]"
-                >
-                  {headline}
-                </h2>
-                <div className="mt-0.5 flex flex-wrap gap-3.5">
-                  {SEVERITY_ORDER.map((severity) => (
-                    <span
-                      key={severity}
-                      className="inline-flex items-center gap-[7px] text-[12.5px] text-fg-2"
-                    >
-                      <span
-                        aria-hidden="true"
-                        className="size-[9px] rounded-[3px]"
-                        style={{ background: SEVERITY_COLORS[severity] }}
-                      />
-                      {t(
-                        severity === 'critical'
-                          ? 'audit.legendCritical'
-                          : severity === 'warning'
-                            ? 'audit.legendWarning'
-                            : 'audit.legendInfo',
-                        { count: count(severity) },
-                      )}
-                    </span>
-                  ))}
-                </div>
-                {permissionFixes.length > 0 ? (
-                  <div className="mt-2.5 flex flex-wrap gap-2.5">
-                    <Button
-                      variant="primary"
-                      size="lg"
-                      loading={fixAll.isPending}
-                      icon={<Wrench className="size-4" strokeWidth={2} />}
-                      onClick={() => fixAll.mutate(permissionFixes)}
-                    >
-                      {t('audit.fixPermissions')}
-                    </Button>
-                  </div>
-                ) : null}
-              </div>
-            </section>
+            <AuditSummary
+              counts={counts}
+              scope={scope}
+              passed={passed}
+              total={ran.length}
+              automatic={automatic.length}
+              fixing={fixAll.isPending}
+              onFixAll={() => fixAll.mutate(automatic)}
+            />
 
-            {open.length === 0 ? (
-              <div className="flex flex-col items-center gap-2 rounded-[20px] border border-ok/20 bg-ok/[0.06] px-4 py-11 text-center">
-                <Tile tone="teal" size={52} glow>
-                  <ShieldCheck className="size-[26px]" strokeWidth={2} />
-                </Tile>
-                <span className="text-[17px] font-semibold">{t('audit.allClearTitle')}</span>
-                <span className="text-[12.5px] text-muted">{t('audit.allClearText')}</span>
-              </div>
-            ) : (
-              <section aria-label={t('audit.title')} className="flex flex-col gap-2">
-                {open.map((finding) => (
-                  <FindingRow
-                    key={finding.id}
-                    severity={finding.severity}
-                    title={findingTitle(t, finding)}
-                    text={findingText(t, finding)}
-                    subject={subject(finding)}
-                    actionLabel={t(fixLabelKey(finding))}
-                    busy={pending === finding.fix}
-                    onAction={() => fix(finding)}
-                    onIgnore={() => setIgnored(finding.id, true)}
-                  />
-                ))}
+            <AreaCards
+              areas={areas}
+              results={results}
+              locked={locked}
+              selected={area}
+              onSelect={(next) => {
+                setArea(next);
+                setSeverity(null);
+              }}
+            />
+
+            {open.length > 0 || locked || area !== null ? (
+              <section aria-labelledby="audit-findings-h" className="flex flex-col gap-2.5">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                  <h2 id="audit-findings-h" className="text-[14px] leading-5 font-semibold">
+                    {area === null ? t('audit.findingsTitle') : t(`audit.areas.${area}`)}
+                  </h2>
+                  {inAreas.length > 0 ? (
+                    <fieldset className="m-0 ml-auto flex min-w-0 flex-wrap gap-1.5 border-0 p-0">
+                      <legend className="sr-only">{t('audit.filterLabel')}</legend>
+                      <Chip
+                        label={t('audit.filterAll')}
+                        count={inAreas.length}
+                        pressed={severity === null}
+                        onClick={() => setSeverity(null)}
+                      />
+                      {SEVERITY_ORDER.map((level) => {
+                        const count = inAreas.filter((item) => item.severity === level).length;
+                        return count > 0 ? (
+                          <Chip
+                            key={level}
+                            label={t(FILTER_LABELS[level])}
+                            count={count}
+                            pressed={severity === level}
+                            onClick={() => setSeverity(severity === level ? null : level)}
+                          />
+                        ) : null;
+                      })}
+                    </fieldset>
+                  ) : null}
+                </div>
+
+                {inView.length === 0 && !lockedRowShown ? (
+                  <p className="flex items-center gap-2 rounded-xl border border-ok/25 bg-ok/[0.08] px-3 py-2.5 text-[12.5px] text-teal-200">
+                    <ShieldCheck aria-hidden="true" className="size-4" strokeWidth={2} />
+                    {t('audit.nothingHere')}
+                  </p>
+                ) : (
+                  shownAreas.map((group) => {
+                    const items = inView.filter((item) => item.area === group);
+                    const lockedHere = group === 'passwords' && lockedRowShown;
+                    if (items.length === 0 && !lockedHere) return null;
+                    return (
+                      <div key={group} className="flex flex-col gap-2">
+                        {area === null ? (
+                          <h3 className="pt-1 text-[11.5px] font-semibold tracking-[0.04em] text-subtle uppercase">
+                            {t(`audit.areas.${group}`)}
+                          </h3>
+                        ) : null}
+                        {lockedHere ? (
+                          <div className="glass flex flex-wrap items-center gap-x-3.5 gap-y-3 rounded-2xl px-4 py-[13px]">
+                            <Tile tone="slate" size={36}>
+                              <VaultIcon className="size-[18px]" />
+                            </Tile>
+                            <span className="flex min-w-[240px] flex-1 flex-col gap-0.5">
+                              <span className="font-semibold">{t('audit.vault.lockedTitle')}</span>
+                              <span className="text-[12.5px] text-muted">
+                                {t('audit.vault.lockedText')}
+                              </span>
+                            </span>
+                            <Button
+                              size="sm"
+                              onClick={() =>
+                                dialogs.unlockVault({ description: t('audit.vault.lockedText') })
+                              }
+                            >
+                              {t('passwords.unlock')}
+                            </Button>
+                          </div>
+                        ) : null}
+                        {items.map((item) => row(item, false))}
+                      </div>
+                    );
+                  })
+                )}
               </section>
-            )}
+            ) : null}
+
+            <ChecksList
+              areas={areas}
+              results={results}
+              locked={locked}
+              passed={passed}
+              total={ran.length}
+              open={checksShown}
+              onToggle={() => setChecksOpen(!checksShown)}
+            />
 
             {hidden.length > 0 ? (
               <section className="flex flex-col gap-2">
@@ -265,23 +345,9 @@ export function AuditPage() {
                     {showIgnored ? t('audit.hideIgnored') : t('audit.showIgnored')}
                   </Button>
                 </p>
-                {showIgnored
-                  ? hidden.map((finding) => (
-                      <FindingRow
-                        key={finding.id}
-                        severity={finding.severity}
-                        title={findingTitle(t, finding)}
-                        text={findingText(t, finding)}
-                        subject={subject(finding)}
-                        muted
-                        onRestore={() => setIgnored(finding.id, false)}
-                      />
-                    ))
-                  : null}
+                {showIgnored ? hidden.map((item) => row(item, true)) : null}
               </section>
             ) : null}
-
-            <VaultAuditSection ignored={ignored} onIgnore={setIgnored} />
 
             <p className="mt-auto flex items-center gap-2 text-[12.5px] text-subtle">
               <Lock aria-hidden="true" className="size-[15px]" strokeWidth={1.75} />

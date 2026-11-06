@@ -29,6 +29,15 @@ const en = {
   failedTitle: 'Something went wrong',
   failedText: 'Try again in a moment.',
 
+  suggestionsTitle: 'Browser’s own suggestions',
+  suggestionsText:
+    'Turn off so {browser} stops offering to save passwords and suggesting earlier entries under login fields.',
+  suggestionsLocked: 'Set by your organization or another extension.',
+  suggestionsSaved:
+    'Passwords already saved in {browser} are still suggested. Import them into SSH Key Manager, then delete them in the browser.',
+  suggestionsOpen: 'Open the browser’s passwords',
+  suggestionsDenied: 'Not changed: the browser didn’t allow it.',
+
   connectTitle: 'Connect to SSH Key Manager',
   connectIntro:
     'The extension fills passwords from your SSH Key Manager vault. Connect it once; the app asks you to confirm.',
@@ -63,6 +72,8 @@ const en = {
   updated: 'Password updated in SSH Key Manager',
   saveLocked: 'Unlock the vault in SSH Key Manager, then choose Save again.',
   saveFailed: 'Couldn’t save. Try again.',
+  usernameLabel: 'Username for this login',
+  usernamePlaceholder: 'Username or email (optional)',
   close: 'Close',
 };
 
@@ -95,6 +106,15 @@ const ru: Strings = {
   disconnect: 'Отключить этот браузер',
   failedTitle: 'Что-то пошло не так',
   failedText: 'Попробуйте ещё раз чуть позже.',
+
+  suggestionsTitle: 'Подсказки самого браузера',
+  suggestionsText:
+    'Выключите, чтобы {browser} не предлагал сохранять пароли и не подсказывал прежние значения под полями входа.',
+  suggestionsLocked: 'Задано вашей организацией или другим расширением.',
+  suggestionsSaved:
+    'Пароли, уже сохранённые в {browser}, он подсказывает по-прежнему. Импортируйте их в SSH Key Manager и удалите в браузере.',
+  suggestionsOpen: 'Открыть пароли браузера',
+  suggestionsDenied: 'Не изменено: браузер не дал разрешения.',
 
   connectTitle: 'Подключение к SSH Key Manager',
   connectIntro:
@@ -131,6 +151,8 @@ const ru: Strings = {
   updated: 'Пароль обновлён в SSH Key Manager',
   saveLocked: 'Разблокируйте хранилище в SSH Key Manager и снова нажмите «Сохранить».',
   saveFailed: 'Не удалось сохранить. Попробуйте ещё раз.',
+  usernameLabel: 'Имя пользователя для этого логина',
+  usernamePlaceholder: 'Имя пользователя или email (необязательно)',
   close: 'Закрыть',
 };
 
@@ -160,6 +182,15 @@ const uz: Strings = {
   disconnect: 'Bu brauzerni uzish',
   failedTitle: 'Nimadir notoʻgʻri ketdi',
   failedText: 'Birozdan keyin qayta urinib koʻring.',
+
+  suggestionsTitle: 'Brauzerning oʻz takliflari',
+  suggestionsText:
+    '{browser} parollarni saqlashni taklif qilmasligi va kirish maydonlari ostida avval kiritilganlarni koʻrsatmasligi uchun oʻchiring.',
+  suggestionsLocked: 'Tashkilotingiz yoki boshqa kengaytma tomonidan belgilangan.',
+  suggestionsSaved:
+    '{browser}da saqlangan parollar avvalgidek taklif qilinadi. Ularni SSH Key Managerga import qiling va brauzerda oʻchiring.',
+  suggestionsOpen: 'Brauzer parollarini ochish',
+  suggestionsDenied: 'Oʻzgartirilmadi: brauzer ruxsat bermadi.',
 
   connectTitle: 'SSH Key Managerga ulanish',
   connectIntro:
@@ -196,6 +227,8 @@ const uz: Strings = {
   updated: 'Parol SSH Key Managerda yangilandi',
   saveLocked: 'SSH Key Managerda omborni oching, keyin yana «Saqlash»ni tanlang.',
   saveFailed: 'Saqlab boʻlmadi. Qayta urinib koʻring.',
+  usernameLabel: 'Bu login uchun foydalanuvchi nomi',
+  usernamePlaceholder: 'Foydalanuvchi nomi yoki email (ixtiyoriy)',
   close: 'Yopish',
 };
 

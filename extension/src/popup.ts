@@ -1,5 +1,6 @@
 // The toolbar popup: where SSH Key Manager stands for this browser, and the
-// one thing to do about it.
+// one thing to do about it. Once connected, it also turns the browser's own
+// password suggestions off and on (shared/suggestions.ts).
 
 import {
   disconnect,
@@ -11,8 +12,15 @@ import {
   showApp,
 } from './shared/client';
 import { button, h } from './shared/dom';
-import { ext } from './shared/ext';
+import { browserName, ext } from './shared/ext';
 import { currentLanguage, type Key, t } from './shared/i18n';
+import {
+  keepsSavedPasswords,
+  openBrowserPasswords,
+  readSuggestions,
+  type Suggestions,
+  setSuggestions,
+} from './shared/suggestions';
 
 type State =
   | 'checking'
@@ -120,6 +128,79 @@ function actionsFor(state: State): HTMLElement[] {
   }
 }
 
+/** The switch for the browser's own suggestions, which show under login fields next to the menu. */
+function suggestionsSetting(): HTMLElement {
+  const browser = browserName();
+  const toggle = h('button', {
+    type: 'button',
+    role: 'switch',
+    className: 'switch',
+    'aria-checked': 'true',
+    'aria-labelledby': 'suggestions-title',
+    'aria-describedby': 'suggestions-text suggestions-note',
+    disabled: '',
+  });
+  const note = h('p', { id: 'suggestions-note', className: 'note' });
+  let current: Suggestions = { on: true, controllable: true };
+
+  const show = (problem?: string) => {
+    toggle.setAttribute('aria-checked', String(current.on));
+    toggle.disabled = !current.controllable;
+    note.replaceChildren();
+    if (problem) {
+      note.append(h('span', { className: 'problem' }, problem));
+    } else if (!current.controllable) {
+      note.append(t('suggestionsLocked'));
+    } else if (!current.on && keepsSavedPasswords()) {
+      const open = () => {
+        openBrowserPasswords();
+        window.close();
+      };
+      note.append(
+        t('suggestionsSaved', { browser }),
+        ' ',
+        h('button', { type: 'button', className: 'link', onClick: open }, t('suggestionsOpen')),
+      );
+    }
+  };
+
+  toggle.addEventListener('click', () => {
+    toggle.disabled = true;
+    // Straight from the click: the browser asks for the permission only then.
+    setSuggestions(!current.on).then(
+      async (done) => {
+        current = await readSuggestions();
+        show(done ? undefined : t('suggestionsDenied'));
+      },
+      () => show(t('failedText')),
+    );
+  });
+  readSuggestions().then(
+    (read) => {
+      current = read;
+      show();
+    },
+    () => show(),
+  );
+
+  return h(
+    'section',
+    { className: 'setting', 'aria-labelledby': 'suggestions-title' },
+    h(
+      'div',
+      { className: 'setting-row' },
+      h(
+        'div',
+        { className: 'setting-text' },
+        h('h2', { id: 'suggestions-title' }, t('suggestionsTitle')),
+        h('p', { id: 'suggestions-text' }, t('suggestionsText', { browser })),
+      ),
+      toggle,
+    ),
+    note,
+  );
+}
+
 function render(state: State): void {
   const brand = h(
     'div',
@@ -152,7 +233,9 @@ function render(state: State): void {
   const actions = h('div', { className: 'actions' }, ...actionsFor(state));
   const hadFocus = app.contains(document.activeElement);
   card.tabIndex = -1;
-  app.replaceChildren(brand, card, actions);
+  const connected = state === 'ready' || state === 'locked';
+  // The one thing to do comes first; the setting goes under it.
+  app.replaceChildren(brand, card, actions, ...(connected ? [suggestionsSetting()] : []));
   // The button just pressed goes away: keep keyboard focus here.
   if (hadFocus) card.focus({ preventScroll: true });
 }

@@ -61,6 +61,9 @@ Nothing is sent over the internet, and nothing is sent to us or to any third par
   written to disk. They're offered for three minutes at most. They're removed when you
   answer the save banner or close the tab, at the next page load after three minutes,
   and when the browser quits.
+- **A username from a two-step sign-in:** when a site asks for the username on one
+  page and the password on the next, the username waits in the same session storage
+  for five minutes, for that tab only, to go with the password.
 - **Recent site lookups:** the titles and usernames of a site's logins are reused from
   memory for up to ten seconds, so the menu opens quickly. They're never written to
   disk.
@@ -73,6 +76,9 @@ keeps encrypted.
 - No analytics, telemetry, crash reporting or ads.
 - No remote code: everything it runs ships inside the extension.
 - No network requests of its own.
+- No change to your browser's settings, except its own password and form suggestions
+  when you turn them off in the extension's popup. The browser asks you first, and
+  turning them on again restores your own choice.
 - No selling, sharing or transfer of your data, and no use of it for anything but
   filling and saving your logins.
 

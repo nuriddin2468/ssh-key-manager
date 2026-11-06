@@ -1,9 +1,12 @@
 import type { TFunction } from 'i18next';
 import type { AuditReport } from '@/bindings/AuditReport';
 import type { Finding } from '@/bindings/Finding';
+import type { FixAction } from '@/bindings/FixAction';
 import type { HostEntry } from '@/bindings/HostEntry';
 import type { KeyView } from '@/bindings/KeyView';
 import type { Severity } from '@/bindings/Severity';
+import type { VaultFinding } from '@/bindings/VaultFinding';
+import { IGNORE_PREFIX } from './vaultModel';
 
 export const SEVERITY_ORDER: Severity[] = ['critical', 'warning', 'info'];
 
@@ -101,7 +104,113 @@ export function findingSubject(
   return path ? displayPath(path) : '';
 }
 
-/** Keys that have no warning or critical finding. */
-export function healthyKeyCount(keys: readonly KeyView[], byKey: Map<string, Finding[]>): number {
-  return keys.filter((key) => !(byKey.get(key.id) ?? []).some((f) => f.severity !== 'info')).length;
+/** The parts of the setup the audit looks at; each finding belongs to one. */
+export type Area = 'keys' | 'config' | 'hostsFile' | 'passwords';
+
+export const AREAS: Area[] = ['keys', 'config', 'hostsFile', 'passwords'];
+
+type SshKind = Finding['kind']['kind'];
+type VaultKind = VaultFinding['kind']['kind'];
+
+/**
+ * What the audit checks, in the order the page lists them, with the kinds of
+ * finding each check turns up. A check with no open finding passed.
+ */
+export const CHECKS = [
+  { id: 'algorithms', area: 'keys', kinds: ['dsaKey', 'rsaTooShort', 'rsaBelowRecommended'] },
+  { id: 'passphrases', area: 'keys', kinds: ['unencryptedKey'] },
+  { id: 'keyPermissions', area: 'keys', kinds: ['privateKeyPermissions'] },
+  {
+    id: 'keyFiles',
+    area: 'keys',
+    kinds: ['missingPublicKey', 'orphanPublicKey', 'pairMismatch', 'duplicateKey', 'legacyFormat'],
+  },
+  { id: 'folderPermissions', area: 'config', kinds: ['sshDirPermissions', 'configPermissions'] },
+  { id: 'identityFiles', area: 'config', kinds: ['identityFileMissing'] },
+  { id: 'redirects', area: 'hostsFile', kinds: ['hostsFileRedirect'] },
+  { id: 'hostsEntries', area: 'hostsFile', kinds: ['hostsFileConflict', 'hostsFileExpired'] },
+  { id: 'weak', area: 'passwords', kinds: ['weakPassword'] },
+  { id: 'reused', area: 'passwords', kinds: ['reusedPassword'] },
+  { id: 'old', area: 'passwords', kinds: ['oldPassword'] },
+  { id: 'links', area: 'passwords', kinds: ['keyNotFound', 'hostNotFound'] },
+  { id: 'passwordLogin', area: 'passwords', kinds: ['passwordLogin'] },
+] as const satisfies readonly {
+  id: string;
+  area: Area;
+  kinds: readonly (SshKind | VaultKind)[];
+}[];
+
+export type CheckId = (typeof CHECKS)[number]['id'];
+
+/** Every kind of finding belongs to a check: a new kind fails to compile until it has one. */
+type Unchecked = Exclude<SshKind | VaultKind, (typeof CHECKS)[number]['kinds'][number]>;
+export const EVERY_KIND_CHECKED: [Unchecked] extends [never] ? true : Unchecked = true;
+
+/** One finding on the page, from `~/.ssh` or the vault. */
+export type AuditItem =
+  | { source: 'ssh'; ignoreId: string; area: Area; severity: Severity; finding: Finding }
+  | { source: 'vault'; ignoreId: string; area: Area; severity: Severity; finding: VaultFinding };
+
+const AREA_OF: Record<string, Area> = Object.fromEntries(
+  CHECKS.flatMap((check) => check.kinds.map((kind) => [kind, check.area])),
+);
+
+export function sshItem(finding: Finding): AuditItem {
+  return {
+    source: 'ssh',
+    ignoreId: finding.id,
+    area: AREA_OF[finding.kind.kind] ?? 'keys',
+    severity: finding.severity,
+    finding,
+  };
+}
+
+export function vaultItem(finding: VaultFinding): AuditItem {
+  return {
+    source: 'vault',
+    ignoreId: `${IGNORE_PREFIX}${finding.id}`,
+    area: 'passwords',
+    severity: finding.severity,
+    finding,
+  };
+}
+
+/** The most serious severity among `items`, or `null` for none. */
+export function worstSeverity(items: readonly { severity: Severity }[]): Severity | null {
+  for (const severity of SEVERITY_ORDER) {
+    if (items.some((item) => item.severity === severity)) return severity;
+  }
+  return null;
+}
+
+/** Items most severe first; items of the same severity keep their order. */
+export function bySeverity<T extends { severity: Severity }>(items: readonly T[]): T[] {
+  const rank = (item: T) => SEVERITY_ORDER.indexOf(item.severity);
+  return items
+    .map((item, at) => ({ item, at }))
+    .sort((a, b) => rank(a.item) - rank(b.item) || a.at - b.at)
+    .map(({ item }) => item);
+}
+
+/** The open findings each check turned up. */
+export function checkResults(
+  items: readonly AuditItem[],
+): Map<CheckId, { count: number; worst: Severity | null }> {
+  const results = new Map<CheckId, { count: number; worst: Severity | null }>();
+  for (const check of CHECKS) {
+    const kinds: readonly string[] = check.kinds;
+    const found = items.filter((item) => kinds.includes(item.finding.kind.kind));
+    results.set(check.id, { count: found.length, worst: worstSeverity(found) });
+  }
+  return results;
+}
+
+/** One-click fixes that need no answer from the user: file permissions and `.pub` files. */
+export function automaticFixes(items: readonly AuditItem[]): FixAction[] {
+  return items.flatMap((item) =>
+    item.source === 'ssh' &&
+    (item.finding.fix?.kind === 'fixPermissions' || item.finding.fix?.kind === 'regeneratePublic')
+      ? [item.finding.fix]
+      : [],
+  );
 }

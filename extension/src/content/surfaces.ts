@@ -66,8 +66,21 @@ const STYLE = `
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
   height: 38px; margin: 1px 0 2px; font-size: 14px; line-height: 19px; font-weight: 600; color: #f2f4f8; overflow-wrap: anywhere;
 }
-.banner .sub { font: 12px/17px ui-monospace, "Geist Mono", Menlo, monospace; color: #a7b0c0; overflow-wrap: anywhere; }
 .banner .text { flex: 1; min-width: 0; }
+.banner .input {
+  appearance: none; box-sizing: border-box; display: block; width: 100%;
+  height: 30px; margin: 4px 0 0; padding: 0 9px; border-radius: 8px;
+  font: 12.5px/28px ui-monospace, "Geist Mono", Menlo, monospace; color: #f2f4f8;
+  background: rgb(255 255 255 / 0.05); border: 1px solid rgb(255 255 255 / 0.14);
+  outline: none; caret-color: #f9a8d4;
+}
+.banner .input::placeholder {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  color: #8892a6; opacity: 1;
+}
+.banner .input:hover { border-color: rgb(255 255 255 / 0.22); }
+.banner .input:focus { border-color: #f9a8d4; box-shadow: 0 0 0 3px rgb(244 114 182 / 0.22); }
+.banner .input:disabled { opacity: 0.6; }
 .status { margin: 10px 0 0; font-size: 12.5px; line-height: 18px; color: #ffc266; }
 .status.ok { color: #5eead4; }
 .status:empty { display: none; }
@@ -568,8 +581,11 @@ export interface SaveOffer {
 }
 
 export interface BannerHandlers {
-  /** Resolves with what to say: done, or why not. */
-  onSave: (offer: SaveOffer) => Promise<{ ok: boolean; message: string }>;
+  /**
+   * Resolves with what to say: done, or why not. `username` is what the
+   * banner's field holds, if it has one.
+   */
+  onSave: (offer: SaveOffer, username?: string) => Promise<{ ok: boolean; message: string }>;
   onDismiss: (offer: SaveOffer) => void;
 }
 
@@ -579,6 +595,14 @@ export interface BannerHandlers {
  * The page can't read it, but it can measure the element it lives on: the
  * title always takes two lines, so the banner's size doesn't tell whether it
  * offers to save or to update, or the saved login's title.
+ *
+ * The username is a field the user can change: a form with only a password
+ * sent none, and one remembered from a two-step login's first step may be
+ * the wrong one. What they type is for the site's own login, so the page
+ * seeing the key presses learns nothing it wasn't told at sign-in; they stop
+ * at the banner all the same, so that the page's keyboard shortcuts don't
+ * take them. A login typed on another site gets no field: that page isn't to
+ * see its username.
  */
 export class SaveBanner extends Surface {
   constructor(private readonly handlers: BannerHandlers) {
@@ -601,7 +625,18 @@ export class SaveBanner extends Surface {
     // A title too long for two lines shows in full on hover.
     heading.title = title;
     text.append(heading);
-    if (!offer.elsewhere) text.append(element('div', 'sub', offer.username || t('noUsername')));
+    let username: HTMLInputElement | null = null;
+    if (!offer.elsewhere) {
+      username = element('input', 'input');
+      username.value = offer.username;
+      username.type = 'text';
+      username.autocomplete = 'off';
+      username.spellcheck = false;
+      username.maxLength = 256;
+      username.placeholder = t('usernamePlaceholder');
+      username.setAttribute('aria-label', t('usernameLabel'));
+      text.append(username);
+    }
     const close = element('button', 'close');
     close.type = 'button';
     close.setAttribute('aria-label', t('close'));
@@ -639,18 +674,34 @@ export class SaveBanner extends Surface {
     panel.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') dismiss(event);
     });
-    save.addEventListener('click', async (event) => {
-      if (!this.accepts(event, save)) return;
+    const submit = async (event: Event) => {
+      if (!this.accepts(event, save) || save.hasAttribute('aria-busy')) return;
       save.setAttribute('aria-busy', 'true');
-      const result = await this.handlers.onSave(offer);
+      const result = await this.handlers.onSave(offer, username?.value.trim());
       save.removeAttribute('aria-busy');
       status.textContent = result.message;
       status.classList.toggle('ok', result.ok);
       if (result.ok) {
         actions.remove();
+        if (username) username.disabled = true;
         setTimeout(() => this.hide(), 2500);
       }
-    });
+    };
+    save.addEventListener('click', (event) => void submit(event));
+    if (username) {
+      username.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          void submit(event);
+        }
+      });
+      // Typing here is for the banner alone, not for the page's shortcuts.
+      for (const type of ['keydown', 'keyup', 'keypress', 'beforeinput', 'input']) {
+        panel.addEventListener(type, (event) => {
+          if (event.composedPath()[0] === username) event.stopPropagation();
+        });
+      }
+    }
 
     this.place({ top: '16px', right: '16px' }, document.activeElement);
     this.settling.restart();

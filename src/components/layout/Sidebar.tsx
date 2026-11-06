@@ -31,6 +31,7 @@ import { Tile, type Tone } from '@/components/ui/Tile';
 import { useSessionCounts } from '@/features/terminal/TerminalProvider';
 import { cn } from '@/lib/cn';
 import { platform } from '@/lib/platform';
+import { useSettings } from '@/lib/settings';
 import { useUpdateState } from '@/lib/updater';
 
 const PLATFORM_NAMES = { macos: 'macOS', windows: 'Windows', linux: 'Linux' } as const;
@@ -52,7 +53,11 @@ export function Sidebar() {
   const vaultEntries = useVaultEntries();
   const sessions = useSessionCounts();
 
-  const findings = audit.data ? audit.data.counts.critical + audit.data.counts.warning : 0;
+  const ignored = useSettings().ignoredFindings;
+  // Critical findings and warnings the user hasn't set aside on the audit page.
+  const findings = (audit.data?.findings ?? []).filter(
+    (finding) => finding.severity !== 'info' && !ignored.includes(finding.id),
+  ).length;
   const unlocked = agent.data?.identities.length ?? 0;
   const running = agent.data?.status.available ?? false;
   const update = useUpdateState();

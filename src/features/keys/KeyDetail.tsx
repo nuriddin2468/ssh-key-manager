@@ -11,6 +11,7 @@ import {
   KeyRound,
   Lock,
   MoreHorizontal,
+  RefreshCw,
   Send,
   ShieldCheck,
   Trash2,
@@ -34,7 +35,7 @@ import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '@/compo
 import { Popover, PopoverTrigger } from '@/components/ui/Popover';
 import { Tile, TONES } from '@/components/ui/Tile';
 import { findingText, findingTitle } from '@/features/audit/model';
-import { fixLabelKey, useFix } from '@/features/audit/useFix';
+import { fixLabelKey, rotates, useFix } from '@/features/audit/useFix';
 import { HostPreview } from '@/features/hosts/HostPreview';
 import { SendDialog } from '@/features/nearby/SendDialog';
 import { SavedSecret } from '@/features/passwords/SavedSecret';
@@ -43,6 +44,8 @@ import { cn } from '@/lib/cn';
 import { displayPath } from '@/lib/format';
 import { fileManagerName } from '@/lib/platform';
 import { algorithmDescription, hasPrivate, isPlain, keyTone, passphraseLabel } from './model';
+import { moved } from './rotation/plan';
+import { useRotations } from './rotation/store';
 import { VaultIcon } from './VaultControls';
 import { useVaultKey } from './vaultKey';
 
@@ -74,6 +77,8 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
   const keysById = new Map((keys.data?.keys ?? []).map((k) => [k.id, k]));
   const { fix } = useFix(keysById);
   const vault = useVaultKey(key.fingerprint);
+  const rotation = useRotations()[key.id];
+  const rotatable = hasPrivate(key) && Boolean(key.publicKey);
   // While the vault is locked the entry is unknown; showing the passphrase
   // opens the vault first.
   const savedIn =
@@ -190,6 +195,14 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
               >
                 {t('keys.copyPath')}
               </MenuItem>
+              {rotatable ? (
+                <MenuItem
+                  icon={<RefreshCw className="size-4" />}
+                  onSelect={() => dialogs.rotateKey(key)}
+                >
+                  {rotation ? t('rotation.resume') : `${t('rotation.action')}…`}
+                </MenuItem>
+              ) : null}
               <MenuSeparator />
               <MenuItem
                 destructive
@@ -242,6 +255,28 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
       </div>
 
       <div className="relative flex min-h-0 flex-1 flex-col gap-[18px] overflow-y-auto px-5 pt-4 pb-[18px]">
+        {rotation ? (
+          <div className="flex items-start gap-2.5 rounded-xl border border-[rgb(var(--accent-rgb)/0.3)] bg-[rgb(var(--accent-rgb)/0.08)] px-3 py-2.5">
+            <RefreshCw
+              aria-hidden="true"
+              className="mt-0.5 size-4 shrink-0 text-[var(--accent-text)]"
+              strokeWidth={2}
+            />
+            <div className="flex min-w-0 flex-1 flex-col items-start gap-2">
+              <p className="text-[12.5px] leading-[18px] text-fg-2">
+                {rotation.hosts.length
+                  ? t('rotation.inProgress', {
+                      moved: rotation.hosts.filter(moved).length,
+                      total: rotation.hosts.length,
+                    })
+                  : t('rotation.inProgressNoHosts')}
+              </p>
+              <Button size="sm" onClick={() => dialogs.rotateKey(key)}>
+                {t('rotation.resume')}
+              </Button>
+            </div>
+          </div>
+        ) : null}
         <Section title={t('keys.fingerprint')}>
           <div className="flex items-center gap-2">
             <span className="selectable min-w-0 flex-1 font-mono text-[12px] [overflow-wrap:anywhere]">
@@ -339,9 +374,11 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
                   <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                     <span className="font-medium">{findingTitle(t, finding)}</span>
                     <span className="text-[12.5px] text-muted">{findingText(t, finding)}</span>
-                    {finding.fix ? (
+                    {finding.fix || (rotates(finding) && rotatable) ? (
                       <Button size="sm" className="mt-1.5 self-start" onClick={() => fix(finding)}>
-                        {t(fixLabelKey(finding))}
+                        {rotation && rotates(finding)
+                          ? t('rotation.resume')
+                          : t(fixLabelKey(finding))}
                       </Button>
                     ) : null}
                   </div>

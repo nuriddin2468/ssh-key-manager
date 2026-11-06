@@ -8,6 +8,7 @@ pub mod browser;
 pub mod config;
 pub mod environment;
 pub mod hosts_file;
+pub mod key_rotation;
 pub mod keys;
 pub mod known_hosts;
 pub mod nearby;

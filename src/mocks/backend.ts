@@ -21,6 +21,7 @@ import { browserHandlers } from './browser';
 import { historyHandlers, recordCheck } from './history';
 import { hostsFileFindings, hostsFileHandlers } from './hostsFile';
 import { nearbyHandlers } from './nearby';
+import { ROTATION_HOSTS, rotationHandlers } from './rotation';
 import { serverKeysHandlers } from './serverKeys';
 import { terminalHandlers } from './terminal';
 import { vaultHandlers, vaultKeyTest } from './vault';
@@ -176,6 +177,7 @@ let hostSpecs: { patterns: string[]; options: HostOption[] }[] = [
       opt('IdentityFile', '~/.ssh/vpn_key'),
     ],
   },
+  ...ROTATION_HOSTS,
   { patterns: ['*'], options: [opt('AddKeysToAgent', 'yes'), opt('UseKeychain', 'yes')] },
 ];
 
@@ -502,6 +504,12 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   ...historyHandlers,
   ...serverKeysHandlers({
     keys: () => keys,
+    batchLogin: keyTest,
+    vaultLogin: (alias) => vaultTest({ alias }) as ReturnType<typeof keyTest>,
+  }),
+  // The key rotation's demo servers; every other host as above.
+  ...rotationHandlers({
+    keys: () => keysView().keys,
     batchLogin: keyTest,
     vaultLogin: (alias) => vaultTest({ alias }) as ReturnType<typeof keyTest>,
   }),

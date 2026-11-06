@@ -89,6 +89,7 @@ Builds are not code-signed yet (it's on the [roadmap](#roadmap)), so your system
 - Create a new key (Ed25519, RSA or ECDSA). The same dialog can unlock it in the agent and add a server entry for it.
 - Copy a public key in one click, ready to paste into GitHub, GitLab or a server.
 - Add, change or remove a passphrase. Import existing keys.
+- Rotate an old key (RSA, DSA, one without a passphrase): a new Ed25519 key goes to every server that uses the old one, is checked to sign in on its own, and only then replaces it in your config. The old key comes off those servers and goes to the Trash when you say so.
 - Deleted keys go to the Trash, so you can get them back.
 
 **Hosts.** Edit `~/.ssh/config` with a form instead of a text editor, so you can type `ssh prod` instead of the full address, user, port and key.

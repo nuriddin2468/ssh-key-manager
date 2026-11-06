@@ -75,7 +75,7 @@ pub fn install_key(
 
 /// Options of a run that only runs its command: no forwarding, no tty, no
 /// configured `RemoteCommand` in the way.
-const COMMAND_ONLY: &[&str] = &[
+pub(crate) const COMMAND_ONLY: &[&str] = &[
     "-o",
     "RemoteCommand=none",
     "-o",

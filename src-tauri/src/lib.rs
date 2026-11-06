@@ -82,6 +82,8 @@ pub fn run() {
             commands::keys::regenerate_public,
             commands::keys::import_key,
             commands::keys::trash_key,
+            commands::key_rotation::check_key_login,
+            commands::key_rotation::vault_check_key_login,
             commands::agent::agent_view,
             commands::agent::agent_add,
             commands::agent::agent_remove,

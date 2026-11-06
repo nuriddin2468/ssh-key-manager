@@ -18,6 +18,8 @@ const COMMANDS: &[&str] = &[
     "regenerate_public",
     "import_key",
     "trash_key",
+    "check_key_login",
+    "vault_check_key_login",
     "agent_view",
     "agent_add",
     "agent_remove",

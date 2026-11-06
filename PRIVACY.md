@@ -108,7 +108,13 @@ It goes online only:
   **Settings → Updates**;
 - when you ask it to reach a server: checking a host key, testing a connection or
   opening a terminal session;
+- when you rotate a key: it signs in to the hosts you chose to add the new key, check
+  that it works and, if you ask, remove the old one;
 - for a DNS lookup when you ask where a name leads.
+
+While you rotate a key, the app remembers on this computer which hosts you chose and
+how far each got, so you can finish later: the names of the keys and hosts, their
+fingerprints and the old public key. It forgets them once the rotation is done.
 
 It talks to the local network only for **Nearby**, and only when you ask:
 

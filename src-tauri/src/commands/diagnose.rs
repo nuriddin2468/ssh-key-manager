@@ -138,8 +138,6 @@ fn ssh_g(alias: &str) -> AppResult<SshG> {
 
 #[cfg(test)]
 mod tests {
-    use sshkm_core::paths::SshPaths;
-
     use super::*;
 
     #[test]
@@ -155,6 +153,8 @@ mod tests {
     #[test]
     fn fixes_only_files_the_audit_names() {
         use std::os::unix::fs::PermissionsExt;
+
+        use sshkm_core::paths::SshPaths;
 
         let home = tempfile::tempdir().unwrap();
         let dir = home.path().join(".ssh");

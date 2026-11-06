@@ -448,6 +448,7 @@ fn an_unreachable_host_is_told_apart() {
         saved: false,
         exit_code: Some(255),
         output: String::new(),
+        diagnosis: None,
     };
     assert_eq!(
         classify(

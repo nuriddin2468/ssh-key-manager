@@ -77,7 +77,7 @@ export function rotationHandlers({
     ['media', { user: 'pi', fingerprints: [OLD_KEY], readsElsewhere: true }],
     ['router', { user: 'admin', fingerprints: [OLD_KEY] }],
   ]);
-  recordCheck('router', { ok: true, output: '', prompts: [] });
+  recordCheck('router', { ok: true, output: '', prompts: [], diagnosis: null });
 
   function line(index: number, fingerprint: string): AuthorizedKey {
     const key = keys().find((k) => k.fingerprint === fingerprint);

@@ -419,13 +419,14 @@ mod tests {
             ids(&items),
             [
                 OPEN,
+                QUICK,
                 "-",
                 &format!("[label label - {STOP_TUNNELS} {TUNNELS}]"),
                 "-",
                 QUIT
             ]
         );
-        let Item::Submenu { text, items } = &items[2] else {
+        let Item::Submenu { text, items } = &items[3] else {
             panic!("no submenu");
         };
         assert!(text.contains('2'));

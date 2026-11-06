@@ -18,6 +18,7 @@ import {
   Sparkle,
   SquareTerminal,
   Upload,
+  Variable,
   Wrench,
 } from 'lucide-react';
 import { Dialog as RDialog } from 'radix-ui';
@@ -61,6 +62,7 @@ const PAGE_LOOK: Record<Exclude<Page, 'tools'>, { icon: LucideIcon; tone: Tone }
   known: { icon: Globe, tone: 'amber' },
   hostsFile: { icon: Network, tone: 'indigo' },
   passwords: { icon: RectangleEllipsis, tone: 'pink' },
+  envs: { icon: Variable, tone: 'lime' },
   terminal: { icon: SquareTerminal, tone: 'green' },
   nearby: { icon: Radar, tone: 'orange' },
   audit: { icon: ShieldCheck, tone: 'rose' },

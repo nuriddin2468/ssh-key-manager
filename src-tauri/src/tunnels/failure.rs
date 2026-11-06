@@ -115,6 +115,7 @@ mod tests {
             saved: false,
             exit_code: Some(255),
             output: String::new(),
+            diagnosis: None,
         }
     }
 

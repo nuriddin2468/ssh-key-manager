@@ -42,4 +42,12 @@ keyType: string,
 /**
  * `SHA256:…`, as `ssh-keygen -l` prints it.
  */
-fingerprint: string, comment: string, };
+fingerprint: string, comment: string, } | { "type": "environment", project: string, name: string, 
+/**
+ * How many variables it has, and how many of them are secret.
+ */
+variables: number, secrets: number, 
+/**
+ * The first few variables' names.
+ */
+names: Array<string>, };

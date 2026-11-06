@@ -8,6 +8,7 @@ import { AgentPage } from '@/features/agent/AgentPage';
 import { useKeysFromVault } from '@/features/agent/useKeysFromVault';
 import { AuditPage } from '@/features/audit/AuditPage';
 import { BrowserPairing } from '@/features/browser/BrowserPairing';
+import { EnvsPage } from '@/features/envs/EnvsPage';
 import { HostsPage } from '@/features/hosts/HostsPage';
 import { HostsFilePage } from '@/features/hostsFile/HostsFilePage';
 import { KeysPage } from '@/features/keys/KeysPage';
@@ -94,6 +95,7 @@ function Shell() {
         ) : null}
         {route.page === 'audit' ? <AuditPage /> : null}
         {route.page === 'passwords' ? <PasswordsPage entryId={route.entryId} /> : null}
+        {route.page === 'envs' ? <EnvsPage envId={route.envId} /> : null}
         {route.page === 'terminal' ? (
           <TerminalPage connect={route.connect} nonce={route.nonce} />
         ) : null}

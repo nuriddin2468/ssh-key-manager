@@ -54,6 +54,11 @@ real `~/.ssh`. Its modules:
   - Every change is written atomically after a backup. Before each operation the
     vault re-reads a database changed elsewhere (a synced folder); a write over such
     a change fails with `conflict` and is kept as a separate copy.
+  - `envs`: secret environments, one entry per environment in
+    `Environments/<project>`, a custom field per variable (protected when secret),
+    marked by the entry's custom data. It reads `.env` files, guesses secrets, writes
+    the export formats and compares two environments by value without returning
+    values.
 
 - `browser`: what the browser extension may see of the vault.
   - `origin` matches a login's address to a page: the same registrable domain (Public
@@ -113,7 +118,8 @@ translates.
     and other accounts' prompts to its responder too, saying which they are; other yes/no
     questions still get "no".
 - **Terminal.** `src-tauri/src/terminal/`: one pseudo-terminal per session (`portable-pty`,
-  ConPTY on Windows) running `ssh -o ConnectTimeout=10 -- <alias>`.
+  ConPTY on Windows) running `ssh -o ConnectTimeout=10 -- <alias>`, or the user's own
+  shell with a secret environment's variables in its environment (`local.rs`).
   - Output goes to the UI over a `tauri::ipc::Channel` as raw bytes; state changes and
     prompts go over the same channel as JSON events. Input, resizing, answers and closing
     are commands (`terminal_*`).

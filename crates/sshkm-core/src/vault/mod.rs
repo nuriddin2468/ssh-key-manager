@@ -23,6 +23,7 @@
 mod audit;
 mod browsers;
 mod contacts;
+pub mod envs;
 mod export;
 mod generator;
 mod import;
@@ -671,11 +672,13 @@ impl Vault {
         self.write_slots(slots)
     }
 
-    /// All entries, sorted by title.
+    /// All entries, sorted by title. Environments ([`envs`]) aren't
+    /// entries here.
     pub fn entries(&self) -> Vec<EntrySummary> {
         let mut entries: Vec<EntrySummary> = self
             .db
             .iter_all_entries()
+            .filter(|entry| !envs::is_environment(entry))
             .map(|entry| self.summary(&entry))
             .collect();
         entries.sort_by_cached_key(|e| (e.title.to_lowercase(), e.username.to_lowercase()));

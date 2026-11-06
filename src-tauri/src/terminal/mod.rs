@@ -24,6 +24,7 @@
 
 pub mod bridge;
 mod external;
+mod local;
 mod store;
 pub(crate) mod text;
 pub mod types;
@@ -182,7 +183,7 @@ impl Terminals {
             command,
             size,
             bridge,
-            askpass,
+            Some(askpass),
             sink,
             Arc::downgrade(self),
         )?;
@@ -294,7 +295,7 @@ pub fn spawn_detached(
         command,
         size,
         bridge,
-        askpass,
+        Some(askpass),
         sink,
         std::sync::Weak::new(),
     )
@@ -312,6 +313,9 @@ pub struct Terminal {
     /// The terminal's mode can be read, so raw mode tells when the session
     /// started.
     reads_mode: bool,
+    /// A shell on this computer ([`local`]): started at once, and kept out
+    /// of the connection history.
+    local: bool,
     /// Closed by the user: ends as "ended", whatever the exit status.
     closing: AtomicBool,
     progress: Mutex<Progress>,
@@ -328,15 +332,18 @@ struct Progress {
 }
 
 impl Terminal {
+    /// Starts `command`; without an askpass session it is a local shell,
+    /// which starts connected.
     fn spawn(
-        info: TerminalInfo,
+        mut info: TerminalInfo,
         mut command: CommandBuilder,
         (cols, rows): (u16, u16),
         bridge: Arc<Bridge>,
-        askpass: Session,
+        askpass: Option<Session>,
         sink: Arc<dyn Sink>,
         terminals: std::sync::Weak<Terminals>,
     ) -> AppResult<Arc<Self>> {
+        let local = askpass.is_none();
         let pair = native_pty_system()
             .openpty(size(cols, rows))
             .map_err(|e| open_error(&e))?;
@@ -354,13 +361,19 @@ impl Terminal {
             let missing = e
                 .downcast_ref::<std::io::Error>()
                 .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound);
-            spawn_error(&e, missing)
+            spawn_error(&e, missing, local)
         })?;
         drop(pair.slave);
         let reader = pair.master.try_clone_reader().map_err(|e| pty_error(&e))?;
         let writer = pair.master.take_writer().map_err(|e| pty_error(&e))?;
         let reads_mode = is_raw(pair.master.as_ref()).is_some();
         let (input, keystrokes) = mpsc::channel();
+        let phase = if local {
+            Phase::Connected
+        } else {
+            Phase::Connecting
+        };
+        info.phase = phase;
 
         let terminal = Arc::new(Self {
             info: Mutex::new(info),
@@ -370,14 +383,22 @@ impl Terminal {
             killer: Mutex::new(child.clone_killer()),
             master: Mutex::new(Some(pair.master)),
             reads_mode,
+            local,
             closing: AtomicBool::new(false),
             progress: Mutex::new(Progress {
-                phase: Phase::Connecting,
-                connected_at: None,
+                phase,
+                connected_at: local.then(Instant::now),
                 tail: Vec::new(),
             }),
             terminals,
         });
+        if local {
+            terminal.sink.event(&TerminalEvent::State {
+                state: SessionState::Connected {
+                    sign_in: types::SignIn::default(),
+                },
+            });
+        }
 
         thread::Builder::new()
             .name("terminal-write".into())
@@ -527,7 +548,7 @@ impl Terminal {
         &self,
         status: Option<&ExitStatus>,
         reader_finished: &Receiver<()>,
-        askpass: Session,
+        askpass: Option<Session>,
     ) {
         // Closing the terminal ends the reader on Windows; elsewhere it ends
         // when `ssh` does. Wait for the last output either way.
@@ -578,6 +599,9 @@ impl Terminal {
     }
 
     fn history(&self) -> Option<Arc<History>> {
+        if self.local {
+            return None;
+        }
         self.terminals.upgrade()?.history.clone()
     }
 
@@ -700,11 +724,12 @@ fn pty_error(error: &impl std::fmt::Display) -> AppError {
     AppError::new(ErrorCode::Io, format!("terminal: {error}"))
 }
 
-fn spawn_error(error: &impl std::fmt::Display, missing: bool) -> AppError {
+fn spawn_error(error: &impl std::fmt::Display, missing: bool, local: bool) -> AppError {
+    let program = if local { "the shell" } else { "ssh" };
     if missing {
-        AppError::not_found("ssh is not installed")
+        AppError::not_found(format!("{program} is not installed"))
     } else {
-        AppError::new(ErrorCode::Io, format!("cannot start ssh: {error}"))
+        AppError::new(ErrorCode::Io, format!("cannot start {program}: {error}"))
     }
 }
 

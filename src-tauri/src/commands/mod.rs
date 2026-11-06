@@ -7,6 +7,7 @@ pub mod background;
 pub mod browser;
 pub mod config;
 pub mod environment;
+pub mod envs;
 pub mod hosts_file;
 pub mod keys;
 pub mod known_hosts;

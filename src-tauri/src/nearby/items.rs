@@ -23,9 +23,9 @@ use sshkm_core::config::{HostEdit, HostEntry, HostKind, HostOption, Risk, SshCon
 use sshkm_core::hosts_file::{HostsChange, HostsEntryEdit, HostsFile, is_system_name};
 use sshkm_core::keys;
 use sshkm_core::known_hosts::{HostMarker, KnownHosts};
-use sshkm_core::p2p::protocol::{HostKey, HostsEntry, Item};
+use sshkm_core::p2p::protocol::{EnvVariable, HostKey, HostsEntry, Item};
 use sshkm_core::paths::{SshPaths, expand_tilde_in};
-use sshkm_core::vault::{EntryInput, EntryKind, SecretField};
+use sshkm_core::vault::{EntryInput, EntryKind, SecretField, envs};
 use sshkm_core::{ExposeSecret, SecretString};
 use tauri::AppHandle;
 
@@ -55,6 +55,11 @@ pub enum SendRequest {
     PublicKey {
         #[serde(rename = "keyId")]
         key_id: String,
+    },
+    /// A secret environment from the vault, with its values.
+    Environment {
+        #[serde(rename = "envId")]
+        env_id: String,
     },
 }
 
@@ -140,6 +145,25 @@ pub fn build(state: &AppState, app: &AppHandle, request: &SendRequest) -> AppRes
                 key: line.trim().to_owned(),
             }
         }
+        SendRequest::Environment { env_id } => state.vault.with(app, |vault| {
+            let env = vault.environment(env_id)?;
+            let variables = vault
+                .env_variables(env_id)?
+                .into_iter()
+                .map(|var| EnvVariable {
+                    value: var.value.expose_secret().to_owned(),
+                    name: var.name,
+                    secret: var.secret,
+                    note: var.note,
+                })
+                .collect();
+            Ok(Item::Environment {
+                project: env.summary.project,
+                name: env.summary.name,
+                notes: env.notes,
+                variables,
+            })
+        })?,
     };
     item.check()
         .map_err(|error| AppError::invalid(format!("it can't be sent as it is: {error}")))?;
@@ -237,6 +261,32 @@ pub fn store(
                 group_draft(&state.hosts_file, id, peer, name, entries).map_err(not_saved)?;
             nearby.keep_group(group);
             Ok((name.clone(), false))
+        }
+        Item::Environment {
+            project,
+            name,
+            notes,
+            variables,
+        } => {
+            let variables: Vec<envs::EnvVariable> = variables
+                .iter()
+                .map(|var| envs::EnvVariable {
+                    name: var.name.clone(),
+                    value: SecretString::from(var.value.as_str()),
+                    secret: var.secret,
+                    note: var.note.clone(),
+                })
+                .collect();
+            let (_, name) = state
+                .vault
+                .change(app, &state.backup_dir, |vault| {
+                    Ok(vault.add_received_environment(project, name, notes, &variables)?)
+                })
+                .map_err(|error| match error.code() {
+                    ErrorCode::VaultLocked => PairingFailure::VaultLocked,
+                    _ => PairingFailure::NotSaved,
+                })?;
+            Ok((format!("{project} / {name}"), false))
         }
         Item::PublicKey { name, key } => {
             let name = save_key(

@@ -16,6 +16,7 @@ const frame = pathToFileURL(join(root, 'scripts/screenshots/frame.html'));
 const chrome = process.env.CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const app = process.env.APP_URL ?? 'http://localhost:1420';
 
+// Name, the app's dev query, and the section heading to scroll to, if any.
 const shots = [
   ['overview', 'page=overview'],
   [
@@ -23,10 +24,15 @@ const shots = [
     `page=keys&key=${encodeURIComponent('SHA256:u9Fh2KdL7pQ3zX8mV1bN6rT4wY0sGcJ5aE2iOkHjUyB#id_rsa')}`,
   ],
   ['generate', 'page=keys&open=generate'],
-  ['hosts', 'page=hosts&host=3'],
+  ['hosts', 'page=hosts'],
   ['agent', 'page=agent'],
   ['audit', 'page=audit'],
   ['known', 'page=known'],
+  ['hosts-file', 'page=hostsFile'],
+  ['passwords', 'page=passwords'],
+  ['terminal', 'page=terminal&connect=prod-api'],
+  ['nearby', 'page=nearby'],
+  ['background', 'page=settings', 'Background'],
 ];
 
 mkdirSync(out, { recursive: true });
@@ -38,13 +44,30 @@ const browser = await puppeteer.launch({
 });
 
 try {
-  for (const [name, query] of shots) {
+  for (const [name, query, section] of shots) {
     const page = await browser.newPage();
     const url = new URL(frame);
-    url.searchParams.set('src', `${app}/?${query}`);
+    // The mock vault starts locked; Passwords, Nearby and Settings show more unlocked.
+    url.searchParams.set('src', `${app}/?${query}&vault=unlocked`);
     await page.goto(url.href, { waitUntil: 'networkidle0' });
     // Let queries settle and entry animations finish.
     await new Promise((resolve) => setTimeout(resolve, 2500));
+    if (section) {
+      const view = page.frames().find((candidate) => candidate.url().startsWith(app));
+      await view?.evaluate((title) => {
+        const heading = [...document.querySelectorAll('h2')].find(
+          (element) => element.textContent === title,
+        );
+        heading?.scrollIntoView({ block: 'start' });
+        // Leave the page's top padding above the heading.
+        let scroller = heading?.parentElement;
+        while (scroller && scroller.scrollHeight <= scroller.clientHeight) {
+          scroller = scroller.parentElement;
+        }
+        if (scroller) scroller.scrollTop -= 16;
+      }, section);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
     const file = join(out, `${name}.png`);
     await page.screenshot({ path: file });
     await page.close();

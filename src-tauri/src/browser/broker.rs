@@ -65,6 +65,9 @@ const LIMIT_WINDOW: Duration = Duration::from_secs(60);
 pub const MAX_CHECKS: usize = 10;
 /// Times a browser may ask the user about fills in [`LIMIT_WINDOW`].
 pub const MAX_PROMPTS: usize = 5;
+/// Times the browsers may ask the user to unlock the vault in
+/// [`LIMIT_WINDOW`], all together: each may bring up a prompt or a window.
+pub const MAX_UNLOCKS: usize = 5;
 /// Most characters of a login's title or username shown in a prompt.
 const SHOWN_CHARS: usize = 60;
 /// How far a request's clock may be from ours.
@@ -129,6 +132,9 @@ pub trait Env {
     fn ask(&self, request: Option<&PairingRequest>);
     /// Brings the app forward on the vault, to unlock it.
     fn show(&self);
+    /// Asks the user to unlock the vault outside the browser, without the
+    /// app's main window. Returns at once.
+    fn unlock(&self);
     fn changed(&self, what: Changed);
     /// This computer's name, recorded with a pairing.
     fn computer(&self) -> String;
@@ -166,6 +172,9 @@ impl<E: Env> Env for Arc<E> {
     fn show(&self) {
         (**self).show();
     }
+    fn unlock(&self) {
+        (**self).unlock();
+    }
     fn changed(&self, what: Changed) {
         (**self).changed(what);
     }
@@ -199,6 +208,7 @@ pub struct Broker {
     fills: Arc<Fills>,
     fill_wait: Duration,
     checks: Mutex<Limiter>,
+    unlocks: Mutex<Limiter>,
 }
 
 impl Default for Broker {
@@ -220,6 +230,7 @@ impl Broker {
             fills: Arc::default(),
             fill_wait: FILL_WAIT,
             checks: Mutex::default(),
+            unlocks: Mutex::default(),
         }
     }
 
@@ -251,12 +262,31 @@ impl Broker {
                 env.show();
                 Ok(Reply::Shown)
             }
+            Message::Unlock => self.unlock(env),
             Message::SameSite(sites) => Ok(Reply::SameSite {
                 same: same_site(&sites),
             }),
             Message::Pair(request) => self.pair(env, &envelope.caller, &request),
             Message::Request(request) => self.request(env, &request),
         }
+    }
+
+    /// Asks the user to unlock the vault, at most [`MAX_UNLOCKS`] times a
+    /// minute. Without a vault the app comes forward instead: it is made
+    /// there.
+    fn unlock(&self, env: &impl Env) -> Answer {
+        match env.vault_lock() {
+            VaultLock::Unlocked => {}
+            VaultLock::Missing => env.show(),
+            VaultLock::Locked => {
+                if !lock(&self.unlocks).take("", MAX_UNLOCKS, Instant::now()) {
+                    log::warn!("browser: asked to unlock too often; refusing");
+                    return Err(ReplyError::TooMany);
+                }
+                env.unlock();
+            }
+        }
+        Ok(Reply::Shown)
     }
 
     /// The pairing waiting for the user, if any.

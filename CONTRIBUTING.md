@@ -72,11 +72,11 @@ request links to it.
 
 There are three workflows:
 
-| Workflow      | Runs on                     | What it does                                              |
-| ------------- | --------------------------- | --------------------------------------------------------- |
-| `ci.yml`      | every push and pull request | runs the checks above on all three systems                |
-| `build.yml`   | every push to `main`        | builds installers and keeps them as artifacts for 30 days |
-| `release.yml` | a `v*` tag                  | builds installers and publishes them as a GitHub Release  |
+| Workflow      | Runs on                     | What it does                                                                                             |
+| ------------- | --------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `ci.yml`      | every push and pull request | runs the checks above on all three systems                                                               |
+| `build.yml`   | every push to `main`        | builds installers and keeps them as artifacts for 30 days                                                |
+| `release.yml` | a `v*` tag                  | builds installers and publishes them as a GitHub Release, then sends the browser extension to the stores |
 
 To publish a release:
 
@@ -97,10 +97,11 @@ To publish a release:
    few hours: they read `latest.json` from the latest release. If a build fails, nothing
    is released: fix the problem and re-run the failed jobs, or delete the tag and push it
    again.
-4. Publish the extension: run `pnpm extension:package` on the release commit and upload
-   the zip to the Chrome Web Store item (**Package → Upload new package**, then
-   **Submit for review**). [extension/store/README.md](extension/store/README.md) has
-   the details.
+4. The extension goes to the stores by itself: once the release is published, the
+   `extension-stores` job uploads the same version to each store whose secrets the
+   `extension-stores` environment has, and submits it for review (see
+   [extension/store/README.md](extension/store/README.md#automatic-publishing)). A store
+   without its secrets is skipped; publish there by hand as that page describes.
 
 Releases are signed for the in-app updater. The workflow needs the `TAURI_SIGNING_PRIVATE_KEY`
 secret of the `release` environment (Settings → Environments → release; not a repository

@@ -33,7 +33,7 @@ pub fn confirm_fill(app: &AppHandle, prompt: &FillPrompt) -> bool {
             Err(_) => return false,
         }
     }
-    super::show_window(app);
+    crate::tray::show_window(app);
     let browser = &prompt.browser;
     let login = login(prompt);
     let site = &prompt.site;
@@ -97,7 +97,7 @@ fn login(prompt: &FillPrompt) -> Localized {
 /// Tells the user that a copy of `browser`'s keys was used and the browser
 /// is disconnected. Doesn't wait for them to close the message.
 pub fn copied(app: &AppHandle, browser: &PairedBrowser) {
-    super::show_window(app);
+    crate::tray::show_window(app);
     let name = &browser.browser;
     let computer = &browser.computer;
     let title = Localized::new("Browser disconnected", "Браузер отключён", "Brauzer uzildi");

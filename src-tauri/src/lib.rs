@@ -15,6 +15,7 @@ pub mod nearby;
 mod process;
 mod state;
 pub mod terminal;
+mod tray;
 mod types;
 mod vault;
 mod vault_watcher;
@@ -44,11 +45,7 @@ pub fn run() {
     #[cfg(desktop)]
     let builder = builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            tray::show_window(app);
         }))
         .plugin(tauri_plugin_updater::Builder::new().build());
 
@@ -64,7 +61,10 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(setup)
-        .on_window_event(lock_on_minimize)
+        .on_window_event(|window, event| {
+            lock_on_minimize(window, event);
+            tray::on_window_event(window, event);
+        })
         // A reloaded page has lost its terminals' channels: end the sessions.
         .on_page_load(|webview, payload| {
             if payload.event() == PageLoadEvent::Started
@@ -182,6 +182,8 @@ pub fn run() {
             commands::browser::browser_set_enabled,
             commands::browser::browser_answer_pairing,
             commands::browser::browser_revoke,
+            commands::background::background_status,
+            commands::background::background_set_enabled,
             commands::updates::update_check,
             commands::updates::update_install,
         ])
@@ -198,6 +200,15 @@ pub fn run() {
                 && let Some(bridge) = app.try_state::<Arc<browser::Bridge>>()
             {
                 bridge.stop();
+            }
+            // The Dock icon of an app whose window is hidden.
+            #[cfg(target_os = "macos")]
+            if let RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } = event
+            {
+                tray::show_window(app);
             }
         });
 }
@@ -245,7 +256,7 @@ fn lock_on_minimize(window: &tauri::Window, event: &WindowEvent) {
     }
 }
 
-/// Shared state, background watchers and the macOS menu.
+/// Shared state, background watchers, the macOS menu and the tray icon.
 fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let paths = SshPaths::detect()?;
     let hosts_file = hosts_file::system_path();
@@ -256,16 +267,24 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let bridge = Arc::new(browser::Bridge::new(&data_dir));
     let nearby = Arc::new(nearby::Nearby::new(data_dir.clone()));
     nearby.attach(app.handle().clone());
-    let state = Arc::new(AppState::new(paths, hosts_file, backup_dir, data_dir));
+    let state = Arc::new(AppState::new(
+        paths,
+        hosts_file,
+        backup_dir,
+        data_dir.clone(),
+    ));
     state.vault.start_timer(app.handle().clone());
     device_unlock::watch_screen_lock(Arc::clone(&state.vault), app.handle().clone());
     vault_watcher::start(app.handle(), &state.vault.paths());
     app.manage(state);
     bridge.start_if_enabled(app.handle());
+    browser::unlock::watch(app.handle());
     app.manage(bridge);
     app.manage(nearby);
     #[cfg(target_os = "macos")]
     menu::install(app)?;
+    let background = tray::Background::install(app.handle(), &data_dir);
+    app.manage(background);
     Ok(())
 }
 
@@ -297,6 +316,36 @@ mod tests {
         ] {
             assert!(!is_app_url(&url(other), None), "{other}");
         }
+    }
+
+    /// The commands between `start` and the next `end` in `source`: the last
+    /// path segment or quoted name on each line.
+    fn command_names(source: &str, start: &str, end: &str) -> Vec<String> {
+        let from = source.find(start).expect("start") + start.len();
+        let to = from + source[from..].find(end).expect("end");
+        let mut names: Vec<String> = source[from..to]
+            .lines()
+            .map(|line| line.trim().trim_end_matches(',').trim_matches('"'))
+            .filter(|line| !line.is_empty() && !line.starts_with("//"))
+            .map(|line| line.rsplit("::").next().unwrap_or(line).to_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// A command missing from `build.rs` would have no permission, so every
+    /// window would be refused it; one listed there but not registered would
+    /// be allowed to nothing.
+    #[test]
+    fn the_build_script_lists_every_command() {
+        let registered = command_names(include_str!("lib.rs"), "generate_handler![", "])");
+        let listed = command_names(
+            include_str!("../build.rs"),
+            "const COMMANDS: &[&str] = &[",
+            "];",
+        );
+        assert!(registered.len() > 100, "{registered:?}");
+        assert_eq!(registered, listed);
     }
 
     #[test]

@@ -146,6 +146,19 @@ impl PairingPhase {
                 | Self::Failed { .. }
         )
     }
+
+    /// Whether the conversation waits for this user's answer.
+    pub fn asks_user(&self) -> bool {
+        matches!(
+            self,
+            Self::Compare { .. }
+                | Self::NameMismatch { .. }
+                | Self::Offered { .. }
+                | Self::Authorize { .. }
+                | Self::SetMaster
+                | Self::Decide { .. }
+        )
+    }
 }
 
 /// Why a conversation ended without what it was for.

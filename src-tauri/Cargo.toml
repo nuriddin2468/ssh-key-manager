@@ -16,7 +16,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 sshkm-core = { path = "../crates/sshkm-core" }
-tauri = { version = "2", features = [] }
+# The tray icon; `image-png` reads its macOS template image.
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-log = "2"
@@ -58,6 +59,8 @@ tauri-plugin-updater = "2"
 
 [dev-dependencies]
 sshkm-core = { path = "../crates/sshkm-core", features = ["ts"] }
+# The mock runtime, to check what each window's capability allows.
+tauri = { version = "2", features = ["test"] }
 tempfile = "3"
 ts-rs = { version = "12", features = ["no-serde-warnings"] }
 

@@ -14,6 +14,7 @@ import {
 import { TextField } from '@/components/ui/TextField';
 import { Tile } from '@/components/ui/Tile';
 import { VaultIcon } from '@/features/keys/VaultControls';
+import type { AppError } from '@/lib/ipc';
 import { DeviceIcon, METHOD_NAME } from './device';
 import { useVaultMutation } from './vault';
 
@@ -26,6 +27,77 @@ interface VaultUnlockFormProps {
   pending?: boolean;
   /** Under the fields: another way to go on. */
   extra?: ReactNode;
+}
+
+/**
+ * The ways into the vault this computer offers, and unlocking with each:
+ * Touch ID or Windows Hello where it is set up, the master password where
+ * this computer has one. A wrong password shows in `wrong`; dismissing the
+ * system prompt is a choice, not an error. Other failures are toasts, or
+ * with `inline` kept in `failure` for a window without toasts.
+ */
+export function useVaultUnlock({
+  onUnlocked,
+  inline = false,
+}: {
+  onUnlocked: () => void;
+  inline?: boolean;
+}) {
+  const status = useVaultStatus().data;
+  const device = status?.device.enabled ? status.device.kind : null;
+  const master = Boolean(status?.files.hasMasterPassword);
+  const [password, setPassword] = useState('');
+  const [wrong, setWrong] = useState(false);
+  const [failure, setFailure] = useState<AppError | null>(null);
+  // Which way in is busy, for its button's spinner.
+  const [via, setVia] = useState<'device' | 'master'>('master');
+
+  const keep = (error: AppError) => {
+    if (!inline) return false;
+    setFailure(error);
+    return true;
+  };
+  const unlock = useVaultMutation(api.vaultUnlock, {
+    onSuccess: onUnlocked,
+    onError: (error) => {
+      if (error.code !== 'wrong_passphrase') return keep(error);
+      setWrong(true);
+      return true;
+    },
+  });
+  const unlockDevice = useVaultMutation(api.vaultUnlockDevice, {
+    onSuccess: onUnlocked,
+    onError: (error) => error.code === 'cancelled' || keep(error),
+  });
+  const busy = unlock.isPending || unlockDevice.isPending;
+
+  return {
+    status,
+    device,
+    master,
+    password,
+    wrong,
+    failure,
+    via,
+    busy,
+    setPassword: (value: string) => {
+      setPassword(value);
+      setWrong(false);
+      setFailure(null);
+    },
+    unlockWithMaster: () => {
+      if (!password || busy) return;
+      setVia('master');
+      setFailure(null);
+      unlock.mutate(password);
+    },
+    unlockWithDevice: () => {
+      if (busy) return;
+      setVia('device');
+      setFailure(null);
+      unlockDevice.mutate();
+    },
+  };
 }
 
 /**
@@ -42,34 +114,12 @@ export function VaultUnlockForm({
   extra,
 }: VaultUnlockFormProps) {
   const { t } = useTranslation();
-  const status = useVaultStatus().data;
-  const device = status?.device.enabled ? status.device.kind : null;
-  const master = Boolean(status?.files.hasMasterPassword);
-  const [password, setPassword] = useState('');
-  const [wrong, setWrong] = useState(false);
-  // Which way in is busy, for its button's spinner.
-  const [via, setVia] = useState<'device' | 'master'>('master');
-
-  const unlock = useVaultMutation(api.vaultUnlock, {
-    onSuccess: onUnlocked,
-    onError: (error) => {
-      if (error.code !== 'wrong_passphrase') return false;
-      setWrong(true);
-      return true;
-    },
-  });
-  const unlockDevice = useVaultMutation(api.vaultUnlockDevice, {
-    onSuccess: onUnlocked,
-    // Dismissing the system prompt is a choice, not an error.
-    onError: (error) => error.code === 'cancelled',
-  });
-  const busy = unlock.isPending || unlockDevice.isPending || pending;
+  const { device, master, password, wrong, via, ...vault } = useVaultUnlock({ onUnlocked });
+  const busy = vault.busy || pending;
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (!password || busy) return;
-    setVia('master');
-    unlock.mutate(password);
+    if (!pending) vault.unlockWithMaster();
   };
 
   return (
@@ -93,8 +143,7 @@ export function VaultUnlockForm({
             loading={busy && via === 'device'}
             disabled={busy}
             onClick={() => {
-              setVia('device');
-              unlockDevice.mutate();
+              if (!pending) vault.unlockWithDevice();
             }}
             autoFocus
           >
@@ -107,10 +156,7 @@ export function VaultUnlockForm({
             type="password"
             autoComplete="current-password"
             value={password}
-            onChange={(event) => {
-              setPassword(event.target.value);
-              setWrong(false);
-            }}
+            onChange={(event) => vault.setPassword(event.target.value)}
             error={wrong ? t('passwords.wrongMaster') : undefined}
             autoFocus={!device}
           />

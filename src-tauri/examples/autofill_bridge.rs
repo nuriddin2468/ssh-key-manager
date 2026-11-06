@@ -113,6 +113,10 @@ impl Env for Harness {
         say(&json!({ "event": "show" }));
     }
 
+    fn unlock(&self) {
+        say(&json!({ "event": "unlock" }));
+    }
+
     fn changed(&self, what: Changed) {
         let what = match what {
             Changed::Entries => "entries",

@@ -27,7 +27,11 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     master password or the recovery key.
   - While unlocked, the decrypted database is held only by the Rust process and is
     dropped when the vault locks: on request, after inactivity, after sleep, and
-    optionally when the window is minimised. Showing an entry or its 2FA code doesn't
+    optionally when the window is minimised or closed. With **Settings → Background**
+    on, closing the window only hides it and the app goes on in the tray (the menu bar
+    on macOS), so browser autofill keeps working; the vault then locks by the same
+    rules, and the tray menu shows whether it is unlocked and locks it. Showing an
+    entry or its 2FA code doesn't
     count as activity, so it doesn't keep the vault open. Lists and details sent to the
     interface carry no passwords or 2FA secrets; a password (or a key's passphrase)
     reaches the interface only when you choose to reveal it. A 2FA secret never does:
@@ -211,7 +215,11 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - Tauri's frozen JavaScript prototype (`freezePrototype`) is off: the terminal
     (xterm.js) assigns its own `toString` while loading, which a frozen prototype
     forbids, and the whole page then failed to start in 0.3.0.
-  - Only the Tauri capabilities the UI needs are granted (`src-tauri/capabilities`).
+  - Only the Tauri capabilities the UI needs are granted (`src-tauri/capabilities`),
+    each window its own. Every command of the app needs a permission (`build.rs` lists
+    them, and a test checks the list against the commands registered), so a window
+    can call only what its capability names: the main window all of them, the
+    browser's unlock window only the three that unlock the vault.
   - The window only shows the app's own page: navigating elsewhere is refused and new
     windows can't open. Links open in your browser, and only `http` and `https` links.
   - Permission fixes apply only what the app's own audit found inside `~/.ssh`, and only
@@ -288,6 +296,42 @@ Settings then asks to move the app to Applications.
     no menu.
 - Nothing else of the vault is reachable: not other entries, 2FA secrets, notes, key
   passphrases or the vault's settings.
+
+**Unlocking for the browser.**
+
+- On a locked vault, **Unlock** in the login menu, and the save banner, ask the app to
+  unlock it. The request (`unlock`) needs no pairing and carries nothing. The app then
+  asks the user itself, never in the browser:
+  - With Touch ID or Windows Hello set up for the vault, only the system prompt. Its
+    text is the app's own, and an app in the tray stays there.
+  - Otherwise, or if that prompt is dismissed or fails, a small window of the app's own
+    asks for the master password (and offers Touch ID or Windows Hello again where it
+    is set up). It stays above other windows, has no taskbar button, and closes once
+    the vault is unlocked, whichever way that happened. The main window stays as it
+    is.
+  - A vault this computer opens only with its recovery key is unlocked in the main
+    window, which comes forward on it.
+- The master password is typed only in the app's own window. It never reaches the
+  browser, the extension or the native host. A page can draw a look-alike of any
+  dialog inside the browser, so the extension never asks for the password itself, and
+  a page can't draw into the app's window. The window loads its own page
+  (`unlock.html`), not the main window's, and has its own capability
+  (`src-tauri/capabilities/unlock.json`): `vault_status`, `vault_unlock`,
+  `vault_unlock_device` and closing itself, nothing else of the app.
+- The browsers may ask at most five times a minute, all together. While the system
+  prompt is up, asking again does nothing; while the window is open, asking again only
+  brings it forward. So neither a page (the menu takes only the user's own clicks
+  anyway) nor a program that can start the native host can bury the screen in
+  windows.
+- Where the system decides, the window may not get its way: on Windows a program in
+  the background may be refused the focus (the app first sends a synthetic Alt key
+  press, which Windows counts as the user's input to it), and on Wayland the
+  compositor places windows and may keep the focus or the top for the browser. The
+  window still opens; the user may have to click it.
+- **Open app** in the extension's popup still brings the main window forward on the
+  vault.
+- Malware running as the user could draw a window that looks like the app's; as
+  below, that is outside this model.
 
 **Which page is asking.** The content script runs in each http(s) frame. The background
 script names the page by the origin the browser reports for the sending frame, never

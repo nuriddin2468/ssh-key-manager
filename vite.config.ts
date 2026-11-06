@@ -26,5 +26,12 @@ export default defineConfig({
     target: process.env.TAURI_ENV_PLATFORM === 'windows' ? 'chrome111' : 'safari16',
     minify: !debug,
     sourcemap: debug,
+    rollupOptions: {
+      // The main window, and the small one that unlocks the vault for the browser.
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        unlock: fileURLToPath(new URL('./unlock.html', import.meta.url)),
+      },
+    },
   },
 });

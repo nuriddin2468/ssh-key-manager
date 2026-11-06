@@ -2,9 +2,9 @@ import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
-import { queryClient, useVaultStatus } from '@/api/queries';
+import { invalidateAll, queryClient, useVaultStatus } from '@/api/queries';
 import { lockToastKey } from './model';
-import { isVaultLocked, markLocked, onVaultLocked } from './vault';
+import { isVaultLocked, markLocked, onVaultLocked, onVaultUnlocked } from './vault';
 
 /** Activity is reported at most this often; the auto-lock counts minutes. */
 const ACTIVITY_INTERVAL = 30_000;
@@ -14,6 +14,8 @@ const ACTIVITY_EVENTS = ['pointerdown', 'pointermove', 'keydown', 'wheel'] as co
  * App-wide vault wiring, mounted once in the shell:
  * - `vault-locked` from the backend switches to the lock screen at once and,
  *   for locks the user didn't ask for, shows a quiet toast;
+ * - `vault-unlocked` refetches everything, as the vault may have been
+ *   unlocked elsewhere (for the browser, while this window was hidden);
  * - while unlocked, pointer and keyboard activity postpones the auto-lock;
  * - a `vault_locked` error from any query or mutation refetches the status.
  */
@@ -34,6 +36,8 @@ export function useVaultEvents(): void {
       }),
     [t],
   );
+
+  useEffect(() => onVaultUnlocked(() => void invalidateAll()), []);
 
   useEffect(() => {
     if (!unlocked) return;

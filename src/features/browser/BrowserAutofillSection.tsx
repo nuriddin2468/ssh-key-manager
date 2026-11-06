@@ -1,8 +1,10 @@
-import { Globe, RotateCcw, TriangleAlert } from 'lucide-react';
+import { isTauri } from '@tauri-apps/api/core';
+import { openUrl } from '@tauri-apps/plugin-opener';
+import { ExternalLink, Globe, RotateCcw, TriangleAlert } from 'lucide-react';
 import { type ReactNode, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
-import { useAppMutation } from '@/api/useAppMutation';
+import { toastError, useAppMutation } from '@/api/useAppMutation';
 import { useDialogs } from '@/app/dialogs';
 import type { PairedBrowser } from '@/bindings/PairedBrowser';
 import { Badge } from '@/components/ui/Badge';
@@ -13,6 +15,10 @@ import { Tile } from '@/components/ui/Tile';
 import { Callout } from '@/features/passwords/files/Callout';
 import { formatDate } from '@/lib/format';
 import { useBrowserStatus } from './queries';
+
+/** The extension's page in the Chrome Web Store; Edge and Brave install from it too. */
+export const CHROME_WEB_STORE =
+  'https://chromewebstore.google.com/detail/ssh-key-manager/lkmgdcanagjeajepncgokapkbihahddb';
 
 /**
  * Browser autofill on the Settings page: the switch, which browsers can
@@ -34,6 +40,14 @@ export function BrowserAutofillSection() {
   });
   if (!status) return null;
 
+  const openStore = async () => {
+    try {
+      if (isTauri()) await openUrl(CHROME_WEB_STORE);
+      else window.open(CHROME_WEB_STORE, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      toastError(t, error);
+    }
+  };
   const name = (browser: PairedBrowser) =>
     t('browser.connectedOn', { browser: browser.browser, computer: browser.computer });
   // Setting up again can't help a copy in a temporary folder or on a mounted volume.
@@ -66,6 +80,25 @@ export function BrowserAutofillSection() {
               onCheckedChange={(enabled) => toggle.mutate(enabled)}
             />
           </span>
+        </div>
+
+        <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">
+          <span className="flex min-w-0 flex-col">
+            <span className="font-medium">{t('browser.extension')}</span>
+            <span id={`${switchId}-store`} className="text-[12px] text-subtle">
+              {t('browser.extensionHint')}
+            </span>
+          </span>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="ml-auto shrink-0"
+            icon={<ExternalLink className="size-[15px]" strokeWidth={1.75} />}
+            aria-describedby={`${switchId}-store`}
+            onClick={() => void openStore()}
+          >
+            Chrome Web Store
+          </Button>
         </div>
 
         {status.enabled ? (

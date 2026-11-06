@@ -32,7 +32,12 @@ const world = vi.hoisted(() => {
   return state;
 });
 
-const client = vi.hoisted(() => ({ request: vi.fn(), sameSite: vi.fn(), showApp: vi.fn() }));
+const client = vi.hoisted(() => ({
+  request: vi.fn(),
+  sameSite: vi.fn(),
+  showApp: vi.fn(),
+  unlockVault: vi.fn(),
+}));
 vi.mock('./shared/client', () => client);
 
 /** Sends a message from a content script; resolves with its answer, or `'refused'`. */
@@ -86,6 +91,17 @@ describe('which page is asking', () => {
       expect(await send({ kind: 'logins' }, { url }), url).toBe('refused');
     }
     expect(await send({ kind: 'logins' }, {})).toBe('refused');
+  });
+});
+
+describe('unlocking', () => {
+  it('asks the app to unlock without its main window', async () => {
+    client.unlockVault.mockReset();
+    client.showApp.mockReset();
+    const bank = { origin: 'https://bank.example', url: 'https://bank.example/login' };
+    expect(await send({ kind: 'unlock' }, bank)).toBeNull();
+    expect(client.unlockVault).toHaveBeenCalledTimes(1);
+    expect(client.showApp).not.toHaveBeenCalled();
   });
 });
 

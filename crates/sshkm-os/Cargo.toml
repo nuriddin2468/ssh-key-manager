@@ -34,6 +34,9 @@ windows = { version = "0.62.2", features = ["Foundation", "Security_Credentials_
 windows-native-keyring-store = { version = "1.1.0", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# Only to check that the tray icon's AppIndicator library loads; the version
+# the tray code itself uses, so this adds no crate to the build.
+libloading = "0.7"
 zbus = { version = "5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
 zbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rust"] }
 

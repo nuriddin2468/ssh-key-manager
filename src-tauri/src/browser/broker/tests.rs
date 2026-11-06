@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 
 use serde_json::{Value, json};
@@ -21,6 +21,9 @@ struct Fake {
     vault: Mutex<Option<Vault>>,
     asked: Mutex<Vec<Option<PairingRequest>>>,
     shown: Mutex<u32>,
+    unlocks: Mutex<u32>,
+    /// There is no vault at all.
+    missing: AtomicBool,
     changes: Mutex<Vec<Changed>>,
     session: AtomicU64,
     /// How the user answers fill prompts at once; `None` leaves them open.
@@ -42,6 +45,8 @@ impl Fake {
             vault: Mutex::new(Some(vault)),
             asked: Mutex::new(Vec::new()),
             shown: Mutex::new(0),
+            unlocks: Mutex::new(0),
+            missing: AtomicBool::new(false),
             changes: Mutex::new(Vec::new()),
             session: AtomicU64::new(0),
             answers: Mutex::new(Some(true)),
@@ -82,7 +87,9 @@ impl Fake {
 
 impl Env for Fake {
     fn vault_lock(&self) -> VaultLock {
-        if lock(&self.vault).is_some() {
+        if self.missing.load(Ordering::SeqCst) {
+            VaultLock::Missing
+        } else if lock(&self.vault).is_some() {
             VaultLock::Unlocked
         } else {
             VaultLock::Locked
@@ -123,6 +130,10 @@ impl Env for Fake {
 
     fn show(&self) {
         *lock(&self.shown) += 1;
+    }
+
+    fn unlock(&self) {
+        *lock(&self.unlocks) += 1;
     }
 
     fn changed(&self, what: Changed) {
@@ -306,6 +317,43 @@ fn paired() -> (Arc<Broker>, Arc<Fake>, Extension) {
     let reply = extension.pair(&broker, &env, true);
     assert_eq!(reply["type"], "paired", "{reply}");
     (broker, env, extension)
+}
+
+#[test]
+fn unlock_asks_the_app_only_while_the_vault_is_locked() {
+    let broker = Broker::default();
+    let env = Fake::new();
+    let unlock = json!({ "type": "unlock" });
+    assert_eq!(send(&broker, &env, &unlock), json!({ "type": "shown" }));
+    assert_eq!(*lock(&env.unlocks), 0);
+
+    *lock(&env.vault) = None;
+    assert_eq!(send(&broker, &env, &unlock), json!({ "type": "shown" }));
+    assert_eq!(*lock(&env.unlocks), 1);
+    assert_eq!(*lock(&env.shown), 0);
+
+    // Without a vault, the app's window comes up: a vault is made there.
+    env.missing.store(true, Ordering::SeqCst);
+    assert_eq!(send(&broker, &env, &unlock), json!({ "type": "shown" }));
+    assert_eq!((*lock(&env.unlocks), *lock(&env.shown)), (1, 1));
+}
+
+#[test]
+fn unlock_is_asked_for_a_few_times_a_minute_at_most() {
+    let broker = Broker::default();
+    let env = Fake::new();
+    *lock(&env.vault) = None;
+    for _ in 0..MAX_UNLOCKS {
+        assert_eq!(
+            send(&broker, &env, &json!({ "type": "unlock" })),
+            json!({ "type": "shown" })
+        );
+    }
+    assert_eq!(
+        send(&broker, &env, &json!({ "type": "unlock" })),
+        error("tooMany")
+    );
+    assert_eq!(*lock(&env.unlocks), u32::try_from(MAX_UNLOCKS).unwrap());
 }
 
 #[test]

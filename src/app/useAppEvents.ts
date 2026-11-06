@@ -24,8 +24,9 @@ const PAGES: Page[] = [
 ];
 
 /**
- * Wires the native menu (macOS), keyboard shortcuts (Windows/Linux, where
- * there is no menu bar) and file-change notifications from the backend.
+ * Wires the native menu (macOS) and the tray menu, keyboard shortcuts
+ * (Windows/Linux, where there is no menu bar) and file-change notifications
+ * from the backend.
  */
 export function useAppEvents(): void {
   const { navigate } = useRouter();
@@ -45,6 +46,9 @@ export function useAppEvents(): void {
       else if (id === 'check') void invalidateAll();
       else if (id === 'check-updates') void checkForUpdates();
       else if (id === 'find') window.dispatchEvent(new Event(FIND_EVENT));
+      // From the tray menu: a session to that host.
+      else if (id.startsWith('connect:'))
+        navigate({ page: 'terminal', connect: id.slice('connect:'.length), nonce: Date.now() });
     };
 
     const unlisten: Promise<() => void>[] = [];

@@ -6,7 +6,10 @@
 //! when the screen locks ([`crate::device_unlock`]) or when the window is
 //! minimised, as the settings say. Every lock emits
 //! [`LOCKED_EVENT`] so the UI can switch to its lock screen, and clears the
-//! clipboard if it still holds a secret copied from the vault.
+//! clipboard if it still holds a secret copied from the vault. Every unlock
+//! emits [`UNLOCKED_EVENT`]: the vault may be opened outside the main window
+//! (for the browser, while that window is hidden), and the main window, the
+//! tray and the browser's unlock window follow.
 //!
 //! Activity is what the user does: the UI reports input ([`VaultRuntime::touch`])
 //! and commands the user starts count too. Reads the UI repeats on its own —
@@ -16,7 +19,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -30,6 +33,8 @@ use crate::error::{AppError, AppResult};
 
 /// Emitted with a [`LockReason`] whenever the vault locks.
 pub const LOCKED_EVENT: &str = "vault-locked";
+/// Emitted whenever the vault is unlocked, by any window or prompt.
+pub const UNLOCKED_EVENT: &str = "vault-unlocked";
 
 const SETTINGS_FILE: &str = "vault.json";
 const DATABASE_FILE: &str = "vault.kdbx";
@@ -106,6 +111,8 @@ pub struct VaultRuntime {
     clipboard: Mutex<ClipboardState>,
     /// Bumped whenever a session ends.
     session: AtomicU64,
+    /// For [`UNLOCKED_EVENT`]; set when the timer starts.
+    app: OnceLock<AppHandle>,
 }
 
 #[derive(Default)]
@@ -194,6 +201,7 @@ impl VaultRuntime {
             last_activity: Mutex::new(Instant::now()),
             clipboard: Mutex::new(ClipboardState::default()),
             session: AtomicU64::new(0),
+            app: OnceLock::new(),
         }
     }
 
@@ -275,6 +283,9 @@ impl VaultRuntime {
     pub fn set_unlocked(&self, vault: Vault) {
         *lock(&self.unlocked) = Some(vault);
         self.touch();
+        if let Some(app) = self.app.get() {
+            let _ = app.emit(UNLOCKED_EVENT, ());
+        }
     }
 
     /// Locks the vault, telling the UI why. Does nothing if it is locked.
@@ -469,8 +480,10 @@ impl VaultRuntime {
         }
     }
 
-    /// Starts the thread that locks the vault after inactivity or sleep.
+    /// Starts the thread that locks the vault after inactivity or sleep, and
+    /// keeps `app` to tell of unlocks.
     pub fn start_timer(self: &Arc<Self>, app: AppHandle) {
+        let _ = self.app.set(app.clone());
         let runtime = Arc::clone(self);
         thread::spawn(move || {
             let mut last_tick = SystemTime::now();

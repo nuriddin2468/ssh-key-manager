@@ -20,8 +20,10 @@ and reviewers need a working app to test with. So:
 
 1. ~~Upload once to create the item, then send us its id and public key.~~ Done: see
    [step 3](#3-create-the-item-done).
-2. Merge, and release the app as 0.4.0, with the extension at 0.4.0.
-3. Upload the 0.4.0 package and submit it for review.
+2. ~~Merge, and release the app as 0.4.0, with the extension at 0.4.0.~~ Done.
+3. ~~Upload the 0.4.0 package and submit it for review.~~ Done: the extension is
+   approved and published. Later versions go to the store with each release
+   ([automatic publishing](#automatic-publishing)).
 
 Fill in the listing, Privacy and other tabs whenever you like and save them as a
 draft. Only **Submit for review** waits for step 3.
@@ -54,9 +56,9 @@ This writes `extension/dist/ssh-key-manager-chromium-<version>.zip`, for example
 
 ## 3. Create the item: done
 
-The item is `lkmgdcanagjeajepncgokapkbihahddb`. Its store page will be
-`https://chromewebstore.google.com/detail/lkmgdcanagjeajepncgokapkbihahddb` once it
-is published.
+The item is `lkmgdcanagjeajepncgokapkbihahddb`. Its store page is
+<https://chromewebstore.google.com/detail/ssh-key-manager/lkmgdcanagjeajepncgokapkbihahddb>; **Settings → Browser autofill** in the app links to it
+(`CHROME_WEB_STORE` in `src/features/browser/BrowserAutofillSection.tsx`).
 
 - Its public key (**Package → View public key**) is the `key` in
   `extension/manifest.json`, so unpacked dev builds get the store's id too.
@@ -147,6 +149,50 @@ them to the release.
 
 ## Later updates
 
-For each app release, `pnpm extension:package` on the release commit, then
+Each app release sends the extension to the stores by itself; see
+[Automatic publishing](#automatic-publishing). By hand, for a store without its
+secrets: `pnpm extension:package` on the release commit, then
 **Package → Upload new package**, then **Submit for review**. The extension's version
-always matches the app's; a test checks it.
+always matches the app's; a test checks it, and so does the release.
+
+## Automatic publishing
+
+`release.yml` builds the extension in a job without secrets: the Chromium zip, the
+Firefox zip and, for Firefox reviewers, the source (the repository at the tag). Once
+the app's release is published, the `extension-stores` job uploads them with
+[.github/scripts/extension_stores.py](../../.github/scripts/extension_stores.py) and
+submits each for review. Only the package changes; listings and screenshots stay as the
+stores have them. A store goes live with the new version when its review approves it.
+
+The job reads its secrets from the `extension-stores` environment (**Settings →
+Environments**), so no other job can. Under **Deployment branches and tags**, allow only
+the tags `v*`, so only a release can use them. Add the secrets of each store you publish
+to; a store without them is skipped with a notice. Required reviewers on the environment
+make each release wait for a yes before anything is uploaded.
+
+| Store            | Secrets                                                                       | Before the first run                                             |
+| ---------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Chrome Web Store | `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET`, `CWS_REFRESH_TOKEN`, `CWS_PUBLISHER_ID` | The item exists and was published once by hand                   |
+| Firefox Add-ons  | `AMO_JWT_ISSUER`, `AMO_JWT_SECRET`                                            | The add-on `autofill@sshkeymanager.dev` exists, with its listing |
+| Edge Add-ons     | `EDGE_CLIENT_ID`, `EDGE_API_KEY`, `EDGE_PRODUCT_ID`                           | The product exists in Partner Center                             |
+
+- **Chrome Web Store.** In a Google Cloud project, enable the Chrome Web Store API. Set
+  up the OAuth consent screen (**External**) and make an OAuth client of type **Web
+  application** with the redirect URI `https://developers.google.com/oauthplayground`.
+  Then set the consent screen's publishing status to **In production**: in **Testing**,
+  refresh tokens stop working after seven days. In the
+  [OAuth 2.0 Playground](https://developers.google.com/oauthplayground), choose **Use
+  your own OAuth credentials** (the gear), enter the scope
+  `https://www.googleapis.com/auth/chromewebstore`, sign in as the publisher's account
+  and exchange the code for tokens: that gives the refresh token. The publisher id is
+  under **Publisher → Settings** in the Developer Dashboard. The account needs two-step
+  verification.
+- **Firefox Add-ons.** **Tools → Manage API Keys** on addons.mozilla.org: the JWT issuer
+  and secret.
+- **Edge Add-ons.** Partner Center → Microsoft Edge → **Publish API**: enable the new
+  experience, then **Create API credentials** for the client id and API key. The key
+  expires; renew it there and update the secret. The product id is on the extension's
+  overview page.
+
+If a store refuses the package after the upload, finish that store by hand: it already
+has the version, so running the job again fails there.

@@ -1,7 +1,8 @@
 # SSH Key Manager for browsers
 
 A Manifest V3 extension for Chrome, Edge, Brave and Firefox that fills logins from the
-SSH Key Manager vault and offers to save new ones. It talks to the app through the
+SSH Key Manager vault and offers to save new ones. Install it from the
+[Chrome Web Store](https://chromewebstore.google.com/detail/ssh-key-manager/lkmgdcanagjeajepncgokapkbihahddb). It talks to the app through the
 app's native messaging host; see [SECURITY.md](../SECURITY.md#browser-autofill) for the
 threat model and [docs/architecture.md](../docs/architecture.md#browser-extension) for
 how the pieces fit.
@@ -71,7 +72,10 @@ pnpm extension:package
 ```
 
 This writes `extension/dist/ssh-key-manager-chromium-<version>.zip` for the Chrome Web
-Store: the Chromium build without the manifest's `key`, which the store keeps itself.
+Store and Edge Add-ons (the Chromium build without the manifest's `key`, which the store
+keeps itself) and `ssh-key-manager-firefox-<version>.zip` for addons.mozilla.org. Each
+release sends them to the stores by itself (see
+[store/README.md](store/README.md#automatic-publishing)).
 [store/README.md](store/README.md) walks through the dashboard, with the listing texts,
 privacy answers and images in [store/](store/). The item's id,
 `lkmgdcanagjeajepncgokapkbihahddb`, is in `CHROMIUM_EXTENSION_IDS` in

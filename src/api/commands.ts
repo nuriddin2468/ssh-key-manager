@@ -4,6 +4,7 @@ import { Channel, isTauri } from '@tauri-apps/api/core';
 import type { AddFromVaultReport } from '@/bindings/AddFromVaultReport';
 import type { AgentView } from '@/bindings/AgentView';
 import type { AuditReport } from '@/bindings/AuditReport';
+import type { BackgroundStatus } from '@/bindings/BackgroundStatus';
 import type { BrowserStatus } from '@/bindings/BrowserStatus';
 import type { ConfigFile } from '@/bindings/ConfigFile';
 import type { ConnectionEvent } from '@/bindings/ConnectionEvent';
@@ -279,6 +280,12 @@ export const api = {
   vaultUseFile: (path: string) => call<VaultLocation>('vault_use_file', { path }),
   /** Back to the app's folder: move the files there, or switch to the vault there. */
   vaultUseDefault: (moveFiles: boolean) => call<VaultLocation>('vault_use_default', { moveFiles }),
+
+  // Running on with the window closed, and the tray icon
+  // (src-tauri/src/commands/background.rs).
+  backgroundStatus: () => call<BackgroundStatus>('background_status'),
+  backgroundSetEnabled: (enabled: boolean) =>
+    call<BackgroundStatus>('background_set_enabled', { enabled }),
 
   // Browser autofill (src-tauri/src/commands/browser.rs).
   browserStatus: () => call<BrowserStatus>('browser_status'),

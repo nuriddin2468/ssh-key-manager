@@ -135,7 +135,10 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   search**) or the tray menu opens a small window to connect to a host, copy a
   password, user name or 2FA code, or unlock the vault.
   - The combination is registered with the system (`tauri-plugin-global-shortcut`),
-    which reports that one combination and no other keys. A combination without
+    which reports that one combination and no other keys. Running the app with
+    `--quick-search` opens the same window in the running app (for desktops that
+    give apps no global shortcuts, such as Wayland); it shows nothing to the
+    program that ran it. A combination without
     Ctrl, Alt or ⌘ / the Windows key is refused, so it can't take a key used for
     typing.
   - The window's capability (`capabilities/quick.json`) allows only what it does:

@@ -349,7 +349,8 @@ const en = {
       title: 'Quick search',
       enable: 'Open quick search from any app',
       hint: 'Connect to a host or copy a password, user name or 2FA code without switching to the app’s window.',
-      wayland: 'On Wayland, the shortcut may work only while an X11 app is in front.',
+      wayland:
+        'On Wayland, the shortcut may work only while an X11 app is in front. Your desktop’s own shortcut can run the app with --quick-search instead.',
       shortcut: 'Shortcut',
       change: 'Change',
       recording: 'Press the new shortcut',

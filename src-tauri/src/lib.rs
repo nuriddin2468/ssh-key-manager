@@ -45,8 +45,12 @@ pub fn run() {
 
     #[cfg(desktop)]
     let builder = builder
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            tray::show_window(app);
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if args.iter().any(|arg| arg == quick::ARG) {
+                quick::open(app);
+            } else {
+                tray::show_window(app);
+            }
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(quick::plugin());
@@ -294,6 +298,9 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let background = tray::Background::install(app.handle(), &data_dir);
     app.manage(background);
     app.manage(quick::Quick::install(app.handle(), &data_dir));
+    if std::env::args().any(|arg| arg == quick::ARG) {
+        quick::open(app.handle());
+    }
     Ok(())
 }
 

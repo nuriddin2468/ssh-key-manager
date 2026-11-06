@@ -177,7 +177,8 @@ translates.
 - **Quick search.** `src-tauri/src/quick/`: a system-wide shortcut
   (`tauri-plugin-global-shortcut`, saved in `quick.json`) or the tray menu opens a
   small window (`quick.html`, `src/quick/`) that connects to a host, copies through
-  `vault_copy` and unlocks the vault; its capability allows only that. Escape or a
+  `vault_copy` and unlocks the vault; its capability allows only that. Starting the
+  app with `--quick-search` opens it too, in the running app if there is one. Escape or a
   copy gives the focus back to the app that was in front (`sshkm_os::focus` on
   macOS).
 - **Tray.** `src-tauri/src/tray/`: with **Settings → Background** on, closing the window

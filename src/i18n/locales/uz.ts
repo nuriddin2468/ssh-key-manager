@@ -357,7 +357,8 @@ const uz = {
       title: 'Tezkor qidiruv',
       enable: 'Tezkor qidiruvni istalgan ilovadan ochish',
       hint: 'Ilova oynasiga oʻtmasdan xostga ulaning yoki parol, foydalanuvchi nomi va 2FA kodini nusxalang.',
-      wayland: 'Wayland’da birikma faqat oldinda X11 ilovasi turganda ishlashi mumkin.',
+      wayland:
+        'Wayland’da birikma faqat oldinda X11 ilovasi turganda ishlashi mumkin. Uning oʻrniga ish stoli sozlamalarida ilovani --quick-search bilan ishga tushiradigan birikma qoʻyish mumkin.',
       shortcut: 'Tugmalar birikmasi',
       change: 'Oʻzgartirish',
       recording: 'Yangi birikmani bosing',

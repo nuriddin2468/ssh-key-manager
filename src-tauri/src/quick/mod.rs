@@ -7,7 +7,9 @@
 //!   Ctrl+Shift+Space elsewhere until changed ([`shortcut::DEFAULT`]). The
 //!   system may refuse it, when another app has it: the Settings page then
 //!   says so ([`QuickStatus::registered`]). On Linux it is an X11 key grab,
-//!   which a Wayland desktop gives only while an X11 window has the focus.
+//!   which a Wayland desktop gives only while an X11 window has the focus;
+//!   there a shortcut of the desktop's own can run the app with [`ARG`],
+//!   which opens the window in the running app.
 //! - The window ([`LABEL`], `quick.html`) may call only what it does
 //!   (`capabilities/quick.json`): list the hosts and the vault's entries
 //!   without their secrets ([`items`]), copy through the vault's own copy
@@ -43,6 +45,9 @@ use crate::error::{AppError, AppResult};
 
 /// The quick search window's label; its capability names it.
 pub const LABEL: &str = "quick";
+/// Starting the app with this opens the window, in the running app if there
+/// is one.
+pub const ARG: &str = "--quick-search";
 /// Its page, next to the main window's `index.html`.
 const PAGE: &str = "quick.html";
 const WIDTH: f64 = 620.0;
@@ -247,6 +252,7 @@ fn build(app: &AppHandle) {
         Ok(window) => {
             place(app, &window);
             let _ = window.set_focus();
+            log::info!("quick search: window opened");
         }
         Err(error) => log::warn!("quick search: no window ({error})"),
     }

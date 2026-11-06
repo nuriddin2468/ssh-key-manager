@@ -40,7 +40,9 @@ real `~/.ssh`. Its modules:
     crate's only `unsafe` code).
 - `audit`: pure rules over the data above. Findings carry machine-readable kinds and
   parameters, so the UI can localise them.
-- `vault`: the password vault, two files side by side.
+- `vault`: the password vault, two files side by side, and the password generator
+  (with the Tools page's presets: database, shell and `.env` passwords, tokens, UUIDs,
+  framework keys, Wi-Fi passwords, passphrases and PINs).
   - `vault.kdbx` is a standard KeePass database (KDBX 4.1, Argon2id, ChaCha20). Its
     password is the _vault secret_: a random 256-bit recovery key, shown once, which
     also opens the file in KeePassXC.
@@ -64,6 +66,17 @@ real `~/.ssh`. Its modules:
   - `protocol` is the JSON. Paired browsers live in the vault's custom data. One
     question goes unsealed and needs no pairing: whether two origins are the same site
     (`sameSite`), so the extension can keep a save offer on the site it came from.
+
+- `net`: the Tools page's network checks, each blocking with a timeout; the tests run
+  against loopback listeners.
+  - `tcp` times connections (SSH ping) and tells open, closed and silent ports apart;
+    `banner` reads the SSH server's version line and flags OpenSSH before 8.0.
+  - `dns` is a small DNS client (UDP, TCP when the answer was cut) for A, AAAA,
+    CNAME, MX and TXT, asking the servers of `/etc/resolv.conf` or, on Windows, the
+    adapters' registry settings.
+  - `tls` makes a rustls handshake that records the chain and the system verifier's
+    verdict (`rustls-platform-verifier`) instead of enforcing it; `x509` reads the
+    names, issuer and dates out of each certificate.
 
 - `p2p`: two copies of the app talking over the local network, without the network
   itself, so the tests run over loopback sockets.

@@ -108,7 +108,11 @@ It goes online only:
   **Settings → Updates**;
 - when you ask it to reach a server: checking a host key, testing a connection or
   opening a terminal session;
-- for a DNS lookup when you ask where a name leads.
+- for a DNS lookup when you ask where a name leads;
+- when you run a network check on the Tools page: SSH ping, the port check and the TLS
+  check connect to the host you name, and the DNS lookup asks your computer's DNS
+  servers about the name you type. Checking a certificate may make your system ask its
+  issuer whether it was revoked. Nothing about the checks is stored.
 
 It talks to the local network only for **Nearby**, and only when you ask:
 

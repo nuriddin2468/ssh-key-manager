@@ -47,7 +47,10 @@ use zeroize::Zeroizing;
 pub use self::audit::{VaultAuditInput, VaultFinding, VaultFindingKind};
 pub use self::browsers::{BrowserKeys, KeysUsed, PairedBrowser};
 pub use self::contacts::Contact;
-pub use self::generator::{GenerateOptions, Strength, generate, strength};
+pub use self::generator::{
+    GenerateOptions, Generated, SecretPreset, Strength, TokenEncoding, UuidVersion, generate,
+    generate_preset, strength,
+};
 pub use self::import::{CsvFormat, ImportPreview, ImportRow};
 pub use self::location::{check_database, copy_files, remove_files};
 pub use self::own_devices::{DeviceRecord, MAX_RECORDS, OwnDevice, check_records};

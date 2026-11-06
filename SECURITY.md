@@ -40,6 +40,11 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     clipboard, marked so clipboard history (and Windows' cloud clipboard) skip it, and
     is cleared after 30 seconds by default if nothing else was copied. Locking the vault
     clears it at once.
+  - The secret generator on the Tools page makes its passwords, tokens and keys in Rust
+    from the operating system's random number generator, as the vault does. It shows
+    the value it made; copying it, or a `.env` line, an `export` or a connection URL
+    around it, goes back through Rust to the clipboard in the same way. Nothing it makes
+    is kept unless you save it to the vault, which needs the vault unlocked.
   - Changes are written atomically and the previous file is backed up (20 copies,
     still encrypted). A change to nothing but a paired browser's keys takes no backup,
     so the daily key change doesn't push out the backups taken before real changes. A
@@ -139,7 +144,21 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     Releases at startup and every six hours (can be turned off in Settings);
   - `ssh-keyscan` and `ssh` when you explicitly check a host key, test a connection or
     open a terminal session;
-  - a DNS lookup when you ask where a name leads.
+  - a DNS lookup when you ask where a name leads;
+  - the network checks on the Tools page, each when you click it, in Rust with
+    timeouts and without running other programs:
+    - SSH ping and the port check open TCP connections to the host and port you name
+      and close them before sending anything; SSH ping reads the line the server sends
+      first.
+    - The TLS check makes a handshake with the host and checks its certificate with the
+      system's certificate store (on macOS and Windows that may ask the certificate's
+      issuer whether it was revoked). The handshake goes on even with a certificate the
+      system doesn't trust, so the certificate can be shown; nothing is sent after it,
+      and the connection is closed, so a server that isn't who it claims gets nothing.
+    - The DNS lookup asks the DNS servers your computer is set up with
+      (`/etc/resolv.conf`, or the network adapters' settings on Windows) for the name
+      you type. An answer counts only if it comes from the server asked, carries the
+      random id of the query and repeats its question.
 - **Signed updates.** An update is installed only if its signature matches the public key
   built into the app (`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`).
   - The update check runs in Rust. The page can ask for a check or an install, but can't

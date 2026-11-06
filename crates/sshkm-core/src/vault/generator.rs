@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result};
 
+mod presets;
+
+pub use presets::{Generated, SecretPreset, TokenEncoding, UuidVersion, generate_preset};
+
 const LOWER: &str = "abcdefghijklmnopqrstuvwxyz";
 const UPPER: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const DIGITS: &str = "0123456789";

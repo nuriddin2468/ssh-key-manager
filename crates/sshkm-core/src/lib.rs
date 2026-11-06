@@ -30,6 +30,8 @@
 //! - [`sync`]: three-way merges that keep the user's own computers in step.
 //! - [`browser`]: what the browser extension may see of the vault: which
 //!   logins belong to a page, and the encrypted channel to the extension.
+//! - [`net`]: the Tools page's network checks: SSH ping, open ports, DNS
+//!   records and TLS certificates.
 //!
 //! Every public data type implements [`serde::Serialize`] with camelCase field
 //! names so it can be returned from Tauri commands unchanged. With the `ts`
@@ -51,6 +53,7 @@ pub mod fsutil;
 pub mod hosts_file;
 pub mod keys;
 pub mod known_hosts;
+pub mod net;
 pub mod p2p;
 pub mod paths;
 pub mod perms;

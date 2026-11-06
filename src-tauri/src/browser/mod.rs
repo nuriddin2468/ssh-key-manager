@@ -482,7 +482,7 @@ impl Env for TauriEnv {
     }
 
     fn unlock(&self) {
-        unlock::ask(&self.app);
+        unlock::ask(&self.app, unlock::Asker::Browser);
     }
 
     fn changed(&self, what: Changed) {

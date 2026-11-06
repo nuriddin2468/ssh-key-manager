@@ -21,8 +21,10 @@
 //! instead.
 
 mod audit;
+mod breach;
 mod browsers;
 mod contacts;
+pub mod envs;
 mod export;
 mod generator;
 mod import;
@@ -45,9 +47,15 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 pub use self::audit::{VaultAuditInput, VaultFinding, VaultFindingKind};
+pub use self::breach::{
+    BreachCache, BreachQuery, MAX_RANGE_BYTES, PADDING_HEADER, RANGE_URL, RangePrefix,
+};
 pub use self::browsers::{BrowserKeys, KeysUsed, PairedBrowser};
 pub use self::contacts::Contact;
-pub use self::generator::{GenerateOptions, Strength, generate, strength};
+pub use self::generator::{
+    GenerateOptions, Generated, SecretPreset, Strength, TokenEncoding, UuidVersion, generate,
+    generate_preset, strength,
+};
 pub use self::import::{CsvFormat, ImportPreview, ImportRow};
 pub use self::location::{check_database, copy_files, remove_files};
 pub use self::own_devices::{DeviceRecord, MAX_RECORDS, OwnDevice, check_records};
@@ -671,11 +679,13 @@ impl Vault {
         self.write_slots(slots)
     }
 
-    /// All entries, sorted by title.
+    /// All entries, sorted by title. Environments ([`envs`]) aren't
+    /// entries here.
     pub fn entries(&self) -> Vec<EntrySummary> {
         let mut entries: Vec<EntrySummary> = self
             .db
             .iter_all_entries()
+            .filter(|entry| !envs::is_environment(entry))
             .map(|entry| self.summary(&entry))
             .collect();
         entries.sort_by_cached_key(|e| (e.title.to_lowercase(), e.username.to_lowercase()));

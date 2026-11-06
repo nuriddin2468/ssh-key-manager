@@ -129,6 +129,17 @@ describe('the menu', () => {
     expect(kinds()).toEqual(['logins']);
   });
 
+  it('stays closed by itself over a password already there, and opens on Down Arrow', async () => {
+    const { user, pass } = loginForm('alice', 'filled-by-the-browser');
+    click(pass);
+    click(user);
+    await settle();
+    expect(kinds()).not.toContain('logins');
+    press(user, 'ArrowDown');
+    await settle();
+    expect(kinds()).toEqual(['logins']);
+  });
+
   it('stays closed when the page moves focus after the user clicked elsewhere', async () => {
     const { user, pass } = loginForm();
     fireTrusted(user, new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
@@ -164,6 +175,32 @@ describe('typed logins', () => {
     form.requestSubmit();
     await settle();
     expect(captures()).toEqual([]);
+  });
+
+  it('name a password sent alone by a hidden username field of the form', async () => {
+    document.body.innerHTML = `<form>
+      <input type="email" autocomplete="username" value="alice@bank.example" hidden>
+      <input id="pass" type="password">
+    </form>`;
+    const pass = document.querySelector('#pass') as HTMLInputElement;
+    type(pass, 'hunter2');
+    press(pass, 'Enter');
+    await settle();
+    expect(captures()).toEqual([
+      { kind: 'capture', username: 'alice@bank.example', password: 'hunter2' },
+    ]);
+  });
+
+  it('pass on the username of a two-step login’s first step', async () => {
+    document.body.innerHTML = `<form><input id="user" type="email" name="identifier"></form>`;
+    const user = document.querySelector('#user') as HTMLInputElement;
+    type(user, 'alice@bank.example');
+    press(user, 'Enter');
+    press(user, 'Enter');
+    await settle();
+    expect(world.sent.filter((message) => message.kind === 'username')).toEqual([
+      { kind: 'username', username: 'alice@bank.example' },
+    ]);
   });
 
   it('are not sent with a password the page set or changed', async () => {

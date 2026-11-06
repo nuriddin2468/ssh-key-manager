@@ -1,0 +1,1 @@
+Unable to negotiate with 192.168.0.10 port 22: no matching cipher found. Their offer: aes128-cbc,3des-cbc,aes192-cbc,aes256-cbc

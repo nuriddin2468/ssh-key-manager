@@ -40,6 +40,11 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     clipboard, marked so clipboard history (and Windows' cloud clipboard) skip it, and
     is cleared after 30 seconds by default if nothing else was copied. Locking the vault
     clears it at once.
+  - The secret generator on the Tools page makes its passwords, tokens and keys in Rust
+    from the operating system's random number generator, as the vault does. It shows
+    the value it made; copying it, or a `.env` line, an `export` or a connection URL
+    around it, goes back through Rust to the clipboard in the same way. Nothing it makes
+    is kept unless you save it to the vault, which needs the vault unlocked.
   - Changes are written atomically and the previous file is backed up (20 copies,
     still encrypted). A change to nothing but a paired browser's keys takes no backup,
     so the daily key change doesn't push out the backups taken before real changes. A
@@ -96,6 +101,32 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     links and firmlinks don't get around it), and cells that a spreadsheet would run as
     a formula are defused, except passwords. Files to import are also picked in a
     system dialog. Imported CSV files can be moved to the Trash right after import.
+  - Secret environments (the **Environments** page) are entries of the same vault:
+    one per environment, in the group `Environments/<project>`, with a custom field
+    per variable; a secret variable's field is protected like a password. Lists,
+    details, import previews and comparisons sent to the interface carry names, flags
+    and notes, never values: a value reaches it only when you choose to show it (or
+    load it to edit it), and copying goes from Rust straight to the clipboard,
+    cleared like a password when the variable is secret. Two environments are
+    compared inside the Rust process; only the names that differ come out.
+  - A `.env` file to import is picked in a system dialog the app opens itself and
+    read again when you import, at most 1 MiB; nothing in it is expanded or run, and
+    lines it can't read are reported by number, never quoted. The app never changes
+    or deletes it.
+  - Exporting an environment writes it in plain text (`.env`, JSON, YAML, shell
+    `export` lines, a Docker env file, or a Kubernetes Secret, whose base64 hides
+    nothing), to a file picked in a system save dialog, with the same protections as
+    the CSV export: mode 0600 (or the private access list on Windows), never in
+    `~/.ssh`, never over the vault's files. Shell lines quote every value in `'…'`,
+    so sourcing the file runs nothing a value holds. When the file would be inside a
+    Git working tree that doesn't ignore it (`git check-ignore`; without `git`, any
+    working tree counts), nothing is written until you confirm in the app.
+  - **Run in terminal** starts your own shell (`$SHELL` as a login shell, or
+    `%ComSpec%` on Windows) in the in-app terminal with the variables added to its
+    environment. Nothing is written to disk, but the shell and everything it starts
+    hold the values in their environment: other programs running as you can read a
+    process's environment (`/proc/<pid>/environ` on Linux, `ps -E` on macOS), and the
+    shell may save the commands you type in its history.
 - **Answering `ssh` prompts.** To log in with a password or one-time code, the app acts
   as `ssh`'s askpass program.
   - The secret goes over a local socket only this user can reach (a private 0700
@@ -130,16 +161,142 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - An answer you choose to save goes into the vault only after the session has signed
     in. On Windows, where the app can't tell when that happens, the terminal never saves
     answers. Terminal output and answers are never logged.
+  - Tunnels (Tools → Tunnels) use the same interactive channel: a saved secret is
+    given once, a new host key is trusted only after your "Trust", and anything else is
+    asked of you on the Tunnels page. A tunnel that reconnects by itself gets saved
+    secrets again but never trusts a host key without you.
+- **SSH tools.** The Tools page's SSH tools change nothing behind your back.
+  - A tunnel is one `ssh -N` per forward, with `ExitOnForwardFailure` (no half-working
+    tunnel) and no connection sharing (`ControlPath none`), so it neither rides on nor
+    carries other `ssh` sessions. Local and SOCKS tunnels listen on `localhost` unless
+    you pick "All addresses", which the app marks as open to your network. Every value
+    that reaches `ssh` (alias, address, host, port) is checked first. Tunnels stop when
+    the app quits and keep running while the window is closed to the tray, where the
+    menu counts them and stops them all. Their definitions are in `tunnels.json` in the
+    app's data folder (mode 0600): hosts, ports, names, never a secret.
+  - The ProxyJump wizard and "Add to ~/.ssh/config" of a tunnel edit `~/.ssh/config`
+    through the host editor's path: a backup first, refused if the file changed
+    meanwhile, and a native confirmation for lines that say which server gets access.
+  - The key converter decrypts keys in Rust only; the page sees fingerprints and the
+    public key. Converted keys go into `~/.ssh` only as new files (0600), or where you
+    pick in a system save dialog, never over a file in `~/.ssh`. New passphrases use
+    the formats' strong options (OpenSSH bcrypt, PuTTY v3 Argon2id, PKCS#8 PBES2 with
+    PBKDF2-SHA256 and AES-256); PEM, whose encryption is one round of MD5, is written
+    only without a passphrase, and the app says so. The key derivation settings a file
+    asks for (PuTTY's Argon2, PKCS#8's PBKDF2) are bounded, as bcrypt rounds are.
+  - An `authorized_keys` line is built and checked in Rust and read back as `sshd`
+    reads it before it is shown or installed. Installing it goes over stdin through the
+    same script as installing a key, and never replaces a line that has the key
+    already.
+- **Quick search.** A system-wide key combination (⇧⌘Space on macOS,
+  Ctrl+Shift+Space elsewhere; it can be changed or turned off in **Settings → Quick
+  search**) or the tray menu opens a small window to connect to a host, copy a
+  password, user name or 2FA code, or unlock the vault.
+  - The combination is registered with the system (`tauri-plugin-global-shortcut`),
+    which reports that one combination and no other keys. Running the app with
+    `--quick-search` opens the same window in the running app (for desktops that
+    give apps no global shortcuts, such as Wayland); it shows nothing to the
+    program that ran it. A combination without
+    Ctrl, Alt or ⌘ / the Windows key is refused, so it can't take a key used for
+    typing.
+  - The window's capability (`capabilities/quick.json`) allows only what it does:
+    the hosts and the vault's entries without their secrets (`quick_items`, which
+    doesn't count as activity), the vault's own copy (`vault_copy`: out of
+    clipboard history, cleared after 30 seconds by default), the three unlock
+    commands, connecting and closing. It can't reveal a password, read an entry's
+    details or the config, or change anything; a test checks this.
+  - A password never reaches the window: it goes from Rust to the clipboard as
+    when copied in the main window. Unlocking asks for the master password, or
+    Touch ID / Windows Hello, in the window itself, as the unlock window does.
+  - The window stays above others and closes on Escape, after a copy, and when it
+    loses the focus, so it doesn't stay open with the vault's entry names behind
+    other windows. After Escape or a copy, the app that was in front gets the focus
+    back.
+  - The in-app command palette (⌘K) and quick search remember recently run items
+    by id (`host:<alias>:connect`, `entry:<uuid>:password`) in the webview's local
+    storage; never a secret or a query.
 - **Browser autofill** (optional, off by default) lets the SSH Key Manager extension for
   Chrome, Edge and Firefox fill and save logins from the vault. See
   [Browser autofill](#browser-autofill) below.
-- **Minimal network access.** The app sends none of your data anywhere. Its only
-  requests are:
+- **Hosts from the shell history** (off until you say yes on the Hosts page) suggest
+  servers you connect to.
+  - The zsh, bash, fish and PowerShell history files are read by the Rust process, on
+    this computer, only when the Hosts page asks (opening it while this is on, or
+    **Look again**), never in the background, and at most their last 16 MiB.
+  - Only `ssh`, `autossh`, `mosh`, `scp` and `sftp` commands are looked at. Of those, only
+    the target (user, host, port), `-i`, `-J`, `-A` and a short list of `-o` options
+    reach the interface; remote commands, file names and every other argument stay in
+    Rust. Options that run programs or check servers less strictly (`ProxyCommand`,
+    `LocalCommand`, `StrictHostKeyChecking`, `UserKnownHostsFile`, …) are never
+    suggested, and nothing in a command is expanded or run (`$VAR`, `$(…)`).
+  - Passwords typed into those commands (`sshpass -p`, `ssh://user:password@`, a `-o`
+    option or a variable named like a password, also inside a `ProxyCommand`) are
+    dropped and only counted per file, so the app can tell you to remove them.
+  - A suggestion becomes a host only through the Add Host dialog, which shows the whole
+    block and asks the same confirmations as any other host.
+  - Your answer and the suggestions you dismissed are kept in `shell-history.json` in
+    the app's data folder (mode 0600): a dismissed host as an HMAC-SHA-256 of its user,
+    host and port under a random key of that file, never as the host or the command.
+    Turning it off in **Settings → Shell history** stops all reading.
+- **Minimal network access.** The app sends none of your data anywhere (the optional
+  breach check sends 5 hex characters of each password's hash). Its only requests are:
   - the update check, which downloads `latest.json` from this repository's GitHub
     Releases at startup and every six hours (can be turned off in Settings);
   - `ssh-keyscan` and `ssh` when you explicitly check a host key, test a connection or
     open a terminal session;
-  - a DNS lookup when you ask where a name leads.
+  - a DNS lookup when you ask where a name leads;
+  - `ssh` for each tunnel you turn on, for as long as it is on;
+  - after a failed connection, when you choose "Check port": one TCP connection to the
+    host's port (or its first jump host's), closed at once without sending anything.
+    The address comes from `ssh -G` for a host alias, never from the page, so the page
+    can't point it elsewhere.
+  - the audit's breach check, only after you turn it on (off by default; see below).
+  - the network checks on the Tools page, each when you click it, in Rust with
+    timeouts and without running other programs:
+    - SSH ping and the port check open TCP connections to the host and port you name
+      and close them before sending anything; SSH ping reads the line the server sends
+      first.
+    - The TLS check makes a handshake with the host and checks its certificate with the
+      system's certificate store (on macOS and Windows that may ask the certificate's
+      issuer whether it was revoked). The handshake goes on even with a certificate the
+      system doesn't trust, so the certificate can be shown; nothing is sent after it,
+      and the connection is closed, so a server that isn't who it claims gets nothing.
+    - The DNS lookup asks the DNS servers your computer is set up with
+      (`/etc/resolv.conf`, or the network adapters' settings on Windows) for the name
+      you type. An answer counts only if it comes from the server asked, carries the
+      random id of the query and repeats its question.
+- **Why a connection failed.** A connection test runs `ssh -v`, so a failure can say
+  which keys were offered. The extra lines go no further than the app's memory: what
+  you read leaves them out (and the server's pre-login banner, as before), and the
+  diagnosis keeps only the lines about the failure, since others can hold the values
+  of environment variables `ssh` sends (`SendEnv`). Answers never pass through them:
+  they go through askpass. The terminal runs `ssh` without `-v` and reads its usual
+  messages. A fix never trusts a host key for you: it opens the host key check. One
+  that turns an old algorithm back on (`HostKeyAlgorithms +ssh-rsa`, …) only changes
+  the host's block in the editor, for you to review and save, which confirms it like
+  any other change.
+- **Breach check (optional, off by default).** The audit can look up saved passwords in
+  Have I Been Pwned's Pwned Passwords, with k-anonymity. The page only turns it on or
+  off and asks for a check; the rest happens in Rust, and passwords and their hashes
+  never reach the page.
+  - For each password the vault rates (outside the recycle bin, not empty), the app
+    computes its SHA-1 hash and sends only the first 5 hex characters to
+    `https://api.pwnedpasswords.com/range/<prefix>`, with `Add-Padding: true` and the
+    user agent `SSH-Key-Manager`. The server answers with the hash suffixes it knows
+    under that prefix (hundreds of them, padded with made-up ones so the size of the
+    answer says nothing either), and the app compares the rest of the hash on this
+    computer. The service sees your IP address and which ranges you asked for, never a
+    password or a whole hash.
+  - Requests go over HTTPS only (no redirects, certificates checked against the
+    system's roots), one at a time and at most ten a second; an answer larger than
+    1 MiB or not in the range format is discarded. A failure stops the check and is
+    shown; the audit then waits five minutes before trying by itself again.
+  - Results stay in memory, keyed by an HMAC-SHA-256 of each password under a random
+    key that exists only in memory, so unchanged passwords aren't asked about again
+    while the vault is unlocked (the audit asks again after a day, "Check now" at
+    once). Locking the vault drops them, with that key. Nothing about the check is
+    written to disk except whether it is on (`breaches.json` in the app's data
+    folder), and range prefixes are never logged.
 - **Signed updates.** An update is installed only if its signature matches the public key
   built into the app (`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`).
   - The update check runs in Rust. The page can ask for a check or an install, but can't
@@ -182,6 +339,28 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - Private keys are deliberately not backed up, because a backup taken before adding a
     passphrase would leave an unencrypted copy behind.
 - **Deletions are recoverable.** Removed keys go to the system Trash.
+- **Rotating a key takes the old one away only where the new one works.**
+  - The new key is added to a host by signing in as the host does now, with the old key.
+  - Then the app signs in offering the new key first, with password and
+    keyboard-interactive logins off, and counts the sign-in only if `ssh -v` logged
+    that the server accepted the new key: the old key, still named in the config or
+    held by the agent, would otherwise get in after the new one is turned down. The
+    log goes to a new file only you can read in the temporary folder (`ssh -E`),
+    removed right after, so nothing a jump host prints or a server sends as a banner
+    reaches it. A server can still forge a line of it in a debug message, but only
+    about itself.
+  - Only then does the host's block in `~/.ssh/config` name the new key, through the
+    usual edit with its revision check.
+  - The old key comes off a server's `authorized_keys` only when you choose it, only
+    for hosts whose new key passed that check and whose block names it, and never
+    while another alias of the same account (same host name, port and user, or no
+    user written) still signs in with the old key. The file is read back after the
+    change and a key still in it counts as not removed.
+  - The old key file is offered for the Trash only once no host in the rotation and
+    no block of the config still uses it; it is also removed from `ssh-agent`.
+  - A rotation in progress is kept in the interface's local storage so it can go on
+    later: key and host names, fingerprints, the old public key and how far each host
+    got. Nothing secret.
 - **Administrator rights only to save the hosts file, and only when you save.** The app
   itself never runs with administrator rights.
   - Changes to the hosts file are collected first and shown as a diff. Saving writes the
@@ -219,11 +398,17 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     each window its own. Every command of the app needs a permission (`build.rs` lists
     them, and a test checks the list against the commands registered), so a window
     can call only what its capability names: the main window all of them, the
-    browser's unlock window only the three that unlock the vault.
+    browser's unlock window only the three that unlock the vault, the quick search
+    window only what it lists and does (see "Quick search" above).
   - The window only shows the app's own page: navigating elsewhere is refused and new
     windows can't open. Links open in your browser, and only `http` and `https` links.
   - Permission fixes apply only what the app's own audit found inside `~/.ssh`, and only
     ever remove permissions.
+  - Config fixes from the audit apply only what its rules offer for the file at that
+    moment, and to the version of the file the page saw: they remove a
+    `StrictHostKeyChecking no`, `UserKnownHostsFile /dev/null` or `ForwardAgent` line,
+    or add `IdentitiesOnly yes` to blocks the audit names. They never add a directive
+    that needs the confirmation above.
 
 ## Browser autofill
 
@@ -352,7 +537,18 @@ the user's own Enter, click or key press. A page that sets the values and calls
 about once a second. Whether the banner appears still tells the page whether the login
 the user just typed there is saved, which is about a password the page was given
 anyway; the banner's size is the same whether it offers to save or to update, whatever
-the saved login's title.
+the saved login's title. The banner's username is a field the user can change (a form
+may send a password alone); key presses in it stop at the banner, but a page listening
+in the capture phase still sees them, which tells it the username of its own login. A
+login typed on another site gets no such field. The username sent with the first step
+of a two-step login waits in `storage.session` for five minutes, for that tab only,
+and names a password sent there without one on the same site.
+
+**The browser's own suggestions.** The popup can turn off the browser's "Offer to save
+passwords" (and in Chromium its address and earlier-entry suggestions) with the
+optional `privacy` permission, which it asks for only when the user turns them off.
+Turning them on again hands the settings back to the user's own choice. A setting the
+user's organization or another extension controls is left alone.
 
 **Pairing.**
 
@@ -476,8 +672,8 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   are closed at once.
   The users have three minutes to compare the codes.
 - **Sending.** After pairing, or straight away between contacts, the side that
-  connected may send one item: a vault entry, a host, a hosts file group or a public
-  key. The UI only names it; the backend reads it from the vault, `~/.ssh` or the
+  connected may send one item: a vault entry, a secret environment, a host, a hosts
+  file group or a public key. The UI only names it; the backend reads it from the vault, `~/.ssh` or the
   hosts file. First goes a summary with nothing secret in it (title and username,
   alias, address and jump host, a group's name, size and first names, or a key's name,
   type, fingerprint and comment); the item itself goes only after the other user
@@ -495,6 +691,14 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   certificate authority's, since `ssh` would then accept the sender's key next to its
   own; it keeps its own and warns instead. A 2FA secret
   goes only if the sender ticks it; a key's passphrase never goes.
+- **An environment arrives as a new one.** Its summary names the project, the
+  environment, how many variables (and secrets) it has and the first three names;
+  the values go only after the other user accepts. The receiver checks every name
+  (variable names are letters, digits and `_`), refuses control characters other
+  than line breaks and tabs in values, and takes at most 1000 variables and 384 KiB.
+  It is saved as a new environment: one of the same name in that project gets a
+  number (`prod 2`), so a sender can never replace or add to an environment the
+  receiver has.
 - **A hosts file group is never written on arrival.** The hosts file decides where
   names lead for every program, so a received group only becomes a change on the
   Hosts file page: the user sees the diff and saves it with the administrator

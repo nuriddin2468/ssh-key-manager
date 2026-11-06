@@ -3,6 +3,7 @@
 // be tested on its own.
 
 import type { TFunction } from 'i18next';
+import type { Diagnosis } from '@/bindings/Diagnosis';
 import type { FailReason } from '@/bindings/FailReason';
 import type { Failure } from '@/bindings/Failure';
 import type { HostEntry } from '@/bindings/HostEntry';
@@ -12,6 +13,7 @@ import type { SessionState } from '@/bindings/SessionState';
 import type { SignIn } from '@/bindings/SignIn';
 import type { TerminalEvent } from '@/bindings/TerminalEvent';
 import type { TerminalInfo } from '@/bindings/TerminalInfo';
+import { causeTitle } from '@/features/diagnose/model';
 
 /** The UI's own failure, for a session `ssh` never started in. */
 export type OpenFailure = { reason: 'openFailed'; message: string };
@@ -24,6 +26,11 @@ export interface Tab {
   /** Stable for the tab's life, across reconnects. */
   key: string;
   alias: string;
+  /**
+   * A shell on this computer with a secret environment's variables (its id),
+   * instead of `ssh`; `alias` then names the environment.
+   */
+  env?: string;
   /** The backend session; `null` while it opens or after it ended. */
   id: number | null;
   info: TerminalInfo | null;
@@ -42,11 +49,12 @@ export interface Tab {
 
 let nextKey = 0;
 
-export function newTab(alias: string): Tab {
+export function newTab(alias: string, env?: string): Tab {
   nextKey += 1;
   return {
     key: `tab-${nextKey}`,
     alias,
+    env,
     id: null,
     info: null,
     state: { phase: 'connecting' },
@@ -78,7 +86,8 @@ export function applyEvent(tab: Tab, event: TerminalEvent, showPrompt: boolean):
         info: tab.info ? { ...tab.info, phase: state.phase } : null,
         prompt: state.phase === 'connecting' ? tab.prompt : null,
         promptOpen: state.phase === 'connecting' && tab.promptOpen,
-        banner: state.phase === 'connected' ? state.signIn : null,
+        // A local shell signs in nowhere.
+        banner: state.phase === 'connected' && !tab.env ? state.signIn : null,
         keyChanged: state.phase === 'failed' && state.failure.reason === 'hostKeyChanged',
         id: state.phase === 'ended' || state.phase === 'failed' ? null : tab.id,
       };
@@ -260,6 +269,25 @@ export function failureView(t: TFunction, tab: Tab, failure: Failure | OpenFailu
   };
 }
 
+/**
+ * The diagnosis a failed session shows, where the prompts said nothing more
+ * precise (a password or code turned down, a prompt cancelled).
+ */
+export function sessionDiagnosis(failure: Failure | OpenFailure): Diagnosis | null {
+  if (failure.reason === 'openFailed' || !failure.diagnosis) return null;
+  const { kind } = failure.diagnosis.cause;
+  switch (failure.reason) {
+    case 'notAccepted':
+    case 'unreachable':
+    case 'hostKeyChanged':
+      return kind === 'unknown' ? null : failure.diagnosis;
+    case 'other':
+      return failure.diagnosis;
+    default:
+      return null;
+  }
+}
+
 /** One line for the live region when a session changes state. */
 export function announcement(t: TFunction, tab: Tab, state: TabState): string | null {
   switch (state.phase) {
@@ -267,11 +295,15 @@ export function announcement(t: TFunction, tab: Tab, state: TabState): string | 
       return t('terminal.announce.connected', { alias: tab.alias });
     case 'ended':
       return t('terminal.announce.ended', { alias: tab.alias });
-    case 'failed':
+    case 'failed': {
+      const diagnosis = sessionDiagnosis(state.failure);
       return t('terminal.announce.failed', {
         alias: tab.alias,
-        reason: failureView(t, tab, state.failure).title,
+        reason: diagnosis
+          ? causeTitle(t, diagnosis, tab.alias)
+          : failureView(t, tab, state.failure).title,
       });
+    }
     default:
       return null;
   }

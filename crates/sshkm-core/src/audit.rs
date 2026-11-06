@@ -23,6 +23,15 @@
 //! | hosts file sends a code host elsewhere, or `localhost` off this computer | critical |
 //! | hosts file gives a name several addresses | warning |
 //! | temporary hosts file entry past its time | warning |
+//! | `StrictHostKeyChecking no` | warning; critical with `UserKnownHostsFile /dev/null` in the same block |
+//! | `UserKnownHostsFile /dev/null` | warning |
+//! | `ForwardAgent` for many hosts (wildcard or `Match` block, global section) | critical |
+//! | `ForwardAgent` for named hosts | info |
+//! | more than 5 keys in ssh-agent and `IdentityFile` hosts without `IdentitiesOnly yes` | warning |
+//!
+//! The rules about config settings are in `audit/config_risks.rs`.
+
+mod config_risks;
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -32,6 +41,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+pub use self::config_risks::{AGENT_KEYS_LIMIT, apply_config_fix};
 use crate::{
     Result,
     config::{IdentityUsage, SshConfig},
@@ -176,6 +186,47 @@ pub enum FindingKind {
         /// When it expired (RFC 3339).
         expires: String,
     },
+    /// `StrictHostKeyChecking no` (or `off`): `ssh` accepts any new host key
+    /// without asking, and only refuses changed ones.
+    StrictHostKeyCheckingOff {
+        /// The value as written.
+        value: String,
+        /// Patterns of the `Host` block (empty for `Match` and the options
+        /// before the first block).
+        patterns: Vec<String>,
+        /// The block also has `UserKnownHostsFile /dev/null`, so no key is
+        /// ever known and every server is accepted.
+        known_hosts_discarded: bool,
+    },
+    /// `UserKnownHostsFile /dev/null` (or `NUL` on Windows): host keys are
+    /// never remembered, so a changed key can't be noticed.
+    KnownHostsDiscarded {
+        /// The value as written.
+        value: String,
+        /// Patterns of the `Host` block.
+        patterns: Vec<String>,
+    },
+    /// `ForwardAgent` is on: the server can sign in elsewhere with every key
+    /// in the agent while the user is connected.
+    AgentForwarding {
+        /// The value as written (`yes`, or a socket).
+        value: String,
+        /// Patterns of the `Host` block.
+        patterns: Vec<String>,
+        /// It applies to many hosts: a wildcard or `Match` block, or the
+        /// options before the first block.
+        wildcard: bool,
+    },
+    /// More keys in ssh-agent than servers allow attempts
+    /// ([`AGENT_KEYS_LIMIT`]), while hosts with an `IdentityFile` let `ssh`
+    /// offer them all first (`Too many authentication failures`).
+    TooManyAgentKeys {
+        /// Keys in the agent.
+        agent_keys: u32,
+        /// Patterns of the `Host` blocks without `IdentitiesOnly yes`, each
+        /// joined with spaces.
+        hosts: Vec<String>,
+    },
 }
 
 /// What a finding is about.
@@ -228,6 +279,22 @@ pub enum FixAction {
     TurnOffHostsEntry {
         /// 1-based line in the hosts file.
         line: u32,
+    },
+    /// [`apply_config_fix`]: remove the `key` lines with this value from a
+    /// block, then save.
+    RemoveConfigOption {
+        /// The block (`None`: global section).
+        host_id: Option<u32>,
+        /// The keyword as written.
+        key: String,
+        /// The value as written.
+        value: String,
+    },
+    /// [`apply_config_fix`]: add `IdentitiesOnly yes` to these blocks, then
+    /// save.
+    AddIdentitiesOnly {
+        /// The blocks.
+        host_ids: Vec<u32>,
     },
 }
 
@@ -304,6 +371,10 @@ pub struct AuditInput<'a> {
     /// Fingerprints of other people's public keys, received from them: a
     /// `.pub` of one is no orphan, as its private key is theirs.
     pub others: &'a [String],
+    /// The config, for the rules about its settings.
+    pub config: Option<&'a SshConfig>,
+    /// Keys in ssh-agent; `None` (unknown) skips the `IdentitiesOnly` rule.
+    pub agent_keys: Option<usize>,
 }
 
 /// Runs all rules. Pure: no file system access.
@@ -367,6 +438,10 @@ pub fn run(input: &AuditInput<'_>) -> AuditReport {
         });
     }
     hosts_file_findings(input.hosts_file, input.now, &mut findings);
+    if let Some(config) = input.config {
+        let path = input.config_file.map(|c| c.path.as_str());
+        findings.extend(config_risks::findings(config, path, input.agent_keys));
+    }
 
     findings.sort_by(|a, b| a.severity.cmp(&b.severity).then_with(|| a.id.cmp(&b.id)));
     let mut counts = AuditCounts::default();
@@ -388,6 +463,17 @@ pub fn run_for_paths(
     paths: &SshPaths,
     hosts_file: &Path,
     others: &[String],
+) -> Result<AuditReport> {
+    run_for_paths_with_agent(paths, hosts_file, others, None)
+}
+
+/// [`run_for_paths`], with the number of keys in ssh-agent for the
+/// `IdentitiesOnly` rule ([`AuditInput::agent_keys`]).
+pub fn run_for_paths_with_agent(
+    paths: &SshPaths,
+    hosts_file: &Path,
+    others: &[String],
+    agent_keys: Option<usize>,
 ) -> Result<AuditReport> {
     let scan = keys::scan(&paths.dir)?;
     let config = SshConfig::load(&paths.config).ok();
@@ -426,6 +512,8 @@ pub fn run_for_paths(
         hosts_file: &hosts,
         now: Some(OffsetDateTime::now_utc()),
         others,
+        config: config.as_ref(),
+        agent_keys,
     }))
 }
 
@@ -884,6 +972,8 @@ mod tests {
             hosts_file: &[],
             now: None,
             others: &[],
+            config: None,
+            agent_keys: None,
         });
         assert_eq!(
             ids(&report),
@@ -1064,12 +1154,87 @@ mod tests {
         })
         .unwrap();
         assert_eq!(fix["target"], "sshDir");
+        let fix = serde_json::to_value(FixAction::AddIdentitiesOnly { host_ids: vec![2] }).unwrap();
+        assert_eq!(fix["kind"], "addIdentitiesOnly");
+        assert_eq!(fix["hostIds"][0], 2);
+        let kind = serde_json::to_value(FindingKind::StrictHostKeyCheckingOff {
+            value: "no".into(),
+            patterns: vec![],
+            known_hosts_discarded: true,
+        })
+        .unwrap();
+        assert_eq!(kind["kind"], "strictHostKeyCheckingOff");
+        assert_eq!(kind["knownHostsDiscarded"], true);
         let dup = serde_json::to_value(FindingKind::DuplicateKey {
             fingerprint: "f".into(),
             key_ids: vec![],
         })
         .unwrap();
         assert!(dup.get("keyIds").is_some());
+    }
+
+    #[test]
+    fn config_settings_end_to_end() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".ssh");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(
+            dir.join("config"),
+            "Host lab\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n\
+             Host gh\n  IdentityFile ~/.ssh/gh\n\
+             Host *\n  ForwardAgent yes\n",
+        )
+        .unwrap();
+        let paths = SshPaths::with_home(home.path(), &dir);
+        let hosts = home.path().join("hosts");
+        let report = run_for_paths_with_agent(&paths, &hosts, &[], Some(7)).unwrap();
+        let config_ids: Vec<&str> = ids(&report)
+            .into_iter()
+            .filter(|id| !id.starts_with("identityFileMissing") && !id.contains("Permissions"))
+            .collect();
+        assert_eq!(
+            config_ids,
+            [
+                "agentForwarding:host:*",
+                "strictHostKeyCheckingOff:host:lab",
+                "knownHostsDiscarded:host:lab",
+                "tooManyAgentKeys",
+            ]
+        );
+        let config_path = path_string(&paths.config);
+        let finding = report
+            .findings
+            .iter()
+            .find(|f| f.id == "tooManyAgentKeys")
+            .unwrap();
+        assert_eq!(finding.subject.path.as_deref(), Some(config_path.as_str()));
+        // Without the agent's count that rule is skipped.
+        let report = run_for_paths(&paths, &hosts, &[]).unwrap();
+        assert!(!ids(&report).contains(&"tooManyAgentKeys"));
+
+        let report = run_for_paths_with_agent(&paths, &hosts, &[], Some(7)).unwrap();
+        for fix in report.findings.iter().filter_map(|f| f.fix.as_ref()) {
+            if matches!(
+                fix,
+                FixAction::RemoveConfigOption { .. } | FixAction::AddIdentitiesOnly { .. }
+            ) {
+                let mut config = SshConfig::load(&paths.config).unwrap();
+                assert!(apply_config_fix(&mut config, fix).unwrap());
+                config.save(&paths.config, &home.path().join("b")).unwrap();
+            }
+        }
+        let report = run_for_paths_with_agent(&paths, &hosts, &[], Some(7)).unwrap();
+        assert!(
+            ids(&report)
+                .iter()
+                .all(|id| id.starts_with("identityFileMissing") || id.contains("Permissions")),
+            "{:?}",
+            ids(&report)
+        );
+        assert_eq!(
+            std::fs::read_to_string(&paths.config).unwrap(),
+            "Host lab\nHost gh\n  IdentityFile ~/.ssh/gh\n  IdentitiesOnly yes\nHost *\n"
+        );
     }
 
     #[cfg(unix)]

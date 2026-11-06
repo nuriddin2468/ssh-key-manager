@@ -21,15 +21,22 @@
 //! - [`agent`]: a small synchronous client for the system `ssh-agent`.
 //! - [`authorized_keys`]: the keys an `authorized_keys` file lets in, read
 //!   from a server's copy.
+//! - [`authorized_line`]: one `authorized_keys` line with options, checked.
+//! - [`tunnels`]: saved port forwards and the `ssh` that holds each open.
 //! - [`perms`]: permission checks and fixes (Unix modes, Windows ACLs).
 //! - [`audit`]: security findings computed from all of the above.
+//! - [`diagnose`]: why an `ssh` run failed, read from what it printed.
 //! - [`vault`]: the encrypted password vault, its key slots and the password
 //!   generator.
 //! - [`p2p`]: two copies of the app talking over the local network: device
 //!   keys, the encrypted session and its pairing code.
+//! - [`shell_history`]: hosts worth adding, found in the user's shell
+//!   history with their consent; passwords in it are only counted.
 //! - [`sync`]: three-way merges that keep the user's own computers in step.
 //! - [`browser`]: what the browser extension may see of the vault: which
 //!   logins belong to a page, and the encrypted channel to the extension.
+//! - [`net`]: the Tools page's network checks: SSH ping, open ports, DNS
+//!   records and TLS certificates.
 //!
 //! Every public data type implements [`serde::Serialize`] with camelCase field
 //! names so it can be returned from Tauri commands unchanged. With the `ts`
@@ -44,18 +51,23 @@
 pub mod agent;
 pub mod audit;
 pub mod authorized_keys;
+pub mod authorized_line;
 pub mod browser;
 pub mod config;
+pub mod diagnose;
 mod error;
 pub mod fsutil;
 pub mod hosts_file;
 pub mod keys;
 pub mod known_hosts;
+pub mod net;
 pub mod p2p;
 pub mod paths;
 pub mod perms;
+pub mod shell_history;
 pub mod sync;
 mod text;
+pub mod tunnels;
 pub mod vault;
 
 pub use error::{Error, ErrorCode, ErrorInfo, Result};

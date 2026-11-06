@@ -152,8 +152,8 @@ export class Screen {
     }
     // Ctrl+V and Ctrl+Shift+V paste through the browser's paste event.
     if (key === 'v') return false;
-    // Ctrl+Shift+T opens the host picker (useAppEvents).
-    if (key === 't' && event.shiftKey) return false;
+    // Ctrl+Shift+T opens the host picker, Ctrl+Shift+K the command palette (useAppEvents).
+    if ((key === 't' || key === 'k') && event.shiftKey) return false;
     return true;
   }
 

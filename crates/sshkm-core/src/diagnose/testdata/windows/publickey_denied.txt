@@ -1,0 +1,20 @@
+OpenSSH_for_Windows_9.5p1, LibreSSL 3.8.2
+debug1: Reading configuration data C:\\Users\\alice/.ssh/config
+debug1: C:\\Users\\alice/.ssh/config line 1: Applying options for prod
+debug1: Connecting to 10.0.4.12 [10.0.4.12] port 22.
+debug1: Connection established.
+debug1: identity file C:\\Users\\alice/.ssh/id_ed25519 type 3
+debug1: identity file C:\\Users\\alice/.ssh/id_ed25519-cert type -1
+debug1: Local version string SSH-2.0-OpenSSH_for_Windows_9.5
+debug1: Remote protocol version 2.0, remote software version OpenSSH_9.6p1 Ubuntu-3ubuntu13.5
+debug1: Authenticating to 10.0.4.12:22 as 'alice'
+debug1: Server host key: ssh-ed25519 SHA256:hFwMDKX0zB4m9p6xU7Tq3wqVJ1t0eNfB1kP2xYd9a8c
+debug1: Host '10.0.4.12' is known and matches the ED25519 host key.
+debug1: Found key in C:\\Users\\alice/.ssh/known_hosts:2
+debug1: SSH2_MSG_SERVICE_ACCEPT received
+debug1: Authentications that can continue: publickey,password,keyboard-interactive
+debug1: Next authentication method: publickey
+debug1: Offering public key: C:\\Users\\alice/.ssh/id_ed25519 ED25519 SHA256:Lm4nB7vC2xZ9qW1eR5tY8uI0oP3aS6dF4gH2jK1lQ0w explicit
+debug1: Authentications that can continue: publickey,password,keyboard-interactive
+debug1: No more authentication methods to try.
+alice@10.0.4.12: Permission denied (publickey,password,keyboard-interactive).

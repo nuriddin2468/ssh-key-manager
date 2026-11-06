@@ -28,6 +28,7 @@ const world = vi.hoisted(() => {
       },
     },
     tabs: { sendMessage: async () => undefined, onRemoved: { addListener: () => undefined } },
+    permissions: { onAdded: { addListener: () => undefined } },
   };
   return state;
 });
@@ -120,6 +121,66 @@ describe('typed logins', () => {
     await send(typed, { ...bank, tab: { id: 7 } });
     await send(typed, { ...bank, tab: { id: 7 } });
     expect(checks()).toBe(5);
+  });
+
+  it('without a username take the one sent just before on the same site', async () => {
+    client.request.mockResolvedValue({ ok: true, value: { status: 'new' } });
+    client.sameSite.mockImplementation(async (_origin: string, page: string) =>
+      page.endsWith('.bank.example'),
+    );
+    const login = { origin: 'https://login.bank.example', tab: { id: 3 } };
+    await send({ kind: 'username', username: ' alice ' }, login);
+    await send(
+      { kind: 'capture', username: '', password: 'hunter2' },
+      {
+        origin: 'https://www.bank.example',
+        tab: { id: 3 },
+      },
+    );
+    expect(client.request).toHaveBeenLastCalledWith({
+      check: { origin: 'https://www.bank.example', username: 'alice', password: 'hunter2' },
+    });
+    // Not on another site, and not in another tab.
+    await send(
+      { kind: 'capture', username: '', password: 'hunter3' },
+      {
+        origin: 'https://evil.example',
+        tab: { id: 3 },
+      },
+    );
+    expect(client.request).toHaveBeenLastCalledWith({
+      check: { origin: 'https://evil.example', username: '', password: 'hunter3' },
+    });
+    await send(
+      { kind: 'capture', username: '', password: 'hunter4' },
+      {
+        origin: 'https://www.bank.example',
+        tab: { id: 4 },
+      },
+    );
+    expect(client.request).toHaveBeenLastCalledWith({
+      check: { origin: 'https://www.bank.example', username: '', password: 'hunter4' },
+    });
+  });
+
+  it('are saved with the username the user put in the banner', async () => {
+    world.session.pending = {
+      1: {
+        id: 'p1',
+        tabId: 1,
+        origin: 'https://bank.example',
+        username: '',
+        password: 'hunter2',
+        mode: 'save',
+        at: Date.now(),
+      },
+    };
+    client.request.mockResolvedValue({ ok: true, value: { status: 'new' } });
+    const reply = await send({ kind: 'save', id: 'p1', username: ' alice ' }, bank);
+    expect(reply).toEqual({ ok: true, mode: 'save' });
+    expect(client.request).toHaveBeenLastCalledWith({
+      save: { origin: 'https://bank.example', username: 'alice', password: 'hunter2' },
+    });
   });
 
   it('are offered in full only on pages of the site they were typed on', async () => {

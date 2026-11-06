@@ -9,6 +9,7 @@ import { AgentPage } from '@/features/agent/AgentPage';
 import { useKeysFromVault } from '@/features/agent/useKeysFromVault';
 import { AuditPage } from '@/features/audit/AuditPage';
 import { BrowserPairing } from '@/features/browser/BrowserPairing';
+import { EnvsPage } from '@/features/envs/EnvsPage';
 import { HostsPage } from '@/features/hosts/HostsPage';
 import { HostsFilePage } from '@/features/hostsFile/HostsFilePage';
 import { KeysPage } from '@/features/keys/KeysPage';
@@ -18,12 +19,14 @@ import { PairingDialog } from '@/features/nearby/PairingDialog';
 import { useNearbyEvents } from '@/features/nearby/queries';
 import { SyncDialog } from '@/features/nearby/SyncDialog';
 import { OverviewPage } from '@/features/overview/OverviewPage';
+import { CommandPalette } from '@/features/palette/CommandPalette';
 import { useVaultFileEvents } from '@/features/passwords/files';
 import { PasswordsPage } from '@/features/passwords/PasswordsPage';
 import { useVaultEvents } from '@/features/passwords/useVaultEvents';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { TerminalPage } from '@/features/terminal/TerminalPage';
 import { TerminalProvider } from '@/features/terminal/TerminalProvider';
+import { ToolsPage } from '@/features/tools/ToolsPage';
 import { platform } from '@/lib/platform';
 import { announceUpdate } from '@/lib/releaseNotes';
 import { useSettings } from '@/lib/settings';
@@ -99,15 +102,18 @@ function Shell() {
         ) : null}
         {route.page === 'audit' ? <AuditPage /> : null}
         {route.page === 'passwords' ? <PasswordsPage entryId={route.entryId} /> : null}
+        {route.page === 'envs' ? <EnvsPage envId={route.envId} /> : null}
         {route.page === 'terminal' ? (
           <TerminalPage connect={route.connect} nonce={route.nonce} />
         ) : null}
         {route.page === 'nearby' ? <NearbyPage /> : null}
+        {route.page === 'tools' ? <ToolsPage tool={route.tool} /> : null}
         {route.page === 'settings' ? <SettingsPage /> : null}
       </main>
       <BrowserPairing />
       <PairingDialog />
       <SyncDialog />
+      <CommandPalette />
       <ReleaseNotesDialog />
     </div>
   );

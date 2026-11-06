@@ -8,10 +8,12 @@ import { checkForUpdates } from '@/lib/updater';
 import { useDialogs } from './dialogs';
 import { type Page, type Route, useRouter } from './router';
 
-/** ⌘F / ⌘K: the page's search, or the terminal's find bar. */
+/** ⌘F: the page's search, or the terminal's find bar. */
 export const FIND_EVENT = 'sshkm:find';
+/** ⌘K: opens or closes the command palette (src/features/palette). */
+export const PALETTE_EVENT = 'sshkm:palette';
 // ⌘1–⌘9, in the order they were added so existing shortcuts never move.
-const PAGES: Page[] = [
+export const NAV_PAGES: Page[] = [
   'overview',
   'keys',
   'hosts',
@@ -46,9 +48,12 @@ export function useAppEvents(): void {
       else if (id === 'check') void invalidateAll();
       else if (id === 'check-updates') void checkForUpdates();
       else if (id === 'find') window.dispatchEvent(new Event(FIND_EVENT));
+      else if (id === 'palette') window.dispatchEvent(new Event(PALETTE_EVENT));
       // From the tray menu: a session to that host.
       else if (id.startsWith('connect:'))
         navigate({ page: 'terminal', connect: id.slice('connect:'.length), nonce: Date.now() });
+      // From the tray menu: one of the Tools page's tools.
+      else if (id.startsWith('tool:')) navigate({ page: 'tools', tool: id.slice('tool:'.length) });
     };
 
     const unlisten: Promise<() => void>[] = [];
@@ -64,7 +69,7 @@ export function useAppEvents(): void {
       if (platform === 'macos' && isTauri()) return;
       const digit = Number(event.key);
       let id: string | undefined;
-      if (digit >= 1 && digit <= PAGES.length) id = `nav-${PAGES[digit - 1]}`;
+      if (digit >= 1 && digit <= NAV_PAGES.length) id = `nav-${NAV_PAGES[digit - 1]}`;
       else if (event.key === ',') id = 'settings';
       else if (event.key.toLowerCase() === 'n') id = event.shiftKey ? 'add-host' : 'new-key';
       else if (event.key.toLowerCase() === 'o') id = 'import-key';
@@ -72,7 +77,9 @@ export function useAppEvents(): void {
       else if (event.key.toLowerCase() === 't' && (platform === 'macos' || event.shiftKey))
         id = 'new-session';
       else if (event.key.toLowerCase() === 'r') id = 'check';
-      else if (event.key.toLowerCase() === 'f' || event.key.toLowerCase() === 'k') id = 'find';
+      else if (event.key.toLowerCase() === 'f') id = 'find';
+      // Ctrl+K belongs to the shell in the terminal, which passes on Ctrl+Shift+K.
+      else if (event.key.toLowerCase() === 'k') id = 'palette';
       if (!id) return;
       event.preventDefault();
       command(id);
@@ -86,7 +93,7 @@ export function useAppEvents(): void {
   }, [navigate, dialogs, setPickerOpen]);
 }
 
-/** Focuses the page's search field on ⌘F / ⌘K. */
+/** Focuses the page's search field on ⌘F. */
 export function useFindShortcut(input: RefObject<HTMLInputElement | null>): void {
   useEffect(() => {
     const focus = () => {

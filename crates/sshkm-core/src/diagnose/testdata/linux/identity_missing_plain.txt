@@ -1,0 +1,2 @@
+no such identity: /home/alice/.ssh/id_ed25519_old: No such file or directory
+alice@git.example.com: Permission denied (publickey).

@@ -158,7 +158,7 @@ fn is_plain_number(cell: &str) -> bool {
 
 /// `target` with symbolic links resolved, refused if it is one of the
 /// vault's own files, a folder, or inside `ssh_dir`.
-fn checked_target(target: &Path, paths: &VaultPaths, ssh_dir: &Path) -> Result<PathBuf> {
+pub(super) fn checked_target(target: &Path, paths: &VaultPaths, ssh_dir: &Path) -> Result<PathBuf> {
     if !target.is_absolute() || target.file_name().is_none() {
         return Err(Error::invalid(format!(
             "not a file path: {}",
@@ -245,7 +245,7 @@ pub(super) fn resolve(path: &Path) -> PathBuf {
 /// for nobody but the user, SYSTEM and Administrators, as for a private key,
 /// before anything is written to it; a drive that can't keep one (FAT,
 /// exFAT, some network shares) is refused and nothing is left behind.
-fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(super) fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     #[cfg(windows)]
     {
         fsutil::atomic_write_private(path, bytes)

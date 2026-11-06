@@ -13,9 +13,11 @@ mod history;
 mod menu;
 pub mod nearby;
 mod process;
+pub mod quick;
 mod state;
 pub mod terminal;
 mod tray;
+pub mod tunnels;
 mod types;
 mod vault;
 mod vault_watcher;
@@ -44,10 +46,15 @@ pub fn run() {
 
     #[cfg(desktop)]
     let builder = builder
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            tray::show_window(app);
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if args.iter().any(|arg| arg == quick::ARG) {
+                quick::open(app);
+            } else {
+                tray::show_window(app);
+            }
         }))
-        .plugin(tauri_plugin_updater::Builder::new().build());
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(quick::plugin());
 
     builder
         .plugin(navigation_guard())
@@ -82,6 +89,8 @@ pub fn run() {
             commands::keys::regenerate_public,
             commands::keys::import_key,
             commands::keys::trash_key,
+            commands::key_rotation::check_key_login,
+            commands::key_rotation::vault_check_key_login,
             commands::agent::agent_view,
             commands::agent::agent_add,
             commands::agent::agent_remove,
@@ -95,8 +104,23 @@ pub fn run() {
             commands::config::test_connection,
             commands::config::connection_history,
             commands::config::clear_connection_history,
+            commands::diagnose::diagnose_probe,
+            commands::diagnose::diagnose_fix_permissions,
             commands::remote::install_public_key,
             commands::remote::server_keys,
+            commands::ssh_tools::tunnel_list,
+            commands::ssh_tools::tunnel_save,
+            commands::ssh_tools::tunnel_delete,
+            commands::ssh_tools::tunnel_set_on,
+            commands::ssh_tools::tunnel_answer,
+            commands::ssh_tools::tunnel_stop_all,
+            commands::ssh_tools::tunnel_export,
+            commands::ssh_tools::set_proxy_jump,
+            commands::ssh_tools::key_convert_inspect,
+            commands::ssh_tools::key_convert_import,
+            commands::ssh_tools::key_convert_save,
+            commands::ssh_tools::authorized_line,
+            commands::ssh_tools::install_authorized_line,
             commands::nearby::nearby_status,
             commands::nearby::nearby_set_name,
             commands::nearby::nearby_set_visible,
@@ -121,14 +145,29 @@ pub fn run() {
             commands::known_hosts::find_known_hosts,
             commands::known_hosts::remove_known_hosts,
             commands::known_hosts::check_host_key,
+            commands::shell_history::shell_history_status,
+            commands::shell_history::shell_history_set_enabled,
+            commands::shell_history::shell_history_scan,
+            commands::shell_history::shell_history_dismiss,
+            commands::shell_history::shell_history_forget_dismissed,
             commands::hosts_file::read_hosts_file,
             commands::hosts_file::lookup_host,
             commands::hosts_file::preview_hosts_changes,
             commands::hosts_file::apply_hosts_changes,
             commands::hosts_file::list_hosts_backups,
             commands::hosts_file::restore_hosts_backup,
+            commands::tools_net::tools_generate_secret,
+            commands::tools_net::tools_copy_secret,
+            commands::tools_net::tools_ssh_ping,
+            commands::tools_net::tools_port_check,
+            commands::tools_net::tools_dns_lookup,
+            commands::tools_net::tools_tls_check,
             commands::audit::run_audit,
             commands::audit::fix_permissions,
+            commands::audit_checks::fix_config,
+            commands::audit_checks::breach_status,
+            commands::audit_checks::breach_set_enabled,
+            commands::audit_checks::breach_check,
             commands::vault::vault_status,
             commands::vault::vault_create,
             commands::vault::vault_unlock,
@@ -171,6 +210,23 @@ pub fn run() {
             commands::vault_files::vault_move,
             commands::vault_files::vault_use_file,
             commands::vault_files::vault_use_default,
+            commands::envs::envs_list,
+            commands::envs::envs_get,
+            commands::envs::envs_create,
+            commands::envs::envs_update,
+            commands::envs::envs_set_var,
+            commands::envs::envs_remove_var,
+            commands::envs::envs_reveal,
+            commands::envs::envs_copy,
+            commands::envs::envs_trash,
+            commands::envs::envs_restore,
+            commands::envs::envs_delete,
+            commands::envs::envs_compare,
+            commands::envs::envs_import_pick,
+            commands::envs::envs_import,
+            commands::envs::envs_export,
+            commands::envs::envs_export_anyway,
+            commands::envs::envs_run,
             commands::terminal::terminal_open,
             commands::terminal::terminal_write,
             commands::terminal::terminal_resize,
@@ -184,6 +240,11 @@ pub fn run() {
             commands::browser::browser_revoke,
             commands::background::background_status,
             commands::background::background_set_enabled,
+            commands::quick::quick_status,
+            commands::quick::quick_set_shortcut,
+            commands::quick::quick_items,
+            commands::quick::quick_connect,
+            commands::quick::quick_close,
             commands::updates::update_check,
             commands::updates::update_install,
         ])
@@ -200,6 +261,12 @@ pub fn run() {
                 && let Some(bridge) = app.try_state::<Arc<browser::Bridge>>()
             {
                 bridge.stop();
+            }
+            // Tunnels run on with the window in the tray, not past the app.
+            if let RunEvent::Exit = event
+                && let Some(tunnels) = app.try_state::<tunnels::SharedTunnels>()
+            {
+                tunnels.stop_all();
             }
             // The Dock icon of an app whose window is hidden.
             #[cfg(target_os = "macos")]
@@ -256,7 +323,8 @@ fn lock_on_minimize(window: &tauri::Window, event: &WindowEvent) {
     }
 }
 
-/// Shared state, background watchers, the macOS menu and the tray icon.
+/// Shared state, background watchers, the macOS menu, the tray icon and the
+/// quick search shortcut.
 fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let paths = SshPaths::detect()?;
     let hosts_file = hosts_file::system_path();
@@ -281,10 +349,17 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     browser::unlock::watch(app.handle());
     app.manage(bridge);
     app.manage(nearby);
+    let tunnels = Arc::new(tunnels::Tunnels::new(&data_dir));
+    tunnels.attach(app.handle().clone());
+    app.manage(tunnels);
     #[cfg(target_os = "macos")]
     menu::install(app)?;
     let background = tray::Background::install(app.handle(), &data_dir);
     app.manage(background);
+    app.manage(quick::Quick::install(app.handle(), &data_dir));
+    if std::env::args().any(|arg| arg == quick::ARG) {
+        quick::open(app.handle());
+    }
     Ok(())
 }
 

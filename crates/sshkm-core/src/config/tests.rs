@@ -410,6 +410,67 @@ fn remove_identity_file() {
 }
 
 #[test]
+fn remove_and_append_options() {
+    let mut config = SshConfig::parse(
+        "ForwardAgent yes\n\
+         \n\
+         Host a\n\
+         \tforwardagent=yes # mine\n\
+         \tForwardAgent no\n\
+         \tUser me\n\
+         \n\
+         # last\n\
+         Match host b\n",
+    );
+    // Only lines with this keyword and value, in that section.
+    assert!(
+        config
+            .remove_option(Some(0), "ForwardAgent", "yes")
+            .unwrap()
+    );
+    assert!(
+        !config
+            .remove_option(Some(0), "ForwardAgent", "yes")
+            .unwrap()
+    );
+    assert!(!config.remove_option(Some(1), "ForwardAgent", "no").unwrap());
+    config
+        .append_option(0, &HostOption::new("IdentitiesOnly", "yes"))
+        .unwrap();
+    config
+        .append_option(1, &HostOption::new("IdentitiesOnly", "yes"))
+        .unwrap();
+    assert_eq!(
+        config.to_string(),
+        "ForwardAgent yes\n\
+         \n\
+         Host a\n\
+         \tForwardAgent no\n\
+         \tUser me\n\
+         \tIdentitiesOnly yes\n\
+         \n\
+         # last\n\
+         Match host b\n\tIdentitiesOnly yes\n"
+    );
+    assert!(config.remove_option(None, "forwardagent", "yes").unwrap());
+    assert!(config.to_string().starts_with('\n'));
+    assert_eq!(
+        config
+            .append_option(5, &HostOption::new("IdentitiesOnly", "yes"))
+            .unwrap_err()
+            .code(),
+        ErrorCode::NotFound
+    );
+    assert_eq!(
+        config
+            .append_option(0, &HostOption::new("Bad Key", "yes"))
+            .unwrap_err()
+            .code(),
+        ErrorCode::InvalidInput
+    );
+}
+
+#[test]
 fn identity_usage_expands_paths() {
     let home = tempfile::tempdir().unwrap();
     let ssh = home.path().join(".ssh");

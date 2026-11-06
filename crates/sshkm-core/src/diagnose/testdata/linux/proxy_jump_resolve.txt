@@ -1,0 +1,2 @@
+ssh: Could not resolve hostname bastion.corp.example: Temporary failure in name resolution
+Connection closed by UNKNOWN port 65535

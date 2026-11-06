@@ -16,7 +16,9 @@ import { Select } from '@/components/ui/Select';
 import { Switch } from '@/components/ui/Switch';
 import { Tile, type Tone } from '@/components/ui/Tile';
 import { LifetimeSelect } from '@/features/agent/LifetimeSelect';
+import { BreachSwitch } from '@/features/audit/BreachCheck';
 import { BrowserAutofillSection } from '@/features/browser/BrowserAutofillSection';
+import { QuickSearchSection } from '@/features/palette/QuickSearchSection';
 import { METHOD_NAME } from '@/features/passwords/device';
 import { VaultLocationSection } from '@/features/passwords/files';
 import { AUTO_LOCK_MINUTES, CLIPBOARD_SECONDS } from '@/features/passwords/model';
@@ -34,6 +36,7 @@ import { showReleaseNotes } from '@/lib/releaseNotes';
 import { type Settings, updateSettings, useSettings } from '@/lib/settings';
 import { checkForUpdates, showUpdateNotes, useUpdateState } from '@/lib/updater';
 import { BackgroundSection } from './BackgroundSection';
+import { ShellHistorySection } from './ShellHistorySection';
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -115,9 +118,11 @@ export function SettingsPage() {
             </Row>
           </Group>
 
+          <ShellHistorySection />
           <PasswordsGroup />
           <VaultLocationSection />
           <BackgroundSection />
+          <QuickSearchSection />
           <BrowserAutofillSection />
 
           <Group title={t('settings.folders')}>
@@ -283,6 +288,7 @@ function PasswordsGroup() {
           />
         </span>
       </div>
+      <BreachSwitch layout="settings" />
 
       {kind ? (
         <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">

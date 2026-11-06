@@ -15,10 +15,14 @@ real `~/.ssh`. Its modules:
 - `keys`: scans, inspects, generates, imports and re-encrypts keys.
   - OpenSSH format, plus unencrypted legacy PEM and PKCS#8.
   - Keys get the same SHA-256 fingerprints `ssh-keygen -l` prints.
+  - `convert` turns a key into another format (OpenSSH, PuTTY `.ppk` v2 and v3 in
+    `ppk`, PEM, PKCS#8), encrypted ones included, and shows its SHA-256 and MD5
+    fingerprints and randomart (`randomart`, as `ssh-keygen -lv` draws it).
 - `config`: a lossless model of `ssh_config`.
   - Unmodified files round-trip byte for byte.
   - Edits change only the lines they touch.
   - New hosts go before a trailing `Host *` block, because the first match wins.
+  - `jump` sets `ProxyJump` in several blocks at once, refusing circles.
 - `known_hosts`: a lossless model, including matching of hashed (`|1|`) entries.
 - `hosts_file`: a lossless, editable model of the system hosts file (`/etc/hosts`,
   `%SystemRoot%\System32\drivers\etc\hosts`).
@@ -40,7 +44,20 @@ real `~/.ssh`. Its modules:
     crate's only `unsafe` code).
 - `audit`: pure rules over the data above. Findings carry machine-readable kinds and
   parameters, so the UI can localise them.
-- `vault`: the password vault, two files side by side.
+  - `audit/config_risks.rs` reads `ssh_config` settings (host key checking, agent
+    forwarding, `IdentitiesOnly` against the number of agent keys) and applies the
+    fixes it offers, and only those (`apply_config_fix`).
+- `diagnose`: why an `ssh` run failed, read from what it printed (with `-v` for
+  connection tests): a cause, the jump host it happened at, and the lines that show
+  it. Its tests run over real OpenSSH output from macOS, Linux and Windows
+  (`diagnose/testdata`). `probe` checks that a TCP port answers.
+- `tunnels`: saved port forwards (local, remote, SOCKS), checked before anything
+  reaches `ssh`, and the `ssh -N` arguments of each.
+- `authorized_line`: one `authorized_keys` line with options (`restrict`, `from=`,
+  `command=`, `expiry-time=`, the `no-…` flags), read back as `sshd` reads it.
+- `vault`: the password vault, two files side by side, and the password generator
+  (with the Tools page's presets: database, shell and `.env` passwords, tokens, UUIDs,
+  framework keys, Wi-Fi passwords, passphrases and PINs).
   - `vault.kdbx` is a standard KeePass database (KDBX 4.1, Argon2id, ChaCha20). Its
     password is the _vault secret_: a random 256-bit recovery key, shown once, which
     also opens the file in KeePassXC.
@@ -51,9 +68,17 @@ real `~/.ssh`. Its modules:
     master password.
   - Entry summaries and details never contain a password or 2FA secret; those are
     read one at a time.
+  - `breach` checks passwords against Have I Been Pwned with k-anonymity: it makes
+    the SHA-1 range prefixes to ask for and matches the answers, without networking,
+    and keeps results under an HMAC of each password with a key held in memory.
   - Every change is written atomically after a backup. Before each operation the
     vault re-reads a database changed elsewhere (a synced folder); a write over such
     a change fails with `conflict` and is kept as a separate copy.
+  - `envs`: secret environments, one entry per environment in
+    `Environments/<project>`, a custom field per variable (protected when secret),
+    marked by the entry's custom data. It reads `.env` files, guesses secrets, writes
+    the export formats and compares two environments by value without returning
+    values.
 
 - `browser`: what the browser extension may see of the vault.
   - `origin` matches a login's address to a page: the same registrable domain (Public
@@ -64,6 +89,17 @@ real `~/.ssh`. Its modules:
   - `protocol` is the JSON. Paired browsers live in the vault's custom data. One
     question goes unsealed and needs no pairing: whether two origins are the same site
     (`sameSite`), so the extension can keep a save offer on the site it came from.
+
+- `net`: the Tools page's network checks, each blocking with a timeout; the tests run
+  against loopback listeners.
+  - `tcp` times connections (SSH ping) and tells open, closed and silent ports apart;
+    `banner` reads the SSH server's version line and flags OpenSSH before 8.0.
+  - `dns` is a small DNS client (UDP, TCP when the answer was cut) for A, AAAA,
+    CNAME, MX and TXT, asking the servers of `/etc/resolv.conf` or, on Windows, the
+    adapters' registry settings.
+  - `tls` makes a rustls handshake that records the chain and the system verifier's
+    verdict (`rustls-platform-verifier`) instead of enforcing it; `x509` reads the
+    names, issuer and dates out of each certificate.
 
 - `p2p`: two copies of the app talking over the local network, without the network
   itself, so the tests run over loopback sockets.
@@ -113,7 +149,8 @@ translates.
     and other accounts' prompts to its responder too, saying which they are; other yes/no
     questions still get "no".
 - **Terminal.** `src-tauri/src/terminal/`: one pseudo-terminal per session (`portable-pty`,
-  ConPTY on Windows) running `ssh -o ConnectTimeout=10 -- <alias>`.
+  ConPTY on Windows) running `ssh -o ConnectTimeout=10 -- <alias>`, or the user's own
+  shell with a secret environment's variables in its environment (`local.rs`).
   - Output goes to the UI over a `tauri::ipc::Channel` as raw bytes; state changes and
     prompts go over the same channel as JSON events. Input, resizing, answers and closing
     are commands (`terminal_*`).
@@ -173,16 +210,38 @@ translates.
   it after inactivity or sleep; each lock emits `vault-locked`. Copied passwords go
   from Rust to the clipboard, marked to stay out of clipboard history, and are
   cleared after a while.
+- **Breach check.** `commands/audit_checks.rs`, off until the user turns it on. The
+  vault audit starts it in the background for passwords without a result; it asks
+  `api.pwnedpasswords.com` for one range at a time (reqwest, the updater's TLS), and
+  its results are dropped on `vault-locked`. The page polls `breach_status`.
 - **Menu.** The macOS menu bar with keyboard shortcuts.
+- **Tunnels.** `src-tauri/src/tunnels/`: the Tools page's port forwards, defined in
+  `sshkm_core::tunnels` and kept in `tunnels.json` in the app's data folder.
+  - One supervisor thread per tunnel that is on runs `ssh -N` with the forward,
+    `ExitOnForwardFailure` and `ServerAliveInterval`, its prompts answered by the
+    terminal's prompt bridge through an interactive askpass session.
+  - `LogLevel=VERBOSE`'s `Authenticated to …` line tells when signing in is done;
+    `failure` reads why `ssh` stopped. With auto-reconnect a tunnel starts again
+    after a growing wait, unless what stopped it needs the user.
+  - Every change goes to the page as `tunnels-changed`, and to the tray menu. Tunnels
+    stop when the app quits.
+- **Quick search.** `src-tauri/src/quick/`: a system-wide shortcut
+  (`tauri-plugin-global-shortcut`, saved in `quick.json`) or the tray menu opens a
+  small window (`quick.html`, `src/quick/`) that connects to a host, copies through
+  `vault_copy` and unlocks the vault; its capability allows only that. Starting the
+  app with `--quick-search` opens it too, in the running app if there is one. Escape or a
+  copy gives the focus back to the app that was in front (`sshkm_os::focus` on
+  macOS).
 - **Tray.** `src-tauri/src/tray/`: with **Settings → Background** on, closing the window
   hides it and an icon in the tray (the menu bar on macOS) stays. Its menu shows the
-  vault's state and locks it, connects to recent hosts, names a Nearby conversation
-  waiting for the user, and quits. One worker rebuilds the menu when the vault, `~/.ssh`
-  or Nearby change, or the language does. On Linux the icon needs the AppIndicator
+  vault's state and locks it, counts the tunnels that are on and stops them, connects
+  to recent hosts, names a Nearby conversation waiting for the user, opens quick
+  search, and quits. One worker rebuilds the menu when the vault, `~/.ssh`, a tunnel or
+  Nearby change, or the language does. On Linux the icon needs the AppIndicator
   library, which `sshkm_os::tray` checks for first.
 - **Permissions.** `build.rs` lists every command, so each gets a Tauri permission and a
   window calls only what its capability names: the main window all, the unlock window
-  three.
+  three, the quick search window seven.
 
 ## UI
 
@@ -196,6 +255,11 @@ translates.
   its DOM renderer on Linux (WebKitGTK often renders on the CPU) and WebGL elsewhere.
 - i18next with English, Russian and Uzbek. A test keeps the translations' keys and
   placeholders in sync.
+- The command palette (⌘K / Ctrl+K, `src/features/palette/`) searches hosts, keys,
+  the unlocked vault's entries, pages, actions and tools: exact matches first, then
+  prefixes, then the rest, recently run items first within each. `>`, `@` and `#`
+  narrow it to actions, hosts or passwords. The quick search window uses the same
+  search and list.
 - `pnpm dev` in a browser uses `src/mocks/backend.ts` instead of Tauri, so the UI can be
   built and reviewed without the native shell. Production builds never include it.
 
@@ -211,8 +275,10 @@ translates.
   one picked and passes sent login forms to the background, which offers to save them in
   a banner on the next page (naming only the site, if that page is another site's). It
   reacts only to trusted events, opens the menu only on the user's own click, Tab or
-  Down Arrow, and passes on only logins whose password the user typed (or the extension
+  Down Arrow (and over a password already filled in, only on Down Arrow), and passes on
+  only logins whose password the user typed (or the extension
   filled) and that the user sent. A menu item or banner button counts only once the
   surface has been shown, uncovered and untouched by the page, for half a second.
-- The popup shows the connection state; the connect page pairs the browser. Keys stay in
-  IndexedDB as non-extractable WebCrypto keys.
+- The popup shows the connection state and can turn off the browser's own password
+  suggestions (the optional `privacy` permission); the connect page pairs the browser.
+  Keys stay in IndexedDB as non-extractable WebCrypto keys.

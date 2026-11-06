@@ -1,0 +1,6 @@
+{
+  "kind": "new",
+  "en": "When a connection fails, the app explains why — a key the server refused, a changed host key, a timeout, an unknown name — and offers the fix, such as installing the key or checking the port.",
+  "ru": "Если подключиться не удалось, приложение объясняет почему — сервер не принял ключ, сменился ключ хоста, истекло время, имя не найдено — и предлагает исправление, например установить ключ или проверить порт.",
+  "uz": "Ulanish muvaffaqiyatsiz boʻlsa, ilova sababini tushuntiradi — server kalitni qabul qilmadi, xost kaliti oʻzgardi, vaqt tugadi, nom topilmadi — va tuzatishni taklif qiladi, masalan kalitni oʻrnatish yoki portni tekshirish."
+}

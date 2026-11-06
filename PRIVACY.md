@@ -6,7 +6,8 @@ of their code.
 
 **In short:** neither the app nor the extension sends your data to us or to anyone
 else. There are no accounts, no servers of ours, no analytics and no ads. The
-extension talks only to the app on your own computer.
+extension talks only to the app on your own computer. (The app's optional breach
+check sends 5 characters of each password's hash to Have I Been Pwned; see below.)
 
 ## The browser extension
 
@@ -61,6 +62,9 @@ Nothing is sent over the internet, and nothing is sent to us or to any third par
   written to disk. They're offered for three minutes at most. They're removed when you
   answer the save banner or close the tab, at the next page load after three minutes,
   and when the browser quits.
+- **A username from a two-step sign-in:** when a site asks for the username on one
+  page and the password on the next, the username waits in the same session storage
+  for five minutes, for that tab only, to go with the password.
 - **Recent site lookups:** the titles and usernames of a site's logins are reused from
   memory for up to ten seconds, so the menu opens quickly. They're never written to
   disk.
@@ -73,6 +77,9 @@ keeps encrypted.
 - No analytics, telemetry, crash reporting or ads.
 - No remote code: everything it runs ships inside the extension.
 - No network requests of its own.
+- No change to your browser's settings, except its own password and form suggestions
+  when you turn them off in the extension's popup. The browser asks you first, and
+  turning them on again restores your own choice.
 - No selling, sharing or transfer of your data, and no use of it for anything but
   filling and saving your logins.
 
@@ -95,6 +102,12 @@ The app keeps your data on your computer:
 - Your SSH files stay where they are.
 - The password vault is an encrypted KeePass file, in the app's data folder or a
   folder you choose.
+- Tunnels you save are kept in `tunnels.json` in the app's data folder: their hosts,
+  ports, addresses and names, never a password.
+- Secret environments (the variables of your `.env` files) are kept in the same
+  encrypted vault. A `.env` file you import is only read; a file you export is
+  written where you choose, in plain text, and a shell you run with an environment
+  gets its values in memory only.
 
 It goes online only:
 
@@ -102,7 +115,34 @@ It goes online only:
   **Settings → Updates**;
 - when you ask it to reach a server: checking a host key, testing a connection or
   opening a terminal session;
-- for a DNS lookup when you ask where a name leads.
+- when you rotate a key: it signs in to the hosts you chose to add the new key, check
+  that it works and, if you ask, remove the old one;
+- for a DNS lookup when you ask where a name leads;
+- when a connection failed and you click **Check port**: it opens one connection to
+  the server's port and closes it at once, without sending anything;
+- when you run a network check on the Tools page: SSH ping, the port check and the TLS
+  check connect to the host you name, and the DNS lookup asks your computer's DNS
+  servers about the name you type. Checking a certificate may make your system ask its
+  issuer whether it was revoked. Nothing about the checks is stored;
+- for each tunnel you turn on, for as long as it is on: it stays connected to that
+  server, and the port it forwards carries what you and your apps send through it;
+- if you turn on the audit's breach check (it is off until you do), to look up your
+  saved passwords in [Have I Been Pwned](https://haveibeenpwned.com/Passwords). For
+  each password it sends only the first 5 characters of the password's SHA-1 hash to
+  `api.pwnedpasswords.com`, gets back the hashes known to start with them, and compares
+  the rest on your computer. Your passwords, and their full hashes, never leave it. The
+  service sees your IP address and those 5 characters. Have I Been Pwned's own
+  [privacy policy](https://haveibeenpwned.com/Privacy) applies to it. The app keeps the
+  results in memory until the vault locks, and stores only whether the check is on, in
+  `breaches.json` in its data folder.
+
+When a connection fails, the app explains why from what `ssh` printed. It keeps
+that explanation only in memory, next to the test's result, and never stores or
+sends it.
+
+While you rotate a key, the app remembers on this computer which hosts you chose and
+how far each got, so you can finish later: the names of the keys and hosts, their
+fingerprints and the old public key. It forgets them once the rotation is done.
 
 It talks to the local network only for **Nearby**, and only when you ask:
 
@@ -112,8 +152,9 @@ It talks to the local network only for **Nearby**, and only when you ask:
   network for ten minutes and accepts connections from other copies of the app.
 - When you pair two computers, they talk directly to each other over an encrypted
   connection. Nothing goes through a server, ours or anyone else's.
-- When you send a password, a host, a group of your hosts file or your public key, it
-  goes only to the computer you pick, and only after its user accepts it. A hosts file
+- When you send a password, a secret environment, a host, a group of your hosts file
+  or your public key, it goes only to the computer you pick, and only after its user
+  accepts it. A hosts file
   group goes with its addresses and names, without comments; a public key goes
   without its private key.
 - When you add one of your own computers, the one that has your vault gives it the
@@ -133,6 +174,23 @@ credential store. A public key you receive is saved in `~/.ssh`, and its fingerp
 in `nearby.json` in the app's data folder, so the app knows the key is someone
 else's. For each of your other computers, the app keeps what it needs to tell what
 changed since the last sync: hashes, never the hosts themselves, in the same folder.
+
+If you say yes to **Find hosts in your shell history?** on the Hosts page, the app reads
+your zsh, bash, fish and PowerShell history on this computer when you open Hosts, to
+suggest servers you connect to. Only the servers (user, address, port and a few
+connection options) are taken from it; your commands, and passwords typed into them,
+are never shown, kept or sent anywhere. The app keeps your answer and the suggestions
+you dismissed, as hashes rather than the servers, in `shell-history.json` in its data
+folder. You can turn this off in **Settings → Shell history**.
+
+**Quick search** listens for one key combination anywhere on your computer (⇧⌘Space
+on macOS, Ctrl+Shift+Space elsewhere, unless you change it or turn it off in
+**Settings → Quick search**): the system tells the app only when that combination is
+pressed, never about other keys. The command palette and quick search remember the
+last few things you ran from them (a host's name, a key's or an entry's internal
+identifier, an action) in the app's local storage, so they come first next time;
+never a password or anything you typed. Your choice of combination is kept in
+`quick.json` in the app's data folder.
 
 For each browser you connect, the app records in your vault the browser's name, your
 computer's name and the date you connected. You can disconnect a browser in
@@ -158,4 +216,4 @@ Questions about privacy: [open an issue](https://github.com/nuriddin2468/ssh-key
 Security problems: report them privately through
 [GitHub security advisories](https://github.com/nuriddin2468/ssh-key-manager/security/advisories/new).
 
-Last updated: 4 November 2026.
+Last updated: 6 November 2026.

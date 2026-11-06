@@ -3,6 +3,12 @@
 // user picks (with a real click or key press), and passes a sent login form
 // to the background so the top frame can offer to save it.
 //
+// The menu stays out of the way of a login already there: it doesn't open by
+// itself on a form whose password field holds something (typed, or filled by
+// the page or the browser), only on Down Arrow. Logins for the username the
+// user typed come first. The username sent with the first step of a two-step
+// login goes to the background too, to name the password sent next.
+//
 // Nothing is filled on its own: a page can't make the extension fill a
 // field without the user choosing a login in the menu. Events a page script
 // makes up (`isTrusted` false) open nothing, move nothing into the menu and
@@ -17,6 +23,7 @@
 
 import {
   fill,
+  holdsValue,
   isPassword,
   isVisible,
   type LoginFields,
@@ -24,7 +31,10 @@ import {
   onScreen,
   scopeOf,
   typedIn,
+  usernameStep,
+  usernameStepIn,
 } from './content/fields';
+import { forUsername } from './content/logins';
 import { LoginMenu, SaveBanner, type SaveOffer } from './content/surfaces';
 import { Typing } from './content/typing';
 import type { Problem } from './shared/client';
@@ -68,6 +78,8 @@ function start(): void {
   /** Bumped when the user types: a menu asked for before then stays closed. */
   let keystrokes = 0;
   let lastCapture = { at: 0, key: '' };
+  /** The username of a two-step login's first step last passed on. */
+  let lastUsername = '';
   const typing = new Typing();
   /** When the user last pressed a key or a pointer button, outside the menu and the banner. */
   let pressedAt = Number.NEGATIVE_INFINITY;
@@ -103,8 +115,8 @@ function start(): void {
   });
 
   const banner = new SaveBanner({
-    onSave: async (offer: SaveOffer) => {
-      const reply = await send<SaveReply>({ kind: 'save', id: offer.id });
+    onSave: async (offer: SaveOffer, username?: string) => {
+      const reply = await send<SaveReply>({ kind: 'save', id: offer.id, username });
       if (reply?.ok)
         return { ok: true, message: reply.mode === 'update' ? t('updated') : t('saved') };
       if (reply?.problem === 'locked') {
@@ -116,22 +128,29 @@ function start(): void {
     onDismiss: (offer) => void send({ kind: 'dismissSave', id: offer.id }),
   });
 
-  async function offer(input: HTMLInputElement): Promise<void> {
+  /**
+   * Shows the logins for `input`'s form. Unless the user asked with Down
+   * Arrow (`asked`), not over a password already there: the user, the page
+   * or the browser filled it.
+   */
+  async function offer(input: HTMLInputElement, asked = false): Promise<void> {
     const fields = loginFieldsFor(input);
-    if (!fields) {
+    if (!fields || (!asked && holdsValue(fields.password))) {
       menu.hide();
       return;
     }
     active = { input, fields };
-    const asked = keystrokes;
+    const typedBefore = keystrokes;
     const reply = await send<LoginsReply>({ kind: 'logins' });
-    if (document.activeElement !== input || active?.input !== input || keystrokes !== asked) return;
+    if (document.activeElement !== input || active?.input !== input || keystrokes !== typedBefore)
+      return;
     // A field the page focused without scrolling to it is out of sight.
     if (!isVisible(input) || !onScreen(input)) {
       menu.hide();
       return;
     }
-    if (reply?.state === 'ready' && reply.logins.length > 0) menu.showLogins(input, reply.logins);
+    if (reply?.state === 'ready' && reply.logins.length > 0)
+      menu.showLogins(input, forUsername(reply.logins, fields.username?.value ?? ''));
     else if (reply?.state === 'locked' && fields.password) menu.showLocked(input);
     else menu.hide();
   }
@@ -182,6 +201,13 @@ function start(): void {
     if (key === lastCapture.key && Date.now() - lastCapture.at < 2000) return;
     lastCapture = { at: Date.now(), key };
     void send({ kind: 'capture', ...typed });
+  }
+
+  /** Passes on the username of a two-step login's first step, sent by the user. */
+  function captureUsername(username: string): void {
+    if (!username || username === lastUsername) return;
+    lastUsername = username;
+    void send({ kind: 'username', username });
   }
 
   async function offerSave(): Promise<void> {
@@ -263,10 +289,14 @@ function start(): void {
         !event.metaKey &&
         target === document.activeElement
       ) {
-        // The keyboard's way to the menu of a field the page focused.
-        void offer(target);
+        // The keyboard's way to the menu of a field the page focused, or of
+        // a login already filled in.
+        void offer(target, true);
       }
-      if (event.key === 'Enter' && isPassword(target)) capture(scopeOf(target));
+      if (event.key === 'Enter') {
+        if (isPassword(target)) capture(scopeOf(target));
+        else captureUsername(usernameStep(target));
+      }
     },
     true,
   );
@@ -282,12 +312,18 @@ function start(): void {
     );
   }
 
+  /** The last field outside a form the user typed into; its "Next" button may be beside it. */
+  let typedUsername: HTMLInputElement | null = null;
+
   document.addEventListener(
     'input',
     (event) => {
       if (!event.isTrusted) return;
       typing.observe(event);
       keystrokes += 1;
+      const target = event.target;
+      if (target instanceof HTMLInputElement && !target.form && !isPassword(target))
+        typedUsername = target;
       if (event.target === active?.input) menu.hide();
     },
     true,
@@ -299,7 +335,10 @@ function start(): void {
       // `requestSubmit()` sends a trusted `submit` too: count one only right
       // after the user's own key press or click.
       if (!event.isTrusted || !(event.target instanceof HTMLFormElement)) return;
-      if (performance.now() - pressedAt < USER_WITHIN) capture(event.target);
+      if (performance.now() - pressedAt < USER_WITHIN) {
+        capture(event.target);
+        captureUsername(usernameStepIn(event.target));
+      }
     },
     true,
   );
@@ -317,6 +356,9 @@ function start(): void {
           : null;
       const password = (scope ?? document).querySelector<HTMLInputElement>('input[type=password]');
       if (password?.value) capture(scope ?? scopeOf(password));
+      else if (scope) captureUsername(usernameStepIn(scope));
+      else if (typedUsername?.isConnected && near(typedUsername, button))
+        captureUsername(usernameStep(typedUsername));
     },
     true,
   );
@@ -328,6 +370,16 @@ function start(): void {
   });
 
   void offerSave();
+}
+
+/** Whether `button` is close to `field`: within the few boxes around it. */
+function near(field: HTMLInputElement, button: Element): boolean {
+  let node: HTMLElement | null = field.parentElement;
+  for (let depth = 0; node && depth < 4; depth += 1) {
+    if (node.contains(button)) return true;
+    node = node.parentElement;
+  }
+  return false;
 }
 
 /**

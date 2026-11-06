@@ -24,3 +24,15 @@ pub(crate) const OPENSSH_ED25519_ENCRYPTED: &str =
 pub(crate) const OPENSSH_ED25519_ENCRYPTED_PUB: &str =
     include_str!("testdata/openssh_ed25519_encrypted.pub");
 pub(crate) const KEYGEN_PASSPHRASE: &str = "correct horse";
+
+// PuTTY keys made by `puttygen` for the `ssh-key` crate's tests (see
+// `testdata/ppk/README.md`); `_ENC` ones have the passphrase `123`.
+pub(crate) const PPK_RSA_3072: &str = include_str!("testdata/ppk/id_rsa_3072.ppk");
+pub(crate) const PPK_RSA_3072_ENC: &str = include_str!("testdata/ppk/id_rsa_3072_enc.ppk");
+pub(crate) const PPK2_RSA_3072: &str = include_str!("testdata/ppk/id_rsa_3072.ppk2");
+pub(crate) const PPK2_RSA_3072_ENC: &str = include_str!("testdata/ppk/id_rsa_3072_enc.ppk2");
+pub(crate) const PPK_RSA_3072_OPENSSH: &str = include_str!("testdata/ppk/id_rsa_3072");
+pub(crate) const PPK_ECDSA_P256: &str = include_str!("testdata/ppk/id_ecdsa_p256.ppk");
+pub(crate) const PPK_ECDSA_P256_ENC: &str = include_str!("testdata/ppk/id_ecdsa_p256_enc.ppk");
+pub(crate) const PPK_ECDSA_P256_OPENSSH: &str = include_str!("testdata/ppk/id_ecdsa_p256");
+pub(crate) const PPK_DSA_1024: &str = include_str!("testdata/ppk/id_dsa_1024.ppk");

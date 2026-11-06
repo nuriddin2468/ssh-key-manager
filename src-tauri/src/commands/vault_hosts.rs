@@ -10,10 +10,8 @@ use sshkm_core::vault::{EntryKind, EntrySummary, SecretField, Vault};
 use sshkm_core::{ExposeSecret, SecretString};
 use tauri::{AppHandle, State};
 
-use super::config::{connection_test, with_typed_passphrase};
-use super::remote::{
-    check_alias, combined, install_key, read_server_keys, run_ssh, with_timeout_note,
-};
+use super::config::{checked, connection_test, with_typed_passphrase};
+use super::remote::{check_alias, install_key, read_server_keys, run_ssh};
 use super::{Shared, blocking};
 use crate::askpass::Secrets;
 use crate::error::AppResult;
@@ -99,18 +97,14 @@ pub async fn vault_test_key_login(
                 "PasswordAuthentication=no",
                 "-o",
                 "KbdInteractiveAuthentication=no",
+                super::diagnose::VERBOSE,
             ],
             &["exit"],
             passphrases,
             None,
             Duration::from_secs(30),
         )?;
-        let text = combined(&run.output);
-        Ok(ConnectionTest {
-            ok: run.output.success,
-            output: with_timeout_note(text, &run.output),
-            prompts: run.prompts,
-        })
+        Ok(checked(&alias, &run, run.output.success))
     })
     .await
 }
@@ -120,7 +114,7 @@ pub async fn vault_test_key_login(
 /// never gets a passphrase: [`run_ssh`] switches keyboard-interactive off
 /// unless a 2FA code is saved, and its session refuses a server's prompt
 /// that asks for one.
-fn saved_secrets(state: &AppState, app: &AppHandle, alias: &str) -> AppResult<Secrets> {
+pub(crate) fn saved_secrets(state: &AppState, app: &AppHandle, alias: &str) -> AppResult<Secrets> {
     let scanned = keys::scan(&state.paths.dir)
         .map(|scan| scan.keys)
         .unwrap_or_default();

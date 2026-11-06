@@ -12,6 +12,24 @@ declare namespace WebExt {
     frameId?: number;
   }
 
+  /** A browser setting under `privacy` (Chrome's `ChromeSetting`). */
+  interface BrowserSetting {
+    get(details: object): Promise<{
+      value: unknown;
+      levelOfControl:
+        | 'not_controllable'
+        | 'controlled_by_other_extensions'
+        | 'controllable_by_this_extension'
+        | 'controlled_by_this_extension';
+    }>;
+    set(details: { value: unknown }): Promise<unknown>;
+    clear(details: object): Promise<unknown>;
+  }
+
+  interface Permissions {
+    permissions?: string[];
+  }
+
   interface StorageArea {
     get(keys?: string | string[] | null): Promise<Record<string, unknown>>;
     set(items: Record<string, unknown>): Promise<void>;
@@ -35,6 +53,19 @@ declare namespace WebExt {
       };
     };
     storage: { session: StorageArea; local: StorageArea };
+    permissions: {
+      contains(permissions: Permissions): Promise<boolean>;
+      request(permissions: Permissions): Promise<boolean>;
+      onAdded: { addListener(listener: (permissions: Permissions) => void): void };
+    };
+    /** Only with the optional `privacy` permission. */
+    privacy?: {
+      services: {
+        passwordSavingEnabled: BrowserSetting;
+        /** Chromium only. */
+        autofillAddressEnabled?: BrowserSetting;
+      };
+    };
     tabs: {
       create(properties: { url: string }): Promise<unknown>;
       sendMessage(

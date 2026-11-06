@@ -13,6 +13,7 @@
 //! `ProxyCommand`, `LocalCommand`, `RemoteCommand` and `KnownHostsCommand`,
 //! which take the rest of the line literally.
 
+mod jump;
 mod lexer;
 mod risky;
 
@@ -24,7 +25,9 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use self::lexer::{Directive, LineKind, lex, render_value, split_args};
+pub(crate) use self::lexer::split_args;
+use self::lexer::{Directive, LineKind, lex, render_value};
+pub(crate) use self::risky::matches_pattern;
 pub use self::risky::{Risk, RiskyDirective};
 use crate::{
     Error, Result, fsutil,
@@ -363,6 +366,14 @@ impl SshConfig {
     /// block (`host_id`) or from the global section (`None`). Returns whether
     /// anything was removed.
     pub fn remove_identity_file(&mut self, host_id: Option<u32>, value: &str) -> Result<bool> {
+        self.remove_option(host_id, "IdentityFile", value)
+    }
+
+    /// Removes the lines of keyword `key` (in any case) whose value equals
+    /// `value` (as [`HostOption::value`] shows it) from a block (`host_id`)
+    /// or from the global section (`None`). Returns whether anything was
+    /// removed.
+    pub fn remove_option(&mut self, host_id: Option<u32>, key: &str, value: &str) -> Result<bool> {
         let blocks = self.blocks();
         let (start, end) = match host_id {
             Some(id) => {
@@ -373,9 +384,7 @@ impl SshConfig {
         };
         let doomed: HashSet<usize> = self
             .directives(start, end)
-            .filter(|(_, d)| {
-                d.key.eq_ignore_ascii_case("identityfile") && d.logical_value() == value
-            })
+            .filter(|(_, d)| d.key.eq_ignore_ascii_case(key) && d.logical_value() == value)
             .map(|(i, _)| i)
             .collect();
         if doomed.is_empty() {
@@ -383,6 +392,25 @@ impl SshConfig {
         }
         self.rebuild(&doomed, &[], None, &[]);
         Ok(true)
+    }
+
+    /// Adds `option` to a block, after its last option and indented like
+    /// its options. Works on `Match` blocks too.
+    pub fn append_option(&mut self, host_id: u32, option: &HostOption) -> Result<()> {
+        validate_option(option)?;
+        let blocks = self.blocks();
+        let block = blocks[block_index(host_id, &blocks)?];
+        let options: Vec<(usize, Directive<'_>)> =
+            self.directives(block.header + 1, block.end).collect();
+        let indent = options
+            .first()
+            .map(|(_, d)| d.indent.trim_start_matches('\u{feff}').to_owned())
+            .filter(|i| !i.is_empty())
+            .unwrap_or_else(|| self.default_indent());
+        let anchor = options.last().map_or(block.header, |(i, _)| *i);
+        let line = option_line(&indent, option);
+        self.rebuild(&HashSet::new(), &[], Some(anchor), &[line]);
+        Ok(())
     }
 
     /// Where each `IdentityFile` points, with `~` and tokens expanded relative

@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use sshkm_core::agent::AgentClient;
 use sshkm_core::audit::{self, AuditReport, FixAction};
 use sshkm_core::perms;
 use tauri::State;
@@ -11,7 +12,8 @@ use crate::state::AppState;
 use crate::types::PermissionFix;
 
 /// Runs the audit. Public keys received through Nearby are other people's,
-/// so they aren't reported for lacking a private key.
+/// so they aren't reported for lacking a private key. The number of keys in
+/// ssh-agent goes in too, for the `IdentitiesOnly` rule.
 #[tauri::command]
 pub async fn run_audit(
     state: State<'_, Shared>,
@@ -19,10 +21,16 @@ pub async fn run_audit(
 ) -> AppResult<AuditReport> {
     let others = nearby.received_keys();
     blocking(&state, move |state| {
-        Ok(audit::run_for_paths(
+        // Without an agent, the rule about how many keys it offers is skipped.
+        let agent_keys = AgentClient::from_env()
+            .and_then(|agent| agent.list())
+            .ok()
+            .map(|keys| keys.len());
+        Ok(audit::run_for_paths_with_agent(
             &state.paths,
             &state.hosts_file,
             &others,
+            agent_keys,
         )?)
     })
     .await

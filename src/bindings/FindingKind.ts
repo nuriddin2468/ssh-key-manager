@@ -97,4 +97,48 @@ line: number,
 /**
  * When it expired (RFC 3339).
  */
-expires: string, };
+expires: string, } | { "kind": "strictHostKeyCheckingOff", 
+/**
+ * The value as written.
+ */
+value: string, 
+/**
+ * Patterns of the `Host` block (empty for `Match` and the options
+ * before the first block).
+ */
+patterns: Array<string>, 
+/**
+ * The block also has `UserKnownHostsFile /dev/null`, so no key is
+ * ever known and every server is accepted.
+ */
+knownHostsDiscarded: boolean, } | { "kind": "knownHostsDiscarded", 
+/**
+ * The value as written.
+ */
+value: string, 
+/**
+ * Patterns of the `Host` block.
+ */
+patterns: Array<string>, } | { "kind": "agentForwarding", 
+/**
+ * The value as written (`yes`, or a socket).
+ */
+value: string, 
+/**
+ * Patterns of the `Host` block.
+ */
+patterns: Array<string>, 
+/**
+ * It applies to many hosts: a wildcard or `Match` block, or the
+ * options before the first block.
+ */
+wildcard: boolean, } | { "kind": "tooManyAgentKeys", 
+/**
+ * Keys in the agent.
+ */
+agentKeys: number, 
+/**
+ * Patterns of the `Host` blocks without `IdentitiesOnly yes`, each
+ * joined with spaces.
+ */
+hosts: Array<string>, };

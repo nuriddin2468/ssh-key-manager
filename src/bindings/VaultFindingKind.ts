@@ -31,4 +31,8 @@ host: string, } | { "kind": "passwordLogin",
 /**
  * The entry's alias.
  */
-host: string, };
+host: string, } | { "kind": "breachedPassword", 
+/**
+ * How many times it was seen there.
+ */
+count: number, };

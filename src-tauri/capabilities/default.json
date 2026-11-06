@@ -4,6 +4,7 @@
   "description": "Permissions of the main window.",
   "windows": ["main"],
   "permissions": [
+    "main-window",
     "core:default",
     "core:window:allow-start-dragging",
     "core:window:allow-toggle-maximize",

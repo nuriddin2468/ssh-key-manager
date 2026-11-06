@@ -137,6 +137,10 @@ translates.
     It reaches the app through a small `Env` trait, so its tests run against a real
     vault without Tauri, and `examples/autofill_bridge.rs` serves a throwaway vault
     to the extension's end-to-end test.
+  - When the extension asks to unlock the vault, the app asks with Touch ID or
+    Windows Hello, else in a small window of its own (`browser/unlock.rs`,
+    `unlock.html`) whose capability allows only the unlock commands; the main
+    window stays hidden.
   - A login fills a page only after the user allowed it, in Touch ID, Windows Hello
     or a native dialog (`browser/prompt.rs`); the yes lasts for the vault runtime's
     session, which ends when the vault is locked by hand, the screen locks or the
@@ -170,6 +174,15 @@ translates.
   from Rust to the clipboard, marked to stay out of clipboard history, and are
   cleared after a while.
 - **Menu.** The macOS menu bar with keyboard shortcuts.
+- **Tray.** `src-tauri/src/tray/`: with **Settings → Background** on, closing the window
+  hides it and an icon in the tray (the menu bar on macOS) stays. Its menu shows the
+  vault's state and locks it, connects to recent hosts, names a Nearby conversation
+  waiting for the user, and quits. One worker rebuilds the menu when the vault, `~/.ssh`
+  or Nearby change, or the language does. On Linux the icon needs the AppIndicator
+  library, which `sshkm_os::tray` checks for first.
+- **Permissions.** `build.rs` lists every command, so each gets a Tauri permission and a
+  window calls only what its capability names: the main window all, the unlock window
+  three.
 
 ## UI
 

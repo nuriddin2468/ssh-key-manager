@@ -1,6 +1,7 @@
 // Talks to SSH Key Manager through its native messaging host
 // (src-tauri/src/browser/host.rs). Everything but `hello`, `show`,
-// `sameSite`, `launch` and pairing is sealed with the keys from pairing.
+// `unlock`, `sameSite`, `launch` and pairing is sealed with the keys from
+// pairing.
 //
 // The keys change once a day (`Action::Rekey` in protocol.rs). The app
 // keeps the old ones, retired, and takes a request sealed with one after
@@ -50,7 +51,7 @@ export type Problem =
   | 'failed'
   /** The app saw a copy of this browser's old keys in use, and forgot the pairing. */
   | 'revoked'
-  /** Too many logins checked, or fills asked about, in the last minute. */
+  /** Too many logins checked, fills asked about or unlocks asked for, in the last minute. */
   | 'tooMany'
   /** From the host: the app isn't running. */
   | 'notRunning'
@@ -116,6 +117,17 @@ export async function hello(): Promise<Result<VaultLock>> {
 /** Brings the app forward on the vault so the user can unlock it. */
 export async function showApp(): Promise<void> {
   await native({ type: 'show' });
+}
+
+/**
+ * Asks the app to unlock the vault without its main window: with Touch ID or
+ * Windows Hello, or in a small window of the app's own. The master password
+ * is typed there and never comes here. An app from before that, which doesn't
+ * know the message, comes forward instead. Answers at once.
+ */
+export async function unlockVault(): Promise<void> {
+  const reply = await native({ type: 'unlock' });
+  if (reply.type === 'error' && reply.code === 'invalid') await showApp();
 }
 
 /**

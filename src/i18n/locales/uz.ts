@@ -1593,7 +1593,7 @@ const uz = {
     clearNever: 'Tozalamaslik',
     lockOnSleep: 'Kompyuter uyqu rejimiga oʻtganda qulflash',
     lockOnScreenLock: 'Ekran qulflanganda qulflash',
-    lockOnMinimize: 'Oyna yigʻilganda qulflash',
+    lockOnMinimize: 'Oyna yigʻilganda yoki yopilganda qulflash',
     unlockKeys: 'Ombor ochilganda saqlangan SSH kalitlarni faollashtirish',
     unlockKeysHint: 'Parol iboralari omborda boʻlgan kalitlar ssh-agentga qoʻshiladi.',
     changeMaster: 'Asosiy parol',
@@ -1618,7 +1618,7 @@ const uz = {
     lockedIdle: 'Faoliyat boʻlmagani uchun ombor qulflandi',
     lockedSleep: 'Kompyuter uxlaganda ombor qulflandi',
     lockedScreen: 'Ombor ekran bilan birga qulflandi',
-    lockedMinimize: 'Oyna yigʻilganda ombor qulflandi',
+    lockedMinimize: 'Oyna yigʻilganda yoki yopilganda ombor qulflandi',
     lockedChanged: 'Ombor qulflandi',
     lockedChangedHint: 'U boshqa kompyuterda oʻzgartirildi. Davom etish uchun uni qayta oching.',
     conflictCopy: 'Sizning versiyangiz: {{path}}',
@@ -1977,8 +1977,23 @@ const uz = {
       opened: 'Hozir {{file}} ishlatilmoqda. Davom etish uchun uni oching.',
     },
   },
+  background: {
+    title: 'Fon rejimi',
+    enable: 'Oyna yopilganda ham ishlash',
+    hintMac:
+      'Brauzerda avtomatik toʻldirish, qurilmalaringiz va terminal seanslari ishlashda davom etadi. Ilovani menyu satridagi belgisi orqali ochish yoki undan chiqish mumkin.',
+    hintWindows:
+      'Brauzerda avtomatik toʻldirish, qurilmalaringiz va terminal seanslari ishlashda davom etadi. Ilovani bildirishnomalar sohasidagi belgisi orqali ochish yoki undan chiqish mumkin.',
+    hintLinux:
+      'Brauzerda avtomatik toʻldirish, qurilmalaringiz va terminal seanslari ishlashda davom etadi. Ilovani traydagi belgisi orqali ochish yoki undan chiqish mumkin. Ish stolida tray belgilari koʻrinmasa, ilovani ilovalar menyusidan qayta oching — oyna qaytadi.',
+    unavailable:
+      'Ish stolida ilova belgisi uchun tray yoʻq. libayatana-appindicator3-1 paketini oʻrnating va ilovani qayta ishga tushiring.',
+  },
   browser: {
     title: 'Brauzerda avtomatik toʻldirish',
+    unlockFor: 'Brauzerda avtomatik toʻldirish uchun.',
+    unlockInApp:
+      'Bu ombor faqat tiklash kaliti bilan ochiladi. Uni ochish uchun SSH Key Manager’ni oching.',
     enable: 'Parollarni brauzerda toʻldirish',
     enableHint:
       'Chrome, Edge va Firefox uchun SSH Key Manager kengaytmasi ombordagi loginlarni toʻldiradi va yangilarini saqlashni taklif qiladi.',

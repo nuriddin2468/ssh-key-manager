@@ -1570,7 +1570,7 @@ const en = {
     clearNever: 'Never',
     lockOnSleep: 'Lock when the computer sleeps',
     lockOnScreenLock: 'Lock when the screen locks',
-    lockOnMinimize: 'Lock when the window is minimized',
+    lockOnMinimize: 'Lock when the window is minimized or closed',
     unlockKeys: 'Unlock saved SSH keys when the vault opens',
     unlockKeysHint: 'Keys whose passphrases are in the vault are added to ssh-agent.',
     changeMaster: 'Master password',
@@ -1595,7 +1595,7 @@ const en = {
     lockedIdle: 'Vault locked after inactivity',
     lockedSleep: 'Vault locked while the computer slept',
     lockedScreen: 'Vault locked with the screen',
-    lockedMinimize: 'Vault locked when the window was minimized',
+    lockedMinimize: 'Vault locked when the window was minimized or closed',
     lockedChanged: 'Vault locked',
     lockedChangedHint: 'It was changed on another computer. Unlock it again to continue.',
     conflictCopy: 'Your version: {{path}}',
@@ -1949,8 +1949,22 @@ const en = {
       opened: 'Now using {{file}}. Unlock it to continue.',
     },
   },
+  background: {
+    title: 'Background',
+    enable: 'Keep running when the window is closed',
+    hintMac:
+      'Browser autofill, your devices and terminal sessions keep working. Open or quit the app from its icon in the menu bar.',
+    hintWindows:
+      'Browser autofill, your devices and terminal sessions keep working. Open or quit the app from its icon in the notification area.',
+    hintLinux:
+      'Browser autofill, your devices and terminal sessions keep working. Open or quit the app from its icon in the tray. If your desktop shows no tray icons, open the app again from the app menu to bring the window back.',
+    unavailable:
+      'Your desktop has no tray for the app’s icon. Install the libayatana-appindicator3-1 package, then restart the app.',
+  },
   browser: {
     title: 'Browser autofill',
+    unlockFor: 'For autofill in your browser.',
+    unlockInApp: 'This vault opens only with its recovery key. Open SSH Key Manager to unlock it.',
     enable: 'Fill passwords in your browser',
     enableHint:
       'The SSH Key Manager extension for Chrome, Edge and Firefox fills logins from the vault and offers to save new ones.',

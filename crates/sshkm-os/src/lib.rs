@@ -11,6 +11,7 @@
 //! - [`secret_store`]: keep a secret in the OS credential store (macOS
 //!   Keychain, Windows Credential Manager, Linux Secret Service).
 //! - `pipe` (Windows): check who serves a named pipe before sending to it.
+//! - [`tray`]: whether the system can show a tray icon at all.
 //!
 //! Every call that can wait for the user (a biometric prompt, a keychain
 //! access dialog, a locked Secret Service collection) blocks the calling
@@ -29,6 +30,7 @@ mod error;
 pub mod pipe;
 pub mod screen_lock;
 pub mod secret_store;
+pub mod tray;
 
 pub use error::{Error, Result};
 pub use secrecy::{self, ExposeSecret, SecretString};

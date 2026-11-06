@@ -16,6 +16,7 @@ import type { KeysView } from '@/bindings/KeysView';
 import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostEntry } from '@/bindings/KnownHostEntry';
 import type { PermissionFix } from '@/bindings/PermissionFix';
+import { backgroundHandlers } from './background';
 import { browserHandlers } from './browser';
 import { historyHandlers, recordCheck } from './history';
 import { hostsFileFindings, hostsFileHandlers } from './hostsFile';
@@ -495,6 +496,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   ...vaultLinkHandlers({ keys: () => keys, hosts, agent: agentLoaded }),
   ...vaultFilesHandlers,
   ...browserHandlers,
+  ...backgroundHandlers,
   ...terminalHandlers(hosts),
   ...nearbyHandlers,
   ...historyHandlers,

@@ -3,7 +3,8 @@
 //! The extension talks to the native messaging host, which passes each
 //! message on unchanged, wrapped as `{"caller": "<extension origin>",
 //! "message": …}` ([`Envelope`]). Only [`Message::Hello`], [`Message::Show`],
-//! [`Message::SameSite`] and [`Message::Pair`] travel in the clear; everything
+//! [`Message::Unlock`], [`Message::SameSite`] and [`Message::Pair`] travel in
+//! the clear; everything
 //! else is a [`Message::Request`] sealed with the paired browser's keys
 //! ([`super::channel`]), whose opened payload is an [`Opened`] request.
 //!
@@ -36,6 +37,11 @@ pub enum Message {
     Hello,
     /// Bring the app's window forward on the vault, to unlock it.
     Show,
+    /// Unlock the vault without the app's window: the app asks the user
+    /// itself, with Touch ID or Windows Hello, or in a small window of its
+    /// own. The answer comes back at once, before the user's. Needs no
+    /// pairing; the master password never passes through the extension.
+    Unlock,
     /// Does a page belong to another origin's site? Needs no pairing: the
     /// answer depends on the two names alone.
     SameSite(SameSite),
@@ -201,7 +207,8 @@ pub enum ReplyError {
     /// Sealed with keys this browser gave up, so someone else holds a copy
     /// of them: the app forgot the pairing. Connect again.
     Revoked,
-    /// Too many logins checked, or fills asked about, in the last minute.
+    /// Too many logins checked, fills asked about or unlocks asked for, in
+    /// the last minute.
     TooMany,
 }
 

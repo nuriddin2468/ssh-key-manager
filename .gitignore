@@ -9,6 +9,8 @@ node_modules/
 
 # Tauri
 /src-tauri/gen/schemas/
+# The app commands' permissions, which build.rs and tauri-build write.
+/src-tauri/permissions/
 
 # Editors and OS
 .DS_Store

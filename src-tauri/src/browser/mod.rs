@@ -19,7 +19,8 @@
 //!
 //! What the extension may ask, and the pairing that guards it, is the
 //! [`broker`]'s business; the cryptography and the page matching are in
-//! [`sshkm_core::browser`].
+//! [`sshkm_core::browser`]. Unlocking the vault when the extension asks,
+//! without the main window, is [`unlock`]'s.
 
 pub mod broker;
 mod host;
@@ -27,6 +28,7 @@ pub mod manifests;
 mod prompt;
 #[cfg(unix)]
 mod unix;
+pub mod unlock;
 #[cfg(windows)]
 mod windows;
 
@@ -470,14 +472,17 @@ impl Env for TauriEnv {
 
     fn ask(&self, request: Option<&PairingRequest>) {
         if request.is_some() {
-            show_window(&self.app);
+            crate::tray::show_window(&self.app);
         }
         let _ = self.app.emit(PAIRING_EVENT, request);
     }
 
     fn show(&self) {
-        show_window(&self.app);
-        let _ = self.app.emit(UNLOCK_EVENT, ());
+        show_app(&self.app);
+    }
+
+    fn unlock(&self) {
+        unlock::ask(&self.app);
     }
 
     fn changed(&self, what: Changed) {
@@ -510,12 +515,10 @@ impl Env for TauriEnv {
     }
 }
 
-fn show_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
+/// Brings the main window forward on the vault, to unlock it there.
+fn show_app(app: &AppHandle) {
+    crate::tray::show_window(app);
+    let _ = app.emit(UNLOCK_EVENT, ());
 }
 
 fn hex(bytes: &[u8]) -> String {

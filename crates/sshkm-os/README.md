@@ -1,8 +1,8 @@
 # sshkm-os
 
 OS integration for SSH Key Manager's password vault: a small, synchronous API
-over screen-lock events, biometrics, the system credential store and, on
-Windows, named-pipe server checks. It does not depend on Tauri or on
+over screen-lock events, biometrics, the system credential store, whether a
+tray icon can be shown and, on Windows, named-pipe server checks. It does not depend on Tauri or on
 `sshkm-core`.
 
 ```rust
@@ -31,6 +31,7 @@ contain secrets.
 | `biometrics` | Touch ID only (no password, no Apple Watch); `enrollment()` tells when fingerprints change | Windows Hello (face, fingerprint or PIN); a Windows Hello key (`create_bound_key`, `sign_with_bound_key`) signs a challenge, so a secret can depend on Windows Hello itself | unavailable |
 | `secret_store` | regular login keychain (not the data-protection keychain) | Credential Manager, persisted on this computer only | Secret Service (GNOME Keyring, KDE Wallet, KeePassXC, …) |
 | `pipe` | — | `check_server`: the pipe's owner and its server process's user must be this user (or SYSTEM where allowed) | — |
+| `tray` | `available()`: always | `available()`: always | `available()`: the AppIndicator library loads, under the names Tauri's tray code tries; without it that code panics |
 
 Notes:
 

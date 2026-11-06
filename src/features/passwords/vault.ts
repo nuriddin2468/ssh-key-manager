@@ -19,6 +19,8 @@ import { AppError } from '@/lib/ipc';
 import { conflictCopyPath } from './model';
 
 export const LOCKED_EVENT = 'vault-locked';
+/** Emitted by the backend whenever the vault is unlocked, by any window or prompt. */
+export const UNLOCKED_EVENT = 'vault-unlocked';
 /** `pnpm dev` only: the mock vault announces locks with this window event. */
 export const MOCK_LOCKED_EVENT = 'sshkm:mock-vault-locked';
 
@@ -157,6 +159,16 @@ export function onVaultLocked(handler: (reason: LockReason) => void): () => void
   const listener = (event: Event) => handler((event as CustomEvent<LockReason>).detail);
   window.addEventListener(MOCK_LOCKED_EVENT, listener);
   return () => window.removeEventListener(MOCK_LOCKED_EVENT, listener);
+}
+
+/**
+ * Calls `handler` when the vault is unlocked outside this window: for the
+ * browser, with Touch ID or in the small unlock window. Tauri only.
+ */
+export function onVaultUnlocked(handler: () => void): () => void {
+  if (!isTauri()) return () => undefined;
+  const stop = listen(UNLOCKED_EVENT, () => handler());
+  return () => void stop.then((unlisten) => unlisten());
 }
 
 // After an unlock the form that had focus is gone; the unlocked view then

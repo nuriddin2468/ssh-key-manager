@@ -62,13 +62,18 @@ impl Localized {
 /// Follows the interface's language (`en`, `ru` or `uz`; anything else is
 /// English).
 #[tauri::command]
-pub fn set_ui_language(language: &str) {
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Tauri passes command arguments by value"
+)]
+pub fn set_ui_language(app: AppHandle, language: &str) {
     let code = match language {
         "ru" => 1,
         "uz" => 2,
         _ => 0,
     };
     LANGUAGE.store(code, Ordering::Relaxed);
+    crate::tray::refresh(&app);
 }
 
 /// Shows `body` in a native dialog and returns `Ok` only if the user chose

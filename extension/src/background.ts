@@ -15,7 +15,7 @@ import {
   type Result,
   request,
   sameSite,
-  showApp,
+  unlockVault,
 } from './shared/client';
 import { ext } from './shared/ext';
 import type {
@@ -239,7 +239,7 @@ async function handle(
     }
     case 'unlock':
       logins.delete(origin);
-      await showApp();
+      await unlockVault();
       return null;
     case 'capture':
       if (isString(message.username) && isString(message.password) && captures.take(tabId)) {

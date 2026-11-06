@@ -86,7 +86,9 @@ it('writes a release in Markdown, a section for each kind', () => {
 it('keeps CHANGELOG.md in step with releases.json', () => {
   const releases = JSON.parse(readFileSync('changelog/releases.json', 'utf8'));
   expect(releasesProblems(releases)).toEqual([]);
-  expect(readFileSync('CHANGELOG.md', 'utf8')).toBe(changelogMarkdown(releases));
+  // Git on Windows checks text files out with CRLF line endings.
+  const changelog = readFileSync('CHANGELOG.md', 'utf8').replaceAll('\r\n', '\n');
+  expect(changelog).toBe(changelogMarkdown(releases));
 });
 
 it('finds the version in every file that keeps it', () => {

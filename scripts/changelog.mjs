@@ -217,7 +217,8 @@ function check(since) {
           'release with `node scripts/changelog.mjs release <version>`',
       );
     }
-    if (read(CHANGELOG) !== changelogMarkdown(releases)) {
+    // Git on Windows checks text files out with CRLF line endings.
+    if (read(CHANGELOG).replaceAll('\r\n', '\n') !== changelogMarkdown(releases)) {
       problems.push(`${CHANGELOG} is out of date: run \`node scripts/changelog.mjs write\``);
     }
   }

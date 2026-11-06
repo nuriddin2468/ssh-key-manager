@@ -22,6 +22,7 @@ import { historyHandlers, recordCheck } from './history';
 import { hostsFileFindings, hostsFileHandlers } from './hostsFile';
 import { nearbyHandlers } from './nearby';
 import { serverKeysHandlers } from './serverKeys';
+import { shellHistoryHandlers } from './shellHistory';
 import { terminalHandlers } from './terminal';
 import { vaultHandlers, vaultKeyTest } from './vault';
 import { vaultFilesHandlers } from './vaultFiles';
@@ -499,6 +500,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   ...backgroundHandlers,
   ...terminalHandlers(hosts),
   ...nearbyHandlers,
+  ...shellHistoryHandlers(hosts),
   ...historyHandlers,
   ...serverKeysHandlers({
     keys: () => keys,

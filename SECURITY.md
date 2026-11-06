@@ -133,6 +133,26 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
 - **Browser autofill** (optional, off by default) lets the SSH Key Manager extension for
   Chrome, Edge and Firefox fill and save logins from the vault. See
   [Browser autofill](#browser-autofill) below.
+- **Hosts from the shell history** (off until you say yes on the Hosts page) suggest
+  servers you connect to.
+  - The zsh, bash, fish and PowerShell history files are read by the Rust process, on
+    this computer, only when the Hosts page asks (opening it while this is on, or
+    **Look again**), never in the background, and at most their last 16 MiB.
+  - Only `ssh`, `autossh`, `mosh`, `scp` and `sftp` commands are looked at. Of those, only
+    the target (user, host, port), `-i`, `-J`, `-A` and a short list of `-o` options
+    reach the interface; remote commands, file names and every other argument stay in
+    Rust. Options that run programs or check servers less strictly (`ProxyCommand`,
+    `LocalCommand`, `StrictHostKeyChecking`, `UserKnownHostsFile`, …) are never
+    suggested, and nothing in a command is expanded or run (`$VAR`, `$(…)`).
+  - Passwords typed into those commands (`sshpass -p`, `ssh://user:password@`, a `-o`
+    option or a variable named like a password, also inside a `ProxyCommand`) are
+    dropped and only counted per file, so the app can tell you to remove them.
+  - A suggestion becomes a host only through the Add Host dialog, which shows the whole
+    block and asks the same confirmations as any other host.
+  - Your answer and the suggestions you dismissed are kept in `shell-history.json` in
+    the app's data folder (mode 0600): a dismissed host as an HMAC-SHA-256 of its user,
+    host and port under a random key of that file, never as the host or the command.
+    Turning it off in **Settings → Shell history** stops all reading.
 - **Minimal network access.** The app sends none of your data anywhere. Its only
   requests are:
   - the update check, which downloads `latest.json` from this repository's GitHub

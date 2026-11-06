@@ -19,6 +19,8 @@ import type { Environment } from '@/bindings/Environment';
 import type { Exported } from '@/bindings/Exported';
 import type { GenerateKeyRequest } from '@/bindings/GenerateKeyRequest';
 import type { GenerateOptions } from '@/bindings/GenerateOptions';
+import type { HistoryScan } from '@/bindings/HistoryScan';
+import type { HistoryStatus } from '@/bindings/HistoryStatus';
 import type { HostEdit } from '@/bindings/HostEdit';
 import type { HostKeyCheck } from '@/bindings/HostKeyCheck';
 import type { HostsApplyResult } from '@/bindings/HostsApplyResult';
@@ -124,6 +126,19 @@ export const api = {
     call<KnownHostsFile>('remove_known_hosts', removal),
   checkHostKey: (host: string, port: number | null) =>
     call<HostKeyCheck>('check_host_key', { host, port }),
+  /** Whether the user allowed reading their shell history, and how many hosts they dismissed. */
+  shellHistoryStatus: () => call<HistoryStatus>('shell_history_status'),
+  shellHistorySetEnabled: (enabled: boolean) =>
+    call<HistoryStatus>('shell_history_set_enabled', { enabled }),
+  /**
+   * Reads the shell history in Rust and suggests the hosts it connects to
+   * that the config lacks; only those targets come back. Fails with
+   * `invalid_input` unless the user turned this on.
+   */
+  shellHistoryScan: () => call<HistoryScan>('shell_history_scan'),
+  /** Stops suggesting a host, by its suggestion's `id` (a hash of the target). */
+  shellHistoryDismiss: (id: string) => call<HistoryStatus>('shell_history_dismiss', { id }),
+  shellHistoryForgetDismissed: () => call<HistoryStatus>('shell_history_forget_dismissed'),
 
   hostsFile: () => call<HostsFileInfo>('read_hosts_file'),
   lookupHost: (name: string) => call<NameLookup>('lookup_host', { name }),

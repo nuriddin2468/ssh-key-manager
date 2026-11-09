@@ -36,7 +36,7 @@ p521 = { version = "0.13", features = ["pem", "pkcs8"] }
 psl = "2.1.246"
 rand_core = { version = "0.6", features = ["getrandom"] }
 # The SQLite databases browsers keep their logins in, read from a private copy.
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+rusqlite = { version = "0.41.1", features = ["bundled"] }
 rsa = { version = "0.9", features = ["pem", "std"] }
 rust-argon2 = "3.0.0"
 # The Tools page's TLS check; the versions and features the updater already

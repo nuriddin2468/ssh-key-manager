@@ -382,6 +382,7 @@ fn private_copies_are_owner_only_and_deleted() {
     let chrome = Chrome::new(&[row("https://a.example/", "me", Vec::new())]);
     let temp = private_temp_dir().unwrap();
     let copy = copy_database(&chrome.profile().join("Login Data"), temp.path()).unwrap();
+    assert!(copy.is_file());
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

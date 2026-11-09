@@ -1,5 +1,5 @@
 import { AlertTriangle, CheckCircle2, Laptop, XCircle } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
 import { useKeys } from '@/api/queries';
@@ -62,7 +62,10 @@ export function PairingDialog() {
   const status = useNearby();
   const keys = useKeys();
   const any = status.data?.pairing ?? null;
-  const pairing = any?.kind === 'sync' ? null : any;
+  // A finished pairing the user closed goes at once: the backend's event
+  // that it is gone only confirms it.
+  const [dismissed, setDismissed] = useState<number | null>(null);
+  const pairing = any?.kind === 'sync' || (any && any.id === dismissed) ? null : any;
   // The last pairing shown stays while the dialog animates out.
   const shown = useRef<Pairing | null>(null);
   if (pairing) shown.current = pairing;
@@ -71,7 +74,12 @@ export function PairingDialog() {
   const answer = useAppMutation((vars: { id: number; matched: boolean }) =>
     api.nearbyAnswer(vars.id, vars.matched),
   );
-  const close = (id: number) => void api.nearbyClose(id).catch((error) => toastError(t, error));
+  // Closing a finished pairing lets it go; closing one going on cancels it,
+  // and the dialog then says it was cancelled.
+  const close = (id: number) => {
+    if (!isActive(pairing)) setDismissed(id);
+    void api.nearbyClose(id).catch((error) => toastError(t, error));
+  };
 
   // Each step replaces the buttons, and the focused one with them: focus
   // the "no" when a question comes up, else the last button.

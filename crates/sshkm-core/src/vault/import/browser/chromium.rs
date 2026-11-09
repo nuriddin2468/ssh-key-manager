@@ -35,6 +35,11 @@ pub(super) const LOGIN_FILES: [&str; 2] = ["Login Data", "Login Data For Account
 const MAX_LOCAL_STATE: u64 = 16 * 1024 * 1024;
 const SALT: &[u8] = b"saltysalt";
 const IV: [u8; 16] = [b' '; 16];
+/// How every DPAPI blob starts: version 1, then the DPAPI provider's GUID.
+pub(super) const DPAPI_BLOB: [u8; 20] = [
+    1, 0, 0, 0, 0xD0, 0x8C, 0x9D, 0xDF, 0x01, 0x15, 0xD1, 0x11, 0x8C, 0x7A, 0x00, 0xC0, 0x4F, 0xC2,
+    0x97, 0xEB,
+];
 
 /// Where a Chromium browser keeps the password its logins' key is made of:
 /// the Keychain item (macOS) with this service and account, the Secret
@@ -251,11 +256,14 @@ impl Keys<'_> {
                 aes256_gcm_decrypt(key, data)
             }
             (Platform::Windows, b"v20") => return Ok(Plain::AppBound),
-            (Platform::Windows, _) => match self.os.unprotect(value) {
-                Ok(plain) => Some(plain),
-                Err(BrowserReadError::Denied) => return Err(BrowserReadError::Denied),
-                Err(_) => None,
-            },
+            // Only what is a DPAPI blob goes to DPAPI.
+            (Platform::Windows, _) if value.starts_with(&DPAPI_BLOB) => {
+                match self.os.unprotect(value) {
+                    Ok(plain) => Some(plain),
+                    Err(BrowserReadError::Denied) => return Err(BrowserReadError::Denied),
+                    Err(_) => None,
+                }
+            }
             _ => None,
         };
         Ok(plain

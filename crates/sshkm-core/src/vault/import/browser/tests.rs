@@ -54,6 +54,7 @@ impl BrowserKeyStore for FakeKeys {
 
     fn unprotect(&self, blob: &[u8]) -> Result<Zeroizing<Vec<u8>>, BrowserReadError> {
         self.asked.set(self.asked.get() + 1);
+        let blob = blob.strip_prefix(&chromium::DPAPI_BLOB).unwrap_or(blob);
         Ok(Zeroizing::new(dpapi(blob)))
     }
 }
@@ -318,7 +319,13 @@ fn windows_passwords_decrypt_with_the_dpapi_wrapped_key() {
     let chrome = Chrome::new(&[
         row("https://a.example/", "a", windows(*b"v10", "gcm")),
         // Before Chrome 80: the password wrapped by DPAPI itself.
-        row("https://b.example/", "b", dpapi(b"legacy")),
+        row(
+            "https://b.example/",
+            "b",
+            [chromium::DPAPI_BLOB.as_slice(), &dpapi(b"legacy")].concat(),
+        ),
+        // Not a DPAPI blob: never handed to DPAPI.
+        row("https://c.example/", "c", b"garbage".to_vec()),
     ]);
     let logins = chrome
         .read(&FakeKeys::default(), Platform::Windows)
@@ -330,7 +337,7 @@ fn windows_passwords_decrypt_with_the_dpapi_wrapped_key() {
             ("https://b.example/", "b", "legacy"),
         ]
     );
-    assert_eq!(logins.unreadable(), 0);
+    assert_eq!(logins.unreadable(), 1);
 }
 
 #[test]

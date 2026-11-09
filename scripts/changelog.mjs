@@ -286,10 +286,43 @@ function release(version) {
   for (const [name] of notes) rmSync(join(ROOT, UNRELEASED, name));
 
   console.log(`## ${version}\n\n${releaseMarkdown(entry)}\n`);
+  const added = addedPermissions(`v${current}`);
+  if (added.length > 0) {
+    console.log(
+      `The extension asks for ${added.join(', ')} since v${current}. Before pushing the tag, ` +
+        'paste their justifications from extension/store/en.md into the Privacy tab of the ' +
+        'Chrome Web Store dashboard: the store refuses to publish without them.\n',
+    );
+  }
   console.log(
     `Read the notes above (and in ${RELEASES} for ru and uz), then commit as ` +
       `"Release ${version}" and push the tag v${version}.`,
   );
+}
+
+/** The extension's permissions, optional ones too, that `tag`'s manifest didn't have. */
+export function newPermissions(before, now) {
+  const all = (manifest) => [
+    ...(manifest.permissions ?? []),
+    ...(manifest.optional_permissions ?? []),
+    ...(manifest.host_permissions ?? []),
+  ];
+  const old = new Set(all(before));
+  return all(now).filter((permission) => !old.has(permission));
+}
+
+function addedPermissions(tag) {
+  let before;
+  try {
+    before = execFileSync('git', ['show', `${tag}:extension/manifest.json`], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch {
+    return [];
+  }
+  return newPermissions(JSON.parse(before), JSON.parse(read('extension/manifest.json')));
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

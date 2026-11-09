@@ -158,6 +158,15 @@ secrets: `pnpm extension:package` on the release commit, then
 **Package → Upload new package**, then **Submit for review**. The extension's version
 always matches the app's; a test checks it, and so does the release.
 
+The listing and the Privacy tab never change by themselves. When a release adds a
+permission (optional ones too) or changes what the extension stores, paste the new
+answers from [en.md → Privacy](en.md#privacy) into the dashboard **before** the release:
+the store refuses to publish a package with a permission it has no justification for
+(`INVALID_ITEM_METADATA`). A test checks that en.md has an answer for every permission,
+and `pnpm release` names the permissions added since the last release. If the publish
+step failed anyway, the package is already uploaded: fix the dashboard, then choose
+**Submit for review** there.
+
 ## Automatic publishing
 
 `release.yml` builds the extension in a job without secrets: the Chromium zip, the

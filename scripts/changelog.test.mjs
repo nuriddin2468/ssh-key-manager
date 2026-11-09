@@ -4,6 +4,7 @@ import {
   changelogMarkdown,
   changeProblems,
   compareVersions,
+  newPermissions,
   releaseMarkdown,
   releasesProblems,
   setVersion,
@@ -100,4 +101,15 @@ it('finds the version in every file that keeps it', () => {
     expect(pattern.exec(bumped)?.[2], path).toBe('9.9.9');
     expect(bumped.length - text.length, path).toBe('9.9.9'.length - version.length);
   }
+});
+
+it('names the permissions the extension asks for since a release', () => {
+  const before = { permissions: ['storage'], host_permissions: ['https://*/*'] };
+  const now = {
+    permissions: ['storage', 'nativeMessaging'],
+    optional_permissions: ['privacy'],
+    host_permissions: ['https://*/*'],
+  };
+  expect(newPermissions(before, now)).toEqual(['nativeMessaging', 'privacy']);
+  expect(newPermissions(now, now)).toEqual([]);
 });

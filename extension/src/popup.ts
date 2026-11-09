@@ -12,7 +12,7 @@ import {
   showApp,
 } from './shared/client';
 import { button, h } from './shared/dom';
-import { browserName, ext } from './shared/ext';
+import { browserName, ext, openDownload } from './shared/ext';
 import { currentLanguage, type Key, t } from './shared/i18n';
 import {
   keepsSavedPasswords,
@@ -121,6 +121,18 @@ function actionsFor(state: State): HTMLElement[] {
         ),
       ];
     case 'noHost':
+      // The app may not be installed at all: the browser can't tell.
+      return [
+        button(
+          t('downloadApp'),
+          () => {
+            openDownload();
+            window.close();
+          },
+          'primary',
+        ),
+        button(t('tryAgain'), () => void refresh()),
+      ];
     case 'failed':
       return [button(t('tryAgain'), () => void refresh())];
     default:

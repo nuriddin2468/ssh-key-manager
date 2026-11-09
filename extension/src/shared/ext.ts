@@ -2,6 +2,14 @@
 const scope = globalThis as unknown as { browser?: WebExt.Api; chrome?: WebExt.Api };
 export const ext = (scope.browser ?? scope.chrome) as WebExt.Api;
 
+/** Where to get the app: the downloads of its latest release. */
+export const APP_DOWNLOAD = 'https://github.com/nuriddin2468/ssh-key-manager/releases/latest';
+
+/** Opens the app's downloads in a new tab. */
+export function openDownload(): void {
+  void ext.tabs.create({ url: APP_DOWNLOAD });
+}
+
 /** The browser's name, recorded with the pairing in the app. */
 export function browserName(): string {
   const agent = navigator.userAgent;

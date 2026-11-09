@@ -9,8 +9,9 @@ const en = {
   connect: 'Connect',
   tryAgain: 'Try again',
 
-  noHostTitle: 'Browser autofill is off',
-  noHostText: 'In SSH Key Manager, open Settings and turn on Browser autofill.',
+  noHostTitle: 'Browser autofill isn’t set up',
+  noHostText: 'Get the free SSH Key Manager app, then turn on Browser autofill in its Settings.',
+  downloadApp: 'Download SSH Key Manager',
   notRunningTitle: 'SSH Key Manager isn’t running',
   notRunningText: 'Open the app to fill passwords.',
   noVaultTitle: 'No vault yet',
@@ -87,8 +88,10 @@ const ru: Strings = {
   connect: 'Подключить',
   tryAgain: 'Повторить',
 
-  noHostTitle: 'Автозаполнение выключено',
-  noHostText: 'В SSH Key Manager откройте «Настройки» и включите автозаполнение в браузере.',
+  noHostTitle: 'Автозаполнение не настроено',
+  noHostText:
+    'Установите бесплатное приложение SSH Key Manager и включите в его настройках «Автозаполнение в браузере».',
+  downloadApp: 'Скачать SSH Key Manager',
   notRunningTitle: 'SSH Key Manager не запущен',
   notRunningText: 'Откройте приложение, чтобы заполнять пароли.',
   noVaultTitle: 'Хранилища пока нет',
@@ -163,8 +166,10 @@ const uz: Strings = {
   connect: 'Ulash',
   tryAgain: 'Qayta urinish',
 
-  noHostTitle: 'Avtomatik toʻldirish oʻchiq',
-  noHostText: 'SSH Key Managerda Sozlamalarni oching va brauzerda avtomatik toʻldirishni yoqing.',
+  noHostTitle: 'Avtomatik toʻldirish sozlanmagan',
+  noHostText:
+    'Bepul SSH Key Manager ilovasini oʻrnating va uning Sozlamalarida «Brauzerda avtomatik toʻldirish»ni yoqing.',
+  downloadApp: 'SSH Key Managerni yuklab olish',
   notRunningTitle: 'SSH Key Manager ishlamayapti',
   notRunningText: 'Parollarni toʻldirish uchun ilovani oching.',
   noVaultTitle: 'Hali ombor yoʻq',

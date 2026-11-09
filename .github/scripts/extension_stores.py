@@ -51,12 +51,14 @@ POLL_EVERY = 5
 POLL_FOR = 15 * 60
 
 AMO_NOTES = (
-    "The scripts are bundled from TypeScript with Vite; the attached source "
-    "is the whole repository at the release tag. To rebuild them: Node 22, "
-    "then `corepack enable`, `pnpm install --frozen-lockfile` and "
-    "`pnpm extension:package` in the repository's root. The add-on is in "
-    "extension/dist/firefox, and extension/README.md says more. It talks to "
-    "the SSH Key Manager desktop app through native messaging."
+    "The scripts are bundled from TypeScript with Vite (not minified); the "
+    "attached source is the whole repository at the release tag. To rebuild "
+    "them: Node 22 or later, then `corepack enable`, "
+    "`pnpm install --frozen-lockfile` and `pnpm extension:package` in the "
+    "repository's root. The add-on is in extension/dist/firefox, and "
+    "extension/README.md says more. It talks to the SSH Key Manager desktop "
+    "app through native messaging; extension/store/firefox.md, under "
+    "\"Notes for reviewers\", says how to test it with the app."
 )
 
 

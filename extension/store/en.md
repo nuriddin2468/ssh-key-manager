@@ -179,7 +179,7 @@ Leave **Username** and **Password** empty: the extension has no account. Paste t
 into **Additional instructions**:
 
 ```text
-The extension needs the free SSH Key Manager desktop app (0.4.0 or later), which holds the password vault. Without it, the extension's popup says that browser autofill is off.
+The extension needs the free SSH Key Manager desktop app (0.4.0 or later), which holds the password vault. Without it, the extension's popup says that browser autofill isn't set up, with a button to download the app.
 
 1. Install SSH Key Manager from https://github.com/nuriddin2468/ssh-key-manager/releases/latest (macOS .dmg, Windows installer, or Linux .deb/.AppImage) and open it.
 2. Open Passwords, enter any master password twice and choose Create vault. Tick "I've saved my recovery key" and choose Continue.

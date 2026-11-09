@@ -4,6 +4,7 @@
 
 import { hello, launchApp, type Problem, pair, showApp } from './shared/client';
 import { button, h } from './shared/dom';
+import { openDownload } from './shared/ext';
 import { currentLanguage, type Key, t } from './shared/i18n';
 
 const app = document.getElementById('app') as HTMLElement;
@@ -56,10 +57,12 @@ function problem(found: Problem): void {
     );
   } else if (found === 'locked' || found === 'noVault') {
     actions.append(button(t('openApp'), () => void showApp()));
+  } else if (found === 'noHost') {
+    // The app may not be installed at all: the browser can't tell.
+    actions.append(button(t('downloadApp'), openDownload, 'primary'));
   }
-  actions.append(
-    button(t('tryAgain'), () => void start(), found === 'notRunning' ? 'secondary' : 'primary'),
-  );
+  const another = found === 'notRunning' || found === 'noHost';
+  actions.append(button(t('tryAgain'), () => void start(), another ? 'secondary' : 'primary'));
   show(
     heading(),
     h('p', { className: 'problem', role: 'alert' }, t(PROBLEMS[found] ?? 'connectFailed')),

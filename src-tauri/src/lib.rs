@@ -217,6 +217,7 @@ pub fn run() {
             commands::vault_links::run_vault_audit,
             commands::vault_files::vault_import_preview,
             commands::vault_files::vault_import,
+            commands::vault_files::vault_import_compare,
             commands::vault_files::vault_trash_import_file,
             commands::vault_files::vault_export_csv,
             commands::vault_files::vault_export_kdbx,

@@ -37,9 +37,23 @@ fn quick_set_shortcut() {}
 fn vault_entries() {}
 #[tauri::command]
 fn read_config() {}
+#[tauri::command]
+fn vault_import_preview() {}
+#[tauri::command]
+fn vault_import() {}
+#[tauri::command]
+fn vault_import_compare() {}
 
 const UNLOCKING: [&str; 3] = ["vault_status", "vault_unlock", "vault_unlock_device"];
-const OTHERS: [&str; 4] = ["list_keys", "vault_reveal", "vault_copy", "set_ui_language"];
+const OTHERS: [&str; 7] = [
+    "list_keys",
+    "vault_reveal",
+    "vault_copy",
+    "set_ui_language",
+    "vault_import_preview",
+    "vault_import",
+    "vault_import_compare",
+];
 /// What the quick search window does: unlocking, its own commands and copying.
 const QUICK: [&str; 7] = [
     "vault_status",
@@ -52,8 +66,11 @@ const QUICK: [&str; 7] = [
 ];
 /// What it never needs: secrets in the clear, everything about an entry or
 /// the config, its own shortcut.
-const NOT_QUICK: [&str; 6] = [
+const NOT_QUICK: [&str; 9] = [
     "vault_reveal",
+    "vault_import_preview",
+    "vault_import",
+    "vault_import_compare",
     "vault_entries",
     "read_config",
     "list_keys",
@@ -95,6 +112,9 @@ fn the_unlock_window_may_only_unlock() {
             vault_reveal,
             vault_copy,
             set_ui_language,
+            vault_import_preview,
+            vault_import,
+            vault_import_compare,
         ])
         .build(tauri::generate_context!("tauri.conf.json", test = true))
         .unwrap();
@@ -139,6 +159,9 @@ fn the_quick_window_may_only_do_what_it_shows() {
             list_keys,
             quick_set_shortcut,
             set_ui_language,
+            vault_import_preview,
+            vault_import,
+            vault_import_compare,
         ])
         .build(tauri::generate_context!("tauri.conf.json", test = true))
         .unwrap();

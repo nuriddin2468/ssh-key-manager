@@ -2,8 +2,11 @@ import { useMutation } from '@tanstack/react-query';
 import {
   ArrowLeft,
   Check,
+  ChevronDown,
   ChevronRight,
   Copy,
+  Eye,
+  EyeOff,
   FileSpreadsheet,
   FileUp,
   Lightbulb,
@@ -12,12 +15,14 @@ import {
   Trash2,
   TriangleAlert,
 } from 'lucide-react';
-import { useId, useState } from 'react';
+import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
 import { useVaultStatus } from '@/api/queries';
 import { toastError, useAppMutation } from '@/api/useAppMutation';
+import type { ImportOutcome } from '@/bindings/ImportOutcome';
+import type { ImportPasswords } from '@/bindings/ImportPasswords';
 import type { ImportPreview } from '@/bindings/ImportPreview';
 import type { ImportRow } from '@/bindings/ImportRow';
 import { Badge } from '@/components/ui/Badge';
@@ -28,8 +33,10 @@ import { Tile } from '@/components/ui/Tile';
 import { useBrowserStatus } from '@/features/browser/queries';
 import { copyText } from '@/lib/clipboard';
 import { cn } from '@/lib/cn';
+import { formatDate } from '@/lib/format';
 import { AppError } from '@/lib/ipc';
 import { platform } from '@/lib/platform';
+import { MASK, REVEAL_MS } from '../SavedSecret';
 import { Callout } from './Callout';
 import { showFileError } from './errors';
 import { type ImportSource, sourcesFor } from './importSources';
@@ -50,14 +57,16 @@ type Step =
       preview: ImportPreview;
       selected: ReadonlySet<number>;
     }
-  | { kind: 'done'; source: ImportSource; path: string; count: number };
+  | { kind: 'done'; source: ImportSource; path: string; outcome: ImportOutcome };
 
 /**
  * Imports logins from a browser or another password manager: say where they
  * are now (the browsers on this computer first, any CSV file last), export
  * them there as the guide says, choose the file (in a system dialog the
  * backend opens, so the page never names a file to read), check the rows
- * (entries already in the vault start unchecked), import, then move the
+ * (new ones first; entries whose password differs from the vault's next, to
+ * update them; entries already in the vault as they are last, unchecked),
+ * import, then move the
  * plain-text file to the Trash. After a browser, it says how to stop the
  * browser offering the same logins.
  */
@@ -76,13 +85,15 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
     mutationFn: (_source: ImportSource) => api.vaultImportPreview(),
     onSuccess: (picked, source) => {
       if (!picked) return;
-      const { path, preview } = picked;
+      const { path } = picked;
+      // Ordered once here, so rows don't move while they are ticked.
+      const preview = { ...picked.preview, rows: byStatus(picked.preview.rows) };
       setStep({
         kind: 'preview',
         source,
         path,
         preview,
-        selected: new Set(preview.rows.filter((r) => !r.duplicateOf).map((r) => r.index)),
+        selected: new Set(preview.rows.filter((r) => rowStatus(r) !== 'same').map((r) => r.index)),
       });
     },
     onError: (cause) => {
@@ -103,8 +114,8 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
     (vars: { source: ImportSource; path: string; indices: number[] }) =>
       api.vaultImport(vars.indices),
     {
-      onSuccess: (count, vars) =>
-        setStep({ kind: 'done', source: vars.source, path: vars.path, count }),
+      onSuccess: (outcome, vars) =>
+        setStep({ kind: 'done', source: vars.source, path: vars.path, outcome }),
       onError: (appError) =>
         showFileError(t, appError, {
           invalid_input: t('vaultFiles.import.changed'),
@@ -235,9 +246,18 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
               <Tile tone="teal" size={52} glow>
                 <Check className="size-6" strokeWidth={2.25} />
               </Tile>
-              <p id={`${doneId}-count`} className="text-[17px] font-semibold tracking-[-0.01em]">
-                {t('vaultFiles.import.imported', { count: step.count })}
-              </p>
+              <div id={`${doneId}-count`} className="flex flex-col gap-1">
+                <p className="text-[17px] font-semibold tracking-[-0.01em]">
+                  {step.outcome.added > 0 || step.outcome.updated === 0
+                    ? t('vaultFiles.import.imported', { count: step.outcome.added })
+                    : t('vaultFiles.import.updated', { count: step.outcome.updated })}
+                </p>
+                {step.outcome.added > 0 && step.outcome.updated > 0 ? (
+                  <p className="text-[13px] text-muted">
+                    {t('vaultFiles.import.updated', { count: step.outcome.updated })}
+                  </p>
+                ) : null}
+              </div>
             </div>
             <Callout
               id={`${doneId}-warning`}
@@ -304,8 +324,17 @@ function PreviewStep({
   const { t } = useTranslation();
   const summaryId = useId();
   const { rows, skipped, format } = preview;
-  const duplicates = rows.filter((r) => r.duplicateOf).length;
+  const duplicates = rows.filter((r) => rowStatus(r) === 'same').length;
+  const changed = rows.filter((r) => rowStatus(r) === 'changed').length;
   const count = selected.size;
+  const updates = rows.filter((r) => selected.has(r.index) && rowStatus(r) === 'changed').length;
+  const adds = count - updates;
+  const submitLabel =
+    updates === 0
+      ? t('vaultFiles.import.submit', { count })
+      : adds === 0
+        ? t('vaultFiles.import.submitUpdate', { count: updates })
+        : t('vaultFiles.import.submitBoth', { added: adds, updated: updates });
   const all = rows.length > 0 && count === rows.length;
 
   const toggle = (index: number) => {
@@ -318,6 +347,7 @@ function PreviewStep({
 
   const summary = [
     t('vaultFiles.import.found', { count: rows.length }),
+    changed > 0 ? t('vaultFiles.import.changedRows', { count: changed }) : null,
     duplicates > 0 ? t('vaultFiles.import.duplicates', { count: duplicates }) : null,
     skipped > 0 ? t('vaultFiles.import.skipped', { count: skipped }) : null,
   ]
@@ -413,7 +443,7 @@ function PreviewStep({
           icon={<FileUp className="size-4" strokeWidth={2} />}
           onClick={onImport}
         >
-          {t('vaultFiles.import.submit', { count })}
+          {submitLabel}
         </Button>
       </DialogFooter>
     </>
@@ -430,53 +460,209 @@ function PreviewRow({
   onToggle: () => void;
 }) {
   const { t } = useTranslation();
+  const compareId = useId();
+  const [comparing, setComparing] = useState(false);
+  const panel = useRef<HTMLTableRowElement>(null);
+  // The table scrolls on its own; bring the opened comparison into view.
+  useEffect(() => {
+    if (comparing) panel.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [comparing]);
   return (
-    // The checkbox is the control; clicking anywhere on the row is a shortcut.
-    <tr
-      onClick={onToggle}
-      className={cn(
-        'h-[46px] border-t border-white/[0.05] transition-colors',
-        checked ? 'bg-[rgb(var(--accent-rgb)/0.07)]' : 'hover:bg-white/[0.03]',
-      )}
-    >
-      <td className="pl-3.5">
-        <CheckboxControl
-          aria-label={t('vaultFiles.import.select', { title: row.title })}
-          checked={checked}
-          onCheckedChange={onToggle}
-          onClick={(event) => event.stopPropagation()}
-        />
-      </td>
-      <td className="pr-3">
-        <span className="block truncate font-medium" title={row.title}>
-          {row.title}
-        </span>
-        {row.group ? (
-          <span className="block truncate text-[11.5px] text-subtle">
-            {t('vaultFiles.import.folder', { folder: row.group })}
+    <Fragment>
+      {/* The checkbox is the control; clicking anywhere on the row is a shortcut. */}
+      <tr
+        onClick={onToggle}
+        className={cn(
+          'h-[46px] border-t border-white/[0.05] transition-colors',
+          checked ? 'bg-[rgb(var(--accent-rgb)/0.07)]' : 'hover:bg-white/[0.03]',
+        )}
+      >
+        <td className="pl-3.5">
+          <CheckboxControl
+            aria-label={t('vaultFiles.import.select', { title: row.title })}
+            checked={checked}
+            onCheckedChange={onToggle}
+            onClick={(event) => event.stopPropagation()}
+          />
+        </td>
+        <td className="pr-3">
+          <span className="block truncate font-medium" title={row.title}>
+            {row.title}
           </span>
-        ) : null}
-      </td>
-      <td className="truncate pr-3 text-fg-2" title={row.username || undefined}>
-        {row.username || t('common.dash')}
-      </td>
-      <td className="truncate pr-3 font-mono text-[12px] text-muted" title={row.url || undefined}>
-        {shortUrl(row.url) || t('common.dash')}
-      </td>
-      <td className="pr-3.5">
-        <span className="flex flex-wrap justify-end gap-1">
-          {row.duplicateOf ? <Badge tone="warning">{t('vaultFiles.import.inVault')}</Badge> : null}
-          {row.hasOtp ? <Badge tone="info">{t('vaultFiles.import.otp')}</Badge> : null}
-          {row.hasUnreadableOtp ? (
-            <span title={t('vaultFiles.import.otpUnreadableHint')}>
-              <Badge>{t('vaultFiles.import.otpUnreadable')}</Badge>
+          {row.group ? (
+            <span className="block truncate text-[11.5px] text-subtle">
+              {t('vaultFiles.import.folder', { folder: row.group })}
             </span>
           ) : null}
-          {row.hasPassword ? null : <Badge>{t('vaultFiles.import.noPassword')}</Badge>}
-        </span>
-      </td>
-    </tr>
+        </td>
+        <td className="truncate pr-3 text-fg-2" title={row.username || undefined}>
+          {row.username || t('common.dash')}
+        </td>
+        <td className="truncate pr-3 font-mono text-[12px] text-muted" title={row.url || undefined}>
+          {shortUrl(row.url) || t('common.dash')}
+        </td>
+        <td className="pr-3.5">
+          <span className="flex flex-wrap justify-end gap-1">
+            {row.passwordChanged ? (
+              <>
+                <span title={t('vaultFiles.import.passwordDiffersHint')}>
+                  <Badge tone="accent">{t('vaultFiles.import.passwordDiffers')}</Badge>
+                </span>
+                <button
+                  type="button"
+                  aria-expanded={comparing}
+                  aria-controls={comparing ? compareId : undefined}
+                  aria-label={t('vaultFiles.import.compareFor', { title: row.title })}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setComparing(!comparing);
+                  }}
+                  className="inline-flex items-center gap-0.5 rounded-md px-1 text-[11.5px] font-medium text-[var(--accent-text)] hover:underline"
+                >
+                  {comparing ? t('vaultFiles.import.compareHide') : t('vaultFiles.import.compare')}
+                  <ChevronDown
+                    aria-hidden="true"
+                    className={cn('size-3.5 transition-transform', comparing && 'rotate-180')}
+                    strokeWidth={2}
+                  />
+                </button>
+              </>
+            ) : row.duplicateOf ? (
+              <Badge tone="warning">{t('vaultFiles.import.inVault')}</Badge>
+            ) : null}
+            {row.hasOtp ? <Badge tone="info">{t('vaultFiles.import.otp')}</Badge> : null}
+            {row.hasUnreadableOtp ? (
+              <span title={t('vaultFiles.import.otpUnreadableHint')}>
+                <Badge>{t('vaultFiles.import.otpUnreadable')}</Badge>
+              </span>
+            ) : null}
+            {row.hasPassword ? null : <Badge>{t('vaultFiles.import.noPassword')}</Badge>}
+          </span>
+        </td>
+      </tr>
+      {comparing ? (
+        <tr ref={panel} id={compareId} className="border-t border-white/[0.05] bg-white/[0.02]">
+          <td colSpan={5} className="px-3.5 py-3">
+            <ComparePasswords row={row} />
+          </td>
+        </tr>
+      ) : null}
+    </Fragment>
   );
+}
+
+/**
+ * The file's and the vault's password of a row side by side, with when each was last changed, so
+ * the user can tell which to keep. The dates come with the preview; the passwords only on request,
+ * and they hide themselves again after a while.
+ */
+function ComparePasswords({ row }: { row: ImportRow }) {
+  const { t, i18n } = useTranslation();
+  const [shown, setShown] = useState<ImportPasswords | null>(null);
+  const reveal = useAppMutation(() => api.vaultImportCompare(row.index), {
+    onSuccess: setShown,
+    onError: (appError) =>
+      showFileError(t, appError, {
+        invalid_input: t('vaultFiles.import.changed'),
+        vault_locked: t('vaultFiles.import.unlockFirst'),
+      }),
+  });
+  useEffect(() => {
+    if (shown === null) return;
+    const timer = window.setTimeout(() => setShown(null), REVEAL_MS);
+    return () => window.clearTimeout(timer);
+  }, [shown]);
+
+  const file = row.changedInFile ? new Date(row.changedInFile) : null;
+  const vault = row.changedInVault ? new Date(row.changedInVault) : null;
+  const newer = file && vault ? (file > vault ? 'file' : vault > file ? 'vault' : null) : null;
+  const sides = [
+    {
+      key: 'file',
+      label: t('vaultFiles.import.inFile'),
+      date: row.changedInFile,
+      noDate: t('vaultFiles.import.fileNoDate'),
+      password: shown?.file,
+    },
+    {
+      key: 'vault',
+      label: t('vaultFiles.import.inVaultSide'),
+      date: row.changedInVault,
+      noDate: t('vaultFiles.import.vaultNoDate'),
+      password: shown?.vault,
+    },
+  ] as const;
+
+  return (
+    <div className="flex flex-col gap-2.5">
+      <dl className="grid grid-cols-2 gap-2">
+        {sides.map((side) => (
+          <div
+            key={side.key}
+            className="flex min-w-0 flex-col gap-1 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2"
+          >
+            <dt className="flex items-center gap-1.5 text-[11.5px] font-semibold tracking-[0.02em] text-subtle">
+              {side.label}
+              {newer === side.key ? (
+                <Badge tone="accent" pill>
+                  {t('vaultFiles.import.newer')}
+                </Badge>
+              ) : null}
+            </dt>
+            <dd className="flex min-w-0 flex-col gap-0.5">
+              <span className="selectable truncate font-mono text-[12.5px] text-fg">
+                {side.password ?? MASK}
+              </span>
+              <span className="text-[11.5px] text-muted">
+                {side.date
+                  ? t('vaultFiles.import.changedOn', { date: formatDate(side.date, i18n.language) })
+                  : side.noDate}
+              </span>
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <Button
+          size="sm"
+          loading={reveal.isPending}
+          icon={
+            shown ? (
+              <EyeOff className="size-3.5" strokeWidth={2} />
+            ) : (
+              <Eye className="size-3.5" strokeWidth={2} />
+            )
+          }
+          onClick={() => (shown ? setShown(null) : reveal.mutate(undefined))}
+        >
+          {shown ? t('vaultFiles.import.hidePasswords') : t('vaultFiles.import.showPasswords')}
+        </Button>
+        <p className="min-w-0 flex-1 text-[11.5px] leading-4 text-muted">
+          {t('vaultFiles.import.compareHint')}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+type RowStatus = 'new' | 'changed' | 'same';
+
+/** New to the vault, in it with another password, or in it as it is. */
+export function rowStatus(row: ImportRow): RowStatus {
+  if (!row.duplicateOf) return 'new';
+  return row.passwordChanged ? 'changed' : 'same';
+}
+
+/**
+ * New rows first, then rows that update an entry's password, then rows already in the vault,
+ * each in the file's order: what will be imported sits at the top of a long list.
+ */
+export function byStatus(rows: ImportRow[]): ImportRow[] {
+  const rank: Record<RowStatus, number> = { new: 0, changed: 1, same: 2 };
+  return rows
+    .map((row, at) => ({ row, at }))
+    .sort((a, b) => rank[rowStatus(a.row)] - rank[rowStatus(b.row)] || a.at - b.at)
+    .map(({ row }) => row);
 }
 
 /** `https://github.com/login/` → `github.com/login`. */

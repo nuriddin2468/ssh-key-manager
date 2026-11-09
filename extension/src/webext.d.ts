@@ -68,6 +68,11 @@ declare namespace WebExt {
     };
     tabs: {
       create(properties: { url: string }): Promise<unknown>;
+      /** A tab's `url` is there only with `activeTab` (the popup's own tab) or the `tabs` permission. */
+      query(query: {
+        active?: boolean;
+        currentWindow?: boolean;
+      }): Promise<{ id?: number; url?: string }[]>;
       sendMessage(
         tabId: number,
         message: unknown,

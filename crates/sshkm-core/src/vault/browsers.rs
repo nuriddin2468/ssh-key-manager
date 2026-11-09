@@ -28,6 +28,8 @@ use crate::{Error, Result};
 const BROWSER_PREFIX: &str = "sshkm.browser.";
 /// Most logins offered on one page.
 const MAX_OFFERS: usize = 50;
+/// Longest username a browser may set on a login.
+const MAX_USERNAME: usize = 256;
 /// Most retired keys kept per browser: with keys changing once a day, about
 /// a month of them.
 const MAX_RETIRED: usize = 30;
@@ -421,6 +423,57 @@ impl Vault {
         tracked.times.last_modification = Some(Times::now());
         Ok(())
     }
+
+    /// Changes the username and/or the password of a login of a page, from
+    /// the extension's popup. The previous version goes to the entry's
+    /// history. `None` keeps a value as it is; a password can't be emptied.
+    pub fn edit_login(
+        &mut self,
+        page: &Origin,
+        id: &str,
+        username: Option<&str>,
+        password: Option<&SecretString>,
+    ) -> Result<()> {
+        let username = username.map(str::trim);
+        if let Some(username) = username {
+            if username.len() > MAX_USERNAME {
+                return Err(Error::invalid("the username is too long"));
+            }
+            check_field(username)?;
+        }
+        if let Some(password) = password {
+            if password.expose_secret().is_empty() {
+                return Err(Error::invalid("the password is empty"));
+            }
+            check_field(password.expose_secret())?;
+        }
+        self.fill_for(page, id)?;
+        let mut entry = self
+            .db
+            .entry_mut(parse_id(id)?)
+            .ok_or_else(|| Error::NotFound(format!("entry {id}")))?;
+        let username = username.filter(|u| entry.get(fields::USERNAME).unwrap_or_default() != *u);
+        let password = password.filter(|p| entry.get(fields::PASSWORD) != Some(p.expose_secret()));
+        if username.is_none() && password.is_none() {
+            return Ok(());
+        }
+        let mut tracked = entry.track_changes();
+        if let Some(username) = username {
+            tracked.set(fields::USERNAME, Value::unprotected(username));
+        }
+        if let Some(password) = password {
+            tracked.set(fields::PASSWORD, Value::protected(password.expose_secret()));
+        }
+        tracked.times.last_modification = Some(Times::now());
+        Ok(())
+    }
+
+    /// Moves a login of a page to the recycle bin, where the app can restore
+    /// it. Never deletes it for good.
+    pub fn remove_login(&mut self, page: &Origin, id: &str) -> Result<()> {
+        self.fill_for(page, id)?;
+        self.trash_entry(id)
+    }
 }
 
 /// How a login fits a page; `NotFound` if it is not a login of the page.
@@ -745,5 +798,72 @@ mod tests {
                 .is_err()
         );
         assert!(vault.save_login(&shop, "bob", &s("")).is_err());
+    }
+
+    #[test]
+    fn logins_are_edited_and_removed_only_on_their_own_site() {
+        let (_dir, mut vault) = vault();
+        let shop = page("https://shop.example.com");
+        let other = page("https://other.com");
+        let id = vault.save_login(&shop, "bob", &s("pw1")).unwrap();
+
+        // Another site can't touch it by naming its id.
+        let wrong = vault
+            .edit_login(&other, &id, Some("eve"), Some(&s("x")))
+            .unwrap_err();
+        assert_eq!(wrong.code(), crate::ErrorCode::NotFound);
+        assert_eq!(
+            vault.remove_login(&other, &id).unwrap_err().code(),
+            crate::ErrorCode::NotFound
+        );
+
+        // The username alone: the password stays.
+        vault
+            .edit_login(&shop, &id, Some(" robert "), None)
+            .unwrap();
+        let entry = vault.entry(&id).unwrap();
+        assert_eq!(entry.summary.username, "robert");
+        assert_eq!(entry.history_len, 1);
+        assert_eq!(
+            vault.check_login(&shop, "robert", &s("pw1")),
+            CheckReply::Saved
+        );
+
+        // The password alone: the old one goes to the history.
+        vault.edit_login(&shop, &id, None, Some(&s("pw2"))).unwrap();
+        assert_eq!(
+            vault
+                .secret(&id, crate::vault::SecretField::Password)
+                .unwrap()
+                .expose_secret(),
+            "pw2"
+        );
+        assert_eq!(vault.entry(&id).unwrap().history_len, 2);
+
+        // Nothing new: no new history.
+        vault
+            .edit_login(&shop, &id, Some("robert"), Some(&s("pw2")))
+            .unwrap();
+        vault.edit_login(&shop, &id, None, None).unwrap();
+        assert_eq!(vault.entry(&id).unwrap().history_len, 2);
+
+        assert!(vault.edit_login(&shop, &id, None, Some(&s(""))).is_err());
+        assert!(
+            vault
+                .edit_login(&shop, &id, Some(&"x".repeat(MAX_USERNAME + 1)), None)
+                .is_err()
+        );
+        assert!(vault.edit_login(&shop, &id, Some("a\0b"), None).is_err());
+
+        // Removing moves it to the recycle bin, where it is no login of the
+        // page any more.
+        vault.remove_login(&shop, &id).unwrap();
+        let entry = vault.entry(&id).unwrap();
+        assert!(entry.summary.in_trash);
+        assert_eq!(vault.logins_for(&shop), Vec::new());
+        assert!(vault.remove_login(&shop, &id).is_err());
+        assert!(vault.edit_login(&shop, &id, Some("x"), None).is_err());
+        vault.restore_entry(&id).unwrap();
+        assert_eq!(vault.logins_for(&shop).len(), 1);
     }
 }

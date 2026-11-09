@@ -1,5 +1,5 @@
 // What the extension draws on a page: the menu of saved logins under a login
-// field, and the "Save login?" banner. Each lives in a closed shadow root on
+// field, the "Save login?" banner, and the "Couldn't sign in?" banner. Each lives in a closed shadow root on
 // an element of its own, so the page's styles can't reach in and its scripts
 // can't read the logins listed. The look follows the app: its dark popover
 // surface, the Passwords section's pink accent and its type sizes.
@@ -11,7 +11,7 @@
 // hid the element it lives on, which is in the page's own DOM.
 
 import type { LoginOffer } from '../shared/client';
-import { t } from '../shared/i18n';
+import { loginName, t } from '../shared/i18n';
 
 const STYLE = `
 :host { all: initial; }
@@ -66,6 +66,7 @@ const STYLE = `
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
   height: 38px; margin: 1px 0 2px; font-size: 14px; line-height: 19px; font-weight: 600; color: #f2f4f8; overflow-wrap: anywhere;
 }
+.banner h2.short { height: auto; margin-bottom: 4px; }
 .banner .text { flex: 1; min-width: 0; }
 .banner .input {
   appearance: none; box-sizing: border-box; display: block; width: 100%;
@@ -97,6 +98,9 @@ const STYLE = `
   box-shadow: 0 8px 20px -8px rgb(244 114 182 / 0.75), inset 0 1px 0 rgb(255 255 255 / 0.5);
 }
 .btn.primary:hover { filter: brightness(1.1); }
+.btn.danger { color: #ff9b9b; }
+.btn.danger:hover { background: rgb(255 107 107 / 0.12); color: #ffb4b4; }
+.banner .detail { margin: 0; font-size: 12.5px; line-height: 18px; color: #c9cfda; overflow-wrap: anywhere; }
 .btn:focus-visible { outline: 2px solid #f9a8d4; outline-offset: 2px; }
 .btn[aria-busy="true"] { opacity: 0.6; pointer-events: none; }
 .close {
@@ -564,6 +568,42 @@ export class LoginMenu extends Surface {
   }
 }
 
+/**
+ * The frame of a banner at the top right of the page, in place of what
+ * `root` showed: the logo, a two-line title, a close button, a line for
+ * what happened, the actions, and a line for screen readers.
+ */
+function bannerParts(root: ShadowRoot, title: string) {
+  for (const node of [...root.childNodes]) if (node.nodeName !== 'STYLE') node.remove();
+  const panel = element('div', 'panel banner');
+  panel.setAttribute('role', 'dialog');
+  panel.setAttribute('aria-label', title);
+  const row = element('div', 'row');
+  const text = element('div', 'text');
+  const heading = element('h2', undefined, title);
+  // A title too long for two lines shows in full on hover.
+  heading.title = title;
+  text.append(heading);
+  const close = element('button', 'close');
+  close.type = 'button';
+  close.setAttribute('aria-label', t('close'));
+  close.append(icon(CLOSE));
+  row.append(logo(), text, close);
+  const status = element('p', 'status');
+  status.setAttribute('role', 'status');
+  const actions = element('div', 'actions');
+  const announce = element('p', 'sr-only');
+  announce.setAttribute('role', 'status');
+  panel.append(row, status, actions, announce);
+  return { panel, text, heading, close, status, actions, announce };
+}
+
+function actionButton(label: string, className = 'btn'): HTMLButtonElement {
+  const button = element('button', className, label);
+  button.type = 'button';
+  return button;
+}
+
 export interface SaveOffer {
   id: string;
   /** The page's host, to name it. */
@@ -610,21 +650,11 @@ export class SaveBanner extends Surface {
   }
 
   show(offer: SaveOffer): void {
-    for (const node of [...this.root.childNodes]) if (node.nodeName !== 'STYLE') node.remove();
     const title =
       offer.mode === 'update'
         ? t('updateTitle', { title: offer.title ?? offer.site })
         : t('saveTitle', { site: offer.site });
-    const panel = element('div', 'panel banner');
-    panel.setAttribute('role', 'dialog');
-    panel.setAttribute('aria-label', title);
-
-    const row = element('div', 'row');
-    const text = element('div', 'text');
-    const heading = element('h2', undefined, title);
-    // A title too long for two lines shows in full on hover.
-    heading.title = title;
-    text.append(heading);
+    const { panel, text, close, status, actions, announce } = bannerParts(this.root, title);
     let username: HTMLInputElement | null = null;
     if (!offer.elsewhere) {
       username = element('input', 'input');
@@ -637,15 +667,6 @@ export class SaveBanner extends Surface {
       username.setAttribute('aria-label', t('usernameLabel'));
       text.append(username);
     }
-    const close = element('button', 'close');
-    close.type = 'button';
-    close.setAttribute('aria-label', t('close'));
-    close.append(icon(CLOSE));
-    row.append(logo(), text, close);
-
-    const status = element('p', 'status');
-    status.setAttribute('role', 'status');
-    const actions = element('div', 'actions');
     const later = element('button', 'btn', t('notNow'));
     later.type = 'button';
     const save = element(
@@ -655,14 +676,11 @@ export class SaveBanner extends Surface {
     );
     save.type = 'button';
     actions.append(later, save);
+    this.root.append(panel);
     // Shown without taking focus: announce it.
-    const announce = element('p', 'sr-only');
-    announce.setAttribute('role', 'status');
-    panel.append(row, status, actions, announce);
     setTimeout(() => {
       announce.textContent = title;
     }, 50);
-    this.root.append(panel);
 
     const dismiss = (event: Event) => {
       if (!event.isTrusted) return;
@@ -705,5 +723,114 @@ export class SaveBanner extends Surface {
 
     this.place({ top: '16px', right: '16px' }, document.activeElement);
     this.settling.restart();
+  }
+}
+
+/** The login a sign-in that seems to have failed was filled with. */
+export interface SignInLogin {
+  title: string;
+  username: string;
+}
+
+export interface SignInHandlers {
+  /** The user will type the right password: point them at the page's field. */
+  onUpdate: () => void;
+  /** Resolves with what to say: moved to the recycle bin, or why not. */
+  onRemove: () => Promise<{ ok: boolean; message: string }>;
+  onDismiss: () => void;
+}
+
+/** How long the banner stays once it said what happens next. */
+const SIGN_IN_DONE_FOR = 8000;
+
+/**
+ * "Couldn't sign in?", at the top right of the page, when the page's
+ * sign-in form came back right after the user sent it filled with a saved
+ * login: the saved password may be out of date. Update points the user at
+ * the page's password field, whose new password the "Update password?"
+ * banner then offers to save once they sign in. Remove moves the login to
+ * the vault's recycle bin, after asking.
+ */
+export class SignInBanner extends Surface {
+  private timer: ReturnType<typeof setTimeout> | undefined;
+
+  constructor(private readonly handlers: SignInHandlers) {
+    super();
+  }
+
+  show(login: SignInLogin): void {
+    clearTimeout(this.timer);
+    const title = t('signInFailedTitle');
+    const { panel, text, heading, close, status, actions, announce } = bannerParts(
+      this.root,
+      title,
+    );
+    // One line, unlike the save banner's, whose height mustn't tell what it offers.
+    heading.classList.add('short');
+    const name = loginName(login);
+    const detail = element('p', 'detail', t('signInFailedText', { login: name }));
+    text.append(detail);
+    const remove = actionButton(t('signInRemove'), 'btn danger');
+    const update = actionButton(t('update'), 'btn primary');
+    actions.append(remove, update);
+    this.root.append(panel);
+    setTimeout(() => {
+      announce.textContent = `${title} ${detail.textContent}`;
+    }, 50);
+
+    const finish = () => {
+      actions.remove();
+      this.timer = setTimeout(() => this.hide(), SIGN_IN_DONE_FOR);
+    };
+    const dismiss = (event: Event) => {
+      if (!event.isTrusted) return;
+      this.hide();
+      this.handlers.onDismiss();
+    };
+    close.addEventListener('click', dismiss);
+    panel.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') dismiss(event);
+    });
+    update.addEventListener('click', (event) => {
+      if (!this.accepts(event, update)) return;
+      status.textContent = t('signInUpdateHint');
+      status.classList.add('ok');
+      finish();
+      this.handlers.onUpdate();
+    });
+    remove.addEventListener('click', (event) => {
+      if (!this.accepts(event, remove)) return;
+      // Ask first, in the banner: the login goes to the recycle bin.
+      detail.textContent = t('moveToBinConfirm', { login: name });
+      const cancel = actionButton(t('cancel'));
+      const confirm = actionButton(t('moveToBin'), 'btn danger');
+      actions.replaceChildren(cancel, confirm);
+      announce.textContent = detail.textContent;
+      confirm.focus();
+      this.settling.restart();
+      cancel.addEventListener('click', (cancelled) => {
+        if (!cancelled.isTrusted) return;
+        detail.textContent = t('signInFailedText', { login: name });
+        actions.replaceChildren(remove, update);
+        remove.focus();
+      });
+      confirm.addEventListener('click', async (confirmed) => {
+        if (!this.accepts(confirmed, confirm) || confirm.hasAttribute('aria-busy')) return;
+        confirm.setAttribute('aria-busy', 'true');
+        const result = await this.handlers.onRemove();
+        confirm.removeAttribute('aria-busy');
+        status.textContent = result.message;
+        status.classList.toggle('ok', result.ok);
+        if (result.ok) finish();
+      });
+    });
+
+    this.place({ top: '16px', right: '16px' }, document.activeElement);
+    this.settling.restart();
+  }
+
+  override hide(): void {
+    clearTimeout(this.timer);
+    super.hide();
   }
 }

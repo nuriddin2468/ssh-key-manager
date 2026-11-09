@@ -25,6 +25,11 @@
 //! - A browser may check [`MAX_CHECKS`] typed logins a minute and ask the
 //!   user [`MAX_PROMPTS`] times, so whoever holds its keys can neither guess
 //!   saved passwords by checking nor wear the user down with prompts.
+//! - Editing or removing a login asks nothing in the app: no secret leaves,
+//!   the old password stays in the entry's history and a removed login goes
+//!   to the recycle bin, where the app restores it. The extension asks the
+//!   user first. A browser may change [`MAX_CHANGES`] logins a minute, so
+//!   whoever holds its keys can't clear out a site's logins at once.
 //! - A browser changes its keys now and then ([`Action::Rekey`]). Its old
 //!   keys are kept, retired; a request sealed with one after that shows that
 //!   someone else holds a copy, and the pairing is revoked at once
@@ -63,6 +68,8 @@ const LIMIT_WINDOW: Duration = Duration::from_secs(60);
 /// Typed logins a browser may check in [`LIMIT_WINDOW`]: a person signs in
 /// a few times a minute at most.
 pub const MAX_CHECKS: usize = 10;
+/// Logins a browser may edit or remove in [`LIMIT_WINDOW`].
+pub const MAX_CHANGES: usize = 10;
 /// Times a browser may ask the user about fills in [`LIMIT_WINDOW`].
 pub const MAX_PROMPTS: usize = 5;
 /// Times the browsers may ask the user to unlock the vault in
@@ -208,6 +215,7 @@ pub struct Broker {
     fills: Arc<Fills>,
     fill_wait: Duration,
     checks: Mutex<Limiter>,
+    changes: Mutex<Limiter>,
     unlocks: Mutex<Limiter>,
 }
 
@@ -230,6 +238,7 @@ impl Broker {
             fills: Arc::default(),
             fill_wait: FILL_WAIT,
             checks: Mutex::default(),
+            changes: Mutex::default(),
             unlocks: Mutex::default(),
         }
     }
@@ -533,6 +542,34 @@ impl Broker {
                 env.changed(Changed::Entries);
                 Ok(to_json(&SavedReply { entry_id }))
             }
+            Action::Edit {
+                origin,
+                entry_id,
+                username,
+                password,
+            } => {
+                let page = page(&origin)?;
+                self.take_change(client_id)?;
+                env.write(|vault| {
+                    Ok(vault.edit_login(
+                        &page,
+                        &entry_id,
+                        username.as_deref(),
+                        password.as_ref(),
+                    )?)
+                })
+                .map_err(|e| reply_error(&e))?;
+                env.changed(Changed::Entries);
+                Ok(to_json(&SavedReply { entry_id }))
+            }
+            Action::Remove { origin, entry_id } => {
+                let page = page(&origin)?;
+                self.take_change(client_id)?;
+                env.write(|vault| Ok(vault.remove_login(&page, &entry_id)?))
+                    .map_err(|e| reply_error(&e))?;
+                env.changed(Changed::Entries);
+                Ok(to_json(&SavedReply { entry_id }))
+            }
             Action::Rekey { public_key } => {
                 let client_public =
                     channel::decode(&public_key, 65).map_err(|_| ReplyError::Invalid)?;
@@ -544,6 +581,17 @@ impl Broker {
                     public_key: channel::encode(&pairing.app_public),
                 }))
             }
+        }
+    }
+
+    /// Counts one more login edited or removed by `client_id`: `TooMany`
+    /// past [`MAX_CHANGES`] a minute.
+    fn take_change(&self, client_id: &str) -> Result<(), ReplyError> {
+        if lock(&self.changes).take(client_id, MAX_CHANGES, Instant::now()) {
+            Ok(())
+        } else {
+            log::warn!("browser: too many logins edited or removed; refusing");
+            Err(ReplyError::TooMany)
         }
     }
 

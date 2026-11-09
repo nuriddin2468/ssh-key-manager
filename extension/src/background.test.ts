@@ -38,6 +38,7 @@ const client = vi.hoisted(() => ({
   sameSite: vi.fn(),
   showApp: vi.fn(),
   unlockVault: vi.fn(),
+  changeLogin: vi.fn(),
 }));
 vi.mock('./shared/client', () => client);
 
@@ -227,5 +228,133 @@ describe('typed logins', () => {
       username: '',
       elsewhere: true,
     });
+  });
+});
+
+describe('a sign-in with a filled login', () => {
+  const bank = { origin: 'https://bank.example', url: 'https://bank.example/login' };
+  const offer = { id: 'e1', title: 'Bank', username: 'alice', exact: true };
+
+  beforeEach(() => {
+    client.request.mockImplementation(async (action: object) =>
+      'logins' in action
+        ? { ok: true, value: { logins: [offer] } }
+        : { ok: true, value: { status: 'new' } },
+    );
+    client.changeLogin.mockReset();
+    client.changeLogin.mockResolvedValue({ ok: true, value: undefined });
+  });
+
+  it('that comes back is said once per login and tab', async () => {
+    await send({ kind: 'filled', entryId: 'e1' }, { ...bank, tab: { id: 11 } });
+    // Not sent yet: nothing to say.
+    expect(await send({ kind: 'signInCheck' }, { ...bank, tab: { id: 11 } })).toBeNull();
+    await send({ kind: 'signInSent' }, { ...bank, tab: { id: 11 } });
+    const failed = { entryId: 'e1', title: 'Bank', username: 'alice' };
+    expect(await send({ kind: 'signInCheck' }, { ...bank, tab: { id: 11 } })).toEqual(failed);
+    // Only for this very origin, in this tab, in the top frame.
+    expect(
+      await send({ kind: 'signInCheck' }, { origin: 'https://www.bank.example', tab: { id: 11 } }),
+    ).toBeNull();
+    expect(await send({ kind: 'signInCheck' }, { ...bank, tab: { id: 12 } })).toBeNull();
+    expect(
+      await send({ kind: 'signInCheck' }, { ...bank, tab: { id: 11 }, frameId: 2 }),
+    ).toBeNull();
+
+    await send({ kind: 'signInWarned', entryId: 'e1' }, { ...bank, tab: { id: 11 } });
+    expect(await send({ kind: 'signInCheck' }, { ...bank, tab: { id: 11 } })).toBeNull();
+    // Filled and sent again: still not said twice.
+    await send({ kind: 'filled', entryId: 'e1' }, { ...bank, tab: { id: 11 } });
+    await send({ kind: 'signInSent' }, { ...bank, tab: { id: 11 } });
+    expect(await send({ kind: 'signInCheck' }, { ...bank, tab: { id: 11 } })).toBeNull();
+  });
+
+  it('is forgotten moments after it was sent', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(5_000_000);
+    await send({ kind: 'filled', entryId: 'e1' }, { ...bank, tab: { id: 13 } });
+    await send({ kind: 'signInSent' }, { ...bank, tab: { id: 13 } });
+    vi.setSystemTime(5_000_000 + 21_000);
+    expect(await send({ kind: 'signInCheck' }, { ...bank, tab: { id: 13 } })).toBeNull();
+  });
+
+  it('removes only the login the banner named, on its page', async () => {
+    const tab = { ...bank, tab: { id: 14 } };
+    const remove = { kind: 'removeLogin', entryId: 'e1' };
+    expect(await send(remove, tab)).toEqual({ ok: false, problem: 'expired' });
+    await send({ kind: 'filled', entryId: 'e1' }, tab);
+    await send({ kind: 'signInSent' }, tab);
+    await send({ kind: 'signInWarned', entryId: 'e1' }, tab);
+    expect(await send({ kind: 'removeLogin', entryId: 'other' }, tab)).toEqual({
+      ok: false,
+      problem: 'expired',
+    });
+    expect(await send(remove, { origin: 'https://evil.example', tab: { id: 14 } })).toEqual({
+      ok: false,
+      problem: 'expired',
+    });
+    expect(client.changeLogin).not.toHaveBeenCalled();
+    expect(await send(remove, tab)).toEqual({ ok: true });
+    expect(client.changeLogin).toHaveBeenCalledWith('https://bank.example', {
+      remove: { entryId: 'e1' },
+    });
+    client.changeLogin.mockResolvedValue({ ok: false, problem: 'outdatedApp' });
+    expect(await send(remove, tab)).toEqual({ ok: false, problem: 'outdatedApp' });
+  });
+});
+
+describe('a password-change form', () => {
+  const site = { origin: 'https://store.example', url: 'https://store.example/account' };
+  const offers = [{ id: 'e1', title: 'Shop', username: 'bob', exact: true }];
+
+  beforeEach(() => {
+    client.request.mockImplementation(async (action: object) =>
+      'logins' in action
+        ? { ok: true, value: { logins: offers } }
+        : { ok: true, value: { status: 'update', entryId: 'e1', title: 'Shop' } },
+    );
+  });
+
+  it('without a username names the site\u2019s only login', async () => {
+    await send(
+      { kind: 'capture', username: '', password: 'new1', change: true },
+      { ...site, tab: { id: 21 } },
+    );
+    expect(client.request).toHaveBeenLastCalledWith({
+      check: { origin: 'https://store.example', username: 'bob', password: 'new1' },
+    });
+  });
+
+  it('names no login for a form that changes no password', async () => {
+    await send({ kind: 'capture', username: '', password: 'pw' }, { ...site, tab: { id: 22 } });
+    expect(client.request).toHaveBeenLastCalledWith({
+      check: { origin: 'https://store.example', username: '', password: 'pw' },
+    });
+  });
+});
+
+describe('the popup', () => {
+  it('drops the logins it changed from the cache', async () => {
+    const { runtime } = (globalThis as unknown as { chrome: { runtime: Record<string, unknown> } })
+      .chrome;
+    runtime.getURL = (path: string) => `chrome-extension://ext/${path}`;
+    const bank = { origin: 'https://cache.example', url: 'https://cache.example/login' };
+    await send({ kind: 'logins' }, bank);
+    await send({ kind: 'logins' }, bank);
+    const lookups = () => client.request.mock.calls.filter(([action]) => 'logins' in action).length;
+    expect(lookups()).toBe(1);
+    // A page may not ask for it.
+    await send({ kind: 'loginsChanged', origin: 'https://cache.example' }, bank);
+    await send({ kind: 'logins' }, bank);
+    expect(lookups()).toBe(1);
+    const popup = { id: 'ext', tab: undefined, url: 'chrome-extension://ext/popup.html' };
+    await new Promise<void>((resolve) => {
+      world.listener?.({ kind: 'loginsChanged', origin: 'https://cache.example' }, popup, () =>
+        resolve(),
+      );
+      resolve();
+    });
+    await send({ kind: 'logins' }, bank);
+    expect(lookups()).toBe(2);
   });
 });

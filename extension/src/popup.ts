@@ -2,6 +2,7 @@
 // one thing to do about it. Once connected, it also turns the browser's own
 // password suggestions off and on (shared/suggestions.ts).
 
+import { siteLogins, tabOrigin } from './popupLogins';
 import {
   disconnect,
   hello,
@@ -213,7 +214,7 @@ function suggestionsSetting(): HTMLElement {
   );
 }
 
-function render(state: State): void {
+function render(state: State, origin: string | null = null): void {
   const brand = h(
     'div',
     { className: 'brand' },
@@ -247,14 +248,23 @@ function render(state: State): void {
   card.tabIndex = -1;
   const connected = state === 'ready' || state === 'locked';
   // The one thing to do comes first; the setting goes under it.
-  app.replaceChildren(brand, card, actions, ...(connected ? [suggestionsSetting()] : []));
+  const logins = state === 'ready' && origin ? [siteLogins(origin)] : [];
+  // The site's logins go right under "Connected": what the popup is opened for.
+  app.replaceChildren(
+    brand,
+    card,
+    ...logins,
+    actions,
+    ...(connected ? [suggestionsSetting()] : []),
+  );
   // The button just pressed goes away: keep keyboard focus here.
   if (hadFocus) card.focus({ preventScroll: true });
 }
 
 async function refresh(): Promise<void> {
   render('checking');
-  render(await check());
+  const [state, origin] = await Promise.all([check(), tabOrigin()]);
+  render(state, origin);
 }
 
 void refresh();

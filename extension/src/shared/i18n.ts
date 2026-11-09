@@ -2,6 +2,8 @@
 // first of the user's preferred languages the app speaks, else English.
 // `{name}` marks a value filled in by `t`.
 
+import type { Problem } from './client';
+
 const en = {
   appName: 'SSH Key Manager',
   checking: 'Checking…',
@@ -75,6 +77,34 @@ const en = {
   saveFailed: 'Couldn’t save. Try again.',
   usernameLabel: 'Username for this login',
   usernamePlaceholder: 'Username or email (optional)',
+  siteLogins: 'Logins for {site}',
+  siteLoginsNone: 'No saved logins for this site.',
+  siteLoginsFailed: 'Couldn’t load the logins for this site.',
+  editLogin: 'Edit {login}',
+  edit: 'Edit',
+  usernameField: 'Username',
+  newPassword: 'New password',
+  newPasswordHint: 'Leave empty to keep the current password.',
+  showPassword: 'Show password',
+  hidePassword: 'Hide password',
+  cancel: 'Cancel',
+  loginChanged: 'Saved. The old version stays in the entry’s history.',
+  moveToBin: 'Move to recycle bin',
+  moveToBinConfirm: 'Move {login} to the recycle bin? You can restore it in SSH Key Manager.',
+  movedToBin: 'Moved to the recycle bin in SSH Key Manager. You can restore it there.',
+  changeLocked: 'Unlock the vault in SSH Key Manager, then try again.',
+  changeNotFound: 'This login is gone, or no longer belongs to this site.',
+  changeTooMany: 'Too many changes. Wait a minute, then try again.',
+  changeFailed: 'Couldn’t save the change. Try again.',
+  outdatedApp: 'Update SSH Key Manager to edit or remove logins from the browser.',
+
+  signInFailedTitle: 'Couldn’t sign in?',
+  signInFailedText: 'The password saved for {login} may be out of date.',
+  signInRemove: 'Remove from vault',
+  signInUpdateHint:
+    'Type the current password and sign in. SSH Key Manager will then offer to update the saved one.',
+  loginTitle: '“{title}”',
+  loginTitleUser: '“{title}” ({username})',
   close: 'Close',
 };
 
@@ -156,6 +186,34 @@ const ru: Strings = {
   saveFailed: 'Не удалось сохранить. Попробуйте ещё раз.',
   usernameLabel: 'Имя пользователя для этого логина',
   usernamePlaceholder: 'Имя пользователя или email (необязательно)',
+  siteLogins: 'Логины для {site}',
+  siteLoginsNone: 'Для этого сайта нет сохранённых логинов.',
+  siteLoginsFailed: 'Не удалось загрузить логины для этого сайта.',
+  editLogin: 'Изменить {login}',
+  edit: 'Изменить',
+  usernameField: 'Имя пользователя',
+  newPassword: 'Новый пароль',
+  newPasswordHint: 'Оставьте пустым, чтобы не менять пароль.',
+  showPassword: 'Показать пароль',
+  hidePassword: 'Скрыть пароль',
+  cancel: 'Отмена',
+  loginChanged: 'Сохранено. Прежняя версия осталась в истории записи.',
+  moveToBin: 'Переместить в корзину',
+  moveToBinConfirm: 'Переместить {login} в корзину? Его можно восстановить в SSH Key Manager.',
+  movedToBin: 'Перемещено в корзину SSH Key Manager. Там его можно восстановить.',
+  changeLocked: 'Разблокируйте хранилище в SSH Key Manager и попробуйте снова.',
+  changeNotFound: 'Этого логина больше нет, или он больше не относится к этому сайту.',
+  changeTooMany: 'Слишком много изменений. Подождите минуту и попробуйте снова.',
+  changeFailed: 'Не удалось сохранить изменение. Попробуйте ещё раз.',
+  outdatedApp: 'Обновите SSH Key Manager, чтобы изменять и удалять логины из браузера.',
+
+  signInFailedTitle: 'Не получилось войти?',
+  signInFailedText: 'Возможно, пароль, сохранённый для {login}, устарел.',
+  signInRemove: 'Удалить из хранилища',
+  signInUpdateHint:
+    'Введите действующий пароль и войдите. SSH Key Manager предложит обновить сохранённый.',
+  loginTitle: '«{title}»',
+  loginTitleUser: '«{title}» ({username})',
   close: 'Закрыть',
 };
 
@@ -234,6 +292,34 @@ const uz: Strings = {
   saveFailed: 'Saqlab boʻlmadi. Qayta urinib koʻring.',
   usernameLabel: 'Bu login uchun foydalanuvchi nomi',
   usernamePlaceholder: 'Foydalanuvchi nomi yoki email (ixtiyoriy)',
+  siteLogins: '{site} uchun loginlar',
+  siteLoginsNone: 'Bu sayt uchun saqlangan login yoʻq.',
+  siteLoginsFailed: 'Bu sayt loginlarini yuklab boʻlmadi.',
+  editLogin: 'Tahrirlash: {login}',
+  edit: 'Tahrirlash',
+  usernameField: 'Foydalanuvchi nomi',
+  newPassword: 'Yangi parol',
+  newPasswordHint: 'Joriy parolni saqlab qolish uchun boʻsh qoldiring.',
+  showPassword: 'Parolni koʻrsatish',
+  hidePassword: 'Parolni yashirish',
+  cancel: 'Bekor qilish',
+  loginChanged: 'Saqlandi. Oldingi versiya yozuv tarixida qoladi.',
+  moveToBin: 'Savatga koʻchirish',
+  moveToBinConfirm: '{login} savatga koʻchirilsinmi? Uni SSH Key Managerda tiklash mumkin.',
+  movedToBin: 'SSH Key Manager savatiga koʻchirildi. Uni oʻsha yerda tiklash mumkin.',
+  changeLocked: 'SSH Key Managerda omborni oching va qayta urinib koʻring.',
+  changeNotFound: 'Bu login endi yoʻq yoki bu saytga tegishli emas.',
+  changeTooMany: 'Oʻzgarishlar juda koʻp. Bir daqiqa kuting va qayta urinib koʻring.',
+  changeFailed: 'Oʻzgarishni saqlab boʻlmadi. Qayta urinib koʻring.',
+  outdatedApp: 'Brauzerdan loginlarni tahrirlash va oʻchirish uchun SSH Key Managerni yangilang.',
+
+  signInFailedTitle: 'Kirib boʻlmadimi?',
+  signInFailedText: '{login} uchun saqlangan parol eskirgan boʻlishi mumkin.',
+  signInRemove: 'Ombordan olib tashlash',
+  signInUpdateHint:
+    'Amaldagi parolni kiriting va tizimga kiring. Shunda SSH Key Manager saqlanganini yangilashni taklif qiladi.',
+  loginTitle: '«{title}»',
+  loginTitleUser: '«{title}» ({username})',
   close: 'Yopish',
 };
 
@@ -261,4 +347,27 @@ export function t(key: Key, values: Record<string, string> = {}): string {
 
 export function currentLanguage(): Language {
   return language;
+}
+
+/** What to say when a login couldn't be edited or removed. */
+export function changeProblem(problem: Problem | undefined): Key {
+  switch (problem) {
+    case 'locked':
+      return 'changeLocked';
+    case 'notFound':
+      return 'changeNotFound';
+    case 'tooMany':
+      return 'changeTooMany';
+    case 'outdatedApp':
+      return 'outdatedApp';
+    default:
+      return 'changeFailed';
+  }
+}
+
+/** A login named as the extension's texts quote it: “Title” (username). */
+export function loginName(login: { title: string; username: string }): string {
+  return login.username
+    ? t('loginTitleUser', { title: login.title, username: login.username })
+    : t('loginTitle', { title: login.title });
 }

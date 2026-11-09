@@ -59,7 +59,9 @@ export type Problem =
   /** The browser can't start the host: autofill is off in the app, or no app. */
   | 'noHost'
   /** This browser isn't paired. */
-  | 'unpaired';
+  | 'unpaired'
+  /** The app is too old for the request: it doesn't know the action. */
+  | 'outdatedApp';
 
 export type Result<T> = { ok: true; value: T } | { ok: false; problem: Problem };
 
@@ -87,6 +89,8 @@ export type Action =
   | { check: { origin: string; username: string; password: string } }
   | { save: { origin: string; username: string; password: string } }
   | { update: { origin: string; entryId: string; password: string } }
+  | { edit: { origin: string; entryId: string; username?: string; password?: string } }
+  | { remove: { origin: string; entryId: string } }
   | { rekey: { publicKey: string } };
 
 type Reply = { type: string; code?: Problem; [key: string]: unknown };
@@ -300,6 +304,27 @@ export async function pair(onCode: (code: string) => void): Promise<Result<void>
   } catch {
     return { ok: false, problem: 'invalid' };
   }
+}
+
+/** A change to a saved login of `origin`'s site. */
+export type LoginChange =
+  | { edit: { entryId: string; username?: string; password?: string } }
+  | { remove: { entryId: string } };
+
+/**
+ * Edits or removes (to the vault's recycle bin) a login of `origin`'s site.
+ * The app checks that the login belongs there. An app from before these
+ * actions can't read the request and answers `invalid`: that is
+ * `outdatedApp`, to say the app needs an update.
+ */
+export async function changeLogin(origin: string, change: LoginChange): Promise<Result<void>> {
+  const action: Action =
+    'edit' in change
+      ? { edit: { origin, ...change.edit } }
+      : { remove: { origin, entryId: change.remove.entryId } };
+  const result = await request<{ entryId: string }>(action);
+  if (result.ok) return { ok: true, value: undefined };
+  return { ok: false, problem: result.problem === 'invalid' ? 'outdatedApp' : result.problem };
 }
 
 /** Forgets the pairing here, and in the app if it can be reached. */

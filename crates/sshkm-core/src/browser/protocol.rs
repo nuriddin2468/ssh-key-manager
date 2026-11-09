@@ -125,6 +125,25 @@ pub enum Action {
         entry_id: String,
         password: SecretString,
     },
+    /// Changes the username and/or the password of a login of the page,
+    /// from the extension's popup. A value left out stays as it is.
+    /// Unknown to older apps, which answer `invalid`.
+    Edit {
+        origin: String,
+        #[serde(rename = "entryId")]
+        entry_id: String,
+        #[serde(default)]
+        username: Option<String>,
+        #[serde(default)]
+        password: Option<SecretString>,
+    },
+    /// Moves a login of the page to the vault's recycle bin. Unknown to
+    /// older apps, which answer `invalid`.
+    Remove {
+        origin: String,
+        #[serde(rename = "entryId")]
+        entry_id: String,
+    },
     /// Changes this browser's keys: a new ECDH exchange, as in pairing,
     /// over the sealed channel. The new keys open requests alongside the
     /// current ones until the browser first uses them; from then on the old
@@ -331,6 +350,41 @@ mod tests {
         let opened: Opened =
             serde_json::from_str(r#"{"sentAt":1,"action":{"rekey":{"publicKey":"pk"}}}"#).unwrap();
         assert!(matches!(opened.action, Action::Rekey { public_key } if public_key == "pk"));
+
+        let opened: Opened = serde_json::from_str(
+            r#"{"sentAt":1,"action":{"edit":{"origin":"https://a.com","entryId":"x","password":"n"}}}"#,
+        )
+        .unwrap();
+        let Action::Edit {
+            entry_id,
+            username,
+            password,
+            ..
+        } = opened.action
+        else {
+            panic!("not an edit");
+        };
+        assert_eq!(entry_id, "x");
+        assert_eq!(username, None);
+        assert_eq!(password.unwrap().expose_secret(), "n");
+        let opened: Opened = serde_json::from_str(
+            r#"{"sentAt":1,"action":{"edit":{"origin":"https://a.com","entryId":"x","username":"me"}}}"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(opened.action, Action::Edit { username: Some(u), password: None, .. } if u == "me")
+        );
+        let opened: Opened = serde_json::from_str(
+            r#"{"sentAt":1,"action":{"remove":{"origin":"https://a.com","entryId":"x"}}}"#,
+        )
+        .unwrap();
+        assert!(matches!(opened.action, Action::Remove { entry_id, .. } if entry_id == "x"));
+        // An action this app doesn't know is refused, as an older app
+        // refuses these.
+        assert!(
+            serde_json::from_str::<Opened>(r#"{"sentAt":1,"action":{"rename":{"origin":"x"}}}"#)
+                .is_err()
+        );
     }
 
     #[test]

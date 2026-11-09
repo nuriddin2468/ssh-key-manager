@@ -1,5 +1,41 @@
 [
   {
+    "version": "0.10.0",
+    "date": "2026-11-09",
+    "changes": [
+      {
+        "kind": "notice",
+        "en": "The browser extension now offers to update a saved password when you change it on a site's password-change form. And if signing in with a filled password fails, it asks “Couldn't sign in?” once, with Update and Remove from vault (to the recycle bin).",
+        "ru": "Расширение для браузера теперь предлагает обновить сохранённый пароль, когда вы меняете его в форме смены пароля на сайте. А если войти с подставленным паролем не получилось, оно один раз спросит «Не получилось войти?» с кнопками «Обновить» и «Удалить из хранилища» (в корзину).",
+        "uz": "Brauzer kengaytmasi endi saytdagi parolni almashtirish formasida parolni oʻzgartirganingizda saqlangan parolni yangilashni taklif qiladi. Toʻldirilgan parol bilan kirib boʻlmasa, u bir marta «Kirib boʻlmadimi?» deb soʻraydi va «Yangilash» hamda «Ombordan olib tashlash» (savatga) tugmalarini koʻrsatadi."
+      },
+      {
+        "kind": "new",
+        "en": "Import passwords now reads Chrome, Edge, Brave, Vivaldi and Firefox directly, after the system asks your permission, so no plain-text export file is needed. Where a browser can't be read (Safari, or passwords Chrome on Windows keeps to itself), the CSV guide is still there.",
+        "ru": "«Импорт паролей» теперь читает Chrome, Edge, Brave, Vivaldi и Firefox напрямую, спросив разрешения у системы, — незашифрованный файл выгрузки больше не нужен. Там, где браузер прочитать нельзя (Safari или пароли, которые Chrome в Windows хранит только для себя), осталась инструкция по выгрузке в CSV.",
+        "uz": "«Parollarni import qilish» endi Chrome, Edge, Brave, Vivaldi va Firefox’ni tizimdan ruxsat soʻrab, toʻgʻridan-toʻgʻri oʻqiydi — shifrlanmagan eksport fayli kerak emas. Brauzerni oʻqib boʻlmaydigan joyda (Safari yoki Chrome Windows’da faqat oʻzi uchun saqlaydigan parollar) CSV eksport yoʻriqnomasi qoladi."
+      },
+      {
+        "kind": "new",
+        "en": "The browser extension's popup lists the logins saved for the site you're on: change a login's username or password, or move it to the vault's recycle bin. The previous version stays in the entry's history. This needs the new version of both the app and the extension.",
+        "ru": "Окно расширения для браузера показывает логины, сохранённые для открытого сайта: можно изменить имя пользователя или пароль либо переместить логин в корзину хранилища. Прежняя версия остаётся в истории записи. Нужны новые версии и приложения, и расширения.",
+        "uz": "Brauzer kengaytmasi oynasi ochiq sayt uchun saqlangan loginlarni koʻrsatadi: foydalanuvchi nomi yoki parolni oʻzgartirish yoki loginni ombor savatiga koʻchirish mumkin. Oldingi versiya yozuv tarixida qoladi. Buning uchun ilova ham, kengaytma ham yangi versiyada boʻlishi kerak."
+      },
+      {
+        "kind": "improved",
+        "en": "Importing passwords again finds logins whose password changed: they're marked “Different password”, and importing updates the entry, keeping the old password in its history, instead of adding a copy. Compare shows both passwords and, where the file says, when each changed. New logins are listed first.",
+        "ru": "Повторный импорт находит входы, у которых изменился пароль: они помечены «Другой пароль», и импорт обновляет запись, сохраняя старый пароль в истории, а не добавляет копию. «Сравнить» показывает оба пароля и, если файл это указывает, когда каждый изменён. Новые входы показываются первыми.",
+        "uz": "Qayta import paroli oʻzgargan kirishlarni topadi: ular «Boshqa parol» deb belgilanadi va import nusxa qoʻshmasdan yozuvni yangilaydi, eski parol tarixda qoladi. «Solishtirish» ikkala parolni va, fayl koʻrsatsa, har biri qachon oʻzgarganini koʻrsatadi. Yangi kirishlar birinchi koʻrsatiladi."
+      },
+      {
+        "kind": "fixed",
+        "en": "Nearby: after you sent something to another computer, or received something, the window didn't close on Done, and new pairings and sends were refused until the app restarted. It closes now. Cancel while connecting also stops at once, and nothing is sent after it.",
+        "ru": "«Рядом»: после отправки чего-либо на другой компьютер или получения окно не закрывалось по кнопке «Готово», а новые сопряжения и отправки не начинались до перезапуска приложения. Теперь окно закрывается. «Отмена» во время подключения тоже срабатывает сразу, и после неё ничего не отправляется.",
+        "uz": "Yaqin atrofda: boshqa kompyuterga biror narsa yuborilgan yoki qabul qilingandan keyin oyna «Tayyor» tugmasi bilan yopilmasdi, yangi juftlash va yuborishlar esa ilova qayta ishga tushguncha boshlanmasdi. Endi oyna yopiladi. Ulanish paytida «Bekor qilish» ham darhol ishlaydi va undan keyin hech narsa yuborilmaydi."
+      }
+    ]
+  },
+  {
     "version": "0.9.0",
     "date": "2026-11-09",
     "changes": [

@@ -9,7 +9,8 @@ use windows::Win32::Security::Cryptography::{
 use crate::{Error, Result};
 
 pub(super) fn unprotect(blob: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
-    let len = u32::try_from(blob.len()).map_err(|_| Error::Failed("the data is too large".into()))?;
+    let len =
+        u32::try_from(blob.len()).map_err(|_| Error::Failed("the data is too large".into()))?;
     let input = CRYPT_INTEGER_BLOB {
         cbData: len,
         // DPAPI only reads the input.

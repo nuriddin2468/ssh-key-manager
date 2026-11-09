@@ -209,10 +209,19 @@ mod tests {
     fn read_errors_become_outcomes_without_details() {
         let cases = [
             (BrowserReadError::Denied, "denied"),
-            (BrowserReadError::KeyUnavailable("x".into()), "keyUnavailable"),
+            (
+                BrowserReadError::KeyUnavailable("x".into()),
+                "keyUnavailable",
+            ),
             (BrowserReadError::AppBound, "appBound"),
-            (BrowserReadError::PrimaryPasswordRequired, "primaryPasswordRequired"),
-            (BrowserReadError::WrongPrimaryPassword, "wrongPrimaryPassword"),
+            (
+                BrowserReadError::PrimaryPasswordRequired,
+                "primaryPasswordRequired",
+            ),
+            (
+                BrowserReadError::WrongPrimaryPassword,
+                "wrongPrimaryPassword",
+            ),
             (BrowserReadError::Unsupported("x".into()), "unsupported"),
         ];
         for (error, kind) in cases {

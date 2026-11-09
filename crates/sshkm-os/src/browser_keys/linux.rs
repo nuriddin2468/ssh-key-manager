@@ -87,7 +87,9 @@ fn from_kwallet(folder: &str, key: &str) -> Result<Option<Zeroizing<Vec<u8>>>> {
             let password: String = proxy
                 .call("readPassword", &(handle, folder, key, APP_ID))
                 .map_err(|e| kwallet_error(&e))?;
-            Ok(Some(Zeroizing::new(Zeroizing::new(password).as_bytes().to_vec())))
+            Ok(Some(Zeroizing::new(
+                Zeroizing::new(password).as_bytes().to_vec(),
+            )))
         };
         let result = read();
         let _ = proxy.call::<_, _, i32>("close", &(handle, false, APP_ID));

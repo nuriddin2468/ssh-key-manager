@@ -4,6 +4,16 @@ What changed in each version of SSH Key Manager. The app shows these notes in yo
 
 <!-- Made from changelog/releases.json by scripts/changelog.mjs: edit that file, then run `node scripts/changelog.mjs write`. -->
 
+## 0.9.0 (2026-11-09)
+
+### New
+
+- Settings → Background → Open at login: SSH Key Manager starts when you log in and waits in the menu bar or tray without its window, so browser autofill works right away. It's off until you turn it on.
+
+### Improved
+
+- When the browser extension can't find SSH Key Manager, its popup and connect page now offer to download the app, not only to turn on Browser autofill.
+
 ## 0.8.0 (2026-11-06)
 
 ### Before you update

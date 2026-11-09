@@ -1,6 +1,0 @@
-{
-  "kind": "new",
-  "en": "Settings → Background → Open at login: SSH Key Manager starts when you log in and waits in the menu bar or tray without its window, so browser autofill works right away. It's off until you turn it on.",
-  "ru": "Настройки → Работа в фоне → «Открывать при входе в систему»: SSH Key Manager запускается при входе и ждёт в строке меню или трее без окна, поэтому автозаполнение в браузере работает сразу. Выключено, пока вы его не включите.",
-  "uz": "Sozlamalar → Fon rejimi → «Tizimga kirganda ochish»: SSH Key Manager tizimga kirganingizda ishga tushadi va menyu satrida yoki trayda oynasiz kutadi, shuning uchun brauzerda avtomatik toʻldirish darhol ishlaydi. Siz yoqmaguningizcha oʻchiq."
-}

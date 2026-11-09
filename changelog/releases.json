@@ -1,5 +1,23 @@
 [
   {
+    "version": "0.9.0",
+    "date": "2026-11-09",
+    "changes": [
+      {
+        "kind": "new",
+        "en": "Settings → Background → Open at login: SSH Key Manager starts when you log in and waits in the menu bar or tray without its window, so browser autofill works right away. It's off until you turn it on.",
+        "ru": "Настройки → Работа в фоне → «Открывать при входе в систему»: SSH Key Manager запускается при входе и ждёт в строке меню или трее без окна, поэтому автозаполнение в браузере работает сразу. Выключено, пока вы его не включите.",
+        "uz": "Sozlamalar → Fon rejimi → «Tizimga kirganda ochish»: SSH Key Manager tizimga kirganingizda ishga tushadi va menyu satrida yoki trayda oynasiz kutadi, shuning uchun brauzerda avtomatik toʻldirish darhol ishlaydi. Siz yoqmaguningizcha oʻchiq."
+      },
+      {
+        "kind": "improved",
+        "en": "When the browser extension can't find SSH Key Manager, its popup and connect page now offer to download the app, not only to turn on Browser autofill.",
+        "ru": "Если расширение для браузера не находит SSH Key Manager, его окно и страница подключения теперь предлагают скачать приложение, а не только включить «Автозаполнение в браузере».",
+        "uz": "Brauzer kengaytmasi SSH Key Managerni topa olmasa, uning oynasi va ulanish sahifasi endi faqat «Brauzerda avtomatik toʻldirish»ni yoqishni emas, ilovani yuklab olishni ham taklif qiladi."
+      }
+    ]
+  },
+  {
     "version": "0.8.0",
     "date": "2026-11-06",
     "changes": [

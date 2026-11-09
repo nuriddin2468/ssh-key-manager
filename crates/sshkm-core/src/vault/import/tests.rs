@@ -7,7 +7,7 @@ use secrecy::{ExposeSecret, SecretString};
 use tempfile::TempDir;
 
 use super::*;
-use crate::vault::{EntryInput, SecretField, VaultPaths};
+use crate::vault::{EntryInput, EntryKind, SecretField, VaultPaths};
 
 struct Fixture {
     dir: TempDir,
@@ -497,6 +497,33 @@ github.com,https://github.com,octocat,pw
         }
     );
     assert_eq!(fx.vault.entries().len(), 2);
+}
+
+#[test]
+fn import_never_updates_ssh_hosts_or_keys() {
+    let mut fx = Fixture::new();
+    let key = fx
+        .vault
+        .add_entry(&EntryInput {
+            title: "id_ed25519".into(),
+            password: Some(s("passphrase")),
+            kind: EntryKind::Key,
+            key_fingerprint: Some("SHA256:abc".into()),
+            ..EntryInput::default()
+        })
+        .unwrap();
+    let path = fx.csv(
+        "crafted.csv",
+        "name,url,username,password
+id_ed25519,,,replaced
+",
+    );
+    let preview = fx.vault.import_preview(&path).unwrap();
+    assert_eq!(preview.rows[0].duplicate_of.as_deref(), Some(key.as_str()));
+    assert!(!preview.rows[0].password_changed);
+    assert_eq!(fx.vault.import_csv(&path, &[0]).unwrap().updated, 0);
+    let kept = fx.vault.secret(&key, SecretField::Password).unwrap();
+    assert_eq!(kept.expose_secret(), "passphrase");
 }
 
 #[test]

@@ -146,10 +146,10 @@ function duplicateOf(existing: EntrySummary[], row: SampleRow): EntrySummary | u
   );
 }
 
-/** The row has a password and the entry `id` has another one. */
-async function passwordDiffers(id: string, row: SampleRow): Promise<boolean> {
-  if (row.password === '') return false;
-  const saved = await vaultHandlers.vault_reveal?.({ id, field: 'password' });
+/** The row has a password and the entry is a login with another one, as in the backend. */
+async function passwordDiffers(entry: EntrySummary, row: SampleRow): Promise<boolean> {
+  if (row.password === '' || entry.kind !== 'login') return false;
+  const saved = await vaultHandlers.vault_reveal?.({ id: entry.id, field: 'password' });
   return saved !== row.password;
 }
 
@@ -166,7 +166,7 @@ async function rowsFor(existing: EntrySummary[]): Promise<ImportRow[]> {
       hasOtp: row.otp !== '',
       hasUnreadableOtp: false,
       duplicateOf: duplicate?.id ?? null,
-      passwordChanged: duplicate ? await passwordDiffers(duplicate.id, row) : false,
+      passwordChanged: duplicate ? await passwordDiffers(duplicate, row) : false,
     };
   });
   return Promise.all(rows);
@@ -210,7 +210,7 @@ export const vaultFilesHandlers: Record<string, Handler> = {
       const row = SAMPLE[index];
       if (!row) return fail('invalid_input', 'the file changed since it was previewed');
       const duplicate = duplicateOf(existing, row);
-      if (duplicate && (await passwordDiffers(duplicate.id, row))) {
+      if (duplicate && (await passwordDiffers(duplicate, row))) {
         const detail = (await vaultHandlers.vault_entry?.({ id: duplicate.id })) as EntryInput;
         await vaultHandlers.vault_update?.({
           id: duplicate.id,

@@ -22,8 +22,8 @@ use serde::Serialize;
 use zeroize::Zeroizing;
 
 use super::{
-    EntryInput, EntrySummary, SecretField, UNREADABLE_OTP_FIELD, Vault, check_field, otp_uri,
-    parse_id, wanted_fields,
+    EntryInput, EntryKind, EntrySummary, SecretField, UNREADABLE_OTP_FIELD, Vault, check_field,
+    otp_uri, parse_id, wanted_fields,
 };
 use crate::{Error, Result, fsutil};
 
@@ -196,9 +196,15 @@ impl Vault {
         Ok(outcome)
     }
 
-    /// The row has a password, and the entry `id` has another one.
+    /// The row has a password, and the entry `id` is a login with another
+    /// one. SSH hosts and keys are never updated by an import: a CSV row
+    /// that happens to share a host's or key's title could otherwise replace
+    /// its password or passphrase.
     fn password_differs(&self, id: &str, record: &Record) -> bool {
         !record.password.is_empty()
+            && self
+                .find(id)
+                .is_ok_and(|entry| self.summary(&entry).kind == EntryKind::Login)
             && self
                 .secret(id, SecretField::Password)
                 .is_ok_and(|saved| saved.expose_secret() != record.password.as_str())

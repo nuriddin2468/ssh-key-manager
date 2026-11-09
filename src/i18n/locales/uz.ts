@@ -2972,6 +2972,10 @@ const uz = {
       found_other: '{{count}} ta yozuv',
       duplicates_one: '{{count}} ta yozuv omborda bor, shuning uchun tanlanmagan.',
       duplicates_other: '{{count}} ta yozuv omborda bor, shuning uchun tanlanmagan.',
+      changedRows_one:
+        '{{count}} ta yozuvning paroli ombordagidan farq qiladi. Import uni yangilaydi.',
+      changedRows_other:
+        '{{count}} ta yozuvning paroli ombordagidan farq qiladi. Import ularni yangilaydi.',
       skipped_one: '{{count}} ta boʻsh yoki oʻqib boʻlmaydigan qator oʻtkazib yuborildi.',
       skipped_other: '{{count}} ta boʻsh yoki oʻqib boʻlmaydigan qator oʻtkazib yuborildi.',
       nothing: 'Bu faylda import qilinadigan yozuvlar yoʻq.',
@@ -2983,6 +2987,9 @@ const uz = {
       colWebsite: 'Sayt',
       colStatus: 'Holati',
       inVault: 'Omborda bor',
+      passwordDiffers: 'Boshqa parol',
+      passwordDiffersHint:
+        'Omborda bu kirish uchun boshqa parol saqlangan. Import uni almashtiradi, eskisi yozuv tarixida qoladi.',
       noPassword: 'Parolsiz',
       otp: '2FA',
       otpUnreadable: 'KeePassXC uchun 2FA',
@@ -2991,8 +2998,13 @@ const uz = {
       folder: 'Papka: {{folder}}',
       submit_one: '{{count}} ta yozuvni import qilish',
       submit_other: '{{count}} ta yozuvni import qilish',
+      submitUpdate_one: '{{count}} ta yozuvni yangilash',
+      submitUpdate_other: '{{count}} ta yozuvni yangilash',
+      submitBoth: '{{added}} tasini import qilish, {{updated}} tasini yangilash',
       imported_one: '{{count}} ta yozuv import qilindi',
       imported_other: '{{count}} ta yozuv import qilindi',
+      updated_one: '{{count}} ta yozuv yangilandi',
+      updated_other: '{{count}} ta yozuv yangilandi',
       doneTitle: 'Eksport faylini oʻchiring',
       doneText:
         '{{file}} da bu parollar hamon ochiq matnda turibdi. Faylni savatga tashlang, keyin savatni tozalang.',

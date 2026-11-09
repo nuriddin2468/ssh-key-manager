@@ -233,7 +233,7 @@ fn quoted_multi_line_notes_survive_the_import() {
     );
     let preview = fx.vault.import_preview(&path).unwrap();
     assert_eq!(preview.rows.len(), 1);
-    assert_eq!(fx.vault.import_csv(&path, &[0]).unwrap(), 1);
+    assert_eq!(fx.vault.import_csv(&path, &[0]).unwrap().added, 1);
     let entry = find(&fx.vault, "Server");
     let detail = fx.vault.entry(&entry.id).unwrap();
     assert_eq!(
@@ -345,7 +345,13 @@ fn import_adds_the_chosen_rows_into_folders() {
          ,,login,Skipped,,,0,https://skip.example,me,pw,\n\
          ,,login,Steam,,,0,https://steam.example,me,pw,steam://ABCDE\n",
     );
-    assert_eq!(fx.vault.import_csv(&path, &[0, 1, 3, 1]).unwrap(), 3);
+    assert_eq!(
+        fx.vault.import_csv(&path, &[0, 1, 3, 1]).unwrap(),
+        ImportOutcome {
+            added: 3,
+            updated: 0
+        }
+    );
 
     let entries = fx.vault.entries();
     assert_eq!(entries.len(), 3);
@@ -406,6 +412,115 @@ fn import_adds_nothing_when_the_file_changed() {
     let error = fx.vault.import_csv(&path, &[0, 1]).unwrap_err();
     assert!(matches!(error, Error::InvalidInput(_)));
     assert_eq!(fx.vault.entries().len(), 0);
+}
+
+#[test]
+fn preview_marks_rows_whose_password_changed() {
+    let mut fx = Fixture::new();
+    let seed = fx.csv(
+        "first.csv",
+        "name,url,username,password
+         github.com,https://github.com,octocat,old-pass
+         example.com,https://example.com,me,same-pass
+",
+    );
+    fx.vault.import_csv(&seed, &[0, 1]).unwrap();
+
+    let preview = fx.preview(
+        "name,url,username,password
+         github.com,https://github.com,octocat,new-pass
+         example.com,https://example.com,me,same-pass
+         new.com,https://new.com,me,pw
+         github.com,https://github.com,octocat,
+",
+    );
+    let marks: Vec<(bool, bool)> = preview
+        .rows
+        .iter()
+        .map(|r| (r.duplicate_of.is_some(), r.password_changed))
+        .collect();
+    // A row without a password never replaces one.
+    assert_eq!(
+        marks,
+        [(true, true), (true, false), (false, false), (true, false)]
+    );
+}
+
+#[test]
+fn import_updates_entries_whose_password_changed() {
+    let mut fx = Fixture::new();
+    let seed = fx.csv(
+        "first.csv",
+        "name,url,username,password
+github.com,https://github.com,octocat,old-pass
+",
+    );
+    fx.vault.import_csv(&seed, &[0]).unwrap();
+    let id = find(&fx.vault, "github.com").id;
+
+    let again = fx.csv(
+        "second.csv",
+        "name,url,username,password
+         github.com,https://www.github.com/login,OctoCat,new-pass
+         new.com,https://new.com,me,pw
+",
+    );
+    assert_eq!(
+        fx.vault.import_csv(&again, &[0, 1]).unwrap(),
+        ImportOutcome {
+            added: 1,
+            updated: 1
+        }
+    );
+    assert_eq!(fx.vault.entries().len(), 2);
+    let password = fx.vault.secret(&id, SecretField::Password).unwrap();
+    assert_eq!(password.expose_secret(), "new-pass");
+    // The old password stays in the entry's history.
+    assert_eq!(fx.vault.entry(&id).unwrap().history_len, 1);
+}
+
+#[test]
+fn import_adds_a_copy_of_a_duplicate_with_the_same_password() {
+    let mut fx = Fixture::new();
+    let path = fx.csv(
+        "same.csv",
+        "name,url,username,password
+github.com,https://github.com,octocat,pw
+",
+    );
+    fx.vault.import_csv(&path, &[0]).unwrap();
+    assert_eq!(
+        fx.vault.import_csv(&path, &[0]).unwrap(),
+        ImportOutcome {
+            added: 1,
+            updated: 0
+        }
+    );
+    assert_eq!(fx.vault.entries().len(), 2);
+}
+
+#[test]
+fn import_leaves_entries_in_the_recycle_bin_alone() {
+    let mut fx = Fixture::new();
+    let seed = fx.csv(
+        "first.csv",
+        "name,url,username,password
+github.com,https://github.com,octocat,old-pass
+",
+    );
+    fx.vault.import_csv(&seed, &[0]).unwrap();
+    let id = find(&fx.vault, "github.com").id;
+    fx.vault.trash_entry(&id).unwrap();
+    let again = fx.csv(
+        "second.csv",
+        "name,url,username,password
+github.com,https://github.com,octocat,new-pass
+",
+    );
+    assert!(!fx.vault.import_preview(&again).unwrap().rows[0].password_changed);
+    assert_eq!(fx.vault.import_csv(&again, &[0]).unwrap().added, 1);
+    let old = fx.vault.secret(&id, SecretField::Password).unwrap();
+    assert_eq!(old.expose_secret(), "old-pass");
 }
 
 // Export

@@ -7,20 +7,23 @@
 //!
 //! Importing takes two steps. [`Vault::import_preview`] reads the file and
 //! returns its rows without passwords or 2FA secrets, marking those an
-//! existing entry already covers. [`Vault::import_csv`] reads the file again
-//! and adds the rows the user picked, so no secret has to wait in memory or
-//! travel to the UI in between.
+//! existing entry already covers, and among them those whose password differs
+//! from the entry's. [`Vault::import_csv`] reads the file again, adds the rows
+//! the user picked and sets the new password on the entries those with a
+//! different one cover, so no secret has to wait in memory or travel to the
+//! UI in between.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
-use keepass::db::{GroupId, fields};
-use secrecy::SecretString;
+use keepass::db::{GroupId, Times, Value, fields};
+use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
 use zeroize::Zeroizing;
 
 use super::{
-    EntryInput, EntrySummary, UNREADABLE_OTP_FIELD, Vault, check_field, otp_uri, wanted_fields,
+    EntryInput, EntrySummary, SecretField, UNREADABLE_OTP_FIELD, Vault, check_field, otp_uri,
+    parse_id, wanted_fields,
 };
 use crate::{Error, Result, fsutil};
 
@@ -52,6 +55,10 @@ pub enum CsvFormat {
 }
 
 /// A row of a CSV file as the import preview shows it. Holds no secrets.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about the row the preview shows"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
@@ -73,6 +80,10 @@ pub struct ImportRow {
     /// An existing entry for the same site (URL host) and user name, or with
     /// the same title and user name when the row has no URL.
     pub duplicate_of: Option<String>,
+    /// The row has a password and `duplicate_of` has another one. Importing
+    /// the row sets it on that entry, keeping the old one in its history,
+    /// instead of adding a copy.
+    pub password_changed: bool,
 }
 
 /// What a CSV file holds, without secrets.
@@ -86,9 +97,20 @@ pub struct ImportPreview {
     pub skipped: u32,
 }
 
+/// What [`Vault::import_csv`] did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+pub struct ImportOutcome {
+    /// New entries.
+    pub added: u32,
+    /// Existing entries that got the row's password.
+    pub updated: u32,
+}
+
 impl Vault {
     /// Reads a CSV export and lists its rows, marking duplicates of entries
-    /// outside the recycle bin.
+    /// outside the recycle bin and those with another password.
     pub fn import_preview(&self, path: &Path) -> Result<ImportPreview> {
         let parsed = read(path)?;
         let existing: Vec<EntrySummary> =
@@ -97,16 +119,21 @@ impl Vault {
         let rows = parsed
             .records
             .iter()
-            .map(|record| ImportRow {
-                index: record.index,
-                title: record.title.clone(),
-                username: record.username.clone(),
-                url: record.url.clone(),
-                group: record.group.clone(),
-                has_password: !record.password.is_empty(),
-                has_otp: record.otp.is_some(),
-                has_unreadable_otp: record.unreadable_otp.is_some(),
-                duplicate_of: duplicates.find(record).map(str::to_owned),
+            .map(|record| {
+                let duplicate_of = duplicates.find(record);
+                ImportRow {
+                    index: record.index,
+                    title: record.title.clone(),
+                    username: record.username.clone(),
+                    url: record.url.clone(),
+                    group: record.group.clone(),
+                    has_password: !record.password.is_empty(),
+                    has_otp: record.otp.is_some(),
+                    has_unreadable_otp: record.unreadable_otp.is_some(),
+                    password_changed: duplicate_of
+                        .is_some_and(|id| self.password_differs(id, record)),
+                    duplicate_of: duplicate_of.map(str::to_owned),
+                }
             })
             .collect();
         Ok(ImportPreview {
@@ -116,11 +143,13 @@ impl Vault {
         })
     }
 
-    /// Reads the CSV file again and adds the rows at `indices` as entries,
-    /// in their folders. Returns how many were added. Nothing is added if any
+    /// Reads the CSV file again and imports the rows at `indices`: a row
+    /// whose entry has another password (see [`ImportRow::password_changed`])
+    /// sets it on that entry, keeping the old one in the entry's history; any
+    /// other row is added as an entry, in its folder. Nothing changes if any
     /// of them fails, or if an index no longer names a row (the file changed
     /// since the preview). The caller saves the vault.
-    pub fn import_csv(&mut self, path: &Path, indices: &[u32]) -> Result<usize> {
+    pub fn import_csv(&mut self, path: &Path, indices: &[u32]) -> Result<ImportOutcome> {
         let parsed = read(path)?;
         let wanted: BTreeSet<u32> = indices.iter().copied().collect();
         let records: Vec<&Record> = parsed
@@ -133,15 +162,60 @@ impl Vault {
                 "the file changed since it was previewed; preview it again",
             ));
         }
-        let before = self.db.clone();
-        let result = records
+        // Which entry each row updates, judged before anything is added, as
+        // the preview judged it.
+        let existing: Vec<EntrySummary> =
+            self.entries().into_iter().filter(|e| !e.in_trash).collect();
+        let duplicates = Duplicates::new(&existing);
+        let plan: Vec<(&Record, Option<String>)> = records
             .into_iter()
-            .try_for_each(|record| self.add_imported(record));
+            .map(|record| {
+                let update = duplicates
+                    .find(record)
+                    .filter(|id| self.password_differs(id, record))
+                    .map(str::to_owned);
+                (record, update)
+            })
+            .collect();
+        let before = self.db.clone();
+        let mut outcome = ImportOutcome::default();
+        let result = plan.into_iter().try_for_each(|(record, update)| {
+            if let Some(id) = update {
+                self.set_imported_password(&id, record)?;
+                outcome.updated += 1;
+            } else {
+                self.add_imported(record)?;
+                outcome.added += 1;
+            }
+            Ok(())
+        });
         if let Err(error) = result {
             self.db = before;
             return Err(error);
         }
-        Ok(wanted.len())
+        Ok(outcome)
+    }
+
+    /// The row has a password, and the entry `id` has another one.
+    fn password_differs(&self, id: &str, record: &Record) -> bool {
+        !record.password.is_empty()
+            && self
+                .secret(id, SecretField::Password)
+                .is_ok_and(|saved| saved.expose_secret() != record.password.as_str())
+    }
+
+    /// Sets a row's password on the entry `id`, keeping the old one in the
+    /// entry's history.
+    fn set_imported_password(&mut self, id: &str, record: &Record) -> Result<()> {
+        check_field(record.password.as_str())?;
+        let mut entry = self
+            .db
+            .entry_mut(parse_id(id)?)
+            .ok_or_else(|| Error::NotFound(format!("entry {id}")))?;
+        let mut tracked = entry.track_changes();
+        tracked.set(fields::PASSWORD, Value::protected(record.password.as_str()));
+        tracked.times.last_modification = Some(Times::now());
+        Ok(())
     }
 
     fn add_imported(&mut self, record: &Record) -> Result<()> {

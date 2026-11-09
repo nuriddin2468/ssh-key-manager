@@ -44,6 +44,7 @@ import type { HostsChange } from '@/bindings/HostsChange';
 import type { HostsFileInfo } from '@/bindings/HostsFileInfo';
 import type { HostsPreview } from '@/bindings/HostsPreview';
 import type { ImportChoice } from '@/bindings/ImportChoice';
+import type { ImportOutcome } from '@/bindings/ImportOutcome';
 import type { ImportPick } from '@/bindings/ImportPick';
 import type { ImportTarget } from '@/bindings/ImportTarget';
 import type { KeyFileFormat } from '@/bindings/KeyFileFormat';
@@ -375,11 +376,14 @@ export const api = {
   // The vault's files (src-tauri/src/commands/vault_files.rs).
   /**
    * Asks for a CSV export in a system file dialog (`null` if cancelled) and returns its rows,
-   * without passwords; duplicates name the existing entry.
+   * without passwords; duplicates name the existing entry and say whether its password differs.
    */
   vaultImportPreview: () => call<ImportPick | null>('vault_import_preview'),
-  /** Reads the picked file again and adds the rows at `indices`; returns how many were added. */
-  vaultImport: (indices: number[]) => call<number>('vault_import', { indices }),
+  /**
+   * Reads the picked file again and imports the rows at `indices`: rows whose entry has another
+   * password update it (keeping the old one in its history), the others are added.
+   */
+  vaultImport: (indices: number[]) => call<ImportOutcome>('vault_import', { indices }),
   /** Moves the CSV file just imported to the Trash; no other file. */
   vaultTrashImportFile: () => call<void>('vault_trash_import_file'),
   /**

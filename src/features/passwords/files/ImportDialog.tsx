@@ -18,6 +18,7 @@ import { toast } from 'sonner';
 import { api } from '@/api/commands';
 import { useVaultStatus } from '@/api/queries';
 import { toastError, useAppMutation } from '@/api/useAppMutation';
+import type { ImportOutcome } from '@/bindings/ImportOutcome';
 import type { ImportPreview } from '@/bindings/ImportPreview';
 import type { ImportRow } from '@/bindings/ImportRow';
 import { Badge } from '@/components/ui/Badge';
@@ -50,14 +51,16 @@ type Step =
       preview: ImportPreview;
       selected: ReadonlySet<number>;
     }
-  | { kind: 'done'; source: ImportSource; path: string; count: number };
+  | { kind: 'done'; source: ImportSource; path: string; outcome: ImportOutcome };
 
 /**
  * Imports logins from a browser or another password manager: say where they
  * are now (the browsers on this computer first, any CSV file last), export
  * them there as the guide says, choose the file (in a system dialog the
  * backend opens, so the page never names a file to read), check the rows
- * (entries already in the vault start unchecked), import, then move the
+ * (new ones first; entries whose password differs from the vault's next, to
+ * update them; entries already in the vault as they are last, unchecked),
+ * import, then move the
  * plain-text file to the Trash. After a browser, it says how to stop the
  * browser offering the same logins.
  */
@@ -76,13 +79,15 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
     mutationFn: (_source: ImportSource) => api.vaultImportPreview(),
     onSuccess: (picked, source) => {
       if (!picked) return;
-      const { path, preview } = picked;
+      const { path } = picked;
+      // Ordered once here, so rows don't move while they are ticked.
+      const preview = { ...picked.preview, rows: byStatus(picked.preview.rows) };
       setStep({
         kind: 'preview',
         source,
         path,
         preview,
-        selected: new Set(preview.rows.filter((r) => !r.duplicateOf).map((r) => r.index)),
+        selected: new Set(preview.rows.filter((r) => rowStatus(r) !== 'same').map((r) => r.index)),
       });
     },
     onError: (cause) => {
@@ -103,8 +108,8 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
     (vars: { source: ImportSource; path: string; indices: number[] }) =>
       api.vaultImport(vars.indices),
     {
-      onSuccess: (count, vars) =>
-        setStep({ kind: 'done', source: vars.source, path: vars.path, count }),
+      onSuccess: (outcome, vars) =>
+        setStep({ kind: 'done', source: vars.source, path: vars.path, outcome }),
       onError: (appError) =>
         showFileError(t, appError, {
           invalid_input: t('vaultFiles.import.changed'),
@@ -235,9 +240,18 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
               <Tile tone="teal" size={52} glow>
                 <Check className="size-6" strokeWidth={2.25} />
               </Tile>
-              <p id={`${doneId}-count`} className="text-[17px] font-semibold tracking-[-0.01em]">
-                {t('vaultFiles.import.imported', { count: step.count })}
-              </p>
+              <div id={`${doneId}-count`} className="flex flex-col gap-1">
+                <p className="text-[17px] font-semibold tracking-[-0.01em]">
+                  {step.outcome.added > 0 || step.outcome.updated === 0
+                    ? t('vaultFiles.import.imported', { count: step.outcome.added })
+                    : t('vaultFiles.import.updated', { count: step.outcome.updated })}
+                </p>
+                {step.outcome.added > 0 && step.outcome.updated > 0 ? (
+                  <p className="text-[13px] text-muted">
+                    {t('vaultFiles.import.updated', { count: step.outcome.updated })}
+                  </p>
+                ) : null}
+              </div>
             </div>
             <Callout
               id={`${doneId}-warning`}
@@ -304,8 +318,17 @@ function PreviewStep({
   const { t } = useTranslation();
   const summaryId = useId();
   const { rows, skipped, format } = preview;
-  const duplicates = rows.filter((r) => r.duplicateOf).length;
+  const duplicates = rows.filter((r) => rowStatus(r) === 'same').length;
+  const changed = rows.filter((r) => rowStatus(r) === 'changed').length;
   const count = selected.size;
+  const updates = rows.filter((r) => selected.has(r.index) && rowStatus(r) === 'changed').length;
+  const adds = count - updates;
+  const submitLabel =
+    updates === 0
+      ? t('vaultFiles.import.submit', { count })
+      : adds === 0
+        ? t('vaultFiles.import.submitUpdate', { count: updates })
+        : t('vaultFiles.import.submitBoth', { added: adds, updated: updates });
   const all = rows.length > 0 && count === rows.length;
 
   const toggle = (index: number) => {
@@ -318,6 +341,7 @@ function PreviewStep({
 
   const summary = [
     t('vaultFiles.import.found', { count: rows.length }),
+    changed > 0 ? t('vaultFiles.import.changedRows', { count: changed }) : null,
     duplicates > 0 ? t('vaultFiles.import.duplicates', { count: duplicates }) : null,
     skipped > 0 ? t('vaultFiles.import.skipped', { count: skipped }) : null,
   ]
@@ -413,7 +437,7 @@ function PreviewStep({
           icon={<FileUp className="size-4" strokeWidth={2} />}
           onClick={onImport}
         >
-          {t('vaultFiles.import.submit', { count })}
+          {submitLabel}
         </Button>
       </DialogFooter>
     </>
@@ -465,7 +489,13 @@ function PreviewRow({
       </td>
       <td className="pr-3.5">
         <span className="flex flex-wrap justify-end gap-1">
-          {row.duplicateOf ? <Badge tone="warning">{t('vaultFiles.import.inVault')}</Badge> : null}
+          {row.passwordChanged ? (
+            <span title={t('vaultFiles.import.passwordDiffersHint')}>
+              <Badge tone="accent">{t('vaultFiles.import.passwordDiffers')}</Badge>
+            </span>
+          ) : row.duplicateOf ? (
+            <Badge tone="warning">{t('vaultFiles.import.inVault')}</Badge>
+          ) : null}
           {row.hasOtp ? <Badge tone="info">{t('vaultFiles.import.otp')}</Badge> : null}
           {row.hasUnreadableOtp ? (
             <span title={t('vaultFiles.import.otpUnreadableHint')}>
@@ -477,6 +507,26 @@ function PreviewRow({
       </td>
     </tr>
   );
+}
+
+type RowStatus = 'new' | 'changed' | 'same';
+
+/** New to the vault, in it with another password, or in it as it is. */
+export function rowStatus(row: ImportRow): RowStatus {
+  if (!row.duplicateOf) return 'new';
+  return row.passwordChanged ? 'changed' : 'same';
+}
+
+/**
+ * New rows first, then rows that update an entry's password, then rows already in the vault,
+ * each in the file's order: what will be imported sits at the top of a long list.
+ */
+export function byStatus(rows: ImportRow[]): ImportRow[] {
+  const rank: Record<RowStatus, number> = { new: 0, changed: 1, same: 2 };
+  return rows
+    .map((row, at) => ({ row, at }))
+    .sort((a, b) => rank[rowStatus(a.row)] - rank[rowStatus(b.row)] || a.at - b.at)
+    .map(({ row }) => row);
 }
 
 /** `https://github.com/login/` → `github.com/login`. */

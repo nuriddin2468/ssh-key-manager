@@ -2928,6 +2928,10 @@ const en = {
       found_other: '{{count}} entries',
       duplicates_one: '{{count}} is already in the vault, so it isn’t selected.',
       duplicates_other: '{{count}} are already in the vault, so they aren’t selected.',
+      changedRows_one:
+        '{{count}} has a different password than in the vault. Importing it updates the entry.',
+      changedRows_other:
+        '{{count}} have a different password than in the vault. Importing them updates those entries.',
       skipped_one: '{{count}} empty or unreadable row was skipped.',
       skipped_other: '{{count}} empty or unreadable rows were skipped.',
       nothing: 'This file has no entries to import.',
@@ -2939,6 +2943,9 @@ const en = {
       colWebsite: 'Website',
       colStatus: 'Status',
       inVault: 'Already in vault',
+      passwordDiffers: 'Different password',
+      passwordDiffersHint:
+        'The vault has another password for this login. Importing replaces it; the old one stays in the entry’s history.',
       noPassword: 'No password',
       otp: '2FA',
       otpUnreadable: '2FA for KeePassXC',
@@ -2947,8 +2954,13 @@ const en = {
       folder: 'Folder: {{folder}}',
       submit_one: 'Import {{count}} entry',
       submit_other: 'Import {{count}} entries',
+      submitUpdate_one: 'Update {{count}} entry',
+      submitUpdate_other: 'Update {{count}} entries',
+      submitBoth: 'Import {{added}}, update {{updated}}',
       imported_one: '{{count}} entry imported',
       imported_other: '{{count}} entries imported',
+      updated_one: '{{count}} entry updated',
+      updated_other: '{{count}} entries updated',
       doneTitle: 'Delete the export file',
       doneText:
         '{{file}} still holds these passwords in plain text. Move it to the Trash, then empty the Trash.',

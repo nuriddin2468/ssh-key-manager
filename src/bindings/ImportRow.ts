@@ -26,4 +26,10 @@ hasUnreadableOtp: boolean,
  * An existing entry for the same site (URL host) and user name, or with
  * the same title and user name when the row has no URL.
  */
-duplicateOf: string | null, };
+duplicateOf: string | null, 
+/**
+ * The row has a password and `duplicate_of` has another one. Importing
+ * the row sets it on that entry, keeping the old one in its history,
+ * instead of adding a copy.
+ */
+passwordChanged: boolean, };

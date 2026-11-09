@@ -17,7 +17,7 @@ use std::sync::{Mutex, PoisonError};
 use serde::Serialize;
 use sshkm_core::SecretString;
 use sshkm_core::keys::move_to_trash;
-use sshkm_core::vault::{self, ImportPreview, Vault, VaultPaths};
+use sshkm_core::vault::{self, ImportOutcome, ImportPreview, Vault, VaultPaths};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
@@ -93,13 +93,14 @@ pub async fn vault_import_preview(
 }
 
 /// Imports the rows at `indices` (from the preview) of the file picked for
-/// it, and returns how many entries were added.
+/// it: adds them, or sets their new password on the entries they match.
+/// Returns how many entries were added and updated.
 #[tauri::command]
 pub async fn vault_import(
     app: AppHandle,
     state: State<'_, Shared>,
     indices: Vec<u32>,
-) -> AppResult<usize> {
+) -> AppResult<ImportOutcome> {
     if indices.is_empty() {
         return Err(AppError::invalid("choose at least one row to import"));
     }

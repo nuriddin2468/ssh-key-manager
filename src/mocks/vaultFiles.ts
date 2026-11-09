@@ -8,6 +8,7 @@ import type { CsvFormat } from '@/bindings/CsvFormat';
 import type { EntryInput } from '@/bindings/EntryInput';
 import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { Exported } from '@/bindings/Exported';
+import type { ImportOutcome } from '@/bindings/ImportOutcome';
 import type { ImportPick } from '@/bindings/ImportPick';
 import type { ImportRow } from '@/bindings/ImportRow';
 import type { VaultLocation } from '@/bindings/VaultLocation';
@@ -133,16 +134,28 @@ async function entries(): Promise<EntrySummary[]> {
   return (await vaultHandlers.vault_entries?.({})) as EntrySummary[];
 }
 
-function rowsFor(existing: EntrySummary[]): ImportRow[] {
-  return SAMPLE.map((row, index) => {
-    const duplicate = existing.find(
-      (e) =>
-        !e.inTrash &&
-        e.username.toLowerCase() === row.username.toLowerCase() &&
-        (row.url
-          ? host(e.url) !== '' && host(e.url) === host(row.url)
-          : e.title.toLowerCase() === row.title.toLowerCase()),
-    );
+/** The entry a sample row duplicates, as the backend matches them. */
+function duplicateOf(existing: EntrySummary[], row: SampleRow): EntrySummary | undefined {
+  return existing.find(
+    (e) =>
+      !e.inTrash &&
+      e.username.toLowerCase() === row.username.toLowerCase() &&
+      (row.url
+        ? host(e.url) !== '' && host(e.url) === host(row.url)
+        : e.title.toLowerCase() === row.title.toLowerCase()),
+  );
+}
+
+/** The row has a password and the entry `id` has another one. */
+async function passwordDiffers(id: string, row: SampleRow): Promise<boolean> {
+  if (row.password === '') return false;
+  const saved = await vaultHandlers.vault_reveal?.({ id, field: 'password' });
+  return saved !== row.password;
+}
+
+async function rowsFor(existing: EntrySummary[]): Promise<ImportRow[]> {
+  const rows = SAMPLE.map(async (row, index) => {
+    const duplicate = duplicateOf(existing, row);
     return {
       index,
       title: row.title,
@@ -153,8 +166,10 @@ function rowsFor(existing: EntrySummary[]): ImportRow[] {
       hasOtp: row.otp !== '',
       hasUnreadableOtp: false,
       duplicateOf: duplicate?.id ?? null,
+      passwordChanged: duplicate ? await passwordDiffers(duplicate.id, row) : false,
     };
   });
+  return Promise.all(rows);
 }
 
 export const vaultFilesHandlers: Record<string, Handler> = {
@@ -184,16 +199,26 @@ export const vaultFilesHandlers: Record<string, Handler> = {
     const path = DEV_CSV;
     const format = FORMATS.find(([pattern]) => pattern.test(path))?.[1] ?? 'generic';
     picked = path;
-    return { path, preview: { format, rows: rowsFor(existing), skipped: 1 } };
+    return { path, preview: { format, rows: await rowsFor(existing), skipped: 1 } };
   },
-  vault_import: async ({ indices }) => {
-    await entries();
+  vault_import: async ({ indices }): Promise<ImportOutcome> => {
+    const existing = await entries();
     const path = picked;
     if (!path) return fail('invalid_input', 'choose the file to import again');
-    let count = 0;
-    for (const index of indices as number[]) {
+    const outcome: ImportOutcome = { added: 0, updated: 0 };
+    for (const index of new Set(indices as number[])) {
       const row = SAMPLE[index];
       if (!row) return fail('invalid_input', 'the file changed since it was previewed');
+      const duplicate = duplicateOf(existing, row);
+      if (duplicate && (await passwordDiffers(duplicate.id, row))) {
+        const detail = (await vaultHandlers.vault_entry?.({ id: duplicate.id })) as EntryInput;
+        await vaultHandlers.vault_update?.({
+          id: duplicate.id,
+          input: { ...detail, password: row.password, otp: null },
+        });
+        outcome.updated += 1;
+        continue;
+      }
       const input: EntryInput = {
         title: row.title,
         username: row.username,
@@ -206,11 +231,11 @@ export const vaultFilesHandlers: Record<string, Handler> = {
         keyFingerprint: null,
       };
       await vaultHandlers.vault_add?.({ input });
-      count += 1;
+      outcome.added += 1;
     }
     picked = null;
     lastImport = path;
-    return count;
+    return outcome;
   },
   vault_trash_import_file: () => {
     if (!lastImport) {

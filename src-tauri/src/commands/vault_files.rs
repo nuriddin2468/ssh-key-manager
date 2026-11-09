@@ -15,7 +15,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
 use serde::Serialize;
-use sshkm_core::SecretString;
+use sshkm_core::{ExposeSecret, SecretString};
+
 use sshkm_core::keys::move_to_trash;
 use sshkm_core::vault::{self, ImportOutcome, ImportPreview, Vault, VaultPaths};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -42,6 +43,18 @@ static LAST_IMPORT: Mutex<Option<PathBuf>> = Mutex::new(None);
 pub struct ImportPick {
     pub path: PathBuf,
     pub preview: ImportPreview,
+}
+
+/// The two passwords of an import row whose entry has another one, shown
+/// side by side when the user asks, to choose which to keep.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = crate::types::BINDINGS))]
+pub struct ImportPasswords {
+    /// The password in the file.
+    pub file: String,
+    /// The password in the vault, which importing the row replaces.
+    pub vault: String,
 }
 
 /// Where an export went, and how many entries it holds.
@@ -114,6 +127,30 @@ pub async fn vault_import(
         *picked_import() = None;
         *last_import() = Some(path);
         Ok(count)
+    })
+    .await
+}
+
+/// Both passwords of the row at `index` of the file picked for import, for
+/// the user to compare. Only for a row whose entry has another password;
+/// see [`Vault::import_compare`].
+#[tauri::command]
+pub async fn vault_import_compare(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    index: u32,
+) -> AppResult<ImportPasswords> {
+    blocking(&state, move |state| {
+        let path = picked_import()
+            .clone()
+            .ok_or_else(|| AppError::invalid("choose the file to import again"))?;
+        state.vault.with(&app, |vault| {
+            let both = vault.import_compare(&path, index)?;
+            Ok(ImportPasswords {
+                file: both.file.expose_secret().to_owned(),
+                vault: both.vault.expose_secret().to_owned(),
+            })
+        })
     })
     .await
 }

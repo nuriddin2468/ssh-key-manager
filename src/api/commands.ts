@@ -45,6 +45,7 @@ import type { HostsFileInfo } from '@/bindings/HostsFileInfo';
 import type { HostsPreview } from '@/bindings/HostsPreview';
 import type { ImportChoice } from '@/bindings/ImportChoice';
 import type { ImportOutcome } from '@/bindings/ImportOutcome';
+import type { ImportPasswords } from '@/bindings/ImportPasswords';
 import type { ImportPick } from '@/bindings/ImportPick';
 import type { ImportTarget } from '@/bindings/ImportTarget';
 import type { KeyFileFormat } from '@/bindings/KeyFileFormat';
@@ -384,6 +385,11 @@ export const api = {
    * password update it (keeping the old one in its history), the others are added.
    */
   vaultImport: (indices: number[]) => call<ImportOutcome>('vault_import', { indices }),
+  /**
+   * Both passwords of a preview row whose entry has another one, to compare; refused for any other
+   * row.
+   */
+  vaultImportCompare: (index: number) => call<ImportPasswords>('vault_import_compare', { index }),
   /** Moves the CSV file just imported to the Trash; no other file. */
   vaultTrashImportFile: () => call<void>('vault_trash_import_file'),
   /**

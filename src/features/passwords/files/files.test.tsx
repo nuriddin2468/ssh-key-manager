@@ -25,6 +25,7 @@ const api = vi.hoisted(() => ({
   vaultStatus: vi.fn(),
   environment: vi.fn(),
   vaultImportPreview: vi.fn(),
+  vaultImportCompare: vi.fn(),
   browserStatus: vi.fn(),
   vaultImport: vi.fn(),
   vaultTrashImportFile: vi.fn(),
@@ -99,6 +100,8 @@ const PREVIEW: ImportPreview = {
       hasUnreadableOtp: false,
       duplicateOf: null,
       passwordChanged: false,
+      changedInFile: null,
+      changedInVault: null,
     },
     {
       index: 1,
@@ -111,6 +114,8 @@ const PREVIEW: ImportPreview = {
       hasUnreadableOtp: false,
       duplicateOf: '3f0c7a52-0d5e-4c1b-9a51-7b0f4e2a8c11',
       passwordChanged: false,
+      changedInFile: null,
+      changedInVault: null,
     },
     {
       index: 3,
@@ -123,6 +128,8 @@ const PREVIEW: ImportPreview = {
       hasUnreadableOtp: true,
       duplicateOf: null,
       passwordChanged: false,
+      changedInFile: null,
+      changedInVault: null,
     },
   ],
 };
@@ -228,6 +235,65 @@ describe('ImportDialog', () => {
     expect(api.vaultImport).toHaveBeenCalledWith([0, 3, 4]);
     expect(await screen.findByText('2 entries imported')).toBeInTheDocument();
     expect(screen.getByText('1 entry updated')).toBeInTheDocument();
+  });
+
+  it('compares the two passwords of a row, with their dates', async () => {
+    const user = userEvent.setup();
+    const [, router] = PREVIEW.rows as [ImportRow, ImportRow];
+    const changed: ImportRow = {
+      ...router,
+      passwordChanged: true,
+      changedInFile: '2026-11-02T09:15:00Z',
+      changedInVault: '2025-03-12T08:00:00Z',
+    };
+    api.vaultImportPreview.mockResolvedValue({
+      path: CSV,
+      preview: { ...PREVIEW, rows: [changed] },
+    });
+    api.vaultImportCompare.mockResolvedValue({ file: 'from-file', vault: 'from-vault' });
+    renderWithProviders(<ImportDialog onDone={vi.fn()} />, { inDialog: true });
+    await user.click(await screen.findByRole('button', { name: /^Bitwarden/ }));
+    await user.click(await screen.findByRole('button', { name: 'Choose CSV file…' }));
+
+    const compare = await screen.findByRole('button', { name: 'Compare the passwords of Router' });
+    expect(compare).toHaveAttribute('aria-expanded', 'false');
+    await user.click(compare);
+    expect(compare).toHaveAttribute('aria-expanded', 'true');
+    // Opening the comparison doesn't tick or untick the row.
+    expect(screen.getByRole('checkbox', { name: 'Import Router' })).toBeChecked();
+    expect(screen.getByText('Changed Nov 2, 2026')).toBeInTheDocument();
+    expect(screen.getByText('Changed Mar 12, 2025')).toBeInTheDocument();
+    const fileSide = screen.getByText('In the file').closest('div') as HTMLElement;
+    expect(within(fileSide).getByText('Newer')).toBeInTheDocument();
+    // No password until asked for.
+    expect(api.vaultImportCompare).not.toHaveBeenCalled();
+    expect(screen.queryByText('from-file')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Show passwords' }));
+    expect(api.vaultImportCompare).toHaveBeenCalledWith(1);
+    expect(await screen.findByText('from-file')).toBeInTheDocument();
+    expect(screen.getByText('from-vault')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Hide passwords' }));
+    expect(screen.queryByText('from-file')).not.toBeInTheDocument();
+  });
+
+  it('says when a file has no dates', async () => {
+    const user = userEvent.setup();
+    const [, router] = PREVIEW.rows as [ImportRow, ImportRow];
+    const changed: ImportRow = { ...router, passwordChanged: true, changedInVault: null };
+    api.vaultImportPreview.mockResolvedValue({
+      path: CSV,
+      preview: { ...PREVIEW, rows: [changed] },
+    });
+    renderWithProviders(<ImportDialog onDone={vi.fn()} />, { inDialog: true });
+    await user.click(await screen.findByRole('button', { name: /^Chrome/ }));
+    await user.click(await screen.findByRole('button', { name: 'Choose CSV file…' }));
+    await user.click(
+      await screen.findByRole('button', { name: 'Compare the passwords of Router' }),
+    );
+    expect(screen.getByText('The file has no date')).toBeInTheDocument();
+    expect(screen.getByText('Date unknown')).toBeInTheDocument();
+    expect(screen.queryByText('Newer')).not.toBeInTheDocument();
   });
 
   it('only updates when every picked row has a different password', async () => {

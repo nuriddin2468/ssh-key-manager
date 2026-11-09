@@ -500,6 +500,96 @@ github.com,https://github.com,octocat,pw
 }
 
 #[test]
+fn preview_reads_when_the_file_and_the_vault_changed_the_password() {
+    let mut fx = Fixture::new();
+    let seed = fx.csv(
+        "first.csv",
+        "name,url,username,password\ngithub.com,https://github.com,octocat,old-pass\n",
+    );
+    fx.vault.import_csv(&seed, &[0]).unwrap();
+
+    let firefox = fx.preview(
+        "\"url\",\"username\",\"password\",\"httpRealm\",\"formActionOrigin\",\"guid\",\"timeCreated\",\"timeLastUsed\",\"timePasswordChanged\"\n\
+         \"https://github.com\",\"octocat\",\"new-pass\",,\"\",\"{a}\",\"1700000000000\",\"1700000000000\",\"1730000000000\"\n",
+    );
+    let row = &firefox.rows[0];
+    assert!(row.password_changed);
+    assert_eq!(row.changed_in_file.as_deref(), Some("2024-10-27T03:33:20Z"));
+    // Imported just now, so the vault's date is today's.
+    let vault = row.changed_in_vault.as_deref().unwrap();
+    assert!(vault > "2024-10-27T03:33:20Z", "{vault}");
+
+    let keepassxc = fx.preview(
+        "\"Group\",\"Title\",\"Username\",\"Password\",\"URL\",\"Notes\",\"TOTP\",\"Icon\",\"Last Modified\",\"Created\"\n\
+         \"Root\",\"GitHub\",\"octocat\",\"new-pass\",\"https://github.com\",\"\",\"\",\"0\",\"2024-05-01T10:20:30Z\",\"2024-01-01T00:00:00Z\"\n",
+    );
+    assert_eq!(
+        keepassxc.rows[0].changed_in_file.as_deref(),
+        Some("2024-05-01T10:20:30Z")
+    );
+    // Chrome writes no dates.
+    let chrome =
+        fx.preview("name,url,username,password\ngithub.com,https://github.com,octocat,x\n");
+    assert_eq!(chrome.rows[0].changed_in_file, None);
+}
+
+#[test]
+fn dates_in_files_are_read_or_ignored() {
+    let at = |cell: &str| changed_at(cell).map(crate::vault::rfc3339);
+    assert_eq!(at("1730000000000").as_deref(), Some("2024-10-27T03:33:20Z"));
+    assert_eq!(at("1730000000").as_deref(), Some("2024-10-27T03:33:20Z"));
+    assert_eq!(
+        at("2024-05-01T12:20:30+02:00").as_deref(),
+        Some("2024-05-01T10:20:30Z")
+    );
+    assert_eq!(
+        at("2024-05-01 10:20:30").as_deref(),
+        Some("2024-05-01T10:20:30Z")
+    );
+    for nonsense in [
+        "",
+        "0",
+        "yesterday",
+        "1970-01-01T00:00:00Z",
+        "9999999999999",
+        "4102444800",
+    ] {
+        assert_eq!(at(nonsense), None, "{nonsense}");
+    }
+}
+
+#[test]
+fn compare_shows_both_passwords_of_a_changed_row_only() {
+    let mut fx = Fixture::new();
+    let seed = fx.csv(
+        "first.csv",
+        "name,url,username,password\n\
+         github.com,https://github.com,octocat,old-pass\n\
+         example.com,https://example.com,me,same\n",
+    );
+    fx.vault.import_csv(&seed, &[0, 1]).unwrap();
+    let again = fx.csv(
+        "second.csv",
+        "name,url,username,password\n\
+         github.com,https://github.com,octocat,new-pass\n\
+         example.com,https://example.com,me,same\n\
+         new.com,https://new.com,me,pw\n",
+    );
+    let both = fx.vault.import_compare(&again, 0).unwrap();
+    assert_eq!(
+        (both.file.expose_secret(), both.vault.expose_secret()),
+        ("new-pass", "old-pass")
+    );
+    // Not for a row the import wouldn't change, nor one that isn't there.
+    for index in [1, 2, 9] {
+        assert!(matches!(
+            fx.vault.import_compare(&again, index).unwrap_err(),
+            Error::InvalidInput(_)
+        ));
+    }
+}
+
+#[test]
 fn import_never_updates_ssh_hosts_or_keys() {
     let mut fx = Fixture::new();
     let key = fx

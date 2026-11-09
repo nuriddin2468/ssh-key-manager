@@ -84,6 +84,20 @@ pub struct ImportRow {
     /// the row sets it on that entry, keeping the old one in its history,
     /// instead of adding a copy.
     pub password_changed: bool,
+    /// When the password was last changed, as the file says (Firefox and
+    /// KeePassXC exports, and other files with such a column), RFC 3339.
+    pub changed_in_file: Option<String>,
+    /// When `duplicate_of` got its current password, RFC 3339: for an entry
+    /// imported before, when it was imported.
+    pub changed_in_vault: Option<String>,
+}
+
+/// The two passwords of a row whose entry has another one, for the user to
+/// compare before importing it.
+#[derive(Debug)]
+pub struct ImportComparison {
+    pub file: SecretString,
+    pub vault: SecretString,
 }
 
 /// What a CSV file holds, without secrets.
@@ -132,6 +146,10 @@ impl Vault {
                     has_unreadable_otp: record.unreadable_otp.is_some(),
                     password_changed: duplicate_of
                         .is_some_and(|id| self.password_differs(id, record)),
+                    changed_in_file: record.changed_at.map(super::rfc3339),
+                    changed_in_vault: duplicate_of
+                        .and_then(|id| self.entry(id).ok())
+                        .and_then(|detail| detail.password_changed),
                     duplicate_of: duplicate_of.map(str::to_owned),
                 }
             })
@@ -194,6 +212,31 @@ impl Vault {
             return Err(error);
         }
         Ok(outcome)
+    }
+
+    /// The password of the row at `index` and that of the entry it would
+    /// update, for the user to compare. Only for a row the preview marked
+    /// [`ImportRow::password_changed`]; any other is refused, so this never
+    /// shows a password the import wouldn't replace.
+    pub fn import_compare(&self, path: &Path, index: u32) -> Result<ImportComparison> {
+        let parsed = read(path)?;
+        let record = parsed
+            .records
+            .iter()
+            .find(|r| r.index == index)
+            .ok_or_else(|| {
+                Error::invalid("the file changed since it was previewed; preview it again")
+            })?;
+        let existing: Vec<EntrySummary> =
+            self.entries().into_iter().filter(|e| !e.in_trash).collect();
+        let id = Duplicates::new(&existing)
+            .find(record)
+            .filter(|id| self.password_differs(id, record))
+            .ok_or_else(|| Error::invalid("this row doesn't change a password in the vault"))?;
+        Ok(ImportComparison {
+            file: SecretString::from(record.password.as_str()),
+            vault: self.secret(id, SecretField::Password)?,
+        })
     }
 
     /// The row has a password, and the entry `id` is a login with another
@@ -313,6 +356,8 @@ struct Record {
     otp: Option<Zeroizing<String>>,
     /// A 2FA secret as the file had it, when it isn't one this app can use.
     unreadable_otp: Option<Zeroizing<String>>,
+    /// When the password was last changed, if the file says.
+    changed_at: Option<chrono::NaiveDateTime>,
 }
 
 fn read(path: &Path) -> Result<Parsed> {
@@ -512,6 +557,16 @@ mod generic {
         "mfa",
         "authenticator",
     ];
+    pub(super) const CHANGED: &[&str] = &[
+        "timepasswordchanged",
+        "passwordchanged",
+        "passwordlastchanged",
+        "passwordmodified",
+        "lastmodified",
+        "modified",
+        "updated",
+        "updatedat",
+    ];
     pub(super) const GROUP: &[&str] = &[
         "group",
         "folder",
@@ -537,6 +592,8 @@ struct Columns {
     group: Vec<usize>,
     /// Bitwarden's custom fields, added to the notes.
     extra: Vec<usize>,
+    /// When the password (or the whole entry) last changed.
+    changed: Vec<usize>,
 }
 
 impl Columns {
@@ -586,6 +643,7 @@ impl Columns {
                 username: find(&["username"]),
                 url: find(&["url"]),
                 password: find(&["password"]),
+                changed: find(&["timepasswordchanged"]),
                 ..Self::default()
             },
             CsvFormat::Keepassxc => Self {
@@ -596,6 +654,7 @@ impl Columns {
                 notes: find(&["notes"]),
                 otp: find(&["totp"]),
                 group: find(&["group"]),
+                changed: find(&["lastmodified"]),
                 ..Self::default()
             },
             CsvFormat::Generic => Self {
@@ -606,6 +665,7 @@ impl Columns {
                 notes: find(generic::NOTES),
                 otp: find(generic::OTP),
                 group: find(generic::GROUP),
+                changed: find(generic::CHANGED),
                 ..Self::default()
             },
         };
@@ -632,16 +692,16 @@ impl Columns {
         // This app's export puts a `'` before text a spreadsheet would run;
         // passwords are written as they are.
         let first = |columns: &[usize]| -> &str { without_formula_guard(any(columns)) };
-        let mut url = first(&self.url).trim().to_owned();
+        let mut url = first(&self.url).trim();
         if self.format == Some(CsvFormat::Bitwarden) {
             // Bitwarden puts all of an item's URIs into one cell.
             url = url
                 .split(',')
                 .map(str::trim)
                 .find(|u| !u.is_empty())
-                .unwrap_or_default()
-                .to_owned();
+                .unwrap_or_default();
         }
+        let url = url.to_owned();
         let username = first(&self.username).trim().to_owned();
         let password = Zeroizing::new(any(&self.password).to_owned());
         let mut notes = first(&self.notes).trim_end().to_owned();
@@ -698,6 +758,7 @@ impl Columns {
             password,
             otp,
             unreadable_otp,
+            changed_at: changed_at(first(&self.changed)),
         })
     }
 }
@@ -777,6 +838,36 @@ impl<'a> Duplicates<'a> {
             self.by_host.get(&(site, user)).copied()
         }
     }
+}
+
+/// A date as exports write it: milliseconds or seconds since 1970
+/// (Firefox), or ISO 8601 with or without a zone (KeePassXC and others).
+/// `None` for anything else, or a date before 1995 or in the future.
+fn changed_at(cell: &str) -> Option<chrono::NaiveDateTime> {
+    let cell = cell.trim();
+    let time = if let Ok(number) = cell.parse::<i64>() {
+        // Milliseconds since 2001 are over 10^12; seconds stay below it for
+        // millennia.
+        if number >= 1_000_000_000_000 {
+            chrono::DateTime::from_timestamp_millis(number)?.naive_utc()
+        } else {
+            chrono::DateTime::from_timestamp(number, 0)?.naive_utc()
+        }
+    } else if let Ok(time) = chrono::DateTime::parse_from_rfc3339(cell) {
+        time.naive_utc()
+    } else {
+        ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"]
+            .iter()
+            .find_map(|format| chrono::NaiveDateTime::parse_from_str(cell, format).ok())?
+    };
+    let earliest = chrono::NaiveDate::from_ymd_opt(1995, 1, 1)?.and_hms_opt(0, 0, 0)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    let latest = chrono::DateTime::from_timestamp(i64::try_from(now.as_secs()).ok()?, 0)?
+        .naive_utc()
+        + chrono::Duration::days(1);
+    (earliest..=latest).contains(&time).then_some(time)
 }
 
 fn csv_error(error: &csv::Error) -> Error {

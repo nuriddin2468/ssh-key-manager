@@ -5,6 +5,7 @@
 // backend picks itself (import and export).
 
 import type { CsvFormat } from '@/bindings/CsvFormat';
+import type { EntryDetail } from '@/bindings/EntryDetail';
 import type { EntryInput } from '@/bindings/EntryInput';
 import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { Exported } from '@/bindings/Exported';
@@ -24,6 +25,8 @@ interface SampleRow {
   group: string | null;
   password: string;
   otp: string;
+  /** When the file says the password changed, as Firefox and KeePassXC exports do. */
+  changed?: string;
 }
 
 const SAMPLE: SampleRow[] = [
@@ -58,6 +61,7 @@ const SAMPLE: SampleRow[] = [
     group: null,
     password: 'router-imported',
     otp: '',
+    changed: '2026-11-02T09:15:00Z',
   },
   {
     title: 'Netflix',
@@ -167,6 +171,11 @@ async function rowsFor(existing: EntrySummary[]): Promise<ImportRow[]> {
       hasUnreadableOtp: false,
       duplicateOf: duplicate?.id ?? null,
       passwordChanged: duplicate ? await passwordDiffers(duplicate, row) : false,
+      changedInFile: row.changed ?? null,
+      changedInVault: duplicate
+        ? (((await vaultHandlers.vault_entry?.({ id: duplicate.id })) as EntryDetail | undefined)
+            ?.passwordChanged ?? null)
+        : null,
     };
   });
   return Promise.all(rows);
@@ -236,6 +245,17 @@ export const vaultFilesHandlers: Record<string, Handler> = {
     picked = null;
     lastImport = path;
     return outcome;
+  },
+  vault_import_compare: async ({ index }) => {
+    const existing = await entries();
+    const row = SAMPLE[index as number];
+    if (!picked || !row) return fail('invalid_input', 'the file changed since it was previewed');
+    const duplicate = duplicateOf(existing, row);
+    if (!duplicate || !(await passwordDiffers(duplicate, row))) {
+      return fail('invalid_input', "this row doesn't change a password in the vault");
+    }
+    const vault = await vaultHandlers.vault_reveal?.({ id: duplicate.id, field: 'password' });
+    return { file: row.password, vault: String(vault) };
   },
   vault_trash_import_file: () => {
     if (!lastImport) {

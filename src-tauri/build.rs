@@ -133,6 +133,7 @@ const COMMANDS: &[&str] = &[
     "run_vault_audit",
     "vault_import_preview",
     "vault_import",
+    "vault_import_compare",
     "vault_trash_import_file",
     "vault_export_csv",
     "vault_export_kdbx",

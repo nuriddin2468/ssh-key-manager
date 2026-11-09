@@ -32,4 +32,14 @@ duplicateOf: string | null,
  * the row sets it on that entry, keeping the old one in its history,
  * instead of adding a copy.
  */
-passwordChanged: boolean, };
+passwordChanged: boolean, 
+/**
+ * When the password was last changed, as the file says (Firefox and
+ * KeePassXC exports, and other files with such a column), RFC 3339.
+ */
+changedInFile: string | null, 
+/**
+ * When `duplicate_of` got its current password, RFC 3339: for an entry
+ * imported before, when it was imported.
+ */
+changedInVault: string | null, };

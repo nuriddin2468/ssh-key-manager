@@ -7,6 +7,7 @@ pub mod audit_checks;
 pub mod autostart;
 pub mod background;
 pub mod browser;
+pub mod browser_import;
 pub mod config;
 pub mod diagnose;
 pub mod environment;

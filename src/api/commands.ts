@@ -8,6 +8,8 @@ import type { AuthorizedLine } from '@/bindings/AuthorizedLine';
 import type { AutostartStatus } from '@/bindings/AutostartStatus';
 import type { BackgroundStatus } from '@/bindings/BackgroundStatus';
 import type { BreachStatus } from '@/bindings/BreachStatus';
+import type { BrowserImport } from '@/bindings/BrowserImport';
+import type { BrowserProfile } from '@/bindings/BrowserProfile';
 import type { BrowserStatus } from '@/bindings/BrowserStatus';
 import type { ConfigFile } from '@/bindings/ConfigFile';
 import type { ConnectionEvent } from '@/bindings/ConnectionEvent';
@@ -382,6 +384,20 @@ export const api = {
   vaultImport: (indices: number[]) => call<number>('vault_import', { indices }),
   /** Moves the CSV file just imported to the Trash; no other file. */
   vaultTrashImportFile: () => call<void>('vault_trash_import_file'),
+
+  // Importing straight from a browser (src-tauri/src/commands/browser_import.rs).
+  /** The browser profiles on this computer with saved logins. */
+  vaultBrowserProfiles: () => call<BrowserProfile[]>('vault_browser_profiles'),
+  /**
+   * Reads a profile's saved logins (the system may ask the user for permission first) and lists
+   * them without passwords; or says why it couldn't.
+   */
+  vaultBrowserImportPreview: (profileId: string, primaryPassword: string | null) =>
+    call<BrowserImport>('vault_browser_import_preview', { profileId, primaryPassword }),
+  /** Adds the logins at `indices` of the last browser preview; returns how many were added. */
+  vaultBrowserImport: (indices: number[]) => call<number>('vault_browser_import', { indices }),
+  /** Drops the logins read for the last browser preview. */
+  vaultBrowserImportForget: () => call<void>('vault_browser_import_forget'),
   /**
    * Checks the master password, asks where to save in a system dialog (`null` if cancelled)
    * and writes a plain-text KeePassXC-style CSV file there.

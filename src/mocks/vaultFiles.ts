@@ -4,6 +4,8 @@
 // src/features/passwords/files/pickers.ts, and from here for the files the
 // backend picks itself (import and export).
 
+import type { BrowserImport } from '@/bindings/BrowserImport';
+import type { BrowserProfile } from '@/bindings/BrowserProfile';
 import type { CsvFormat } from '@/bindings/CsvFormat';
 import type { EntryInput } from '@/bindings/EntryInput';
 import type { EntrySummary } from '@/bindings/EntrySummary';
@@ -94,6 +96,24 @@ let foreign = false;
 let defaultMoved = false;
 let picked: string | null = null;
 let lastImport: string | null = null;
+/** Whether a browser profile was "read" for import. */
+let browserRead = false;
+
+/**
+ * Browser profiles to import from. Chrome's work profile has passwords only Chrome can read;
+ * Edge has nothing else (the CSV fallback); Firefox has the Primary Password `firefox`.
+ */
+const BROWSER_PROFILES: BrowserProfile[] = [
+  { id: 'chrome:Default', browser: 'Google Chrome', name: 'Person 1', family: 'chromium' },
+  { id: 'chrome:Profile 2', browser: 'Google Chrome', name: 'Work', family: 'chromium' },
+  { id: 'edge:Default', browser: 'Microsoft Edge', name: 'Profile 1', family: 'chromium' },
+  {
+    id: 'firefox:0:Profiles/dev.default-release',
+    browser: 'Firefox',
+    name: 'default-release',
+    family: 'firefox',
+  },
+];
 
 /** What the backend's file dialogs "pick" in the mock. */
 const DEV_CSV = '/Users/dev/Downloads/bitwarden_export.csv';
@@ -157,6 +177,29 @@ function rowsFor(existing: EntrySummary[]): ImportRow[] {
   });
 }
 
+/** Adds the sample rows at `indices` to the vault; returns how many. */
+async function addSample(indices: number[]): Promise<number> {
+  let count = 0;
+  for (const index of indices) {
+    const row = SAMPLE[index];
+    if (!row) return fail('invalid_input', 'the file changed since it was previewed');
+    const input: EntryInput = {
+      title: row.title,
+      username: row.username,
+      password: row.password,
+      url: row.url,
+      notes: '',
+      otp: row.otp ? `otpauth://totp/${row.title}?secret=${row.otp}` : null,
+      kind: 'login',
+      host: null,
+      keyFingerprint: null,
+    };
+    await vaultHandlers.vault_add?.({ input });
+    count += 1;
+  }
+  return count;
+}
+
 export const vaultFilesHandlers: Record<string, Handler> = {
   // Shows the switched-to file and, for a file from elsewhere, the recovery form.
   vault_status: async () => {
@@ -190,27 +233,42 @@ export const vaultFilesHandlers: Record<string, Handler> = {
     await entries();
     const path = picked;
     if (!path) return fail('invalid_input', 'choose the file to import again');
-    let count = 0;
-    for (const index of indices as number[]) {
-      const row = SAMPLE[index];
-      if (!row) return fail('invalid_input', 'the file changed since it was previewed');
-      const input: EntryInput = {
-        title: row.title,
-        username: row.username,
-        password: row.password,
-        url: row.url,
-        notes: '',
-        otp: row.otp ? `otpauth://totp/${row.title}?secret=${row.otp}` : null,
-        kind: 'login',
-        host: null,
-        keyFingerprint: null,
-      };
-      await vaultHandlers.vault_add?.({ input });
-      count += 1;
-    }
+    const count = await addSample(indices as number[]);
     picked = null;
     lastImport = path;
     return count;
+  },
+  vault_browser_profiles: (): BrowserProfile[] => BROWSER_PROFILES,
+  vault_browser_import_preview: async ({ profileId, primaryPassword }): Promise<BrowserImport> => {
+    const status = await baseStatus();
+    if (status.state !== 'unlocked') return fail('vault_locked', 'the vault is locked');
+    browserRead = false;
+    const profile = BROWSER_PROFILES.find((p) => p.id === profileId);
+    if (!profile) return fail('not_found', 'that browser profile');
+    if (profile.browser === 'Microsoft Edge') return { kind: 'appBound' };
+    if (profile.family === 'firefox') {
+      if (!primaryPassword) return { kind: 'primaryPasswordRequired' };
+      if (primaryPassword !== 'firefox') return { kind: 'wrongPrimaryPassword' };
+    }
+    browserRead = true;
+    const rows = rowsFor(await entries()).map((row) => ({ ...row, group: null, hasOtp: false }));
+    const appBound = profile.name === 'Work' ? 2 : 0;
+    return {
+      kind: 'preview',
+      profile,
+      preview: { format: profile.family === 'firefox' ? 'firefox' : 'chrome', rows, skipped: 0 },
+      unreadable: appBound,
+      appBound,
+    };
+  },
+  vault_browser_import: async ({ indices }) => {
+    if (!browserRead) return fail('invalid_input', 'read the browser’s logins again');
+    const count = await addSample(indices as number[]);
+    browserRead = false;
+    return count;
+  },
+  vault_browser_import_forget: () => {
+    browserRead = false;
   },
   vault_trash_import_file: () => {
     if (!lastImport) {

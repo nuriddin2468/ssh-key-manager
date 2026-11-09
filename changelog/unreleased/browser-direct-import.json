@@ -1,0 +1,6 @@
+{
+  "kind": "new",
+  "en": "Import passwords now reads Chrome, Edge, Brave, Vivaldi and Firefox directly, after the system asks your permission, so no plain-text export file is needed. Where a browser can't be read (Safari, or passwords Chrome on Windows keeps to itself), the CSV guide is still there.",
+  "ru": "«Импорт паролей» теперь читает Chrome, Edge, Brave, Vivaldi и Firefox напрямую, спросив разрешения у системы, — незашифрованный файл выгрузки больше не нужен. Там, где браузер прочитать нельзя (Safari или пароли, которые Chrome в Windows хранит только для себя), осталась инструкция по выгрузке в CSV.",
+  "uz": "«Parollarni import qilish» endi Chrome, Edge, Brave, Vivaldi va Firefox’ni tizimdan ruxsat soʻrab, toʻgʻridan-toʻgʻri oʻqiydi — shifrlanmagan eksport fayli kerak emas. Brauzerni oʻqib boʻlmaydigan joyda (Safari yoki Chrome Windows’da faqat oʻzi uchun saqlaydigan parollar) CSV eksport yoʻriqnomasi qoladi."
+}

@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { BrowserProfile } from '@/bindings/BrowserProfile';
 import type { ImportPreview } from '@/bindings/ImportPreview';
 import type { VaultLocation } from '@/bindings/VaultLocation';
 import type { VaultStatus } from '@/bindings/VaultStatus';
@@ -27,6 +28,10 @@ const api = vi.hoisted(() => ({
   browserStatus: vi.fn(),
   vaultImport: vi.fn(),
   vaultTrashImportFile: vi.fn(),
+  vaultBrowserProfiles: vi.fn(),
+  vaultBrowserImportPreview: vi.fn(),
+  vaultBrowserImport: vi.fn(),
+  vaultBrowserImportForget: vi.fn(),
   vaultExportCsv: vi.fn(),
   vaultExportKdbx: vi.fn(),
   vaultLocation: vi.fn(),
@@ -137,7 +142,20 @@ beforeEach(() => {
   api.vaultStatus.mockResolvedValue(status('unlocked'));
   api.environment.mockResolvedValue({ paths: { home: '/Users/me' } });
   api.browserStatus.mockResolvedValue({ browsers: [] });
+  api.vaultBrowserProfiles.mockResolvedValue([]);
+  api.vaultBrowserImportForget.mockResolvedValue(undefined);
 });
+
+const CHROME_PROFILES: BrowserProfile[] = [
+  { id: 'chrome:Default', browser: 'Google Chrome', name: 'Person 1', family: 'chromium' },
+  { id: 'chrome:Profile 2', browser: 'Google Chrome', name: 'Work', family: 'chromium' },
+];
+const FIREFOX_PROFILE: BrowserProfile = {
+  id: 'firefox:0:Profiles/a.default-release',
+  browser: 'Firefox',
+  name: 'default-release',
+  family: 'firefox',
+};
 
 describe('ImportDialog', () => {
   it('previews a file, skips duplicates, imports and moves the file to the Trash', async () => {
@@ -241,7 +259,7 @@ describe('ImportDialog', () => {
     expect(names.at(-1)).toMatch(/^Another app or CSV file/);
 
     await user.click(screen.getByRole('button', { name: /^Firefox/ }));
-    expect(screen.getByText('about:logins')).toBeInTheDocument();
+    expect(await screen.findByText('about:logins')).toBeInTheDocument();
   });
 
   it('says how to stop a browser offering the logins it imported', async () => {
@@ -253,6 +271,109 @@ describe('ImportDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Choose CSV file…' }));
     await user.click(await screen.findByRole('button', { name: 'Import 2 entries' }));
     expect(await screen.findByText('Stop Chrome offering them too')).toBeInTheDocument();
+  });
+
+  it('imports straight from a browser profile, without a file', async () => {
+    const user = userEvent.setup();
+    api.vaultBrowserProfiles.mockResolvedValue(CHROME_PROFILES);
+    api.vaultBrowserImportPreview.mockResolvedValue({
+      kind: 'preview',
+      profile: CHROME_PROFILES[1],
+      preview: { ...PREVIEW, format: 'chrome', skipped: 0 },
+      unreadable: 1,
+      appBound: 1,
+    });
+    api.vaultBrowserImport.mockResolvedValue(2);
+    const onDone = vi.fn();
+    renderWithProviders(<ImportDialog onDone={onDone} />, { inDialog: true });
+
+    await user.click(await screen.findByRole('button', { name: /^Chrome/ }));
+    expect(await screen.findByRole('heading', { name: 'Import from Chrome' })).toBeInTheDocument();
+    await user.click(screen.getByRole('radio', { name: 'Work' }));
+    await user.click(screen.getByRole('button', { name: 'Import from Chrome' }));
+    expect(api.vaultBrowserImportPreview).toHaveBeenCalledWith('chrome:Profile 2', null);
+
+    expect(await screen.findByText('Chrome · Work')).toBeInTheDocument();
+    expect(screen.getByRole('table', { name: 'Logins in Work' })).toBeInTheDocument();
+    expect(screen.getByText(/1 password wasn’t read: only Chrome can decrypt it/)).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Import 2 entries' }));
+    expect(api.vaultBrowserImport).toHaveBeenCalledWith([0, 3]);
+    expect(api.vaultImport).not.toHaveBeenCalled();
+    expect(await screen.findByText('2 entries imported')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Move to Trash' })).not.toBeInTheDocument();
+    expect(screen.getByText('Stop Chrome offering them too')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onDone).toHaveBeenCalled();
+  });
+
+  it('asks for the Firefox primary password and says when it is wrong', async () => {
+    const user = userEvent.setup();
+    api.vaultBrowserProfiles.mockResolvedValue([FIREFOX_PROFILE]);
+    api.vaultBrowserImportPreview
+      .mockResolvedValueOnce({ kind: 'primaryPasswordRequired' })
+      .mockResolvedValueOnce({ kind: 'wrongPrimaryPassword' })
+      .mockResolvedValueOnce({
+        kind: 'preview',
+        profile: FIREFOX_PROFILE,
+        preview: { ...PREVIEW, format: 'firefox' },
+        unreadable: 0,
+        appBound: 0,
+      });
+    renderWithProviders(<ImportDialog onDone={vi.fn()} />, { inDialog: true });
+
+    await user.click(await screen.findByRole('button', { name: /^Firefox/ }));
+    await user.click(await screen.findByRole('button', { name: 'Import from Firefox' }));
+    const field = await screen.findByLabelText('Firefox Primary Password');
+    await waitFor(() => expect(field).toHaveFocus());
+    expect(screen.getByRole('button', { name: 'Import from Firefox' })).toBeDisabled();
+    await user.type(field, 'wrong{Enter}');
+    expect(await screen.findByText('That’s not the Primary Password. Try again.')).toBeVisible();
+    await user.clear(field);
+    await user.type(field, 'right{Enter}');
+    expect(api.vaultBrowserImportPreview).toHaveBeenLastCalledWith(FIREFOX_PROFILE.id, 'right');
+    expect(await screen.findByText('Firefox · default-release')).toBeInTheDocument();
+  });
+
+  it('falls back to the CSV guide when only the browser can read its passwords', async () => {
+    const user = userEvent.setup();
+    api.vaultBrowserProfiles.mockResolvedValue(CHROME_PROFILES.slice(0, 1));
+    api.vaultBrowserImportPreview.mockResolvedValue({ kind: 'appBound' });
+    renderWithProviders(<ImportDialog onDone={vi.fn()} />, { inDialog: true });
+
+    await user.click(await screen.findByRole('button', { name: /^Chrome/ }));
+    // With one profile there is nothing to choose.
+    expect(await screen.findByRole('heading', { name: 'Import from Chrome' })).toBeInTheDocument();
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Import from Chrome' }));
+
+    expect(await screen.findByText('Chrome keeps these passwords to itself')).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Export from Chrome' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Choose CSV file…' })).toHaveAccessibleDescription(
+      /only it can read them/,
+    );
+  });
+
+  it('says so when the system prompt is refused, and offers to try again', async () => {
+    const user = userEvent.setup();
+    api.vaultBrowserProfiles.mockResolvedValue(CHROME_PROFILES.slice(0, 1));
+    api.vaultBrowserImportPreview.mockResolvedValue({ kind: 'denied' });
+    renderWithProviders(<ImportDialog onDone={vi.fn()} />, { inDialog: true });
+
+    await user.click(await screen.findByRole('button', { name: /^Chrome/ }));
+    await user.click(await screen.findByRole('button', { name: 'Import from Chrome' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Access wasn’t allowed/);
+    expect(screen.getByRole('button', { name: 'Import from Chrome' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Use a CSV file instead' }));
+    expect(screen.getByRole('heading', { name: 'Export from Chrome' })).toBeInTheDocument();
+  });
+
+  it('drops the logins read from a browser when the dialog closes', async () => {
+    const { unmount } = renderWithProviders(<ImportDialog onDone={vi.fn()} />, {
+      inDialog: true,
+    });
+    await screen.findByRole('button', { name: /^Chrome/ });
+    unmount();
+    expect(api.vaultBrowserImportForget).toHaveBeenCalled();
   });
 });
 

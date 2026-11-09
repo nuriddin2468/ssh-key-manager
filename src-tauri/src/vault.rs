@@ -305,6 +305,7 @@ impl VaultRuntime {
         let was_unlocked = lock(&self.unlocked).take().is_some();
         if was_unlocked {
             self.clear_copied_secret();
+            crate::commands::browser_import::forget();
         }
         was_unlocked
     }

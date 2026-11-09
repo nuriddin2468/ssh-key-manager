@@ -281,6 +281,8 @@ impl VaultRuntime {
     }
 
     pub fn set_unlocked(&self, vault: Vault) {
+        // Logins read from a browser for the vault open before are not for this one.
+        crate::commands::browser_import::forget();
         *lock(&self.unlocked) = Some(vault);
         self.touch();
         if let Some(app) = self.app.get() {
@@ -473,7 +475,10 @@ impl VaultRuntime {
     }
 
     /// Clears the clipboard if it still holds the secret copied last.
+    /// Also drops the logins read from a browser for an import: whenever the
+    /// open vault goes, they go with it.
     fn clear_copied_secret(&self) {
+        crate::commands::browser_import::forget();
         let mut state = lock(&self.clipboard);
         if let Some(digest) = state.secret {
             clear_if_holding(&mut state, &digest);

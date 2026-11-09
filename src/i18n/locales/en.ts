@@ -2985,6 +2985,64 @@ const en = {
       tooLarge: 'This file is too large to import.',
       changed: 'The file changed after you chose it. Choose it again.',
       unlockFirst: 'Unlock the vault to import passwords.',
+      browser: {
+        title: 'Import from {{name}}',
+        lead: 'Your saved logins go straight into the vault. No export file is made.',
+        profile: 'Profile',
+        permissionTitle: {
+          macos: 'macOS will ask for permission',
+          linux: 'Your keyring may ask to unlock',
+          windows: 'Windows won’t ask',
+          firefox: 'Set a Primary Password in Firefox?',
+          firefoxLocked: 'This profile has a Primary Password',
+        },
+        permission: {
+          macos:
+            'To read the passwords, the app needs {{name}}’s key from your keychain. Enter your Mac login password and click Allow.',
+          linux:
+            'The app reads {{name}}’s key from your keyring (GNOME Keyring or KWallet). If it’s locked, you’ll be asked to unlock it.',
+          windows:
+            'The app reads the passwords as you. Any that {{name}} protects for its own use can’t be read; for those, you’ll be offered a CSV export.',
+          firefox:
+            'If you did, you’ll be asked for it here. It’s used once to read the passwords and isn’t saved.',
+          firefoxLocked: 'Enter it to read the passwords. It’s used once and isn’t saved.',
+        },
+        primary: 'Firefox Primary Password',
+        primaryHint: 'The one you set in {{name}} under Settings → Privacy & Security.',
+        wrongPrimary: 'That’s not the Primary Password. Try again.',
+        denied:
+          'Access wasn’t allowed, so nothing was read. Try again and click Allow, or use a CSV file instead.',
+        submit: 'Import from {{name}}',
+        reading: 'Reading {{name}}…',
+        done: 'Done',
+        inBrowser: 'In {{name}}',
+        browserNoDate: '{{name}} has no date',
+        compareHint:
+          'Importing this login keeps the password from {{name}}. The vault’s password stays in the entry’s history.',
+        useCsv: 'Use a CSV file instead',
+        from: '{{name}} · {{profile}}',
+        tableLabel: 'Logins in {{profile}}',
+        nothing: 'This profile has no saved passwords.',
+        someAppBound_one:
+          '{{count}} password wasn’t read: only {{name}} can decrypt it. To bring it over too, export a CSV file from {{name}}.',
+        someAppBound_other:
+          '{{count}} passwords weren’t read: only {{name}} can decrypt them. To bring them over too, export a CSV file from {{name}}.',
+        someUnreadable_one: '{{count}} password couldn’t be decrypted and isn’t listed.',
+        someUnreadable_other: '{{count}} passwords couldn’t be decrypted and aren’t listed.',
+        fallbackTitle: {
+          appBound: '{{name}} keeps these passwords to itself',
+          keyUnavailable: '{{name}}’s key wasn’t found',
+          unsupported: 'These passwords can’t be read directly',
+        },
+        fallback: {
+          appBound:
+            'On Windows, {{name}} encrypts saved passwords so that only it can read them. Export them to a CSV file instead, as shown below.',
+          keyUnavailable:
+            'Your system has no key for {{name}}’s passwords, so the app can’t read them directly. Export them to a CSV file instead.',
+          unsupported:
+            '{{name}} stores these passwords in a way the app can’t read yet. Export them to a CSV file instead.',
+        },
+      },
     },
     export: {
       title: 'Export passwords',

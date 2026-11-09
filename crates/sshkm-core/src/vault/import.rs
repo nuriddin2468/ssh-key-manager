@@ -126,7 +126,10 @@ impl Vault {
     /// Reads a CSV export and lists its rows, marking duplicates of entries
     /// outside the recycle bin and those with another password.
     pub fn import_preview(&self, path: &Path) -> Result<ImportPreview> {
-        let parsed = read(path)?;
+        Ok(self.preview_parsed(&read(path)?))
+    }
+
+    fn preview_parsed(&self, parsed: &Parsed) -> ImportPreview {
         let existing: Vec<EntrySummary> =
             self.entries().into_iter().filter(|e| !e.in_trash).collect();
         let duplicates = Duplicates::new(&existing);
@@ -154,11 +157,11 @@ impl Vault {
                 }
             })
             .collect();
-        Ok(ImportPreview {
+        ImportPreview {
             format: parsed.format,
             rows,
             skipped: parsed.skipped,
-        })
+        }
     }
 
     /// Reads the CSV file again and imports the rows at `indices`: a row
@@ -168,7 +171,10 @@ impl Vault {
     /// of them fails, or if an index no longer names a row (the file changed
     /// since the preview). The caller saves the vault.
     pub fn import_csv(&mut self, path: &Path, indices: &[u32]) -> Result<ImportOutcome> {
-        let parsed = read(path)?;
+        self.apply_parsed(&read(path)?, indices)
+    }
+
+    fn apply_parsed(&mut self, parsed: &Parsed, indices: &[u32]) -> Result<ImportOutcome> {
         let wanted: BTreeSet<u32> = indices.iter().copied().collect();
         let records: Vec<&Record> = parsed
             .records
@@ -219,7 +225,10 @@ impl Vault {
     /// [`ImportRow::password_changed`]; any other is refused, so this never
     /// shows a password the import wouldn't replace.
     pub fn import_compare(&self, path: &Path, index: u32) -> Result<ImportComparison> {
-        let parsed = read(path)?;
+        self.compare_parsed(&read(path)?, index)
+    }
+
+    fn compare_parsed(&self, parsed: &Parsed, index: u32) -> Result<ImportComparison> {
         let record = parsed
             .records
             .iter()
@@ -882,6 +891,12 @@ fn without_formula_guard(cell: &str) -> &str {
         _ => cell,
     }
 }
+
+mod browser;
+pub use browser::{
+    BrowserFamily, BrowserKeyStore, BrowserLogins, BrowserProfile, BrowserReadError, SafeStorage,
+    browser_profiles,
+};
 
 #[cfg(test)]
 mod tests;

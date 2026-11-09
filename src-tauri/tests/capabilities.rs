@@ -43,9 +43,19 @@ fn vault_import_preview() {}
 fn vault_import() {}
 #[tauri::command]
 fn vault_import_compare() {}
+#[tauri::command]
+fn vault_browser_profiles() {}
+#[tauri::command]
+fn vault_browser_import_preview() {}
+#[tauri::command]
+fn vault_browser_import() {}
+#[tauri::command]
+fn vault_browser_import_compare() {}
+#[tauri::command]
+fn vault_browser_import_forget() {}
 
 const UNLOCKING: [&str; 3] = ["vault_status", "vault_unlock", "vault_unlock_device"];
-const OTHERS: [&str; 7] = [
+const OTHERS: [&str; 12] = [
     "list_keys",
     "vault_reveal",
     "vault_copy",
@@ -53,6 +63,11 @@ const OTHERS: [&str; 7] = [
     "vault_import_preview",
     "vault_import",
     "vault_import_compare",
+    "vault_browser_profiles",
+    "vault_browser_import_preview",
+    "vault_browser_import",
+    "vault_browser_import_compare",
+    "vault_browser_import_forget",
 ];
 /// What the quick search window does: unlocking, its own commands and copying.
 const QUICK: [&str; 7] = [
@@ -66,11 +81,16 @@ const QUICK: [&str; 7] = [
 ];
 /// What it never needs: secrets in the clear, everything about an entry or
 /// the config, its own shortcut.
-const NOT_QUICK: [&str; 9] = [
+const NOT_QUICK: [&str; 14] = [
     "vault_reveal",
     "vault_import_preview",
     "vault_import",
     "vault_import_compare",
+    "vault_browser_profiles",
+    "vault_browser_import_preview",
+    "vault_browser_import",
+    "vault_browser_import_compare",
+    "vault_browser_import_forget",
     "vault_entries",
     "read_config",
     "list_keys",
@@ -115,6 +135,11 @@ fn the_unlock_window_may_only_unlock() {
             vault_import_preview,
             vault_import,
             vault_import_compare,
+            vault_browser_profiles,
+            vault_browser_import_preview,
+            vault_browser_import,
+            vault_browser_import_compare,
+            vault_browser_import_forget,
         ])
         .build(tauri::generate_context!("tauri.conf.json", test = true))
         .unwrap();
@@ -162,6 +187,11 @@ fn the_quick_window_may_only_do_what_it_shows() {
             vault_import_preview,
             vault_import,
             vault_import_compare,
+            vault_browser_profiles,
+            vault_browser_import_preview,
+            vault_browser_import,
+            vault_browser_import_compare,
+            vault_browser_import_forget,
         ])
         .build(tauri::generate_context!("tauri.conf.json", test = true))
         .unwrap();

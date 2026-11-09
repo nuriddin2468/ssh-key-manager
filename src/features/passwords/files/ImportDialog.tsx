@@ -1,4 +1,4 @@
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import {
   ArrowLeft,
   Check,
@@ -9,6 +9,8 @@ import {
   EyeOff,
   FileSpreadsheet,
   FileUp,
+  Globe,
+  Info,
   Lightbulb,
   Lock,
   ShieldAlert,
@@ -21,6 +23,7 @@ import { toast } from 'sonner';
 import { api } from '@/api/commands';
 import { useVaultStatus } from '@/api/queries';
 import { toastError, useAppMutation } from '@/api/useAppMutation';
+import type { BrowserProfile } from '@/bindings/BrowserProfile';
 import type { ImportOutcome } from '@/bindings/ImportOutcome';
 import type { ImportPasswords } from '@/bindings/ImportPasswords';
 import type { ImportPreview } from '@/bindings/ImportPreview';
@@ -37,6 +40,7 @@ import { formatDate } from '@/lib/format';
 import { AppError } from '@/lib/ipc';
 import { platform } from '@/lib/platform';
 import { MASK, REVEAL_MS } from '../SavedSecret';
+import { type BrowserFallback, BrowserImportStep, type BrowserRead } from './BrowserImportStep';
 import { Callout } from './Callout';
 import { showFileError } from './errors';
 import { type ImportSource, sourcesFor } from './importSources';
@@ -49,15 +53,24 @@ export interface ImportDialogProps {
 
 type Step =
   | { kind: 'source' }
-  | { kind: 'choose'; source: ImportSource }
+  | { kind: 'choose'; source: ImportSource; fallback?: BrowserFallback }
+  | { kind: 'browser'; source: ImportSource; profiles: BrowserProfile[] }
   | {
       kind: 'preview';
       source: ImportSource;
       path: string;
       preview: ImportPreview;
       selected: ReadonlySet<number>;
+      /** Read from a browser profile, not from a file (`path` is empty then). */
+      browser?: BrowserRead;
     }
-  | { kind: 'done'; source: ImportSource; path: string; outcome: ImportOutcome };
+  | {
+      kind: 'done';
+      source: ImportSource;
+      path: string;
+      outcome: ImportOutcome;
+      browser?: BrowserRead;
+    };
 
 /**
  * Imports logins from a browser or another password manager: say where they
@@ -79,6 +92,21 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
   const [error, setError] = useState<string | null>(null);
   const installed = new Set(
     (useBrowserStatus().data?.browsers ?? []).map((browser) => browser.name),
+  );
+  const browserProfiles = useQuery({
+    queryKey: ['vault', 'browserProfiles'],
+    queryFn: api.vaultBrowserProfiles,
+    staleTime: 0,
+  });
+  const profilesOf = (source: ImportSource, listed = browserProfiles.data) =>
+    source.direct ? (listed ?? []).filter((profile) => profile.browser === source.installName) : [];
+  // Logins read from a browser stay on the other side until they are imported; drop them
+  // when the dialog closes.
+  useEffect(
+    () => () => {
+      void api.vaultBrowserImportForget().catch(() => {});
+    },
+    [],
   );
 
   const preview = useMutation({
@@ -111,11 +139,17 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
   });
 
   const importRows = useAppMutation(
-    (vars: { source: ImportSource; path: string; indices: number[] }) =>
-      api.vaultImport(vars.indices),
+    (vars: { source: ImportSource; path: string; indices: number[]; browser?: BrowserRead }) =>
+      vars.browser ? api.vaultBrowserImport(vars.indices) : api.vaultImport(vars.indices),
     {
       onSuccess: (outcome, vars) =>
-        setStep({ kind: 'done', source: vars.source, path: vars.path, outcome }),
+        setStep({
+          kind: 'done',
+          source: vars.source,
+          path: vars.path,
+          outcome,
+          browser: vars.browser,
+        }),
       onError: (appError) =>
         showFileError(t, appError, {
           invalid_input: t('vaultFiles.import.changed'),
@@ -157,9 +191,19 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
             <SourceStep
               sources={sourcesFor(platform, installed)}
               installed={installed}
-              onPick={(source) => {
+              onPick={async (source) => {
                 setError(null);
-                setStep({ kind: 'choose', source });
+                // The first pick may come before the profiles are listed.
+                const listed =
+                  source.direct && !browserProfiles.isSuccess
+                    ? (await browserProfiles.refetch()).data
+                    : browserProfiles.data;
+                const profiles = profilesOf(source, listed);
+                setStep(
+                  profiles.length > 0
+                    ? { kind: 'browser', source, profiles }
+                    : { kind: 'choose', source },
+                );
               }}
             />
             {lockedNote}
@@ -172,9 +216,47 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
         </>
       ) : null}
 
+      {step.kind === 'browser' ? (
+        <BrowserImportStep
+          source={step.source}
+          profiles={step.profiles}
+          locked={locked}
+          onRead={(read) => {
+            // Ordered and ticked as a file's rows are.
+            const preview = { ...read.preview, rows: byStatus(read.preview.rows) };
+            setStep({
+              kind: 'preview',
+              source: step.source,
+              path: '',
+              preview,
+              selected: new Set(
+                preview.rows.filter((r) => rowStatus(r) !== 'same').map((r) => r.index),
+              ),
+              browser: { ...read, preview },
+            });
+          }}
+          onCsv={(fallback) => setStep({ kind: 'choose', source: step.source, fallback })}
+          onBack={() => setStep({ kind: 'source' })}
+        />
+      ) : null}
+
       {step.kind === 'choose' ? (
         <>
           <DialogBody>
+            {step.fallback ? (
+              <Callout
+                id={`${doneId}-fallback`}
+                tone="warning"
+                icon={TriangleAlert}
+                title={t(`vaultFiles.import.browser.fallbackTitle.${step.fallback}`, {
+                  name: step.source.name ?? '',
+                })}
+              >
+                {t(`vaultFiles.import.browser.fallback.${step.fallback}`, {
+                  name: step.source.name ?? '',
+                })}
+              </Callout>
+            ) : null}
             <GuideStep source={step.source} />
             <Callout
               tone="warning"
@@ -196,7 +278,14 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
               size="lg"
               className="mr-auto"
               icon={<ArrowLeft className="size-4" strokeWidth={2} />}
-              onClick={() => setStep({ kind: 'source' })}
+              onClick={() => {
+                const profiles = profilesOf(step.source);
+                setStep(
+                  profiles.length > 0 && !step.fallback
+                    ? { kind: 'browser', source: step.source, profiles }
+                    : { kind: 'source' },
+                );
+              }}
             >
               {t('vaultFiles.import.back')}
             </Button>
@@ -208,6 +297,8 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
               size="lg"
               icon={<FileSpreadsheet className="size-4" strokeWidth={2} />}
               autoFocus
+              // The reason a browser couldn't be read directly is read with it.
+              aria-describedby={step.fallback ? `${doneId}-fallback` : undefined}
               loading={preview.isPending}
               disabled={locked}
               onClick={() => choose(step.source)}
@@ -223,14 +314,23 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
           path={step.path}
           preview={step.preview}
           selected={step.selected}
+          browser={step.browser}
+          browserName={step.source.name}
           onSelect={(selected) => setStep({ ...step, selected })}
           busy={importRows.isPending}
-          onChooseOther={() => choose(step.source)}
+          onChooseOther={() => {
+            const profiles = profilesOf(step.source);
+            if (step.browser && profiles.length > 0) {
+              void api.vaultBrowserImportForget().catch(() => {});
+              setStep({ kind: 'browser', source: step.source, profiles });
+            } else choose(step.source);
+          }}
           onCancel={onDone}
           onImport={() =>
             importRows.mutate({
               source: step.source,
               path: step.path,
+              browser: step.browser,
               indices: step.preview.rows
                 .map((r) => r.index)
                 .filter((index) => step.selected.has(index)),
@@ -259,14 +359,16 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
                 ) : null}
               </div>
             </div>
-            <Callout
-              id={`${doneId}-warning`}
-              tone="critical"
-              icon={ShieldAlert}
-              title={t('vaultFiles.import.doneTitle')}
-            >
-              {t('vaultFiles.import.doneText', { file: baseName(step.path) })}
-            </Callout>
+            {step.browser ? null : (
+              <Callout
+                id={`${doneId}-warning`}
+                tone="critical"
+                icon={ShieldAlert}
+                title={t('vaultFiles.import.doneTitle')}
+              >
+                {t('vaultFiles.import.doneText', { file: baseName(step.path) })}
+              </Callout>
+            )}
             {step.source.kind === 'browser' && step.source.name ? (
               <Callout
                 tone="info"
@@ -277,23 +379,37 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
               </Callout>
             ) : null}
           </DialogBody>
-          <DialogFooter>
-            <Button size="lg" onClick={onDone}>
-              {t('vaultFiles.import.keep')}
-            </Button>
-            <Button
-              variant="primary"
-              size="lg"
-              autoFocus
-              // Focus lands here, so the result and the warning are read with it.
-              aria-describedby={`${doneId}-count ${doneId}-warning`}
-              icon={<Trash2 className="size-4" strokeWidth={2} />}
-              loading={trash.isPending}
-              onClick={() => trash.mutate(step.path)}
-            >
-              {t('vaultFiles.import.trash')}
-            </Button>
-          </DialogFooter>
+          {step.browser ? (
+            <DialogFooter>
+              <Button
+                variant="primary"
+                size="lg"
+                autoFocus
+                aria-describedby={`${doneId}-count`}
+                onClick={onDone}
+              >
+                {t('vaultFiles.import.browser.done')}
+              </Button>
+            </DialogFooter>
+          ) : (
+            <DialogFooter>
+              <Button size="lg" onClick={onDone}>
+                {t('vaultFiles.import.keep')}
+              </Button>
+              <Button
+                variant="primary"
+                size="lg"
+                autoFocus
+                // Focus lands here, so the result and the warning are read with it.
+                aria-describedby={`${doneId}-count ${doneId}-warning`}
+                icon={<Trash2 className="size-4" strokeWidth={2} />}
+                loading={trash.isPending}
+                onClick={() => trash.mutate(step.path)}
+              >
+                {t('vaultFiles.import.trash')}
+              </Button>
+            </DialogFooter>
+          )}
         </>
       ) : null}
     </DialogContent>
@@ -303,6 +419,10 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
 interface PreviewStepProps {
   path: string;
   preview: ImportPreview;
+  /** Logins read from a browser profile instead of a file. */
+  browser?: BrowserRead;
+  /** The browser's name, as the import's sources give it. */
+  browserName?: string;
   selected: ReadonlySet<number>;
   onSelect: (selected: ReadonlySet<number>) => void;
   busy: boolean;
@@ -314,6 +434,8 @@ interface PreviewStepProps {
 function PreviewStep({
   path,
   preview,
+  browser,
+  browserName,
   selected,
   onSelect,
   busy,
@@ -358,29 +480,60 @@ function PreviewStep({
     <>
       <DialogBody>
         <div className="flex flex-col gap-1.5">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <FileSpreadsheet aria-hidden="true" className="size-4 text-subtle" strokeWidth={1.75} />
-            <span className="selectable min-w-0 truncate font-mono text-[12.5px] text-fg-2">
-              {baseName(path)}
-            </span>
-            <Badge tone="accent">
-              {t('vaultFiles.import.source', { format: t(`vaultFiles.formats.${format}`) })}
-            </Badge>
-          </div>
+          {browser ? (
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <Globe aria-hidden="true" className="size-4 text-subtle" strokeWidth={1.75} />
+              <span className="min-w-0 truncate text-[12.5px] font-medium text-fg-2">
+                {t('vaultFiles.import.browser.from', {
+                  name: browserName ?? browser.profile.browser,
+                  profile: browser.profile.name,
+                })}
+              </span>
+            </div>
+          ) : (
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <FileSpreadsheet
+                aria-hidden="true"
+                className="size-4 text-subtle"
+                strokeWidth={1.75}
+              />
+              <span className="selectable min-w-0 truncate font-mono text-[12.5px] text-fg-2">
+                {baseName(path)}
+              </span>
+              <Badge tone="accent">
+                {t('vaultFiles.import.source', { format: t(`vaultFiles.formats.${format}`) })}
+              </Badge>
+            </div>
+          )}
           <p id={summaryId} className="text-[12.5px] text-muted">
             {summary}
           </p>
         </div>
 
+        {browser && browser.unreadable > 0 ? (
+          <Callout id={`${summaryId}-unreadable`} tone="info" icon={Info}>
+            {browser.appBound > 0
+              ? t('vaultFiles.import.browser.someAppBound', {
+                  count: browser.unreadable,
+                  name: browserName ?? browser.profile.browser,
+                })
+              : t('vaultFiles.import.browser.someUnreadable', { count: browser.unreadable })}
+          </Callout>
+        ) : null}
+
         {rows.length === 0 ? (
           <p className="rounded-2xl border border-dashed border-white/[0.14] px-4 py-8 text-center text-muted">
-            {t('vaultFiles.import.nothing')}
+            {browser ? t('vaultFiles.import.browser.nothing') : t('vaultFiles.import.nothing')}
           </p>
         ) : (
           <div className="glass max-h-[340px] overflow-auto rounded-2xl">
             <table
               className="w-full min-w-[600px] table-fixed border-collapse text-left"
-              aria-label={t('vaultFiles.import.tableLabel', { file: baseName(path) })}
+              aria-label={
+                browser
+                  ? t('vaultFiles.import.browser.tableLabel', { profile: browser.profile.name })
+                  : t('vaultFiles.import.tableLabel', { file: baseName(path) })
+              }
             >
               <colgroup>
                 <col className="w-11" />
@@ -419,6 +572,7 @@ function PreviewStep({
                     row={row}
                     checked={selected.has(row.index)}
                     onToggle={() => toggle(row.index)}
+                    browserName={browser ? (browserName ?? browser.profile.browser) : undefined}
                   />
                 ))}
               </tbody>
@@ -428,7 +582,7 @@ function PreviewStep({
       </DialogBody>
       <DialogFooter>
         <Button variant="ghost" size="lg" className="mr-auto" onClick={onChooseOther}>
-          {t('vaultFiles.import.chooseOther')}
+          {browser ? t('vaultFiles.import.back') : t('vaultFiles.import.chooseOther')}
         </Button>
         <Button size="lg" onClick={onCancel}>
           {t('common.cancel')}
@@ -437,7 +591,9 @@ function PreviewStep({
           variant="primary"
           size="lg"
           autoFocus
-          aria-describedby={summaryId}
+          aria-describedby={
+            browser && browser.unreadable > 0 ? `${summaryId} ${summaryId}-unreadable` : summaryId
+          }
           loading={busy}
           disabled={count === 0}
           icon={<FileUp className="size-4" strokeWidth={2} />}
@@ -454,10 +610,13 @@ function PreviewRow({
   row,
   checked,
   onToggle,
+  browserName,
 }: {
   row: ImportRow;
   checked: boolean;
   onToggle: () => void;
+  /** The browser the row was read from, when it wasn't a file. */
+  browserName?: string;
 }) {
   const { t } = useTranslation();
   const compareId = useId();
@@ -543,7 +702,7 @@ function PreviewRow({
       {comparing ? (
         <tr ref={panel} id={compareId} className="border-t border-white/[0.05] bg-white/[0.02]">
           <td colSpan={5} className="px-3.5 py-3">
-            <ComparePasswords row={row} />
+            <ComparePasswords row={row} browserName={browserName} />
           </td>
         </tr>
       ) : null}
@@ -556,17 +715,22 @@ function PreviewRow({
  * the user can tell which to keep. The dates come with the preview; the passwords only on request,
  * and they hide themselves again after a while.
  */
-function ComparePasswords({ row }: { row: ImportRow }) {
+function ComparePasswords({ row, browserName }: { row: ImportRow; browserName?: string }) {
   const { t, i18n } = useTranslation();
   const [shown, setShown] = useState<ImportPasswords | null>(null);
-  const reveal = useAppMutation(() => api.vaultImportCompare(row.index), {
-    onSuccess: setShown,
-    onError: (appError) =>
-      showFileError(t, appError, {
-        invalid_input: t('vaultFiles.import.changed'),
-        vault_locked: t('vaultFiles.import.unlockFirst'),
-      }),
-  });
+  const fromBrowser = browserName !== undefined;
+  const reveal = useAppMutation(
+    () =>
+      fromBrowser ? api.vaultBrowserImportCompare(row.index) : api.vaultImportCompare(row.index),
+    {
+      onSuccess: setShown,
+      onError: (appError) =>
+        showFileError(t, appError, {
+          invalid_input: t('vaultFiles.import.changed'),
+          vault_locked: t('vaultFiles.import.unlockFirst'),
+        }),
+    },
+  );
   useEffect(() => {
     if (shown === null) return;
     const timer = window.setTimeout(() => setShown(null), REVEAL_MS);
@@ -579,9 +743,13 @@ function ComparePasswords({ row }: { row: ImportRow }) {
   const sides = [
     {
       key: 'file',
-      label: t('vaultFiles.import.inFile'),
+      label: fromBrowser
+        ? t('vaultFiles.import.browser.inBrowser', { name: browserName })
+        : t('vaultFiles.import.inFile'),
       date: row.changedInFile,
-      noDate: t('vaultFiles.import.fileNoDate'),
+      noDate: fromBrowser
+        ? t('vaultFiles.import.browser.browserNoDate', { name: browserName })
+        : t('vaultFiles.import.fileNoDate'),
       password: shown?.file,
     },
     {
@@ -638,7 +806,9 @@ function ComparePasswords({ row }: { row: ImportRow }) {
           {shown ? t('vaultFiles.import.hidePasswords') : t('vaultFiles.import.showPasswords')}
         </Button>
         <p className="min-w-0 flex-1 text-[11.5px] leading-4 text-muted">
-          {t('vaultFiles.import.compareHint')}
+          {fromBrowser
+            ? t('vaultFiles.import.browser.compareHint', { name: browserName })
+            : t('vaultFiles.import.compareHint')}
         </p>
       </div>
     </div>

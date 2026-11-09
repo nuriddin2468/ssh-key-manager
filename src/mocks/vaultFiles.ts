@@ -4,12 +4,15 @@
 // src/features/passwords/files/pickers.ts, and from here for the files the
 // backend picks itself (import and export).
 
+import type { BrowserImport } from '@/bindings/BrowserImport';
+import type { BrowserProfile } from '@/bindings/BrowserProfile';
 import type { CsvFormat } from '@/bindings/CsvFormat';
 import type { EntryDetail } from '@/bindings/EntryDetail';
 import type { EntryInput } from '@/bindings/EntryInput';
 import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { Exported } from '@/bindings/Exported';
 import type { ImportOutcome } from '@/bindings/ImportOutcome';
+import type { ImportPasswords } from '@/bindings/ImportPasswords';
 import type { ImportPick } from '@/bindings/ImportPick';
 import type { ImportRow } from '@/bindings/ImportRow';
 import type { VaultLocation } from '@/bindings/VaultLocation';
@@ -99,6 +102,24 @@ let foreign = false;
 let defaultMoved = false;
 let picked: string | null = null;
 let lastImport: string | null = null;
+/** Whether a browser profile was "read" for import. */
+let browserRead = false;
+
+/**
+ * Browser profiles to import from. Chrome's work profile has passwords only Chrome can read;
+ * Edge has nothing else (the CSV fallback); Firefox has the Primary Password `firefox`.
+ */
+const BROWSER_PROFILES: BrowserProfile[] = [
+  { id: 'chrome:Default', browser: 'Google Chrome', name: 'Person 1', family: 'chromium' },
+  { id: 'chrome:Profile 2', browser: 'Google Chrome', name: 'Work', family: 'chromium' },
+  { id: 'edge:Default', browser: 'Microsoft Edge', name: 'Profile 1', family: 'chromium' },
+  {
+    id: 'firefox:0:Profiles/dev.default-release',
+    browser: 'Firefox',
+    name: 'default-release',
+    family: 'firefox',
+  },
+];
 
 /** What the backend's file dialogs "pick" in the mock. */
 const DEV_CSV = '/Users/dev/Downloads/bitwarden_export.csv';
@@ -181,6 +202,55 @@ async function rowsFor(existing: EntrySummary[]): Promise<ImportRow[]> {
   return Promise.all(rows);
 }
 
+/**
+ * Imports the sample rows at `indices`: a row whose entry has another password updates it, any
+ * other is added.
+ */
+async function applySample(existing: EntrySummary[], indices: number[]): Promise<ImportOutcome> {
+  const outcome: ImportOutcome = { added: 0, updated: 0 };
+  for (const index of new Set(indices as number[])) {
+    const row = SAMPLE[index];
+    if (!row) return fail('invalid_input', 'the file changed since it was previewed');
+    const duplicate = duplicateOf(existing, row);
+    if (duplicate && (await passwordDiffers(duplicate, row))) {
+      const detail = (await vaultHandlers.vault_entry?.({ id: duplicate.id })) as EntryInput;
+      await vaultHandlers.vault_update?.({
+        id: duplicate.id,
+        input: { ...detail, password: row.password, otp: null },
+      });
+      outcome.updated += 1;
+      continue;
+    }
+    const input: EntryInput = {
+      title: row.title,
+      username: row.username,
+      password: row.password,
+      url: row.url,
+      notes: '',
+      otp: row.otp ? `otpauth://totp/${row.title}?secret=${row.otp}` : null,
+      kind: 'login',
+      host: null,
+      keyFingerprint: null,
+    };
+    await vaultHandlers.vault_add?.({ input });
+    outcome.added += 1;
+  }
+  return outcome;
+}
+
+/** Both passwords of the sample row at `index`, when its entry has another one. */
+async function compareSample(index: number): Promise<ImportPasswords> {
+  const existing = await entries();
+  const row = SAMPLE[index];
+  if (!row) return fail('invalid_input', 'the file changed since it was previewed');
+  const duplicate = duplicateOf(existing, row);
+  if (!duplicate || !(await passwordDiffers(duplicate, row))) {
+    return fail('invalid_input', "this row doesn't change a password in the vault");
+  }
+  const vault = await vaultHandlers.vault_reveal?.({ id: duplicate.id, field: 'password' });
+  return { file: row.password, vault: String(vault) };
+}
+
 export const vaultFilesHandlers: Record<string, Handler> = {
   // Shows the switched-to file and, for a file from elsewhere, the recovery form.
   vault_status: async () => {
@@ -214,48 +284,54 @@ export const vaultFilesHandlers: Record<string, Handler> = {
     const existing = await entries();
     const path = picked;
     if (!path) return fail('invalid_input', 'choose the file to import again');
-    const outcome: ImportOutcome = { added: 0, updated: 0 };
-    for (const index of new Set(indices as number[])) {
-      const row = SAMPLE[index];
-      if (!row) return fail('invalid_input', 'the file changed since it was previewed');
-      const duplicate = duplicateOf(existing, row);
-      if (duplicate && (await passwordDiffers(duplicate, row))) {
-        const detail = (await vaultHandlers.vault_entry?.({ id: duplicate.id })) as EntryInput;
-        await vaultHandlers.vault_update?.({
-          id: duplicate.id,
-          input: { ...detail, password: row.password, otp: null },
-        });
-        outcome.updated += 1;
-        continue;
-      }
-      const input: EntryInput = {
-        title: row.title,
-        username: row.username,
-        password: row.password,
-        url: row.url,
-        notes: '',
-        otp: row.otp ? `otpauth://totp/${row.title}?secret=${row.otp}` : null,
-        kind: 'login',
-        host: null,
-        keyFingerprint: null,
-      };
-      await vaultHandlers.vault_add?.({ input });
-      outcome.added += 1;
-    }
+    const outcome = await applySample(existing, indices as number[]);
     picked = null;
     lastImport = path;
     return outcome;
   },
   vault_import_compare: async ({ index }) => {
-    const existing = await entries();
-    const row = SAMPLE[index as number];
-    if (!picked || !row) return fail('invalid_input', 'the file changed since it was previewed');
-    const duplicate = duplicateOf(existing, row);
-    if (!duplicate || !(await passwordDiffers(duplicate, row))) {
-      return fail('invalid_input', "this row doesn't change a password in the vault");
+    if (!picked) return fail('invalid_input', 'the file changed since it was previewed');
+    return compareSample(index as number);
+  },
+  vault_browser_profiles: (): BrowserProfile[] => BROWSER_PROFILES,
+  vault_browser_import_preview: async ({ profileId, primaryPassword }): Promise<BrowserImport> => {
+    const status = await baseStatus();
+    if (status.state !== 'unlocked') return fail('vault_locked', 'the vault is locked');
+    browserRead = false;
+    const profile = BROWSER_PROFILES.find((p) => p.id === profileId);
+    if (!profile) return fail('not_found', 'that browser profile');
+    if (profile.browser === 'Microsoft Edge') return { kind: 'appBound' };
+    if (profile.family === 'firefox') {
+      if (!primaryPassword) return { kind: 'primaryPasswordRequired' };
+      if (primaryPassword !== 'firefox') return { kind: 'wrongPrimaryPassword' };
     }
-    const vault = await vaultHandlers.vault_reveal?.({ id: duplicate.id, field: 'password' });
-    return { file: row.password, vault: String(vault) };
+    browserRead = true;
+    const rows = (await rowsFor(await entries())).map((row) => ({
+      ...row,
+      group: null,
+      hasOtp: false,
+    }));
+    const appBound = profile.name === 'Work' ? 2 : 0;
+    return {
+      kind: 'preview',
+      profile,
+      preview: { format: profile.family === 'firefox' ? 'firefox' : 'chrome', rows, skipped: 0 },
+      unreadable: appBound,
+      appBound,
+    };
+  },
+  vault_browser_import: async ({ indices }) => {
+    if (!browserRead) return fail('invalid_input', 'read the browser’s logins again');
+    const outcome = await applySample(await entries(), indices as number[]);
+    browserRead = false;
+    return outcome;
+  },
+  vault_browser_import_compare: async ({ index }) => {
+    if (!browserRead) return fail('invalid_input', 'read the browser’s logins again');
+    return compareSample(index as number);
+  },
+  vault_browser_import_forget: () => {
+    browserRead = false;
   },
   vault_trash_import_file: () => {
     if (!lastImport) {

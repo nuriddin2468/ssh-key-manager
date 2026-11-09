@@ -1,8 +1,8 @@
 // Where an import can come from, and how to get the export file out of each.
-// Browsers and password managers keep their passwords to themselves: each
-// writes them to a CSV file on request, which the import then reads. So the
-// import asks where the passwords are now and says how to export them there;
-// a CSV file of any other app comes last.
+// Chromium browsers and Firefox can be read directly (`direct`), with the
+// system's permission; for the rest, and as the fallback, the import says how
+// to export a CSV file, which it then reads. A CSV file of any other app
+// comes last.
 
 import { Compass, FileSpreadsheet, Flame, Globe, KeyRound, type LucideIcon } from 'lucide-react';
 import type { Tone } from '@/components/ui/Tile';
@@ -51,6 +51,8 @@ export interface ImportSource {
   only?: Platform[];
   /** Shown only when it is installed. */
   ifInstalled?: boolean;
+  /** The app can read its saved logins itself, when it finds a profile with some. */
+  direct?: boolean;
   tone: Tone;
   icon: LucideIcon;
   steps: GuideStep[];
@@ -70,6 +72,7 @@ const chromium = (
   installName: name === 'Chrome' ? 'Google Chrome' : name,
   address,
   ifInstalled,
+  direct: true,
   tone,
   icon: Globe,
   steps: [address ? 'open' : 'settingsOpen', 'chromiumExport'],
@@ -86,6 +89,7 @@ export const SOURCES: ImportSource[] = [
     name: 'Firefox',
     installName: 'Firefox',
     address: 'about:logins',
+    direct: true,
     tone: 'amber',
     icon: Flame,
     steps: ['open', 'firefoxExport'],

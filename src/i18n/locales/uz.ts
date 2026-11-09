@@ -3030,6 +3030,65 @@ const uz = {
       tooLarge: 'Fayl import qilish uchun juda katta.',
       changed: 'Fayl tanlanganidan keyin oʻzgardi. Uni qaytadan tanlang.',
       unlockFirst: 'Parollarni import qilish uchun omborni oching.',
+      browser: {
+        title: '{{name}}dan import',
+        lead: 'Saqlangan loginlar toʻgʻridan-toʻgʻri omborga tushadi. Eksport fayli yaratilmaydi.',
+        profile: 'Profil',
+        permissionTitle: {
+          macos: 'macOS ruxsat soʻraydi',
+          linux: 'Kalitlar toʻplami ochishni soʻrashi mumkin',
+          windows: 'Windows hech narsa soʻramaydi',
+          firefox: 'Firefox’da asosiy parol oʻrnatilganmi?',
+          firefoxLocked: 'Bu profilda asosiy parol bor',
+        },
+        permission: {
+          macos:
+            'Parollarni oʻqish uchun ilovaga kalitlar toʻplamidagi {{name}} kaliti kerak. Mac parolingizni kiriting va «Ruxsat berish»ni bosing.',
+          linux:
+            'Ilova {{name}} kalitini kalitlar toʻplamidan (GNOME Keyring yoki KWallet) oladi. U qulflangan boʻlsa, uni ochish soʻraladi.',
+          windows:
+            'Ilova parollarni sizning nomingizdan oʻqiydi. {{name}} faqat oʻzi uchun himoyalaganlarini oʻqib boʻlmaydi — ular uchun CSV eksport taklif qilinadi.',
+          firefox:
+            'Agar shunday boʻlsa, u shu yerda soʻraladi. U parollarni oʻqish uchun bir marta ishlatiladi va saqlanmaydi.',
+          firefoxLocked:
+            'Parollarni oʻqish uchun uni kiriting. U bir marta ishlatiladi va saqlanmaydi.',
+        },
+        primary: 'Firefox asosiy paroli',
+        primaryHint: '{{name}}da Sozlamalar → Maxfiylik va xavfsizlik boʻlimida oʻrnatilgan parol.',
+        wrongPrimary: 'Bu asosiy parol emas. Qaytadan urinib koʻring.',
+        denied:
+          'Ruxsat berilmadi, shuning uchun hech narsa oʻqilmadi. Qaytadan urinib, «Ruxsat berish»ni bosing yoki CSV fayldan foydalaning.',
+        submit: '{{name}}dan import qilish',
+        reading: '{{name}} oʻqilmoqda…',
+        done: 'Tayyor',
+        inBrowser: '{{name}}da',
+        browserNoDate: '{{name}}da sana yoʻq',
+        compareHint:
+          'Bu login import qilinsa, {{name}}dagi parol qoladi. Ombordagi parol yozuv tarixida saqlanadi.',
+        useCsv: 'Oʻrniga CSV fayldan foydalanish',
+        from: '{{name}} · {{profile}}',
+        tableLabel: '{{profile}} profilidagi loginlar',
+        nothing: 'Bu profilda saqlangan parollar yoʻq.',
+        someAppBound_one:
+          '{{count}} ta parol oʻqilmadi: uni faqat {{name}} ochishi mumkin. Uni ham koʻchirish uchun {{name}}dan CSV fayl eksport qiling.',
+        someAppBound_other:
+          '{{count}} ta parol oʻqilmadi: ularni faqat {{name}} ochishi mumkin. Ularni ham koʻchirish uchun {{name}}dan CSV fayl eksport qiling.',
+        someUnreadable_one: '{{count}} ta parolni ochib boʻlmadi, u roʻyxatda yoʻq.',
+        someUnreadable_other: '{{count}} ta parolni ochib boʻlmadi, ular roʻyxatda yoʻq.',
+        fallbackTitle: {
+          appBound: '{{name}} bu parollarni hech kimga bermaydi',
+          keyUnavailable: '{{name}} kaliti topilmadi',
+          unsupported: 'Bu parollarni toʻgʻridan-toʻgʻri oʻqib boʻlmaydi',
+        },
+        fallback: {
+          appBound:
+            'Windows’da {{name}} saqlangan parollarni faqat oʻzi oʻqiy oladigan qilib shifrlaydi. Ularni pastda koʻrsatilganidek CSV faylga eksport qiling.',
+          keyUnavailable:
+            'Tizimda {{name}} parollarining kaliti yoʻq, shuning uchun ularni toʻgʻridan-toʻgʻri oʻqib boʻlmaydi. Ularni CSV faylga eksport qiling.',
+          unsupported:
+            '{{name}} bu parollarni ilova hali oʻqiy olmaydigan tarzda saqlaydi. Ularni CSV faylga eksport qiling.',
+        },
+      },
     },
     export: {
       title: 'Parollarni eksport qilish',

@@ -542,34 +542,7 @@ impl Broker {
                 env.changed(Changed::Entries);
                 Ok(to_json(&SavedReply { entry_id }))
             }
-            Action::Edit {
-                origin,
-                entry_id,
-                username,
-                password,
-            } => {
-                let page = page(&origin)?;
-                self.take_change(client_id)?;
-                env.write(|vault| {
-                    Ok(vault.edit_login(
-                        &page,
-                        &entry_id,
-                        username.as_deref(),
-                        password.as_ref(),
-                    )?)
-                })
-                .map_err(|e| reply_error(&e))?;
-                env.changed(Changed::Entries);
-                Ok(to_json(&SavedReply { entry_id }))
-            }
-            Action::Remove { origin, entry_id } => {
-                let page = page(&origin)?;
-                self.take_change(client_id)?;
-                env.write(|vault| Ok(vault.remove_login(&page, &entry_id)?))
-                    .map_err(|e| reply_error(&e))?;
-                env.changed(Changed::Entries);
-                Ok(to_json(&SavedReply { entry_id }))
-            }
+            Action::Edit { .. } | Action::Remove { .. } => self.change(env, client_id, &action),
             Action::Rekey { public_key } => {
                 let client_public =
                     channel::decode(&public_key, 65).map_err(|_| ReplyError::Invalid)?;
@@ -582,6 +555,37 @@ impl Broker {
                 }))
             }
         }
+    }
+
+    /// Edits or removes (to the recycle bin) a login of the page; returns
+    /// the JSON to seal.
+    fn change(
+        &self,
+        env: &impl Env,
+        client_id: &str,
+        action: &Action,
+    ) -> Result<Zeroizing<Vec<u8>>, ReplyError> {
+        let (origin, entry_id) = match action {
+            Action::Edit {
+                origin, entry_id, ..
+            }
+            | Action::Remove { origin, entry_id } => (origin.as_str(), entry_id.clone()),
+            _ => return Err(ReplyError::Invalid),
+        };
+        let page = page(origin)?;
+        self.take_change(client_id)?;
+        env.write(|vault| {
+            match action {
+                Action::Edit {
+                    username, password, ..
+                } => vault.edit_login(&page, &entry_id, username.as_deref(), password.as_ref())?,
+                _ => vault.remove_login(&page, &entry_id)?,
+            }
+            Ok(())
+        })
+        .map_err(|e| reply_error(&e))?;
+        env.changed(Changed::Entries);
+        Ok(to_json(&SavedReply { entry_id }))
     }
 
     /// Counts one more login edited or removed by `client_id`: `TooMany`

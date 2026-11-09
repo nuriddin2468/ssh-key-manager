@@ -12,6 +12,8 @@
 //!   Keychain, Windows Credential Manager, Linux Secret Service).
 //! - `pipe` (Windows): check who serves a named pipe before sending to it.
 //! - [`tray`]: whether the system can show a tray icon at all.
+//! - [`browser_keys`]: the keys browsers keep with the system, to import
+//!   their saved logins.
 //! - [`focus`]: give the focus back to the app the user was in.
 //! - [`login_item`]: whether macOS lets the app's login item run.
 //!
@@ -27,6 +29,7 @@
 //! `unsafe` block carries a `// SAFETY:` comment.
 
 pub mod biometrics;
+pub mod browser_keys;
 mod error;
 pub mod focus;
 pub mod login_item;

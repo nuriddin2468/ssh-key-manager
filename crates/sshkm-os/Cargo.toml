@@ -34,9 +34,12 @@ objc2-local-authentication = { version = "0.3.2", default-features = false, feat
 # Whether System Settings lets the app's launch agent run (`login_item`). The
 # version `auto-launch` uses, so this adds no crate to the build.
 objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "objc2", "objc2-foundation", "SMAppService"] }
+# The Keychain item of a Chromium browser, to import its saved logins
+# (`browser_keys`). The version the keychain store uses, so this adds no crate.
+security-framework = "3.7.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.62.2", features = ["Foundation", "Security_Credentials_UI", "Security_Cryptography", "Storage_Streams", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader", "Win32_System_Pipes", "Win32_System_RemoteDesktop", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.62.2", features = ["Foundation", "Security_Credentials_UI", "Security_Cryptography", "Storage_Streams", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader", "Win32_System_Pipes", "Win32_System_RemoteDesktop", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 windows-native-keyring-store = { version = "1.1.0", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -45,6 +48,9 @@ windows-native-keyring-store = { version = "1.1.0", default-features = false }
 libloading = "0.7"
 zbus = { version = "5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
 zbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rust"] }
+# A Chromium browser's key in the Secret Service, to import its saved logins
+# (`browser_keys`). The version the keyring store uses, so this adds no crate.
+secret-service = { version = "5.2.0", features = ["crypto-rust"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 # The `watch_lock` example runs the main run loop, as the app's NSApplication does.

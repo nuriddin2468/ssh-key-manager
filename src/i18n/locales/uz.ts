@@ -3296,6 +3296,22 @@ const uz = {
       'Brauzerda avtomatik toʻldirish, qurilmalaringiz va terminal seanslari ishlashda davom etadi. Ilovani traydagi belgisi orqali ochish yoki undan chiqish mumkin. Ish stolida tray belgilari koʻrinmasa, ilovani ilovalar menyusidan qayta oching — oyna qaytadi.',
     unavailable:
       'Ish stolida ilova belgisi uchun tray yoʻq. libayatana-appindicator3-1 paketini oʻrnating va ilovani qayta ishga tushiring.',
+    login: 'Tizimga kirganda ochish',
+    loginHintMac:
+      'Menyu satrida oynasiz ishga tushadi: brauzerda avtomatik toʻldirish va qurilmalaringiz tizimga kirishingiz bilan ishlaydi.',
+    loginHintWindows:
+      'Bildirishnomalar sohasida oynasiz ishga tushadi: brauzerda avtomatik toʻldirish va qurilmalaringiz tizimga kirishingiz bilan ishlaydi.',
+    loginHintLinux:
+      'Trayda oynasiz ishga tushadi: brauzerda avtomatik toʻldirish va qurilmalaringiz tizimga kirishingiz bilan ishlaydi.',
+    loginHintWindow:
+      'Tizimga kirganda oyna ochiladi. Fonda ishga tushishi uchun «Oyna yopilganda ham ishlash»ni yoqing.',
+    loginHintNoTray: 'Tizimga kirganda oyna ochiladi.',
+    loginTurnedOff:
+      'macOS sozlamalarida (System Settings) oʻchirilgan. Ushbu kalitni yoqing, soʻng Login Items boʻlimida SSH Key Manager ilovasiga ruxsat bering.',
+    loginMounted:
+      'Ilova oʻz disk obrazidan, boshqa diskdan yoki yuklab olingan joyidan ishga tushirilgan. Uni tizimga kirganda ochish uchun Applications jildiga koʻchiring va oʻsha yerdan oching.',
+    loginTemporary:
+      'Ilova vaqtinchalik jilddan ishga tushirilgan. Uni tizimga kirganda ochish uchun (AppImage uchun .AppImage faylining oʻzini) doimiy jildga koʻchiring va oʻsha yerdan oching.',
   },
   browser: {
     title: 'Brauzerda avtomatik toʻldirish',

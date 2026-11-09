@@ -18,6 +18,9 @@
 //! window lost focus (the user may head for the icon next, after unlocking or
 //! connecting in the window), or the language changed. It sets the menu only if it came out different.
 //!
+//! Opened by the system at login ([`crate::autostart`]), the app starts here,
+//! without its window.
+//!
 //! The setting is on by default on macOS and Windows, which always have a
 //! place for the icon. On Linux it is off by default, and can't be turned on
 //! without the `AppIndicator` library ([`sshkm_os::tray`]); on a desktop that

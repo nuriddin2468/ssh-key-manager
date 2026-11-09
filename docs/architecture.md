@@ -239,6 +239,13 @@ translates.
   search, and quits. One worker rebuilds the menu when the vault, `~/.ssh`, a tunnel or
   Nearby change, or the language does. On Linux the icon needs the AppIndicator
   library, which `sshkm_os::tray` checks for first.
+- **Open at login.** `src-tauri/src/autostart.rs`, through `auto-launch`: a launch agent
+  on macOS, the `Run` key (current user) on Windows, an XDG autostart entry on Linux,
+  each starting the app with `--autostart`. Started so, with the tray icon there, the
+  app starts without its window (it is `visible: false` in `tauri.conf.json`, and
+  `setup` shows it otherwise). Turning it on also turns on Background. Nothing is saved:
+  the status is the system's entry, plus on macOS whether System Settings → Login Items
+  lets it run (`sshkm_os::login_item`).
 - **Permissions.** `build.rs` lists every command, so each gets a Tauri permission and a
   window calls only what its capability names: the main window all, the unlock window
   three, the quick search window seven.

@@ -98,7 +98,13 @@ The extension talks to the SSH Key Manager desktop app on the user's computer, w
 ### Permission justification: storage
 
 ```text
-After the user sends a login form, the username and password wait in chrome.storage.session (memory only, never written to disk) until the user answers the "Save login for <site>?" banner, which may appear on the next page. They are removed when the user answers, closes the tab or quits the browser, and are offered for three minutes at most. The username sent with the first step of a two-step sign-in waits there too, for five minutes, to name the password sent on the next page. The extension uses no local or sync storage.
+After the user sends a login form, the username and password wait in chrome.storage.session (memory only, never written to disk) until the user answers the "Save login for <site>?" banner, which may appear on the next page. They are removed when the user answers, closes the tab or quits the browser, and are offered for three minutes at most. The username sent with the first step of a two-step sign-in waits there too, for five minutes, to name the password sent on the next page. So do the title and username (never the password) of the login last filled in a tab, for ten minutes: they name the login a password-change form updates, and tell when a sign-in with it seems to have failed. The extension uses no local or sync storage.
+```
+
+### Permission justification: activeTab
+
+```text
+When the user opens the extension's popup, it reads the address of the tab they are on, to list the logins saved for that site and let the user change a login's username or password, or move it to the vault's recycle bin. The popup reads nothing else of the tab, and only when the user opens it.
 ```
 
 ### Permission justification: privacy

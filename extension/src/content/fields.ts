@@ -8,7 +8,12 @@
 // - a form with a username but no password (the first step of a two-step
 //   login) gets the username alone, if the field looks like one;
 // - a sent form whose username isn't shown (the second step of a two-step
-//   login) may still name it in a hidden field marked as the username.
+//   login) may still name it in a hidden field marked as the username;
+// - a password-change form has the current password, then the new one and
+//   often a copy to confirm it: told by `autocomplete="current-password"` /
+//   `"new-password"`, or by three password fields whose last two match. Its
+//   username counts only from a field marked as one: such forms sit among
+//   other settings, and the nearest text field may be anything.
 
 const TEXT_TYPES = new Set(['text', 'email', 'tel', '']);
 const USERNAME_HINT = /user|login|e-?mail|account|identifier|phone/i;
@@ -21,6 +26,8 @@ export interface LoginFields {
 export interface Typed {
   username: string;
   password: string;
+  /** Sent from a password-change form: `password` is the new one. */
+  change?: boolean;
 }
 
 /** Smaller than this either way, what shows of a field isn't meant for people. */
@@ -134,6 +141,65 @@ function isNewPassword(input: HTMLInputElement): boolean {
   return autocomplete(input).includes('new-password');
 }
 
+function isCurrentPassword(input: HTMLInputElement): boolean {
+  return autocomplete(input).includes('current-password');
+}
+
+/** The fields of a password-change form, in the order they show. */
+export interface ChangeFields {
+  current: HTMLInputElement;
+  next: HTMLInputElement;
+  /** The new password again, if the form asks for it. */
+  confirm: HTMLInputElement | null;
+}
+
+/**
+ * The current, new and confirming fields among a form's filled password
+ * fields `passwords` (in page order), if it changes a password: a current
+ * password before a new one, by their `autocomplete`; or three fields,
+ * the last two for the new password (they may differ: a typo, which the
+ * form refuses).
+ */
+export function changeFields(passwords: HTMLInputElement[]): ChangeFields | null {
+  const next = passwords.find(isNewPassword);
+  if (next) {
+    const current = passwords.find((field) => !isNewPassword(field) && before(field, next));
+    if (!current) return null;
+    const confirm = passwords.find((field) => field !== current && before(next, field)) ?? null;
+    return { current, next, confirm };
+  }
+  if (passwords.length === 3 && !passwords.some(isCurrentPassword)) {
+    const [current, second, third] = passwords as [
+      HTMLInputElement,
+      HTMLInputElement,
+      HTMLInputElement,
+    ];
+    return { current, next: second, confirm: third };
+  }
+  if (passwords.length === 3) {
+    const current = passwords.find(isCurrentPassword);
+    const rest = passwords.filter((field) => field !== current);
+    if (current && rest.length === 2 && rest.every((field) => before(current, field))) {
+      const [second, third] = rest as [HTMLInputElement, HTMLInputElement];
+      return { current, next: second, confirm: third };
+    }
+  }
+  return null;
+}
+
+/** A username the form marks as one, shown or hidden. */
+function markedUsername(scope: ParentNode): string {
+  for (const input of scope.querySelectorAll('input')) {
+    if (NOT_USERNAME.has(input.type)) continue;
+    const hints = autocomplete(input);
+    const marked = hints.includes('username') || hints.includes('email') || input.type === 'email';
+    if (!marked) continue;
+    const value = input.value.trim();
+    if (value) return value;
+  }
+  return '';
+}
+
 function isTextLike(input: HTMLInputElement): boolean {
   return TEXT_TYPES.has(input.type) && !autocomplete(input).includes('one-time-code');
 }
@@ -244,9 +310,18 @@ export function typedIn(
   scope: ParentNode,
   byUser: (input: HTMLInputElement) => boolean,
 ): Typed | null {
-  const passwords = [...scope.querySelectorAll('input')].filter(
-    (input) => isPassword(input) && input.value !== '' && isVisible(input) && byUser(input),
+  const filled = [...scope.querySelectorAll('input')].filter(
+    (input) => isPassword(input) && input.value !== '' && isVisible(input),
   );
+  const change = changeFields(filled);
+  // The new password, typed by the user and confirmed as typed; the current
+  // one may have been filled from the vault. One the page set goes the
+  // usual way below, without it.
+  if (change && byUser(change.next)) {
+    if (change.confirm && change.confirm.value !== change.next.value) return null;
+    return { username: markedUsername(scope), password: change.next.value, change: true };
+  }
+  const passwords = filled.filter(byUser);
   if (passwords.length === 0) return null;
   const password = passwords.filter(isNewPassword).at(-1) ?? passwords[0];
   if (!password) return null;
@@ -271,4 +346,22 @@ export function usernameStepIn(scope: ParentNode): string {
     if (username) return username;
   }
   return '';
+}
+
+/**
+ * The password field of a sign-in form showing again, empty, for `username`:
+ * what a site shows when a sign-in failed. Its username field, if any, must
+ * be empty or hold `username` (without case or outer spaces). `null` if
+ * there is none.
+ */
+export function signInFormAgain(doc: Document, username: string): HTMLInputElement | null {
+  const wanted = username.trim().toLowerCase();
+  for (const input of doc.querySelectorAll('input')) {
+    if (!isPassword(input) || !onScreen(input)) continue;
+    const fields = loginFieldsFor(input);
+    if (!fields?.password || holdsValue(fields.password)) continue;
+    const shown = fields.username?.value.trim().toLowerCase() ?? '';
+    if (shown === '' || shown === wanted) return fields.password;
+  }
+  return null;
 }

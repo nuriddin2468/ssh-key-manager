@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { press } from '../test/user';
-import { LoginMenu, SaveBanner, SETTLE_MS, Settling, uncovered, uncoveredAt } from './surfaces';
+import { fireTrusted, press } from '../test/user';
+import {
+  LoginMenu,
+  SaveBanner,
+  SETTLE_MS,
+  Settling,
+  SignInBanner,
+  uncovered,
+  uncoveredAt,
+} from './surfaces';
 
 const LOGIN = { id: 'e1', title: 'Bank', username: 'alice', exact: true };
 
@@ -8,7 +16,7 @@ function menu(): LoginMenu {
   return new LoginMenu({ onPick: vi.fn(), onUnlock: vi.fn(), onLeave: vi.fn() });
 }
 
-function settlingOf(surface: LoginMenu | SaveBanner): Settling {
+function settlingOf(surface: LoginMenu | SaveBanner | SignInBanner): Settling {
   return (surface as unknown as { settling: Settling }).settling;
 }
 
@@ -109,7 +117,7 @@ describe('cover check', () => {
 });
 
 /** What the page can't see: the surface's own state. */
-function inside(surface: LoginMenu | SaveBanner) {
+function inside(surface: LoginMenu | SaveBanner | SignInBanner) {
   return surface as unknown as { root: ShadowRoot; list: HTMLElement | null; intact(): boolean };
 }
 
@@ -242,5 +250,70 @@ describe('notices', () => {
     expect(logins.showsNotice).toBe(true);
     logins.hide();
     expect(logins.showsNotice).toBe(false);
+  });
+});
+
+describe('the "couldn\u2019t sign in?" banner', () => {
+  /** A click with the keyboard (Enter or Space on a button), as the browser sends it. */
+  const choose = (button: HTMLElement | undefined) => {
+    if (!button) throw new Error('no such button');
+    fireTrusted(button, new MouseEvent('click', { bubbles: true, composed: true, detail: 0 }));
+  };
+  const buttons = (banner: SignInBanner) => [
+    ...inside(banner).root.querySelectorAll<HTMLButtonElement>('.actions button'),
+  ];
+  const login = { title: 'Bank', username: 'alice' };
+
+  it('names the login and points the user at the page for Update', () => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(10_000);
+    const onUpdate = vi.fn();
+    const banner = new SignInBanner({ onUpdate, onRemove: vi.fn(), onDismiss: vi.fn() });
+    banner.show(login);
+    expect(inside(banner).root.querySelector('.detail')?.textContent).toContain('Bank');
+    const [, update] = buttons(banner);
+    // Not in the first moments: the page could have put it under a click.
+    choose(update);
+    expect(onUpdate).not.toHaveBeenCalled();
+    clock.mockReturnValue(10_000 + SETTLE_MS);
+    choose(update);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(inside(banner).root.querySelector('.status')?.textContent).not.toBe('');
+    expect(buttons(banner)).toHaveLength(0);
+  });
+
+  it('asks before it removes the login, and lets the user keep it', async () => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(20_000);
+    const onRemove = vi.fn(async () => ({ ok: true, message: 'Moved' }));
+    const banner = new SignInBanner({ onUpdate: vi.fn(), onRemove, onDismiss: vi.fn() });
+    banner.show(login);
+    clock.mockReturnValue(20_000 + SETTLE_MS);
+    choose(buttons(banner)[0]);
+    expect(onRemove).not.toHaveBeenCalled();
+    // The question waits again before its answer counts.
+    expect(settlingOf(banner).settled).toBe(false);
+    choose(buttons(banner)[1]);
+    expect(onRemove).not.toHaveBeenCalled();
+    // Cancel: back to the two choices.
+    choose(buttons(banner)[0]);
+    expect(buttons(banner)).toHaveLength(2);
+
+    clock.mockReturnValue(20_000 + 3 * SETTLE_MS);
+    choose(buttons(banner)[0]);
+    clock.mockReturnValue(20_000 + 5 * SETTLE_MS);
+    choose(buttons(banner)[1]);
+    await microtasks();
+    expect(onRemove).toHaveBeenCalledTimes(1);
+    expect(inside(banner).root.querySelector('.status')?.textContent).toBe('Moved');
+  });
+
+  it('ignores clicks a page script makes up', () => {
+    vi.spyOn(performance, 'now').mockReturnValue(30_000 + SETTLE_MS);
+    const onRemove = vi.fn();
+    const onUpdate = vi.fn();
+    const banner = new SignInBanner({ onUpdate, onRemove, onDismiss: vi.fn() });
+    banner.show(login);
+    for (const button of buttons(banner)) button.click();
+    expect(buttons(banner)).toHaveLength(2);
+    expect(onUpdate).not.toHaveBeenCalled();
   });
 });

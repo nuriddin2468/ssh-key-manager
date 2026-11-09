@@ -1,0 +1,6 @@
+{
+  "kind": "notice",
+  "en": "The browser extension now offers to update a saved password when you change it on a site's password-change form. And if signing in with a filled password fails, it asks “Couldn't sign in?” once, with Update and Remove from vault (to the recycle bin).",
+  "ru": "Расширение для браузера теперь предлагает обновить сохранённый пароль, когда вы меняете его в форме смены пароля на сайте. А если войти с подставленным паролем не получилось, оно один раз спросит «Не получилось войти?» с кнопками «Обновить» и «Удалить из хранилища» (в корзину).",
+  "uz": "Brauzer kengaytmasi endi saytdagi parolni almashtirish formasida parolni oʻzgartirganingizda saqlangan parolni yangilashni taklif qiladi. Toʻldirilgan parol bilan kirib boʻlmasa, u bir marta «Kirib boʻlmadimi?» deb soʻraydi va «Yangilash» hamda «Ombordan olib tashlash» (savatga) tugmalarini koʻrsatadi."
+}

@@ -5,9 +5,20 @@ vi.mock('./ext', () => ({
   ext: { runtime: { sendNativeMessage: native } },
   browserName: () => 'Test',
 }));
-vi.mock('./keystore', () => ({}));
+const keystore = vi.hoisted(() => ({ loadPairing: vi.fn(), forgetPairing: vi.fn() }));
+vi.mock('./keystore', () => keystore);
+// Sealing is tested in channel.test.ts; here a request goes out as is.
+vi.mock('./channel', () => ({
+  sealRequest: async (_keys: unknown, _id: string, plain: Uint8Array) => ({
+    nonce: new Uint8Array(12),
+    sealed: plain.slice(),
+  }),
+  toBase64: () => 'AA',
+  fromBase64: () => new Uint8Array(),
+  openResponse: async () => new TextEncoder().encode('{"entryId":"e"}'),
+}));
 
-import { unlockVault } from './client';
+import { changeLogin, unlockVault } from './client';
 
 beforeEach(() => native.mockReset());
 
@@ -32,5 +43,36 @@ describe('unlockVault', () => {
     native.mockResolvedValue({ type: 'error', code: 'tooMany' });
     await unlockVault();
     expect(native).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('changeLogin', () => {
+  beforeEach(() => {
+    keystore.loadPairing.mockResolvedValue({ clientId: 'c', pairedAt: Date.now() });
+  });
+
+  it('edits and removes logins of the page', async () => {
+    native.mockResolvedValue({ type: 'response', nonce: 'AA', payload: 'AA' });
+    expect(await changeLogin('https://a.com', { edit: { entryId: 'e', password: 'n' } })).toEqual({
+      ok: true,
+      value: undefined,
+    });
+    expect(await changeLogin('https://a.com', { remove: { entryId: 'e' } })).toEqual({
+      ok: true,
+      value: undefined,
+    });
+  });
+
+  it('tells an app that predates the actions apart', async () => {
+    native.mockResolvedValue({ type: 'error', code: 'invalid' });
+    expect(await changeLogin('https://a.com', { remove: { entryId: 'e' } })).toEqual({
+      ok: false,
+      problem: 'outdatedApp',
+    });
+    native.mockResolvedValue({ type: 'error', code: 'notFound' });
+    expect(await changeLogin('https://a.com', { remove: { entryId: 'e' } })).toEqual({
+      ok: false,
+      problem: 'notFound',
+    });
   });
 });

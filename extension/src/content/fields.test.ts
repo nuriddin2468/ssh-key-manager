@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fill, loginFieldsFor, typedIn } from './fields';
+import { changeFields, fill, loginFieldsFor, signInFormAgain, typedIn } from './fields';
 
 function page(html: string): void {
   document.body.innerHTML = html;
@@ -162,7 +162,67 @@ describe('typed logins', () => {
     expect(typedIn(input('#user').form as HTMLFormElement, all)).toEqual({
       username: 'bob@example.com',
       password: 'new1',
+      change: true,
     });
+  });
+
+  it('takes the new password of an unmarked change form whose last two match', () => {
+    page(`<form id="f">
+      <input name="display" value="Bob B.">
+      <input type="password" value="old">
+      <input type="password" value="new1">
+      <input type="password" value="new1">
+    </form>`);
+    const form = document.getElementById('f') as HTMLFormElement;
+    // The display name isn't marked as a username: none is taken.
+    expect(typedIn(form, all)).toEqual({ username: '', password: 'new1', change: true });
+  });
+
+  it('offers nothing when the new password and its copy differ', () => {
+    page(`<form id="f">
+      <input type="password" autocomplete="current-password" value="old">
+      <input type="password" autocomplete="new-password" value="new1">
+      <input type="password" autocomplete="new-password" value="new2">
+    </form>`);
+    expect(typedIn(document.getElementById('f') as HTMLFormElement, all)).toBeNull();
+    page(`<form id="f">
+      <input type="password" value="old">
+      <input type="password" value="new1">
+      <input type="password" value="new2">
+    </form>`);
+    expect(typedIn(document.getElementById('f') as HTMLFormElement, all)).toBeNull();
+  });
+
+  it('takes the new password when the current one was filled from the vault', () => {
+    page(`<form id="f">
+      <input type="hidden" autocomplete="username" value="carol">
+      <input id="old" type="password" autocomplete="current-password" value="saved">
+      <input id="new" type="password" autocomplete="new-password" value="fresh">
+    </form>`);
+    const form = document.getElementById('f') as HTMLFormElement;
+    expect(typedIn(form, (field) => field.id === 'new')).toEqual({
+      username: 'carol',
+      password: 'fresh',
+      change: true,
+    });
+  });
+
+  it('tells change forms from sign-ups and sign-ins', () => {
+    page(`<form>
+      <input id="a" type="password" value="x">
+      <input id="b" type="password" autocomplete="new-password" value="y">
+      <input id="c" type="password" autocomplete="new-password" value="y">
+      <input id="d" type="password" value="x">
+    </form>`);
+    const [a, b, c, d] = ['#a', '#b', '#c', '#d'].map(input) as HTMLInputElement[];
+    expect(
+      changeFields([a as HTMLInputElement, b as HTMLInputElement, c as HTMLInputElement]),
+    ).toEqual({ current: a, next: b, confirm: c });
+    // A sign-up: a new password and its copy, nothing current.
+    expect(changeFields([b as HTMLInputElement, c as HTMLInputElement])).toBeNull();
+    // A sign-in, or a sign-up without hints.
+    expect(changeFields([a as HTMLInputElement])).toBeNull();
+    expect(changeFields([a as HTMLInputElement, d as HTMLInputElement])).toBeNull();
   });
 
   it('ignores forms without a typed password', () => {
@@ -195,5 +255,38 @@ describe('filling', () => {
     fill(field, 'alice');
     expect(field.value).toBe('alice');
     expect(seen).toHaveBeenCalledWith('alice');
+  });
+});
+
+describe('a sign-in form that came back', () => {
+  /** jsdom has no layout: give every field a place in the window. */
+  const placed = () => {
+    for (const input of document.querySelectorAll('input')) {
+      const rect = { left: 10, top: 10, width: 200, height: 30, right: 210, bottom: 40 };
+      input.getBoundingClientRect = () => ({ ...rect, x: 10, y: 10, toJSON: () => rect });
+    }
+  };
+
+  it('is found with an empty password, for the same or no username', () => {
+    page(`<form><input id="user" value="Alice"><input id="pass" type="password"></form>`);
+    placed();
+    expect(signInFormAgain(document, ' alice ')).toBe(input('#pass'));
+    input('#user').value = '';
+    expect(signInFormAgain(document, 'alice')).toBe(input('#pass'));
+  });
+
+  it('is not one for another username, or with a password in it', () => {
+    page(`<form><input id="user" value="bob"><input id="pass" type="password"></form>`);
+    placed();
+    expect(signInFormAgain(document, 'alice')).toBeNull();
+    input('#user').value = 'alice';
+    input('#pass').value = 'kept';
+    expect(signInFormAgain(document, 'alice')).toBeNull();
+  });
+
+  it('is not a page without a sign-in form', () => {
+    page(`<form><input type="password" autocomplete="new-password"></form><p>Welcome</p>`);
+    placed();
+    expect(signInFormAgain(document, 'alice')).toBeNull();
   });
 });

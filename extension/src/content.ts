@@ -9,6 +9,15 @@
 // user typed come first. The username sent with the first step of a two-step
 // login goes to the background too, to name the password sent next.
 //
+// A password-change form passes on its new password, flagged as such
+// (content/fields.ts tells such forms apart), so the banner offers to update
+// the saved login with it.
+//
+// When the user sends a form with a login filled from the menu, and the
+// site's sign-in form comes back empty moments later (the page reloaded or
+// redrew it), the top frame says the saved password may be out of date,
+// once per login per tab: the background keeps track (background.ts).
+//
 // Nothing is filled on its own: a page can't make the extension fill a
 // field without the user choosing a login in the menu. Events a page script
 // makes up (`isTrusted` false) open nothing, move nothing into the menu and
@@ -30,21 +39,24 @@ import {
   loginFieldsFor,
   onScreen,
   scopeOf,
+  signInFormAgain,
   typedIn,
   usernameStep,
   usernameStepIn,
 } from './content/fields';
 import { forUsername } from './content/logins';
-import { LoginMenu, SaveBanner, type SaveOffer } from './content/surfaces';
+import { LoginMenu, SaveBanner, type SaveOffer, SignInBanner } from './content/surfaces';
 import { Typing } from './content/typing';
 import type { Problem } from './shared/client';
 import { ext } from './shared/ext';
-import { type Key, t } from './shared/i18n';
+import { changeProblem, type Key, t } from './shared/i18n';
 import type {
   FillReply,
   LoginsReply,
   PendingSaveReply,
+  RemoveReply,
   SaveReply,
+  SignInCheckReply,
   ToBackground,
 } from './shared/messages';
 
@@ -60,6 +72,13 @@ const NOTICE_FOR = 4000;
  * moment, as the browser handles the press.
  */
 const USER_WITHIN = 1000;
+/**
+ * When to look whether the sign-in form came back after a sign-in was sent:
+ * after the page loaded, and after the form was sent on a page that stays.
+ * Past the last, the background no longer asks (it allows 20 seconds).
+ */
+const SIGN_IN_LOOKS_ON_LOAD = [700, 2500, 6000];
+const SIGN_IN_LOOKS_AFTER_SEND = [1500, 4000, 9000];
 
 /** What the menu says when the app filled nothing. */
 const NOT_FILLED: Partial<Record<Problem, Key>> = {
@@ -87,6 +106,10 @@ function start(): void {
   let pointed: { input: HTMLInputElement; at: number } | null = null;
   /** When the user last pressed Tab, outside the menu and the banner. */
   let tabbedAt = Number.NEGATIVE_INFINITY;
+  /** The password field the menu last filled, until the user sends it. */
+  let filledPassword: HTMLInputElement | null = null;
+  /** The login the "couldn't sign in?" banner names, and the password field it is about. */
+  let failed: { entryId: string; field: HTMLInputElement } | null = null;
 
   /**
    * Whether focus came to `target` by the user's own click on it, or Tab key
@@ -126,6 +149,19 @@ function start(): void {
       return { ok: false, message: t('saveFailed') };
     },
     onDismiss: (offer) => void send({ kind: 'dismissSave', id: offer.id }),
+  });
+
+  const signIn = new SignInBanner({
+    onUpdate: () => {
+      if (failed?.field.isConnected) failed.field.focus();
+    },
+    onRemove: async () => {
+      if (!failed) return { ok: false, message: t('changeFailed') };
+      const reply = await send<RemoveReply>({ kind: 'removeLogin', entryId: failed.entryId });
+      if (reply?.ok) return { ok: true, message: t('movedToBin') };
+      return { ok: false, message: t(changeProblem(reply?.problem)) };
+    },
+    onDismiss: () => undefined,
   });
 
   /**
@@ -177,6 +213,8 @@ function start(): void {
     if (password) {
       fill(password, reply.password);
       typing.filled(password);
+      filledPassword = password;
+      void send({ kind: 'filled', entryId });
     }
     menu.hide();
     (password ?? username)?.focus();
@@ -193,7 +231,47 @@ function start(): void {
     }, NOTICE_FOR);
   }
 
+  /**
+   * Notes that the user sent `scope` with the password the menu filled, as
+   * it was filled: if the sign-in form comes back, it may be out of date.
+   */
+  function noteSent(scope: ParentNode): void {
+    const password = filledPassword;
+    if (!password?.isConnected || !scope.contains(password)) return;
+    if (!password.value || typing.byUser(password)) return;
+    filledPassword = null;
+    void send({ kind: 'signInSent' }).then(() => lookForFailedSignIn(SIGN_IN_LOOKS_AFTER_SEND));
+  }
+
+  /**
+   * Looks, at each of `delays`, whether a sign-in sent moments ago with a
+   * filled login came back as an empty sign-in form; says so once if it did.
+   * Only in the top frame, and not over the save banner.
+   */
+  function lookForFailedSignIn(delays: number[]): void {
+    if (window !== window.top) return;
+    let done = false;
+    for (const delay of delays) {
+      setTimeout(async () => {
+        if (done || signIn.shown || banner.shown) return;
+        const login = await send<SignInCheckReply>({ kind: 'signInCheck' });
+        if (!login) {
+          done = true;
+          return;
+        }
+        if (done || signIn.shown || banner.shown) return;
+        const field = signInFormAgain(document, login.username);
+        if (!field) return;
+        done = true;
+        failed = { entryId: login.entryId, field };
+        signIn.show(login);
+        void send({ kind: 'signInWarned', entryId: login.entryId });
+      }, delay);
+    }
+  }
+
   function capture(scope: ParentNode): void {
+    noteSent(scope);
     const typed = typedIn(scope, (input) => typing.byUser(input));
     if (!typed) return;
     // A click on the button and the submit event that follows are one login.
@@ -213,7 +291,10 @@ function start(): void {
   async function offerSave(): Promise<void> {
     if (window !== window.top) return;
     const pending = await send<PendingSaveReply>({ kind: 'pendingSave' });
-    if (pending) banner.show(pending);
+    if (pending) {
+      signIn.hide();
+      banner.show(pending);
+    }
   }
 
   document.addEventListener(
@@ -221,7 +302,7 @@ function start(): void {
     (event) => {
       if (!event.isTrusted) return;
       const target = event.target;
-      if (menu.contains(target) || banner.contains(target)) return;
+      if (menu.contains(target) || banner.contains(target) || signIn.contains(target)) return;
       // A page's own `focus()` is trusted too: it opens nothing.
       if (focusedByUser(target) && target instanceof HTMLInputElement) void offer(target);
       else menu.hide();
@@ -250,7 +331,7 @@ function start(): void {
       if (!event.isTrusted) return;
       const target = event.target;
       if (menu.contains(target)) return;
-      if (!banner.contains(target)) pressedAt = performance.now();
+      if (!banner.contains(target) && !signIn.contains(target)) pressedAt = performance.now();
       if (target instanceof HTMLInputElement) {
         // A click into the field that already has focus opens the menu again.
         if (target === document.activeElement) {
@@ -271,7 +352,7 @@ function start(): void {
       const target = event.target;
       if (!event.isTrusted) return;
       typing.observe(event);
-      if (menu.contains(target) || banner.contains(target)) return;
+      if (menu.contains(target) || banner.contains(target) || signIn.contains(target)) return;
       pressedAt = performance.now();
       if (event.key === 'Tab') tabbedAt = pressedAt;
       if (!(target instanceof HTMLInputElement)) return;
@@ -370,6 +451,7 @@ function start(): void {
   });
 
   void offerSave();
+  lookForFailedSignIn(SIGN_IN_LOOKS_ON_LOAD);
 }
 
 /** Whether `button` is close to `field`: within the few boxes around it. */

@@ -1,11 +1,15 @@
-// End-to-end check of browser autofill in Chrome, through the real native
-// messaging host, against the test bridge (src-tauri/examples/autofill_bridge.rs)
-// over a throwaway vault. Nothing touches your browser profile or your vault:
-// Chrome runs with a temporary profile, whose NativeMessagingHosts folder
-// gets the host manifest.
+// End-to-end check of browser autofill in Chrome or Firefox, through the real
+// native messaging host, against the test bridge
+// (src-tauri/examples/autofill_bridge.rs) over a throwaway vault. Nothing
+// touches your browser profile or your vault: the browser runs with a
+// temporary profile, and finds the host manifest in a temporary folder.
 //
 //   cargo build -p sshkm-app --example autofill_bridge && pnpm extension:build
 //   node extension/e2e.mjs [path to Chrome] [folder for screenshots]
+//   node extension/e2e.mjs --firefox [path to Firefox] [folder for screenshots]
+//
+// The Firefox run is for macOS: Firefox reads host manifests only from the
+// user's folders, and the test moves those with CFFIXED_USER_HOME.
 //
 // Quit SSH Key Manager first: the bridge takes over its endpoint file while
 // the test runs.
@@ -14,7 +18,7 @@
 // browsers out of ~/Documents, ~/Desktop and ~/Downloads, and a host started
 // from there hangs before its first instruction.
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -24,9 +28,21 @@ import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const chrome = process.argv[2] ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const shots = process.argv[3] ?? null;
+const firefox = process.argv.includes('--firefox');
+const [executable, shots = null] = process.argv.slice(2).filter((arg) => arg !== '--firefox');
+const browserPath =
+  executable ??
+  (firefox
+    ? '/Applications/Firefox.app/Contents/MacOS/firefox'
+    : '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome');
 const EXTENSION_ID = 'lkmgdcanagjeajepncgokapkbihahddb';
+const FIREFOX_ID = 'autofill@sshkeymanager.dev';
+// Firefox gives each install a random UUID for its moz-extension:// pages;
+// the test profile fixes it.
+const FIREFOX_UUID = '5e7c1a2b-3d4f-4a6b-8c9d-0e1f2a3b4c5d';
+const EXTENSION_URL = firefox
+  ? `moz-extension://${FIREFOX_UUID}`
+  : `chrome-extension://${EXTENSION_ID}`;
 const HOST = 'dev.sshkeymanager.autofill';
 const exe = process.platform === 'win32' ? '.exe' : '';
 
@@ -94,28 +110,52 @@ async function bridgeSays(command, answer) {
 await next('ready');
 
 const profile = await mkdtemp(join(tmpdir(), 'sshkm-e2e-'));
-await mkdir(join(profile, 'NativeMessagingHosts'));
+// Chrome reads host manifests from its profile too. Firefox only from the
+// user's folders, so on macOS it gets a home of its own (CFFIXED_USER_HOME),
+// which the host, a Rust program, ignores.
+const home = join(profile, 'home');
+const manifests = firefox
+  ? join(home, 'Library/Application Support/Mozilla/NativeMessagingHosts')
+  : join(profile, 'NativeMessagingHosts');
+await mkdir(manifests, { recursive: true });
 const host = join(profile, `sshkm-app${exe}`);
 await copyFile(join(root, `target/debug/sshkm-app${exe}`), host);
 await writeFile(
-  join(profile, 'NativeMessagingHosts', `${HOST}.json`),
+  join(manifests, `${HOST}.json`),
   JSON.stringify({
     name: HOST,
     description: 'SSH Key Manager (test)',
     path: host,
     type: 'stdio',
-    allowed_origins: [`chrome-extension://${EXTENSION_ID}/`],
+    ...(firefox
+      ? { allowed_extensions: [FIREFOX_ID] }
+      : { allowed_origins: [`chrome-extension://${EXTENSION_ID}/`] }),
   }),
 );
 
-const browser = await puppeteer.launch({
-  executablePath: chrome,
-  headless: true,
-  pipe: true,
-  userDataDir: profile,
-  enableExtensions: [join(root, 'extension/dist/chromium')],
-  defaultViewport: { width: 900, height: 640 },
-});
+const viewport = { width: 900, height: 640 };
+const browser = firefox
+  ? await puppeteer.launch({
+      browser: 'firefox',
+      executablePath: browserPath,
+      headless: true,
+      userDataDir: join(profile, 'firefox'),
+      extraPrefsFirefox: {
+        'extensions.webextensions.uuids': JSON.stringify({ [FIREFOX_ID]: FIREFOX_UUID }),
+      },
+      // MOZ_REMOTE_ALLOW_SYSTEM_ACCESS lets the test open moz-extension:// pages.
+      env: { ...process.env, CFFIXED_USER_HOME: home, MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: '1' },
+      defaultViewport: viewport,
+    })
+  : await puppeteer.launch({
+      executablePath: browserPath,
+      headless: true,
+      pipe: true,
+      userDataDir: profile,
+      enableExtensions: [join(root, 'extension/dist/chromium')],
+      defaultViewport: viewport,
+    });
+if (firefox) await browser.installExtension(join(root, 'extension/dist/firefox'));
 
 async function shot(page, name) {
   if (shots) await page.screenshot({ path: join(shots, `${name}.png`) });
@@ -123,8 +163,20 @@ async function shot(page, name) {
 
 async function extensionPage(path) {
   const page = await browser.newPage();
-  await page.goto(`chrome-extension://${EXTENSION_ID}/${path}`);
-  return page;
+  const url = `${EXTENSION_URL}/${path}`;
+  if (!firefox) {
+    await page.goto(url);
+    return page;
+  }
+  // The page loads in the extension's process, and Puppeteer never hears
+  // that the navigation finished: ask the page itself until it's there.
+  // Asking while the tab changes process fails, so failures are tried again.
+  page.goto(url).catch(() => undefined);
+  const loaded = (url) => location.href === url && document.readyState === 'complete';
+  for (const deadline = Date.now() + 15_000; ; await sleep(100)) {
+    if (await page.evaluate(loaded, url).catch(() => false)) return page;
+    if (Date.now() > deadline) throw new Error(`${path} didn't load`);
+  }
 }
 
 async function popupText() {
@@ -345,6 +397,8 @@ try {
   await browser.close();
   bridge.stdin.end('quit\n');
   server.close();
+  // macOS makes Firefox's ~/Downloads in its home undeletable (an ACL).
+  if (process.platform === 'darwin') spawnSync('chmod', ['-RN', profile]);
   await rm(profile, { recursive: true, force: true });
 }
 

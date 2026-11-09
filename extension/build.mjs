@@ -38,7 +38,7 @@ for (const name of SCRIPTS) {
     build: {
       outDir: bundles,
       emptyOutDir: false,
-      target: ['chrome121', 'firefox128'],
+      target: ['chrome121', 'firefox140'],
       minify: false,
       lib: {
         entry: join(root, 'src', `${name}.ts`),

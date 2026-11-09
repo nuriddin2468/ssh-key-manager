@@ -36,8 +36,10 @@ This writes `extension/dist/chromium` and `extension/dist/firefox`.
      **Load unpacked** and pick `extension/dist/chromium`. Its id is
      `lkmgdcanagjeajepncgokapkbihahddb`, the Chrome Web Store item's: the `key` in
      `manifest.json` is the item's public key. The host manifest allows only that id.
-   - Firefox (128 or newer): open `about:debugging#/runtime/this-firefox`, choose
-     **Load Temporary Add-on** and pick `extension/dist/firefox/manifest.json`.
+   - Firefox (140 or newer): open `about:debugging#/runtime/this-firefox`, choose
+     **Load Temporary Add-on** and pick `extension/dist/firefox/manifest.json`. The
+     app registers with Firefox only once Firefox has a profile: if you installed or
+     first started Firefox after turning autofill on, restart the app.
 3. Click the extension's icon and choose **Connect**. Check that the app shows the same
    code, then choose **Connect** in the app.
 
@@ -49,12 +51,14 @@ Installed apps in `/Applications` are not affected.
 
 ## End-to-end test
 
-`e2e.mjs` drives Chrome through pairing, filling (and the app's question before it),
+`e2e.mjs` drives Chrome or Firefox through pairing, filling (and the app's question before it),
 exact-site matching, the daily key change, saving, updating, the locked vault and
 disconnecting. It runs against `src-tauri/examples/autofill_bridge.rs`, a bridge over a
-throwaway vault that approves pairings and fills by itself, with Chrome in a temporary
-profile: your browser profile and your vault are never touched. Quit the app first, since the bridge takes over its endpoint
-file while the test runs.
+throwaway vault that approves pairings and fills by itself, with the browser in a
+temporary profile: your browser profile and your vault are never touched. Quit the app
+first, since the bridge takes over its endpoint file while the test runs. Leave the
+extension in your own browsers alone until it ends: they would reach the bridge too,
+which approves their pairings and throws the test's counts off.
 
 ```bash
 cargo build -p sshkm-app --bin sshkm-app --example autofill_bridge
@@ -63,7 +67,15 @@ node extension/e2e.mjs
 ```
 
 Pass the path of another Chromium browser as the first argument, and a folder as the
-second to keep screenshots of each step.
+second to keep screenshots of each step. For Firefox, put `--firefox` first:
+
+```bash
+node extension/e2e.mjs --firefox
+```
+
+The Firefox run is for macOS (it finds `/Applications/Firefox.app` by itself): Firefox
+reads host manifests only from the user's folders, so the test gives it a home folder
+of its own with `CFFIXED_USER_HOME`.
 
 ## Publishing
 
@@ -76,7 +88,10 @@ Store and Edge Add-ons (the Chromium build without the manifest's `key`, which t
 keeps itself) and `ssh-key-manager-firefox-<version>.zip` for addons.mozilla.org. Each
 release sends them to the stores by itself (see
 [store/README.md](store/README.md#automatic-publishing)).
-[store/README.md](store/README.md) walks through the dashboard, with the listing texts,
-privacy answers and images in [store/](store/). The item's id,
+[store/README.md](store/README.md) walks through the Chrome Web Store dashboard, with the
+listing texts, privacy answers and images in [store/](store/). The item's id,
 `lkmgdcanagjeajepncgokapkbihahddb`, is in `CHROMIUM_EXTENSION_IDS` in
 `src-tauri/src/browser/mod.rs`, so the app lets it in.
+[store/firefox.md](store/firefox.md) does the same for addons.mozilla.org. There the
+add-on's id is the manifest's `browser_specific_settings.gecko.id`,
+`autofill@sshkeymanager.dev`, which the app already lets in (`FIREFOX_EXTENSION_ID`).

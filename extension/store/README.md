@@ -1,5 +1,7 @@
 # Publishing in the Chrome Web Store
 
+For addons.mozilla.org, see [firefox.md](firefox.md).
+
 Everything the
 [Developer Dashboard](https://chrome.google.com/webstore/devconsole) asks for is in
 this folder, in the order the dashboard asks for it:
@@ -174,7 +176,7 @@ make each release wait for a yes before anything is uploaded.
 | Store            | Secrets                                                                       | Before the first run                                             |
 | ---------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------- |
 | Chrome Web Store | `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET`, `CWS_REFRESH_TOKEN`, `CWS_PUBLISHER_ID` | The item exists and was published once by hand                   |
-| Firefox Add-ons  | `AMO_JWT_ISSUER`, `AMO_JWT_SECRET`                                            | The add-on `autofill@sshkeymanager.dev` exists, with its listing |
+| Firefox Add-ons  | `AMO_JWT_ISSUER`, `AMO_JWT_SECRET`                                            | The add-on exists, with its listing ([firefox.md](firefox.md))   |
 | Edge Add-ons     | `EDGE_CLIENT_ID`, `EDGE_API_KEY`, `EDGE_PRODUCT_ID`                           | The product exists in Partner Center                             |
 
 - **Chrome Web Store.** In a Google Cloud project, enable the Chrome Web Store API. Set

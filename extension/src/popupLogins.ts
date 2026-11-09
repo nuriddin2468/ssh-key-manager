@@ -260,7 +260,7 @@ export function siteLogins(origin: string): HTMLElement {
         t('moveToBinConfirm', { login: loginName(login) }),
       );
       const removeProblem = h('p', { className: 'problem', role: 'alert' });
-      const keep = button(t('cancel'), () => back().focus());
+      const keep = button(t('keepLogin'), () => back().focus());
       const confirm = button(t('moveToBin'), () => void removeIt(), 'danger');
       confirm.classList.add('solid');
       const box = h(

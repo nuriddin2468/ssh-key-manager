@@ -427,7 +427,9 @@ async function handle(
     case 'signInCheck':
       return frameId === 0 ? signInCheck(tabId, origin) : null;
     case 'signInWarned':
-      if (isString(message.entryId, 64)) await signInWarned(tabId, message.entryId);
+      if (isString(message.entryId, 64) && frameId === 0) {
+        await signInWarned(tabId, message.entryId);
+      }
       return null;
     case 'removeLogin':
       if (!isString(message.entryId, 64) || frameId !== 0) return { ok: false, problem: 'invalid' };

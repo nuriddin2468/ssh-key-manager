@@ -741,7 +741,7 @@ export interface SignInHandlers {
 }
 
 /** How long the banner stays once it said what happens next. */
-const SIGN_IN_DONE_FOR = 8000;
+const SIGN_IN_DONE_FOR = 12_000;
 
 /**
  * "Couldn't sign in?", at the top right of the page, when the page's
@@ -802,11 +802,12 @@ export class SignInBanner extends Surface {
       if (!this.accepts(event, remove)) return;
       // Ask first, in the banner: the login goes to the recycle bin.
       detail.textContent = t('moveToBinConfirm', { login: name });
-      const cancel = actionButton(t('cancel'));
+      const cancel = actionButton(t('keepLogin'));
       const confirm = actionButton(t('moveToBin'), 'btn danger');
       actions.replaceChildren(cancel, confirm);
       announce.textContent = detail.textContent;
-      confirm.focus();
+      // The safe choice has focus: Enter keeps the login.
+      cancel.focus();
       this.settling.restart();
       cancel.addEventListener('click', (cancelled) => {
         if (!cancelled.isTrusted) return;

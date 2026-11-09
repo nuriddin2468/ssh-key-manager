@@ -118,8 +118,8 @@ describe("the site's logins", () => {
     expect(client.changeLogin).not.toHaveBeenCalled();
     expect(section.querySelector('.confirm-text')?.textContent).toContain('restore');
     // The safe choice has focus.
-    expect(document.activeElement?.textContent).toBe('Cancel');
-    buttonNamed(section, 'Cancel').click();
+    expect(document.activeElement?.textContent).toBe('Keep login');
+    buttonNamed(section, 'Keep login').click();
     expect(client.changeLogin).not.toHaveBeenCalled();
 
     buttonNamed(section, 'Edit “Bank (old)”').click();

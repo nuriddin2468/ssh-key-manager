@@ -401,7 +401,7 @@ p {
 }
 .btn.danger.solid {
   background: rgb(255 107 107 / 0.14);
-  color: #ffb4b4;
+  color: var(--critical);
 }
 .btn.danger.solid:hover {
   background: rgb(255 107 107 / 0.22);
@@ -430,7 +430,8 @@ p {
   height: 32px;
   padding: 0 10px;
   border-radius: 8px;
-  border: 1px solid rgb(255 255 255 / 0.14);
+  /* At least 3:1 against the card, so the field shows where it is (WCAG 1.4.11). */
+  border: 1px solid rgb(255 255 255 / 0.34);
   background: rgb(255 255 255 / 0.05);
   font:
     12.5px / 30px ui-monospace,
@@ -442,7 +443,7 @@ p {
   outline: none;
 }
 .field input:hover {
-  border-color: rgb(255 255 255 / 0.22);
+  border-color: rgb(255 255 255 / 0.46);
 }
 .field input:focus {
   border-color: var(--accent-1);

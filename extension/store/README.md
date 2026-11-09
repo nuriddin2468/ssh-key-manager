@@ -182,11 +182,11 @@ the tags `v*`, so only a release can use them. Add the secrets of each store you
 to; a store without them is skipped with a notice. Required reviewers on the environment
 make each release wait for a yes before anything is uploaded.
 
-| Store            | Secrets                                                                       | Before the first run                                             |
-| ---------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| Chrome Web Store | `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET`, `CWS_REFRESH_TOKEN`, `CWS_PUBLISHER_ID` | The item exists and was published once by hand                   |
-| Firefox Add-ons  | `AMO_JWT_ISSUER`, `AMO_JWT_SECRET`                                            | The add-on exists, with its listing ([firefox.md](firefox.md))   |
-| Edge Add-ons     | `EDGE_CLIENT_ID`, `EDGE_API_KEY`, `EDGE_PRODUCT_ID`                           | The product exists in Partner Center                             |
+| Store            | Secrets                                                                       | Before the first run                                           |
+| ---------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| Chrome Web Store | `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET`, `CWS_REFRESH_TOKEN`, `CWS_PUBLISHER_ID` | The item exists and was published once by hand                 |
+| Firefox Add-ons  | `AMO_JWT_ISSUER`, `AMO_JWT_SECRET`                                            | The add-on exists, with its listing ([firefox.md](firefox.md)) |
+| Edge Add-ons     | `EDGE_CLIENT_ID`, `EDGE_API_KEY`, `EDGE_PRODUCT_ID`                           | The product exists in Partner Center                           |
 
 - **Chrome Web Store.** In a Google Cloud project, enable the Chrome Web Store API. Set
   up the OAuth consent screen (**External**) and make an OAuth client of type **Web

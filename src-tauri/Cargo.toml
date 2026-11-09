@@ -56,6 +56,11 @@ portable-pty = "0.9"
 sshkm-os = { path = "../crates/sshkm-os" }
 # The quick search window's system-wide shortcut.
 tauri-plugin-global-shortcut = "2"
+# "Open at login" (src/autostart.rs): a launch agent on macOS, the Run key on
+# Windows, an XDG autostart entry on Linux. The crate `tauri-plugin-autostart`
+# wraps, used directly to quote the program's path and to name the app's
+# bundle in its launch agent, which the plugin doesn't let through.
+auto-launch = "0.6"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 # Compares release versions, as the updater does; the version it uses, so this

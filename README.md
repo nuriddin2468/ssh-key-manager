@@ -170,6 +170,7 @@ Builds are not code-signed yet (it's on the [roadmap](#roadmap)), so your system
 **Runs in the background.** With **Settings → Background** on, closing the window leaves the app running in the tray (the menu bar on macOS). Browser autofill, your devices and terminal sessions keep working.
 - The tray menu shows whether the vault is locked and locks it, connects to a recent host, tells you when a computer nearby is waiting for your answer, and quits.
 - It's on by default on macOS and Windows. On Linux, turn it on yourself; the tray icon needs the `libayatana-appindicator3-1` package.
+- **Open at login** starts the app when you log in, straight into the tray without its window, so browser autofill works right away. It's off until you turn it on.
 
 **Feels native.** Menu bar and keyboard shortcuts on macOS (⌘1–9, ⌘N, ⌘T, ⌘,), and changes you make in a terminal show up instantly.
 

@@ -4,6 +4,7 @@
 pub mod agent;
 pub mod audit;
 pub mod audit_checks;
+pub mod autostart;
 pub mod background;
 pub mod browser;
 pub mod config;

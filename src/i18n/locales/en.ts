@@ -3244,6 +3244,22 @@ const en = {
       'Browser autofill, your devices and terminal sessions keep working. Open or quit the app from its icon in the tray. If your desktop shows no tray icons, open the app again from the app menu to bring the window back.',
     unavailable:
       'Your desktop has no tray for the app’s icon. Install the libayatana-appindicator3-1 package, then restart the app.',
+    login: 'Open at login',
+    loginHintMac:
+      'Starts in the menu bar without a window, so browser autofill and your devices work as soon as you log in.',
+    loginHintWindows:
+      'Starts in the notification area without a window, so browser autofill and your devices work as soon as you log in.',
+    loginHintLinux:
+      'Starts in the tray without a window, so browser autofill and your devices work as soon as you log in.',
+    loginHintWindow:
+      'Opens the window when you log in. To start in the background instead, turn on “Keep running when the window is closed”.',
+    loginHintNoTray: 'Opens the window when you log in.',
+    loginTurnedOff:
+      'Turned off in System Settings. Turn this switch on, then allow SSH Key Manager in Login Items.',
+    loginMounted:
+      'The app is running from its disk image, another drive or where it was downloaded. To open it at login, move it to the Applications folder and open it from there.',
+    loginTemporary:
+      'The app is running from a temporary folder. To open it at login, move it (for an AppImage, the .AppImage file) to a permanent folder and open it from there.',
   },
   browser: {
     title: 'Browser autofill',

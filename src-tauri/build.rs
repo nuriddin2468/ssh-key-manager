@@ -170,6 +170,8 @@ const COMMANDS: &[&str] = &[
     "browser_revoke",
     "background_status",
     "background_set_enabled",
+    "autostart_status",
+    "autostart_set_enabled",
     "quick_status",
     "quick_set_shortcut",
     "quick_items",

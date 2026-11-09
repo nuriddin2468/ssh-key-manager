@@ -29,8 +29,11 @@ objc2 = "0.6.5"
 # The app in front, to give it the focus back (`focus`). The version Tauri's
 # windowing uses, so this adds no crate to the build.
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "libc", "NSRunningApplication", "NSWorkspace"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSDistributedNotificationCenter", "NSNotification", "NSOperation", "NSString", "NSError"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSDistributedNotificationCenter", "NSNotification", "NSOperation", "NSString", "NSError", "NSURL"] }
 objc2-local-authentication = { version = "0.3.2", default-features = false, features = ["std", "LAContext", "LAError", "LABiometryType"] }
+# Whether System Settings lets the app's launch agent run (`login_item`). The
+# version `auto-launch` uses, so this adds no crate to the build.
+objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "objc2", "objc2-foundation", "SMAppService"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62.2", features = ["Foundation", "Security_Credentials_UI", "Security_Cryptography", "Storage_Streams", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader", "Win32_System_Pipes", "Win32_System_RemoteDesktop", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }

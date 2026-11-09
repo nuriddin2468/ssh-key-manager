@@ -1,6 +1,7 @@
 //! SSH Key Manager desktop app: Tauri commands over [`sshkm_core`].
 
 pub mod askpass;
+mod autostart;
 pub mod browser;
 mod commands;
 mod confirm;
@@ -30,6 +31,7 @@ use sshkm_core::paths::SshPaths;
 use tauri::plugin::TauriPlugin;
 use tauri::webview::PageLoadEvent;
 use tauri::{Manager, RunEvent, Runtime, Url, WindowEvent};
+use tauri_plugin_window_state::StateFlags;
 
 pub use crate::error::{AppError, AppResult};
 
@@ -44,12 +46,18 @@ pub fn run() {
 
     let builder = tauri::Builder::default();
 
+    // Opened by the system at login, the app doesn't take the focus from
+    // the app the user went to first.
+    #[cfg(target_os = "macos")]
+    let builder =
+        builder.activate_ignoring_other_apps(!autostart::launched_at_login(std::env::args_os()));
+
     #[cfg(desktop)]
     let builder = builder
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if args.iter().any(|arg| arg == quick::ARG) {
                 quick::open(app);
-            } else {
+            } else if !autostart::launched_at_login(&args) {
                 tray::show_window(app);
             }
         }))
@@ -63,7 +71,13 @@ pub fn run() {
                 .level(log::LevelFilter::Info)
                 .build(),
         )
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // The window starts hidden (`visible: false` in tauri.conf.json), and
+        // `setup` shows it unless the app starts in the tray.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(StateFlags::all() - StateFlags::VISIBLE)
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
@@ -240,6 +254,8 @@ pub fn run() {
             commands::browser::browser_revoke,
             commands::background::background_status,
             commands::background::background_set_enabled,
+            commands::autostart::autostart_status,
+            commands::autostart::autostart_set_enabled,
             commands::quick::quick_status,
             commands::quick::quick_set_shortcut,
             commands::quick::quick_items,
@@ -355,12 +371,30 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "macos")]
     menu::install(app)?;
     let background = tray::Background::install(app.handle(), &data_dir);
+    show_main_window(app, background.enabled());
     app.manage(background);
     app.manage(quick::Quick::install(app.handle(), &data_dir));
     if std::env::args().any(|arg| arg == quick::ARG) {
         quick::open(app.handle());
     }
     Ok(())
+}
+
+/// Shows the main window, which starts hidden, unless the system opened the
+/// app at login and it runs on in the tray (`in_tray`): then it starts there,
+/// without the window ([`autostart`]).
+fn show_main_window(app: &tauri::App, in_tray: bool) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    if autostart::starts_hidden(autostart::launched_at_login(std::env::args_os()), in_tray) {
+        log::info!("opened at login: in the tray, without the window");
+        // Restoring a maximised window may have shown it.
+        let _ = window.hide();
+    } else {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
 }
 
 #[cfg(test)]

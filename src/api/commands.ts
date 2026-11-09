@@ -5,6 +5,7 @@ import type { AddFromVaultReport } from '@/bindings/AddFromVaultReport';
 import type { AgentView } from '@/bindings/AgentView';
 import type { AuditReport } from '@/bindings/AuditReport';
 import type { AuthorizedLine } from '@/bindings/AuthorizedLine';
+import type { AutostartStatus } from '@/bindings/AutostartStatus';
 import type { BackgroundStatus } from '@/bindings/BackgroundStatus';
 import type { BreachStatus } from '@/bindings/BreachStatus';
 import type { BrowserStatus } from '@/bindings/BrowserStatus';
@@ -439,6 +440,12 @@ export const api = {
   backgroundStatus: () => call<BackgroundStatus>('background_status'),
   backgroundSetEnabled: (enabled: boolean) =>
     call<BackgroundStatus>('background_set_enabled', { enabled }),
+
+  // Opening at login, read from the system each time; turning it on also
+  // keeps the app running in the background (src-tauri/src/commands/autostart.rs).
+  autostartStatus: () => call<AutostartStatus>('autostart_status'),
+  autostartSetEnabled: (enabled: boolean) =>
+    call<AutostartStatus>('autostart_set_enabled', { enabled }),
 
   // Quick search: its shortcut, and what its window lists and does
   // (src-tauri/src/commands/quick.rs).

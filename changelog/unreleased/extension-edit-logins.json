@@ -1,0 +1,6 @@
+{
+  "kind": "new",
+  "en": "The browser extension's popup lists the logins saved for the site you're on: change a login's username or password, or move it to the vault's recycle bin. The previous version stays in the entry's history. This needs the new version of both the app and the extension.",
+  "ru": "Окно расширения для браузера показывает логины, сохранённые для открытого сайта: можно изменить имя пользователя или пароль либо переместить логин в корзину хранилища. Прежняя версия остаётся в истории записи. Нужны новые версии и приложения, и расширения.",
+  "uz": "Brauzer kengaytmasi oynasi ochiq sayt uchun saqlangan loginlarni koʻrsatadi: foydalanuvchi nomi yoki parolni oʻzgartirish yoki loginni ombor savatiga koʻchirish mumkin. Oldingi versiya yozuv tarixida qoladi. Buning uchun ilova ham, kengaytma ham yangi versiyada boʻlishi kerak."
+}

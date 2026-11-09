@@ -7,9 +7,12 @@
 import type { BrowserImport } from '@/bindings/BrowserImport';
 import type { BrowserProfile } from '@/bindings/BrowserProfile';
 import type { CsvFormat } from '@/bindings/CsvFormat';
+import type { EntryDetail } from '@/bindings/EntryDetail';
 import type { EntryInput } from '@/bindings/EntryInput';
 import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { Exported } from '@/bindings/Exported';
+import type { ImportOutcome } from '@/bindings/ImportOutcome';
+import type { ImportPasswords } from '@/bindings/ImportPasswords';
 import type { ImportPick } from '@/bindings/ImportPick';
 import type { ImportRow } from '@/bindings/ImportRow';
 import type { VaultLocation } from '@/bindings/VaultLocation';
@@ -25,6 +28,8 @@ interface SampleRow {
   group: string | null;
   password: string;
   otp: string;
+  /** When the file says the password changed, as Firefox and KeePassXC exports do. */
+  changed?: string;
 }
 
 const SAMPLE: SampleRow[] = [
@@ -59,6 +64,7 @@ const SAMPLE: SampleRow[] = [
     group: null,
     password: 'router-imported',
     otp: '',
+    changed: '2026-11-02T09:15:00Z',
   },
   {
     title: 'Netflix',
@@ -153,16 +159,28 @@ async function entries(): Promise<EntrySummary[]> {
   return (await vaultHandlers.vault_entries?.({})) as EntrySummary[];
 }
 
-function rowsFor(existing: EntrySummary[]): ImportRow[] {
-  return SAMPLE.map((row, index) => {
-    const duplicate = existing.find(
-      (e) =>
-        !e.inTrash &&
-        e.username.toLowerCase() === row.username.toLowerCase() &&
-        (row.url
-          ? host(e.url) !== '' && host(e.url) === host(row.url)
-          : e.title.toLowerCase() === row.title.toLowerCase()),
-    );
+/** The entry a sample row duplicates, as the backend matches them. */
+function duplicateOf(existing: EntrySummary[], row: SampleRow): EntrySummary | undefined {
+  return existing.find(
+    (e) =>
+      !e.inTrash &&
+      e.username.toLowerCase() === row.username.toLowerCase() &&
+      (row.url
+        ? host(e.url) !== '' && host(e.url) === host(row.url)
+        : e.title.toLowerCase() === row.title.toLowerCase()),
+  );
+}
+
+/** The row has a password and the entry is a login with another one, as in the backend. */
+async function passwordDiffers(entry: EntrySummary, row: SampleRow): Promise<boolean> {
+  if (row.password === '' || entry.kind !== 'login') return false;
+  const saved = await vaultHandlers.vault_reveal?.({ id: entry.id, field: 'password' });
+  return saved !== row.password;
+}
+
+async function rowsFor(existing: EntrySummary[]): Promise<ImportRow[]> {
+  const rows = SAMPLE.map(async (row, index) => {
+    const duplicate = duplicateOf(existing, row);
     return {
       index,
       title: row.title,
@@ -173,16 +191,36 @@ function rowsFor(existing: EntrySummary[]): ImportRow[] {
       hasOtp: row.otp !== '',
       hasUnreadableOtp: false,
       duplicateOf: duplicate?.id ?? null,
+      passwordChanged: duplicate ? await passwordDiffers(duplicate, row) : false,
+      changedInFile: row.changed ?? null,
+      changedInVault: duplicate
+        ? (((await vaultHandlers.vault_entry?.({ id: duplicate.id })) as EntryDetail | undefined)
+            ?.passwordChanged ?? null)
+        : null,
     };
   });
+  return Promise.all(rows);
 }
 
-/** Adds the sample rows at `indices` to the vault; returns how many. */
-async function addSample(indices: number[]): Promise<number> {
-  let count = 0;
-  for (const index of indices) {
+/**
+ * Imports the sample rows at `indices`: a row whose entry has another password updates it, any
+ * other is added.
+ */
+async function applySample(existing: EntrySummary[], indices: number[]): Promise<ImportOutcome> {
+  const outcome: ImportOutcome = { added: 0, updated: 0 };
+  for (const index of new Set(indices as number[])) {
     const row = SAMPLE[index];
     if (!row) return fail('invalid_input', 'the file changed since it was previewed');
+    const duplicate = duplicateOf(existing, row);
+    if (duplicate && (await passwordDiffers(duplicate, row))) {
+      const detail = (await vaultHandlers.vault_entry?.({ id: duplicate.id })) as EntryInput;
+      await vaultHandlers.vault_update?.({
+        id: duplicate.id,
+        input: { ...detail, password: row.password, otp: null },
+      });
+      outcome.updated += 1;
+      continue;
+    }
     const input: EntryInput = {
       title: row.title,
       username: row.username,
@@ -195,9 +233,22 @@ async function addSample(indices: number[]): Promise<number> {
       keyFingerprint: null,
     };
     await vaultHandlers.vault_add?.({ input });
-    count += 1;
+    outcome.added += 1;
   }
-  return count;
+  return outcome;
+}
+
+/** Both passwords of the sample row at `index`, when its entry has another one. */
+async function compareSample(index: number): Promise<ImportPasswords> {
+  const existing = await entries();
+  const row = SAMPLE[index];
+  if (!row) return fail('invalid_input', 'the file changed since it was previewed');
+  const duplicate = duplicateOf(existing, row);
+  if (!duplicate || !(await passwordDiffers(duplicate, row))) {
+    return fail('invalid_input', "this row doesn't change a password in the vault");
+  }
+  const vault = await vaultHandlers.vault_reveal?.({ id: duplicate.id, field: 'password' });
+  return { file: row.password, vault: String(vault) };
 }
 
 export const vaultFilesHandlers: Record<string, Handler> = {
@@ -227,16 +278,20 @@ export const vaultFilesHandlers: Record<string, Handler> = {
     const path = DEV_CSV;
     const format = FORMATS.find(([pattern]) => pattern.test(path))?.[1] ?? 'generic';
     picked = path;
-    return { path, preview: { format, rows: rowsFor(existing), skipped: 1 } };
+    return { path, preview: { format, rows: await rowsFor(existing), skipped: 1 } };
   },
-  vault_import: async ({ indices }) => {
-    await entries();
+  vault_import: async ({ indices }): Promise<ImportOutcome> => {
+    const existing = await entries();
     const path = picked;
     if (!path) return fail('invalid_input', 'choose the file to import again');
-    const count = await addSample(indices as number[]);
+    const outcome = await applySample(existing, indices as number[]);
     picked = null;
     lastImport = path;
-    return count;
+    return outcome;
+  },
+  vault_import_compare: async ({ index }) => {
+    if (!picked) return fail('invalid_input', 'the file changed since it was previewed');
+    return compareSample(index as number);
   },
   vault_browser_profiles: (): BrowserProfile[] => BROWSER_PROFILES,
   vault_browser_import_preview: async ({ profileId, primaryPassword }): Promise<BrowserImport> => {
@@ -251,7 +306,11 @@ export const vaultFilesHandlers: Record<string, Handler> = {
       if (primaryPassword !== 'firefox') return { kind: 'wrongPrimaryPassword' };
     }
     browserRead = true;
-    const rows = rowsFor(await entries()).map((row) => ({ ...row, group: null, hasOtp: false }));
+    const rows = (await rowsFor(await entries())).map((row) => ({
+      ...row,
+      group: null,
+      hasOtp: false,
+    }));
     const appBound = profile.name === 'Work' ? 2 : 0;
     return {
       kind: 'preview',
@@ -263,9 +322,13 @@ export const vaultFilesHandlers: Record<string, Handler> = {
   },
   vault_browser_import: async ({ indices }) => {
     if (!browserRead) return fail('invalid_input', 'read the browser’s logins again');
-    const count = await addSample(indices as number[]);
+    const outcome = await applySample(await entries(), indices as number[]);
     browserRead = false;
-    return count;
+    return outcome;
+  },
+  vault_browser_import_compare: async ({ index }) => {
+    if (!browserRead) return fail('invalid_input', 'read the browser’s logins again');
+    return compareSample(index as number);
   },
   vault_browser_import_forget: () => {
     browserRead = false;

@@ -58,7 +58,7 @@ pub use self::generator::{
 };
 pub use self::import::{
     BrowserFamily, BrowserKeyStore, BrowserLogins, BrowserProfile, BrowserReadError, CsvFormat,
-    ImportPreview, ImportRow, SafeStorage, browser_profiles,
+    ImportComparison, ImportOutcome, ImportPreview, ImportRow, SafeStorage, browser_profiles,
 };
 pub use self::location::{check_database, copy_files, remove_files};
 pub use self::own_devices::{DeviceRecord, MAX_RECORDS, OwnDevice, check_records};

@@ -12,9 +12,17 @@
 // The username sent with the first step of a two-step login waits here too,
 // for five minutes, to name a password sent next in the same tab on the same
 // site without one.
+//
+// The login last filled in a tab waits here as well (no password), for ten
+// minutes. A password-change form without a username field names its login
+// by it, or by the site's only saved login. And if the user sent it and the
+// tab shows the same site's sign-in form again within moments, the page asks
+// whether to say the saved password may be out of date: once per login per
+// tab.
 
 import {
   type CheckResult,
+  changeLogin,
   type LoginOffer,
   type Result,
   request,
@@ -24,9 +32,12 @@ import {
 import { ext } from './shared/ext';
 import type {
   FillReply,
+  FromPage,
   LoginsReply,
   PendingSaveReply,
+  RemoveReply,
   SaveReply,
+  SignInCheckReply,
   ToBackground,
   ToContent,
 } from './shared/messages';
@@ -35,6 +46,10 @@ import { applyWanted } from './shared/suggestions';
 const LOGINS_TTL = 10_000;
 const PENDING_TTL = 3 * 60_000;
 const USERNAME_TTL = 5 * 60_000;
+/** How long the login filled in a tab names a password-change form's login. */
+const FILLED_TTL = 10 * 60_000;
+/** How soon after a sign-in was sent the sign-in form showing again counts as it failing. */
+const SIGN_IN_FAILED_WITHIN = 20_000;
 const MAX_FIELD = 4096;
 /** Longest username taken from the banner or a two-step login's first step. */
 const MAX_USERNAME = 256;
@@ -56,6 +71,19 @@ interface Step {
   origin: string;
   username: string;
   at: number;
+}
+
+/** The login last filled in a tab, per tab. */
+interface Filled {
+  origin: string;
+  entryId: string;
+  title: string;
+  username: string;
+  at: number;
+  /** When the user sent the form with it. */
+  sentAt?: number;
+  /** Logins the "couldn't sign in?" banner was shown for in this tab. */
+  warned: string[];
 }
 
 const logins = new Map<string, { at: number; reply: LoginsReply }>();
@@ -177,6 +205,90 @@ async function forgetUsername(tabId: number): Promise<void> {
   await ext.storage.session.set({ steps: all });
 }
 
+async function loadFilled(): Promise<Record<string, Filled>> {
+  const stored = await ext.storage.session.get('filled');
+  return (stored.filled ?? {}) as Record<string, Filled>;
+}
+
+async function storeFilled(all: Record<string, Filled>): Promise<void> {
+  await ext.storage.session.set({ filled: all });
+}
+
+/** Remembers the login filled in a tab, named by the vault's list for the page. */
+async function rememberFilled(tabId: number, origin: string, entryId: string): Promise<void> {
+  const list = await loginsFor(origin);
+  const login = list.state === 'ready' ? list.logins.find((l) => l.id === entryId) : undefined;
+  if (!login) return;
+  const all = await loadFilled();
+  const warned = all[tabId]?.warned ?? [];
+  all[tabId] = {
+    origin,
+    entryId,
+    title: login.title,
+    username: login.username,
+    at: Date.now(),
+    warned,
+  };
+  await storeFilled(all);
+}
+
+async function signInSent(tabId: number, origin: string): Promise<void> {
+  const all = await loadFilled();
+  const filled = all[tabId];
+  if (!filled || filled.origin !== origin || Date.now() - filled.at > FILLED_TTL) return;
+  filled.sentAt = Date.now();
+  await storeFilled(all);
+}
+
+/**
+ * The login whose sign-in on this very origin was sent moments ago, unless
+ * the banner was shown for it in this tab. The page then looks whether its
+ * sign-in form is back.
+ */
+async function signInCheck(tabId: number, origin: string): Promise<SignInCheckReply> {
+  const filled = (await loadFilled())[tabId];
+  if (!filled?.sentAt || filled.origin !== origin) return null;
+  if (Date.now() - filled.sentAt > SIGN_IN_FAILED_WITHIN) return null;
+  if (filled.warned.includes(filled.entryId)) return null;
+  return { entryId: filled.entryId, title: filled.title, username: filled.username };
+}
+
+async function signInWarned(tabId: number, entryId: string): Promise<void> {
+  const all = await loadFilled();
+  const filled = all[tabId];
+  if (!filled || filled.entryId !== entryId) return;
+  filled.sentAt = undefined;
+  if (!filled.warned.includes(entryId)) filled.warned.push(entryId);
+  await storeFilled(all);
+}
+
+/** Moves the login the "couldn't sign in?" banner named in this tab to the recycle bin. */
+async function removeWarned(tabId: number, origin: string, entryId: string): Promise<RemoveReply> {
+  const filled = (await loadFilled())[tabId];
+  // Only the login the banner was shown for, on its own page.
+  if (!filled || filled.origin !== origin || !filled.warned.includes(entryId)) {
+    return { ok: false, problem: 'expired' };
+  }
+  const result = await changeLogin(origin, { remove: { entryId } });
+  logins.delete(origin);
+  return result.ok ? { ok: true } : { ok: false, problem: result.problem };
+}
+
+/**
+ * The username of a password-change form that names none: that of the login
+ * filled in this tab lately on this origin, else that of the site's only
+ * saved login. Empty if neither.
+ */
+async function changedUsername(tabId: number, origin: string): Promise<string> {
+  const filled = (await loadFilled())[tabId];
+  if (filled && filled.origin === origin && Date.now() - filled.at <= FILLED_TTL) {
+    return filled.username;
+  }
+  const list = await loginsFor(origin);
+  if (list.state === 'ready' && list.logins.length === 1) return list.logins[0]?.username ?? '';
+  return '';
+}
+
 /** The username sent just before in this tab, on the same site as `origin`; empty if none. */
 async function usernameBefore(tabId: number, origin: string): Promise<string> {
   const step = (await loadSteps())[tabId];
@@ -190,9 +302,16 @@ async function usernameBefore(tabId: number, origin: string): Promise<string> {
  * One sent without a username takes the one the tab sent just before on the
  * same site, if any: the first step of a two-step login.
  */
-async function capture(tabId: number, origin: string, typed: string, password: string) {
+async function capture(
+  tabId: number,
+  origin: string,
+  typed: string,
+  password: string,
+  change = false,
+) {
   if (!password) return;
-  const username = typed || (await usernameBefore(tabId, origin));
+  let username = typed || (await usernameBefore(tabId, origin));
+  if (!username && change) username = await changedUsername(tabId, origin);
   const check = await request<CheckResult>({ check: { origin, username, password } });
   if (!check.ok && check.problem !== 'locked') return;
   if (check.ok && check.value.status === 'saved') {
@@ -295,9 +414,26 @@ async function handle(
       return null;
     case 'capture':
       if (isString(message.username) && isString(message.password) && captures.take(tabId)) {
-        await capture(tabId, origin, message.username.trim(), message.password);
+        const change = message.change === true;
+        await capture(tabId, origin, message.username.trim(), message.password, change);
       }
       return null;
+    case 'filled':
+      if (isString(message.entryId, 64)) await rememberFilled(tabId, origin, message.entryId);
+      return null;
+    case 'signInSent':
+      await signInSent(tabId, origin);
+      return null;
+    case 'signInCheck':
+      return frameId === 0 ? signInCheck(tabId, origin) : null;
+    case 'signInWarned':
+      if (isString(message.entryId, 64) && frameId === 0) {
+        await signInWarned(tabId, message.entryId);
+      }
+      return null;
+    case 'removeLogin':
+      if (!isString(message.entryId, 64) || frameId !== 0) return { ok: false, problem: 'invalid' };
+      return removeWarned(tabId, origin, message.entryId);
     case 'username':
       if (isString(message.username, MAX_USERNAME) && message.username.trim()) {
         await rememberUsername(tabId, origin, message.username.trim());
@@ -318,7 +454,24 @@ async function handle(
   }
 }
 
+/** Whether `sender` is one of the extension's own pages, such as the popup. */
+function fromOwnPage(sender: WebExt.MessageSender): boolean {
+  return (
+    sender.id === ext.runtime.id &&
+    sender.tab === undefined &&
+    typeof sender.url === 'string' &&
+    sender.url.startsWith(ext.runtime.getURL(''))
+  );
+}
+
 ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (fromOwnPage(sender)) {
+    const page = message as Partial<FromPage> | null;
+    if (page?.kind === 'loginsChanged' && typeof page.origin === 'string') {
+      logins.delete(page.origin);
+    }
+    return false;
+  }
   const origin = originOf(sender);
   const tabId = sender.tab?.id;
   if (sender.id !== ext.runtime.id || origin === null || tabId === undefined) return false;
@@ -338,4 +491,9 @@ ext.tabs.onRemoved.addListener((tabId) => {
   captures.forget(tabId);
   void dropPending(tabId);
   void forgetUsername(tabId);
+  void loadFilled().then((all) => {
+    if (!(tabId in all)) return;
+    delete all[tabId];
+    return storeFilled(all);
+  });
 });

@@ -35,7 +35,10 @@ use std::path::{Path, PathBuf};
 use secrecy::SecretString;
 use zeroize::Zeroizing;
 
-use super::{CsvFormat, ImportPreview, MAX_RECORDS, Parsed, Record, UNTITLED, host};
+use super::{
+    CsvFormat, ImportComparison, ImportOutcome, ImportPreview, MAX_RECORDS, Parsed, Record,
+    UNTITLED, host,
+};
 use crate::vault::{Vault, check_field};
 use crate::{Error, Result};
 
@@ -99,6 +102,19 @@ pub struct BrowserLogins {
 }
 
 impl BrowserLogins {
+    /// No logins, as a profile without any reads.
+    pub fn empty(format: CsvFormat) -> Self {
+        Self {
+            parsed: Parsed {
+                format,
+                records: Vec::new(),
+                skipped: 0,
+            },
+            unreadable: 0,
+            app_bound: 0,
+        }
+    }
+
     /// Logins that could not be decrypted, app-bound ones included.
     pub fn unreadable(&self) -> u32 {
         self.unreadable + self.app_bound
@@ -154,10 +170,25 @@ impl Vault {
         self.preview_parsed(&logins.parsed)
     }
 
-    /// Adds the logins at `indices` (from the preview) as entries, like
-    /// [`Vault::import_csv`]. The caller saves the vault.
-    pub fn import_browser(&mut self, logins: &BrowserLogins, indices: &[u32]) -> Result<usize> {
+    /// Imports the logins at `indices` (from the preview) like
+    /// [`Vault::import_csv`]: new ones as entries, changed passwords onto the
+    /// entries they update. The caller saves the vault.
+    pub fn import_browser(
+        &mut self,
+        logins: &BrowserLogins,
+        indices: &[u32],
+    ) -> Result<ImportOutcome> {
         self.apply_parsed(&logins.parsed, indices)
+    }
+
+    /// The password of the login at `index` and that of the entry it would
+    /// update, like [`Vault::import_compare`].
+    pub fn browser_import_compare(
+        &self,
+        logins: &BrowserLogins,
+        index: u32,
+    ) -> Result<ImportComparison> {
+        self.compare_parsed(&logins.parsed, index)
     }
 }
 
@@ -166,6 +197,8 @@ struct Login {
     url: String,
     username: String,
     password: Zeroizing<String>,
+    /// When the password was last changed, if the browser says.
+    changed_at: Option<chrono::NaiveDateTime>,
 }
 
 /// The logins as import records: one per site, user name and password (a
@@ -218,6 +251,7 @@ fn record(index: u32, login: Login) -> Option<Record> {
         url,
         username,
         password,
+        changed_at,
     } = login;
     let url = url.trim().to_owned();
     let username = username.trim().to_owned();
@@ -244,6 +278,7 @@ fn record(index: u32, login: Login) -> Option<Record> {
         password,
         otp: None,
         unreadable_otp: None,
+        changed_at,
     })
 }
 

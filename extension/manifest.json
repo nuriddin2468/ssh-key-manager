@@ -12,7 +12,7 @@
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   },
-  "permissions": ["nativeMessaging", "storage"],
+  "permissions": ["nativeMessaging", "storage", "activeTab"],
   "optional_permissions": ["privacy"],
   "background": {
     "service_worker": "background.js"

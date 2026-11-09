@@ -637,6 +637,88 @@ fn typed_logins_are_checked_then_saved_or_updated() {
     );
 }
 
+#[test]
+fn logins_are_edited_and_removed_only_on_their_site_without_a_prompt() {
+    let (broker, env, extension) = paired();
+    let id = env.add("Shop", "bob", "https://shop.example", "pw1");
+    let ask = |action: Value| extension.ask(&broker, &env, &action);
+    let check = |username: &str, password: &str| {
+        ask(
+            json!({ "check": { "origin": "https://shop.example", "username": username, "password": password } }),
+        )
+    };
+
+    // Another site names the id: nothing changes.
+    assert_eq!(
+        ask(
+            json!({ "edit": { "origin": "https://evil.example", "entryId": id, "password": "x" } })
+        ),
+        error("notFound")
+    );
+    assert_eq!(
+        ask(json!({ "remove": { "origin": "https://evil.example", "entryId": id } })),
+        error("notFound")
+    );
+
+    let edited = ask(json!({ "edit": {
+        "origin": "https://www.shop.example", "entryId": id, "username": "robert", "password": "pw2"
+    } }));
+    assert_eq!(edited["entryId"], id.as_str());
+    assert_eq!(check("robert", "pw2"), json!({ "status": "saved" }));
+    ask(json!({ "edit": { "origin": "https://shop.example", "entryId": id, "password": "pw3" } }));
+    assert_eq!(check("robert", "pw3"), json!({ "status": "saved" }));
+    assert_eq!(
+        ask(json!({ "edit": { "origin": "https://shop.example", "entryId": id, "password": "" } })),
+        error("invalid")
+    );
+
+    let removed = ask(json!({ "remove": { "origin": "https://shop.example", "entryId": id } }));
+    assert_eq!(removed["entryId"], id.as_str());
+    assert_eq!(
+        ask(json!({ "logins": { "origin": "https://shop.example" } })),
+        json!({ "logins": [] })
+    );
+    // In the recycle bin, not gone.
+    let trashed = lock(&env.vault).as_ref().unwrap().entry(&id).unwrap();
+    assert!(trashed.summary.in_trash);
+    assert_eq!(
+        ask(json!({ "remove": { "origin": "https://shop.example", "entryId": id } })),
+        error("notFound")
+    );
+
+    assert_eq!(env.prompts(), 0);
+    assert_eq!(
+        *lock(&env.changes),
+        [
+            Changed::Browsers,
+            Changed::Entries,
+            Changed::Entries,
+            Changed::Entries
+        ]
+    );
+}
+
+#[test]
+fn a_browser_may_change_only_a_few_logins_a_minute() {
+    let (broker, env, extension) = paired();
+    let id = env.add("Shop", "bob", "https://shop.example", "pw");
+    for n in 0..MAX_CHANGES {
+        let edit = json!({ "edit": { "origin": "https://shop.example", "entryId": id, "password": format!("pw{n}") } });
+        assert_eq!(extension.ask(&broker, &env, &edit)["entryId"], id.as_str());
+    }
+    let remove = json!({ "remove": { "origin": "https://shop.example", "entryId": id } });
+    assert_eq!(extension.ask(&broker, &env, &remove), error("tooMany"));
+    assert!(
+        !lock(&env.vault)
+            .as_ref()
+            .unwrap()
+            .entry(&id)
+            .unwrap()
+            .summary
+            .in_trash
+    );
+}
+
 fn fill(extension: &Extension, broker: &Broker, env: &Fake, origin: &str, id: &str) -> Value {
     extension.ask(
         broker,

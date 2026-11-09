@@ -80,6 +80,18 @@ struct Row {
     url: String,
     username: String,
     password: Vec<u8>,
+    changed_at: Option<chrono::NaiveDateTime>,
+}
+
+/// Microseconds from 1601-01-01 (Chromium's epoch) to 1970-01-01.
+const UNIX_EPOCH_MICROS: i64 = 11_644_473_600_000_000;
+
+/// A Chromium time (microseconds since 1601), if it is set.
+pub(super) fn chromium_time(micros: i64) -> Option<chrono::NaiveDateTime> {
+    if micros <= 0 {
+        return None;
+    }
+    chrono::DateTime::from_timestamp_micros(micros - UNIX_EPOCH_MICROS).map(|t| t.naive_utc())
 }
 
 /// Reads the profile at `dir` of the browser whose data folder is
@@ -122,6 +134,7 @@ pub(super) fn read(
                 url: row.url,
                 username: row.username,
                 password,
+                changed_at: row.changed_at,
             }),
             Plain::AppBound => app_bound += 1,
             Plain::Unreadable => unreadable += 1,
@@ -158,6 +171,8 @@ fn read_rows(path: &Path) -> Result<Vec<Row>> {
     };
     let realm = column("signon_realm");
     let blocked = column("blacklisted_by_user");
+    // When the password last changed (Chrome 81 and later), else when saved.
+    let dates = [column("date_password_modified"), column("date_created")];
     let mut rows = statement.query([]).map_err(|e| sqlite_error(&e))?;
     let mut out = Vec::new();
     while let Some(row) = rows.next().map_err(|e| sqlite_error(&e))? {
@@ -180,10 +195,16 @@ fn read_rows(path: &Path) -> Result<Vec<Row>> {
             .ok()
             .flatten()
             .unwrap_or_default();
+        let changed_at = dates
+            .iter()
+            .flatten()
+            .filter_map(|&i| row.get::<_, Option<i64>>(i).ok().flatten())
+            .find_map(chromium_time);
         out.push(Row {
             url,
             username: text(Some(username)),
             password,
+            changed_at,
         });
     }
     Ok(out)

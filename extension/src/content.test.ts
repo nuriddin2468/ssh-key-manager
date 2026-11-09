@@ -158,6 +158,23 @@ describe('typed logins', () => {
     expect(captures()).toEqual([{ kind: 'capture', username: 'alice', password: 'hunter2' }]);
   });
 
+  it('from a password-change form pass on the new password, as one', async () => {
+    document.body.innerHTML = `<form>
+      <input id="old" type="password" autocomplete="current-password">
+      <input id="new" type="password" autocomplete="new-password">
+      <input id="again" type="password" autocomplete="new-password">
+    </form>`;
+    const field = (id: string) => document.getElementById(id) as HTMLInputElement;
+    type(field('old'), 'before');
+    type(field('new'), 'after');
+    type(field('again'), 'after');
+    press(field('again'), 'Enter');
+    await settle();
+    expect(captures()).toEqual([
+      { kind: 'capture', username: '', password: 'after', change: true },
+    ]);
+  });
+
   it('are sent when a click or key press of the user sends the form', async () => {
     const { form, pass } = loginForm('bob');
     type(pass, 'swordfish');

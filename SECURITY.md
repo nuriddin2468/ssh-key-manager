@@ -429,11 +429,20 @@ Settings then asks to move the app to Applications.
 
 **What the extension can get.**
 
-- The app answers four questions, each about one page:
+- The app answers these questions, each about one page:
   - which logins belong to it: titles and usernames only;
   - the username and password of the one login the user picked there;
   - whether a login the user typed there is new, changed or already saved;
-  - saving or updating that login.
+  - saving or updating that login;
+  - changing the username or password of one of its logins, or moving one to the
+    vault's recycle bin (the popup, and the "couldn't sign in?" banner).
+- Changing or removing a login sends no secret back and asks nothing in the app: the
+  old version stays in the entry's history, and a removed login stays in the recycle
+  bin, where the app restores it. Nothing is ever deleted for good from the browser.
+  The extension asks the user before it removes one. A browser may change at most ten
+  logins a minute, so a program holding its keys can't clear out a site's logins at
+  once. An app from before these questions can't read them and answers `invalid`,
+  which the extension shows as "update the app".
 - One more question needs no pairing and carries nothing from the vault: whether two
   origins are the same site, by the same rules as below. The extension asks it to tell
   how much a save offer may show on the page.
@@ -543,6 +552,23 @@ in the capture phase still sees them, which tells it the username of its own log
 login typed on another site gets no such field. The username sent with the first step
 of a two-step login waits in `storage.session` for five minutes, for that tab only,
 and names a password sent there without one on the same site.
+
+A password-change form (a current password, then a new one and its copy) passes on the
+new password, under the same rules: typed by the user and sent by them. A form that
+names no username is matched to the login filled in that tab in the last ten minutes,
+or to the site's only saved login; the banner then offers to update it. The title and
+username of the login filled last in a tab (never its password) wait in
+`storage.session` for that. If the user sends a form with a login the extension filled
+and, within 20 seconds, the same origin shows its sign-in form again with an empty
+password field and the same or no username, the top frame says the saved password may
+be out of date: once per login per tab. **Update** only points the user at the page's
+password field; **Remove from vault** asks first, and the background moves only the
+login that banner named, on that page, to the recycle bin.
+
+**The popup's logins.** With `activeTab`, the popup reads the address of the tab it was
+opened on and lists that site's logins. The origin comes from the browser, and the app
+checks each change against it like any other lookup, so the popup can't touch another
+site's login either. A new password is sent only if the user typed one.
 
 **The browser's own suggestions.** The popup can turn off the browser's "Offer to save
 passwords" (and in Chromium its address and earlier-entry suggestions) with the

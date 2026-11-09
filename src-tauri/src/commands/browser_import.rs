@@ -10,18 +10,21 @@
 //! the vault locks. The page names a profile only by the id
 //! [`vault_browser_profiles`] gave it; its folder never leaves this side.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use sshkm_core::SecretString;
 use sshkm_core::vault::{
-    BrowserKeyStore, BrowserLogins, BrowserProfile, BrowserReadError, ImportPreview, SafeStorage,
-    browser_profiles,
+    BrowserKeyStore, BrowserLogins, BrowserProfile, BrowserReadError, ImportOutcome, ImportPreview,
+    SafeStorage, browser_profiles,
 };
+use sshkm_os::secrecy::ExposeSecret;
 use sshkm_os::secrecy::zeroize::Zeroizing;
 use tauri::{AppHandle, State};
 
+use super::vault_files::ImportPasswords;
 use super::{Shared, blocking};
 use crate::error::{AppError, AppResult};
 
@@ -30,6 +33,9 @@ const KEEP_FOR: Duration = Duration::from_secs(15 * 60);
 
 /// The logins read for the last preview: from which profile, and when.
 static READ: Mutex<Option<Held>> = Mutex::new(None);
+/// Counts [`forget`] calls, so logins taken out to work with are not put
+/// back after the vault locked in the meantime.
+static FORGOTTEN: AtomicU64 = AtomicU64::new(0);
 
 struct Held {
     logins: BrowserLogins,
@@ -87,6 +93,9 @@ pub async fn vault_browser_import_preview(
         // Nothing is read, and no prompt shown, while the vault is locked.
         state.vault.with(&app, |_| Ok(()))?;
         forget();
+        // Reading may wait on a system prompt; kept only if nothing was
+        // forgotten (the vault didn't lock) meanwhile.
+        let epoch = FORGOTTEN.load(Ordering::SeqCst);
         let profile = browser_profiles()
             .into_iter()
             .find(|p| p.id == profile_id)
@@ -103,10 +112,13 @@ pub async fn vault_browser_import_preview(
             .with(&app, |vault| Ok(vault.browser_import_preview(&logins)))?;
         let unreadable = logins.unreadable();
         let app_bound = logins.app_bound();
-        *held() = Some(Held {
-            logins,
-            at: Instant::now(),
-        });
+        put_back(
+            Held {
+                logins,
+                at: Instant::now(),
+            },
+            epoch,
+        );
         Ok(BrowserImport::Preview {
             profile,
             preview,
@@ -117,33 +129,51 @@ pub async fn vault_browser_import_preview(
     .await
 }
 
-/// Imports the logins at `indices` (from the preview) and returns how many
-/// entries were added.
+/// Imports the logins at `indices` (from the preview): new ones as entries,
+/// changed passwords onto the entries they update.
 #[tauri::command]
 pub async fn vault_browser_import(
     app: AppHandle,
     state: State<'_, Shared>,
     indices: Vec<u32>,
-) -> AppResult<usize> {
+) -> AppResult<ImportOutcome> {
     if indices.is_empty() {
         return Err(AppError::invalid("choose at least one login to import"));
     }
     blocking(&state, move |state| {
-        let mut held = held();
-        let logins = match held.take() {
-            Some(read) if read.at.elapsed() <= KEEP_FOR => read.logins,
-            _ => return Err(AppError::invalid("read the browser's logins again")),
-        };
+        // Taken out, not held under the lock: locking the vault forgets them.
+        let (read, epoch) = take_fresh()?;
         let result = state.vault.change(&app, &state.backup_dir, |vault| {
-            Ok(vault.import_browser(&logins, &indices)?)
+            Ok(vault.import_browser(&read.logins, &indices)?)
         });
         if result.is_err() {
-            // To try again, e.g. after unlocking.
-            *held = Some(Held {
-                logins,
-                at: Instant::now(),
-            });
+            // To try again, unless the vault locked meanwhile.
+            put_back(read, epoch);
         }
+        result
+    })
+    .await
+}
+
+/// Both passwords of the login at `index` of the last preview, for the user
+/// to compare. Only for a login whose entry has another password; see
+/// [`sshkm_core::vault::Vault::browser_import_compare`].
+#[tauri::command]
+pub async fn vault_browser_import_compare(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    index: u32,
+) -> AppResult<ImportPasswords> {
+    blocking(&state, move |state| {
+        let (read, epoch) = take_fresh()?;
+        let result = state.vault.with(&app, |vault| {
+            let both = vault.browser_import_compare(&read.logins, index)?;
+            Ok(ImportPasswords {
+                file: both.file.expose_secret().to_owned(),
+                vault: both.vault.expose_secret().to_owned(),
+            })
+        });
+        put_back(read, epoch);
         result
     })
     .await
@@ -157,7 +187,28 @@ pub fn vault_browser_import_forget() {
 
 /// Drops (and wipes) the logins read for a preview.
 pub fn forget() {
+    FORGOTTEN.fetch_add(1, Ordering::SeqCst);
     held().take();
+}
+
+/// Takes out the logins read for the last preview, if they are not too old,
+/// with the [`FORGOTTEN`] count to give [`put_back`].
+fn take_fresh() -> AppResult<(Held, u64)> {
+    let mut held = held();
+    let epoch = FORGOTTEN.load(Ordering::SeqCst);
+    match held.take() {
+        Some(read) if read.at.elapsed() <= KEEP_FOR => Ok((read, epoch)),
+        _ => Err(AppError::invalid("read the browser's logins again")),
+    }
+}
+
+/// Puts back logins taken out with [`take_fresh`], unless they were
+/// forgotten since (the vault locked, the dialog closed) or others were read.
+fn put_back(read: Held, epoch: u64) {
+    let mut held = held();
+    if FORGOTTEN.load(Ordering::SeqCst) == epoch && held.is_none() {
+        *held = Some(read);
+    }
 }
 
 fn held() -> MutexGuard<'static, Option<Held>> {
@@ -230,6 +281,25 @@ mod tests {
         }
         let error = outcome(sshkm_core::Error::NotFound("x".into()).into()).unwrap_err();
         assert_eq!(error.code(), sshkm_core::ErrorCode::NotFound);
+    }
+
+    #[test]
+    fn logins_taken_out_are_not_put_back_once_forgotten() {
+        let empty = || BrowserLogins::empty(sshkm_core::vault::CsvFormat::Chrome);
+        forget();
+        put_back(held_now(empty()), FORGOTTEN.load(Ordering::SeqCst));
+        let (read, epoch) = take_fresh().unwrap();
+        // The vault locks while they are out.
+        forget();
+        put_back(read, epoch);
+        assert!(take_fresh().is_err());
+    }
+
+    fn held_now(logins: BrowserLogins) -> Held {
+        Held {
+            logins,
+            at: Instant::now(),
+        }
     }
 
     #[test]

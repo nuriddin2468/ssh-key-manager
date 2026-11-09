@@ -549,6 +549,7 @@ fn firefox(nss: Nss, primary: &str, logins: &[(&str, &str, &str)]) -> TempDir {
                 "encryptedUsername": login_value(cipher, &key, user),
                 "encryptedPassword": login_value(cipher, &key, password),
                 "encType": 1,
+                "timePasswordChanged": 1_700_000_000_000_i64,
             })
         })
         .collect();
@@ -685,22 +686,54 @@ fn browser_logins_preview_and_import_like_a_file() {
     let rows: Vec<_> = preview
         .rows
         .iter()
-        .map(|r| (r.title.as_str(), r.duplicate_of.is_some(), r.has_password))
+        .map(|r| {
+            (
+                r.title.as_str(),
+                r.duplicate_of.is_some(),
+                r.password_changed,
+                r.changed_in_file.as_deref(),
+            )
+        })
         .collect();
     assert_eq!(
         rows,
-        [("github.com", true), ("example.com", false)].map(|(t, d)| (t, d, true))
+        [
+            ("github.com", true, true, Some("2023-11-14T22:13:20Z")),
+            ("example.com", false, false, Some("2023-11-14T22:13:20Z")),
+        ]
     );
 
-    let count = vault
-        .import_browser(&logins, &[preview.rows[1].index])
+    // The changed password can be compared before it replaces the old one.
+    let both = vault
+        .browser_import_compare(&logins, preview.rows[0].index)
         .unwrap();
-    assert_eq!(count, 1);
-    let added = vault
-        .entries()
-        .into_iter()
-        .find(|e| e.title == "example.com")
-        .unwrap();
-    let password = vault.secret(&added.id, SecretField::Password).unwrap();
-    assert_eq!(password.expose_secret(), "пароль");
+    assert_eq!(
+        (both.file.expose_secret(), both.vault.expose_secret()),
+        ("hunter2", "old")
+    );
+
+    let indices: Vec<u32> = preview.rows.iter().map(|r| r.index).collect();
+    let outcome = vault.import_browser(&logins, &indices).unwrap();
+    assert_eq!((outcome.added, outcome.updated), (1, 1));
+    let secret_of = |title: &str| {
+        let entry = vault
+            .entries()
+            .into_iter()
+            .find(|e| e.title == title)
+            .unwrap();
+        vault
+            .secret(&entry.id, SecretField::Password)
+            .unwrap()
+            .expose_secret()
+            .to_owned()
+    };
+    assert_eq!(secret_of("GitHub"), "hunter2");
+    assert_eq!(secret_of("example.com"), "пароль");
+}
+
+#[test]
+fn chromium_times_count_from_1601() {
+    assert_eq!(chromium::chromium_time(0), None);
+    let time = chromium::chromium_time(13_344_473_600_000_000).unwrap();
+    assert_eq!(time.to_string(), "2023-11-14 22:13:20");
 }

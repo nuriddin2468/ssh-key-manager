@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserProfile } from '@/bindings/BrowserProfile';
 import type { ImportPreview } from '@/bindings/ImportPreview';
+import type { ImportRow } from '@/bindings/ImportRow';
 import type { VaultLocation } from '@/bindings/VaultLocation';
 import type { VaultStatus } from '@/bindings/VaultStatus';
 import { Dialog } from '@/components/ui/Dialog';
@@ -25,12 +26,14 @@ const api = vi.hoisted(() => ({
   vaultStatus: vi.fn(),
   environment: vi.fn(),
   vaultImportPreview: vi.fn(),
+  vaultImportCompare: vi.fn(),
   browserStatus: vi.fn(),
   vaultImport: vi.fn(),
   vaultTrashImportFile: vi.fn(),
   vaultBrowserProfiles: vi.fn(),
   vaultBrowserImportPreview: vi.fn(),
   vaultBrowserImport: vi.fn(),
+  vaultBrowserImportCompare: vi.fn(),
   vaultBrowserImportForget: vi.fn(),
   vaultExportCsv: vi.fn(),
   vaultExportKdbx: vi.fn(),
@@ -102,6 +105,9 @@ const PREVIEW: ImportPreview = {
       hasOtp: true,
       hasUnreadableOtp: false,
       duplicateOf: null,
+      passwordChanged: false,
+      changedInFile: null,
+      changedInVault: null,
     },
     {
       index: 1,
@@ -113,6 +119,9 @@ const PREVIEW: ImportPreview = {
       hasOtp: false,
       hasUnreadableOtp: false,
       duplicateOf: '3f0c7a52-0d5e-4c1b-9a51-7b0f4e2a8c11',
+      passwordChanged: false,
+      changedInFile: null,
+      changedInVault: null,
     },
     {
       index: 3,
@@ -124,6 +133,9 @@ const PREVIEW: ImportPreview = {
       hasOtp: false,
       hasUnreadableOtp: true,
       duplicateOf: null,
+      passwordChanged: false,
+      changedInFile: null,
+      changedInVault: null,
     },
   ],
 };
@@ -163,7 +175,7 @@ describe('ImportDialog', () => {
     const onDone = vi.fn();
     // The backend opens the file dialog and says which file was picked.
     api.vaultImportPreview.mockResolvedValue({ path: CSV, preview: PREVIEW });
-    api.vaultImport.mockResolvedValue(2);
+    api.vaultImport.mockResolvedValue({ added: 2, updated: 0 });
     api.vaultTrashImportFile.mockResolvedValue(undefined);
     renderWithProviders(<ImportDialog onDone={onDone} />, { inDialog: true });
 
@@ -205,6 +217,116 @@ describe('ImportDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Move to Trash' }));
     await waitFor(() => expect(onDone).toHaveBeenCalled());
     expect(api.vaultTrashImportFile).toHaveBeenCalledWith();
+  });
+
+  it('lists new rows first and updates entries whose password differs', async () => {
+    const user = userEvent.setup();
+    const [github, router, wifi] = PREVIEW.rows as [ImportRow, ImportRow, ImportRow];
+    const changed: ImportRow = {
+      ...router,
+      index: 4,
+      title: 'Mail',
+      duplicateOf: '7c1d2e3f-0d5e-4c1b-9a51-7b0f4e2a8c11',
+      passwordChanged: true,
+    };
+    // In the file: an unchanged duplicate first, then a changed one, then two new rows.
+    const preview: ImportPreview = { ...PREVIEW, rows: [router, changed, github, wifi] };
+    api.vaultImportPreview.mockResolvedValue({ path: CSV, preview });
+    api.vaultImport.mockResolvedValue({ added: 2, updated: 1 });
+    renderWithProviders(<ImportDialog onDone={vi.fn()} />, { inDialog: true });
+
+    await user.click(await screen.findByRole('button', { name: /^Bitwarden/ }));
+    await user.click(await screen.findByRole('button', { name: 'Choose CSV file…' }));
+    const table = await screen.findByRole('table', { name: 'Entries in bitwarden_export.csv' });
+    const order = within(table)
+      .getAllByRole('checkbox')
+      .map((box) => box.getAttribute('aria-label'))
+      .filter((label) => label !== 'Select all');
+    expect(order).toEqual(['Import GitHub', 'Import Wi-Fi', 'Import Mail', 'Import Router']);
+    expect(within(table).getByText('Different password')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Import Mail' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Import Router' })).not.toBeChecked();
+    expect(
+      screen.getByText(/1 has a different password than in the vault\. Importing it updates/),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Import 2, update 1' }));
+    expect(api.vaultImport).toHaveBeenCalledWith([0, 3, 4]);
+    expect(await screen.findByText('2 entries imported')).toBeInTheDocument();
+    expect(screen.getByText('1 entry updated')).toBeInTheDocument();
+  });
+
+  it('compares the two passwords of a row, with their dates', async () => {
+    const user = userEvent.setup();
+    const [, router] = PREVIEW.rows as [ImportRow, ImportRow];
+    const changed: ImportRow = {
+      ...router,
+      passwordChanged: true,
+      changedInFile: '2026-11-02T09:15:00Z',
+      changedInVault: '2025-03-12T08:00:00Z',
+    };
+    api.vaultImportPreview.mockResolvedValue({
+      path: CSV,
+      preview: { ...PREVIEW, rows: [changed] },
+    });
+    api.vaultImportCompare.mockResolvedValue({ file: 'from-file', vault: 'from-vault' });
+    renderWithProviders(<ImportDialog onDone={vi.fn()} />, { inDialog: true });
+    await user.click(await screen.findByRole('button', { name: /^Bitwarden/ }));
+    await user.click(await screen.findByRole('button', { name: 'Choose CSV file…' }));
+
+    const compare = await screen.findByRole('button', { name: 'Compare the passwords of Router' });
+    expect(compare).toHaveAttribute('aria-expanded', 'false');
+    await user.click(compare);
+    expect(compare).toHaveAttribute('aria-expanded', 'true');
+    // Opening the comparison doesn't tick or untick the row.
+    expect(screen.getByRole('checkbox', { name: 'Import Router' })).toBeChecked();
+    expect(screen.getByText('Changed Nov 2, 2026')).toBeInTheDocument();
+    expect(screen.getByText('Changed Mar 12, 2025')).toBeInTheDocument();
+    const fileSide = screen.getByText('In the file').closest('div') as HTMLElement;
+    expect(within(fileSide).getByText('Newer')).toBeInTheDocument();
+    // No password until asked for.
+    expect(api.vaultImportCompare).not.toHaveBeenCalled();
+    expect(screen.queryByText('from-file')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Show passwords' }));
+    expect(api.vaultImportCompare).toHaveBeenCalledWith(1);
+    expect(await screen.findByText('from-file')).toBeInTheDocument();
+    expect(screen.getByText('from-vault')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Hide passwords' }));
+    expect(screen.queryByText('from-file')).not.toBeInTheDocument();
+  });
+
+  it('says when a file has no dates', async () => {
+    const user = userEvent.setup();
+    const [, router] = PREVIEW.rows as [ImportRow, ImportRow];
+    const changed: ImportRow = { ...router, passwordChanged: true, changedInVault: null };
+    api.vaultImportPreview.mockResolvedValue({
+      path: CSV,
+      preview: { ...PREVIEW, rows: [changed] },
+    });
+    renderWithProviders(<ImportDialog onDone={vi.fn()} />, { inDialog: true });
+    await user.click(await screen.findByRole('button', { name: /^Chrome/ }));
+    await user.click(await screen.findByRole('button', { name: 'Choose CSV file…' }));
+    await user.click(
+      await screen.findByRole('button', { name: 'Compare the passwords of Router' }),
+    );
+    expect(screen.getByText('The file has no date')).toBeInTheDocument();
+    expect(screen.getByText('Date unknown')).toBeInTheDocument();
+    expect(screen.queryByText('Newer')).not.toBeInTheDocument();
+  });
+
+  it('only updates when every picked row has a different password', async () => {
+    const user = userEvent.setup();
+    const [, router] = PREVIEW.rows as [ImportRow, ImportRow];
+    const preview: ImportPreview = { ...PREVIEW, rows: [{ ...router, passwordChanged: true }] };
+    api.vaultImportPreview.mockResolvedValue({ path: CSV, preview });
+    api.vaultImport.mockResolvedValue({ added: 0, updated: 1 });
+    renderWithProviders(<ImportDialog onDone={vi.fn()} />, { inDialog: true });
+    await user.click(await screen.findByRole('button', { name: /^Bitwarden/ }));
+    await user.click(await screen.findByRole('button', { name: 'Choose CSV file…' }));
+    await user.click(await screen.findByRole('button', { name: 'Update 1 entry' }));
+    expect(await screen.findByText('1 entry updated')).toBeInTheDocument();
+    expect(screen.queryByText(/imported/)).not.toBeInTheDocument();
   });
 
   it('stays on the first step when the file dialog is cancelled', async () => {
@@ -265,7 +387,7 @@ describe('ImportDialog', () => {
   it('says how to stop a browser offering the logins it imported', async () => {
     const user = userEvent.setup();
     api.vaultImportPreview.mockResolvedValue({ path: CSV, preview: PREVIEW });
-    api.vaultImport.mockResolvedValue(2);
+    api.vaultImport.mockResolvedValue({ added: 2, updated: 0 });
     renderWithProviders(<ImportDialog onDone={vi.fn()} />, { inDialog: true });
     await user.click(await screen.findByRole('button', { name: /^Chrome/ }));
     await user.click(screen.getByRole('button', { name: 'Choose CSV file…' }));
@@ -283,7 +405,7 @@ describe('ImportDialog', () => {
       unreadable: 1,
       appBound: 1,
     });
-    api.vaultBrowserImport.mockResolvedValue(2);
+    api.vaultBrowserImport.mockResolvedValue({ added: 2, updated: 0 });
     const onDone = vi.fn();
     renderWithProviders(<ImportDialog onDone={onDone} />, { inDialog: true });
 
@@ -304,6 +426,41 @@ describe('ImportDialog', () => {
     expect(screen.getByText('Stop Chrome offering them too')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Done' }));
     expect(onDone).toHaveBeenCalled();
+  });
+
+  it('compares a changed password with the one in the browser', async () => {
+    const user = userEvent.setup();
+    const [, router] = PREVIEW.rows as [ImportRow, ImportRow];
+    api.vaultBrowserProfiles.mockResolvedValue(CHROME_PROFILES.slice(0, 1));
+    api.vaultBrowserImportPreview.mockResolvedValue({
+      kind: 'preview',
+      profile: CHROME_PROFILES[0],
+      preview: {
+        format: 'chrome',
+        skipped: 0,
+        rows: [{ ...router, passwordChanged: true, changedInFile: '2026-11-02T09:15:00Z' }],
+      },
+      unreadable: 0,
+      appBound: 0,
+    });
+    api.vaultBrowserImportCompare.mockResolvedValue({ file: 'from-chrome', vault: 'from-vault' });
+    api.vaultBrowserImport.mockResolvedValue({ added: 0, updated: 1 });
+    renderWithProviders(<ImportDialog onDone={vi.fn()} />, { inDialog: true });
+
+    await user.click(await screen.findByRole('button', { name: /^Chrome/ }));
+    await user.click(await screen.findByRole('button', { name: 'Import from Chrome' }));
+    await user.click(
+      await screen.findByRole('button', { name: 'Compare the passwords of Router' }),
+    );
+    expect(screen.getByText('In Chrome')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Show passwords' }));
+    expect(api.vaultBrowserImportCompare).toHaveBeenCalledWith(1);
+    expect(api.vaultImportCompare).not.toHaveBeenCalled();
+    expect(await screen.findByText('from-chrome')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Update 1 entry' }));
+    expect(api.vaultBrowserImport).toHaveBeenCalledWith([1]);
+    expect(await screen.findByText('1 entry updated')).toBeInTheDocument();
   });
 
   it('asks for the Firefox primary password and says when it is wrong', async () => {

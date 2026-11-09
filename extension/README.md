@@ -9,8 +9,9 @@ how the pieces fit.
 
 ```text
 src/background.ts     the only part that talks to the app for pages
-src/content.ts        login fields, the menu and the save banner (content/)
+src/content.ts        login fields, the menu, the save and "couldn't sign in?" banners (content/)
 src/popup.ts          the toolbar popup: connection state and one action
+src/popupLogins.ts    the popup's list of the site's logins: edit, move to the recycle bin
 src/connect.ts        the page that pairs this browser with the app
 src/shared/channel.ts pairing and sealing with WebCrypto (mirrors sshkm-core)
 manifest.json         one manifest; build.mjs adjusts it per browser

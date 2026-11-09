@@ -43,6 +43,9 @@ this browser and the app hold, created when you connect them.
   - the login you picked in the menu;
   - a login you typed, so the app can tell whether it's new, changed or already
     saved, and save it if you choose **Save** or **Update**;
+  - a new username or password for a login of the site, or which login to move to
+    the vault's recycle bin, when you change or remove it in the extension's popup or
+    banner;
   - when you connect, the browser's name (for example "Google Chrome"), so you can
     tell browsers apart in the app's Settings.
 - **Back from the app:**
@@ -65,6 +68,10 @@ Nothing is sent over the internet, and nothing is sent to us or to any third par
 - **A username from a two-step sign-in:** when a site asks for the username on one
   page and the password on the next, the username waits in the same session storage
   for five minutes, for that tab only, to go with the password.
+- **The login last filled in a tab:** its title and username (never its password)
+  wait in the same session storage for ten minutes, for that tab only. They name the
+  login a password-change form updates, and tell when a sign-in with it seems to
+  have failed, so the extension can say the saved password may be out of date once.
 - **Recent site lookups:** the titles and usernames of a site's logins are reused from
   memory for up to ten seconds, so the menu opens quickly. They're never written to
   disk.
@@ -92,6 +99,8 @@ including the Limited Use requirements.
 - **Native messaging:** to talk to the SSH Key Manager app on your computer.
 - **Storage:** to keep a login you just typed in memory until you answer the save
   banner.
+- **Active tab:** when you open the extension's popup, to read the address of the
+  tab you're on, so the popup lists that site's logins. Nothing else of the tab.
 - **Access to http and https pages:** to find login forms, show the menu of your
   logins and fill the one you pick, on whichever site you sign in to.
 

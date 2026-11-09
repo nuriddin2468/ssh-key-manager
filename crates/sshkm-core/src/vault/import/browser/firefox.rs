@@ -84,6 +84,7 @@ pub(super) fn read(
                 url: entry.url,
                 username: username.to_string(),
                 password,
+                changed_at: entry.changed_at,
             }),
             _ => unreadable += 1,
         }
@@ -101,6 +102,7 @@ struct Entry {
     url: String,
     username: String,
     password: String,
+    changed_at: Option<chrono::NaiveDateTime>,
 }
 
 fn parse_logins(json: &[u8]) -> Result<Vec<Entry>> {
@@ -117,6 +119,12 @@ fn parse_logins(json: &[u8]) -> Result<Vec<Entry>> {
             url: field(login, "hostname"),
             username: field(login, "encryptedUsername"),
             password: field(login, "encryptedPassword"),
+            // Milliseconds since 1970.
+            changed_at: login["timePasswordChanged"]
+                .as_i64()
+                .filter(|&ms| ms > 0)
+                .and_then(chrono::DateTime::from_timestamp_millis)
+                .map(|t| t.naive_utc()),
         })
         .collect())
 }

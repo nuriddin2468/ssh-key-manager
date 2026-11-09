@@ -140,6 +140,8 @@ impl PairingPhase {
             self,
             Self::Paired
                 | Self::Known
+                | Self::Sent { .. }
+                | Self::Received { .. }
                 | Self::Added { .. }
                 | Self::Joined
                 | Self::Synced { .. }

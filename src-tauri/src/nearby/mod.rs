@@ -623,14 +623,15 @@ impl Nearby {
     ) {
         let Some(stream) = addresses
             .iter()
+            .take_while(|_| !cancelled.load(Ordering::SeqCst))
             .find_map(|address| TcpStream::connect_timeout(address, CONNECT_TIMEOUT).ok())
         else {
-            self.finish(
-                id,
-                PairingPhase::Failed {
-                    reason: PairingFailure::Unreachable,
-                },
-            );
+            let reason = if cancelled.load(Ordering::SeqCst) {
+                PairingFailure::Cancelled
+            } else {
+                PairingFailure::Unreachable
+            };
+            self.finish(id, PairingPhase::Failed { reason });
             return;
         };
         self.run(
@@ -755,6 +756,18 @@ impl Nearby {
             slot.cancelled.store(true, Ordering::SeqCst);
             if let Some(socket) = &slot.socket {
                 let _ = socket.shutdown(std::net::Shutdown::Both);
+            } else {
+                // Still connecting: nothing to hang up yet, and connecting
+                // can take a while. It ends here; the thread stops once
+                // connected (see `run`) and finds the slot no longer its own.
+                if let Some(slot) = inner.pairing.as_mut() {
+                    slot.view.phase = PairingPhase::Failed {
+                        reason: PairingFailure::Cancelled,
+                    };
+                    slot.answer = None;
+                }
+                drop(inner);
+                self.changed();
             }
         } else {
             // A vault given but not set up yet goes with it.
@@ -953,6 +966,20 @@ impl Nearby {
             && let Some(slot) = self.slot(id).as_mut()
         {
             slot.socket = Some(socket);
+        }
+        // Cancelled while connecting, before there was a socket to hang up:
+        // stop before saying anything, let alone sending an item. Checked
+        // after the socket is in the slot, so a cancel either finds it there
+        // or is seen here.
+        if cancelled.load(Ordering::SeqCst) {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+            self.finish(
+                id,
+                PairingPhase::Failed {
+                    reason: PairingFailure::Cancelled,
+                },
+            );
+            return;
         }
         let session = if matches!(role, Role::Connects(_)) {
             p2p::connect(stream, identity)
@@ -1563,6 +1590,89 @@ mod tests {
     }
 
     const WAIT: Duration = Duration::from_millis(10);
+
+    fn login() -> p2p::protocol::ItemSummary {
+        p2p::protocol::ItemSummary::Password {
+            title: "Router".into(),
+            username: "admin".into(),
+            url: String::new(),
+            otp: false,
+        }
+    }
+
+    #[test]
+    fn closing_a_finished_send_ends_it() {
+        let nearby = Nearby::new(std::env::temp_dir().join("sshkm-no-nearby"));
+        let finished = [
+            PairingPhase::Sent { item: login() },
+            PairingPhase::Received {
+                item: login(),
+                name: "Router".into(),
+                keys_differ: false,
+            },
+        ];
+        for phase in finished {
+            let (id, _answers, cancelled) = nearby.claim(true, ConversationKind::Pair).unwrap();
+            at(&nearby, id, phase);
+            // It no longer holds the slot: another device may connect.
+            assert!(!nearby.lock().pairing.as_ref().unwrap().active());
+            nearby.close(id);
+            assert_eq!(nearby.status().pairing, None);
+            assert!(!cancelled.load(Ordering::SeqCst));
+        }
+        // And the next one can start.
+        assert!(nearby.claim(true, ConversationKind::Pair).is_ok());
+    }
+
+    #[test]
+    fn cancelling_while_connecting_ends_at_once() {
+        let nearby = Nearby::new(std::env::temp_dir().join("sshkm-no-nearby"));
+        let (id, answers, cancelled) = nearby.claim(true, ConversationKind::Pair).unwrap();
+        nearby.close(id);
+        assert!(cancelled.load(Ordering::SeqCst));
+        assert_eq!(
+            nearby.status().pairing.map(|pairing| pairing.phase),
+            Some(PairingPhase::Failed {
+                reason: PairingFailure::Cancelled
+            })
+        );
+        // The thread hears no more answers.
+        let side = side(&nearby, id, answers, &cancelled);
+        assert_eq!(side.answer(WAIT), Err(PairingFailure::Cancelled));
+        // Closing it again lets it go.
+        nearby.close(id);
+        assert_eq!(nearby.status().pairing, None);
+    }
+
+    #[test]
+    fn a_cancel_before_the_socket_stops_the_conversation() {
+        let nearby = Arc::new(Nearby::new(std::env::temp_dir().join("sshkm-no-nearby")));
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let (id, answers, cancelled) = nearby.claim(true, ConversationKind::Pair).unwrap();
+        nearby.close(id);
+        let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut other, _) = listener.accept().unwrap();
+        let identity = Identity::generate().unwrap();
+        nearby.run(
+            id,
+            stream,
+            &identity,
+            &Role::Connects(Goal::Pair),
+            answers,
+            &cancelled,
+        );
+        assert_eq!(
+            nearby.status().pairing.map(|pairing| pairing.phase),
+            Some(PairingPhase::Failed {
+                reason: PairingFailure::Cancelled
+            })
+        );
+        // Nothing was said to the other side: it only sees the hang-up.
+        other
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        assert_eq!(std::io::Read::read(&mut other, &mut [0; 1]).unwrap(), 0);
+    }
 
     #[test]
     fn only_the_app_confirms_adding_a_device() {

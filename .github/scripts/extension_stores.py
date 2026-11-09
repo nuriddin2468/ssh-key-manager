@@ -175,12 +175,22 @@ def chrome(folder, version):
         raise Failed(f"Chrome Web Store upload: {state}: {json.dumps(upload)}")
     print(f"Chrome Web Store: uploaded {version}")
 
-    _, _, raw = request(
-        "POST",
-        f"{CHROME_API}/v2/{item}:publish",
-        json.dumps({"publishType": "DEFAULT_PUBLISH"}).encode(),
-        {**auth, "Content-Type": "application/json"},
-    )
+    try:
+        _, _, raw = request(
+            "POST",
+            f"{CHROME_API}/v2/{item}:publish",
+            json.dumps({"publishType": "DEFAULT_PUBLISH"}).encode(),
+            {**auth, "Content-Type": "application/json"},
+        )
+    except Failed as failure:
+        if "INVALID_ITEM_METADATA" in str(failure):
+            print(
+                f"::error::Chrome Web Store: {version} is uploaded but not submitted. The "
+                "dashboard is missing something this version needs, most often the "
+                "justification of a permission the manifest added (extension/store/en.md, "
+                "Privacy). Fill it in on the dashboard, then choose Submit for review there."
+            )
+        raise
     result = parsed(raw)
     if result.get("warningInfo"):
         print(f"::warning::Chrome Web Store: {json.dumps(result['warningInfo'])}")

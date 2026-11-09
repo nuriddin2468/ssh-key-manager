@@ -90,7 +90,9 @@ To publish a release:
    (the browser extension ships with the app). Read the notes it prints, then commit
    everything to `main` as `Release 0.2.0`. `ci.yml` and `build.yml` skip a commit whose
    message starts with `Release `, since `release.yml` builds it from the tag, and
-   `release.yml` refuses a tag whose version has no notes.
+   `release.yml` refuses a tag whose version has no notes. If it says the extension asks
+   for new permissions, update the Chrome Web Store dashboard first
+   ([extension/store/README.md](extension/store/README.md#later-updates)).
 2. Push a tag:
 
    ```bash

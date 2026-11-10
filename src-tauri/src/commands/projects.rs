@@ -182,14 +182,15 @@ struct SuggestionPrefs {
 }
 
 const PREFS_FILE: &str = "project-suggestions.json";
-/// Most dismissals and folders kept.
-const MAX_PREFS: usize = 500;
+/// Most folders kept to look into.
+const MAX_FOLDERS: usize = 100;
 
-/// The suggestions made last: the only ones [`projects_accept_suggestion`]
-/// takes, so the folders it adds are ones this side found.
-static OFFERED: Mutex<Vec<ProjectSuggestion>> = Mutex::new(Vec::new());
+/// The suggestions made last, and the vault they were made for: the only
+/// ones [`projects_accept_suggestion`] takes, so the folders it adds are
+/// ones this side found.
+static OFFERED: Mutex<(String, Vec<ProjectSuggestion>)> = Mutex::new((String::new(), Vec::new()));
 
-fn offered() -> MutexGuard<'static, Vec<ProjectSuggestion>> {
+fn offered() -> MutexGuard<'static, (String, Vec<ProjectSuggestion>)> {
     OFFERED.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -236,12 +237,14 @@ fn host_facts(state: &AppState) -> AppResult<Vec<HostFacts>> {
                     .map(|(_, fingerprint)| fingerprint.clone())
             })
             .collect();
-        for alias in host.patterns.iter().filter(|p| !p.starts_with('!')) {
+        // One server is one host, whatever names its block gives it: the
+        // first is what people type.
+        if let Some(alias) = host.patterns.iter().find(|p| !p.starts_with('!')) {
             facts.push(HostFacts {
                 alias: alias.clone(),
                 host_name: host.host_name.clone(),
                 proxy_jump: host.proxy_jump.clone(),
-                keys: keys.clone(),
+                keys,
             });
         }
     }
@@ -269,10 +272,15 @@ fn code_roots(prefs: &SuggestionPrefs) -> Vec<PathBuf> {
 }
 
 fn suggestions(app: &AppHandle, state: &AppState) -> AppResult<Vec<ProjectSuggestion>> {
+    // Nothing is read on disk while the vault is locked.
+    let vault_id = state
+        .vault
+        .with_quietly(app, |vault| Ok(vault.vault_id().to_owned()))?;
     let prefs = load_prefs(state);
     let hosts = host_facts(state)?;
     let repositories = suggest::find_repositories(&code_roots(&prefs));
-    let home = home_dir();
+    // The working trees come by their real paths; so does the home folder.
+    let home = home_dir().map(|home| suggest::canonical(&home).unwrap_or(home));
     let found = state.vault.with_quietly(app, |vault| {
         let projects = vault.projects();
         let groups = vault.environment_groups();
@@ -289,7 +297,7 @@ fn suggestions(app: &AppHandle, state: &AppState) -> AppResult<Vec<ProjectSugges
             &prefs.declined,
         ))
     })?;
-    offered().clone_from(&found);
+    *offered() = (vault_id, found.clone());
     Ok(found)
 }
 
@@ -318,10 +326,12 @@ pub async fn projects_accept_suggestion(
     members: Vec<ProjectMember>,
 ) -> AppResult<Project> {
     blocking(&state, move |state| {
-        let suggestion = offered()
-            .iter()
-            .find(|s| s.key == key)
-            .cloned()
+        let (for_vault, suggestion) = {
+            let offered = offered();
+            let found = offered.1.iter().find(|s| s.key == key).cloned();
+            (offered.0.clone(), found)
+        };
+        let suggestion = suggestion
             .ok_or_else(|| AppError::not_found("the suggestion; look for suggestions again"))?;
         if let Some(member) = members.iter().find(|m| !suggestion.offers(m)) {
             return Err(AppError::invalid(format!(
@@ -329,6 +339,16 @@ pub async fn projects_accept_suggestion(
             )));
         }
         let project = state.vault.change(&app, &state.backup_dir, |vault| {
+            if vault.vault_id() != for_vault {
+                return Err(AppError::not_found(
+                    "the suggestion; look for suggestions again",
+                ));
+            }
+            // Every member is checked before anything changes; a failure
+            // after that is undone with the rest of the change.
+            for member in &members {
+                vault.check_project_member(member, true)?;
+            }
             let id = match &suggestion.existing {
                 Some(id) => id.clone(),
                 None => vault.add_project(&input)?,
@@ -338,7 +358,7 @@ pub async fn projects_accept_suggestion(
             }
             Ok(vault.project(&id)?)
         })?;
-        offered().retain(|s| s.key != key);
+        offered().1.retain(|s| s.key != key);
         let mut prefs = load_prefs(state);
         let before = prefs.declined.clone();
         prefs.declined.left_out(&suggestion, &members);
@@ -355,10 +375,10 @@ pub async fn projects_accept_suggestion(
 pub async fn projects_dismiss_suggestion(state: State<'_, Shared>, key: String) -> AppResult<()> {
     blocking(&state, move |state| {
         let mut prefs = load_prefs(state);
-        if prefs.declined.keys.len() < MAX_PREFS && prefs.declined.keys.insert(key.clone()) {
+        if prefs.declined.dismiss(&key) {
             save_prefs(state, &prefs)?;
         }
-        offered().retain(|s| s.key != key);
+        offered().1.retain(|s| s.key != key);
         Ok(())
     })
     .await
@@ -398,7 +418,7 @@ pub async fn projects_suggest_in_folder(
             return Ok(None);
         };
         let mut prefs = load_prefs(state);
-        if !prefs.folders.contains(&folder) && prefs.folders.len() < MAX_PREFS {
+        if !prefs.folders.contains(&folder) && prefs.folders.len() < MAX_FOLDERS {
             prefs.folders.push(folder);
             save_prefs(state, &prefs)?;
         }

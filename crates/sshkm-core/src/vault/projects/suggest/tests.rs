@@ -7,6 +7,10 @@ fn root() -> PathBuf {
     PathBuf::from(if cfg!(windows) { "C:\\" } else { "/" })
 }
 
+/// Entry ids, as the vault's logins have.
+const L1: &str = "6f1c2d3e-0000-4000-8000-0000000000a1";
+const L2: &str = "6f1c2d3e-0000-4000-8000-0000000000a2";
+
 fn host(alias: &str, host_name: Option<&str>, jump: Option<&str>) -> HostFacts {
     HostFacts {
         alias: alias.into(),
@@ -125,12 +129,12 @@ fn environments_folders_and_keepass_join_by_name() {
     ];
     let logins = [
         LoginFacts {
-            id: "l1".into(),
+            id: L1.into(),
             group: Some("Shop API/Admin".into()),
             tags: Vec::new(),
         },
         LoginFacts {
-            id: "l2".into(),
+            id: L2.into(),
             group: Some("General".into()),
             tags: vec!["Blog".into(), " ".into()],
         },
@@ -154,11 +158,11 @@ fn environments_folders_and_keepass_join_by_name() {
     // The remote's own alias and its key; github.com is everyone's.
     assert_eq!(shop.hosts, ["github-shop"]);
     assert_eq!(shop.keys, ["SHA256:shopkey"]);
-    assert_eq!(shop.logins, ["l1"]);
+    assert_eq!(shop.logins, [L1]);
     assert_eq!(shop.reasons.len(), 3);
     let blog = &suggestions[1];
     assert_eq!(blog.folders, [blog_folder.to_str().unwrap()]);
-    assert_eq!(blog.logins, ["l2"]);
+    assert_eq!(blog.logins, [L2]);
     // KeePass's starter groups say nothing.
     assert!(!names(&suggestions).contains(&"General"));
     assert_ne!(shop.color, blog.color);
@@ -240,8 +244,8 @@ fn members_left_out_of_an_accepted_suggestion_arent_offered_again() {
 
 #[test]
 fn working_trees_are_found_in_code_folders() {
-    let dir = tempfile::tempdir().unwrap();
-    let code = dir.path().join("code");
+    let (_dir, root) = real_tempdir();
+    let code = root.join("code");
     let make = |path: &Path, config: Option<&str>| {
         std::fs::create_dir_all(path.join(".git")).unwrap();
         if let Some(config) = config {
@@ -264,7 +268,7 @@ fn working_trees_are_found_in_code_folders() {
     std::fs::create_dir_all(code.join("wt")).unwrap();
     std::fs::write(code.join("wt").join(".git"), "gitdir: /elsewhere").unwrap();
 
-    let found = find_repositories(&[code.clone(), dir.path().join("missing")]);
+    let found = find_repositories(&[code.clone(), root.join("missing")]);
     let folders: Vec<&Path> = found.iter().map(|r| r.folder.as_path()).collect();
     assert_eq!(
         folders,
@@ -282,4 +286,157 @@ fn working_trees_are_found_in_code_folders() {
         ]
     );
     assert_eq!(found[1].remotes, Vec::<String>::new());
+}
+
+/// A temporary folder by its real path (`/var` is a link on macOS).
+fn real_tempdir() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let real = canonical(dir.path()).unwrap();
+    (dir, real)
+}
+
+#[test]
+fn a_code_folder_is_searched_once_whatever_its_case_or_links() {
+    let (_dir, root) = real_tempdir();
+    std::fs::create_dir_all(root.join("Code").join("shop").join(".git")).unwrap();
+    // `code` and `Code` are one folder where the disk ignores case.
+    let mut roots: Vec<PathBuf> = ["code", "Code"]
+        .iter()
+        .map(|folder| root.join(folder))
+        .filter(|path| path.is_dir())
+        .collect();
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(root.join("Code"), root.join("work")).unwrap();
+        roots.push(root.join("work"));
+    }
+    let found = find_repositories(&roots);
+    let texts: Vec<String> = found
+        .iter()
+        .map(|r| folder_text(&r.folder, Some(&root)).unwrap())
+        .collect();
+    assert_eq!(texts, ["~/Code/shop"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_git_config_that_isnt_a_regular_file_is_not_read() {
+    let (_dir, root) = real_tempdir();
+    let fifo = root.join("code").join("trap").join(".git");
+    std::fs::create_dir_all(&fifo).unwrap();
+    let made = std::process::Command::new("mkfifo")
+        .arg(fifo.join("config"))
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let linked = root.join("code").join("zero").join(".git");
+    std::fs::create_dir_all(&linked).unwrap();
+    std::os::unix::fs::symlink("/dev/zero", linked.join("config")).unwrap();
+    let roots = vec![root.join("code")];
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(find_repositories(&roots));
+    });
+    let found = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the search still runs after 5 s");
+    assert_eq!(found.len(), 2);
+    assert!(found.iter().all(|r| r.remotes.is_empty()));
+}
+
+#[test]
+fn members_a_project_cant_take_arent_suggested() {
+    let hosts = [
+        host("shop-prod", None, None),
+        host("shop-\"db\"", None, None),
+        host("shop-web", None, None),
+    ];
+    let groups = ["a/b".to_owned(), "fine".to_owned()];
+    let suggestions = suggest(
+        &Sources {
+            hosts: &hosts,
+            environment_groups: &groups,
+            ..Sources::default()
+        },
+        &Declined::default(),
+    );
+    assert_eq!(names(&suggestions), ["shop", "fine"]);
+    assert_eq!(suggestions[0].hosts, ["shop-prod", "shop-web"]);
+}
+
+#[test]
+fn logins_left_out_of_a_tag_suggestion_stay_out() {
+    let logins = [
+        LoginFacts {
+            id: "l1".into(),
+            group: None,
+            tags: vec!["work".into()],
+        },
+        LoginFacts {
+            id: "l2".into(),
+            group: None,
+            tags: vec!["work".into()],
+        },
+    ];
+    let sources = Sources {
+        logins: &logins,
+        ..Sources::default()
+    };
+    // The ids here aren't entry ids, which a project would refuse: this
+    // checks what is offered, before any project.
+    let offered = suggest(&sources, &Declined::default());
+    assert_eq!(offered, []);
+
+    let logins = [
+        LoginFacts {
+            id: "6f1c2d3e-0000-4000-8000-000000000001".into(),
+            group: None,
+            tags: vec!["work".into()],
+        },
+        LoginFacts {
+            id: "6f1c2d3e-0000-4000-8000-000000000002".into(),
+            group: None,
+            tags: vec!["work".into()],
+        },
+    ];
+    let sources = Sources {
+        logins: &logins,
+        ..Sources::default()
+    };
+    let offered = suggest(&sources, &Declined::default());
+    let work = &offered[0];
+    assert_eq!(work.logins.len(), 2);
+    let kept = [ProjectMember::Login {
+        id: logins[0].id.clone(),
+    }];
+    let mut declined = Declined::default();
+    declined.left_out(work, &kept);
+    let mut project = project("work", &[]);
+    project.logins = vec![logins[0].id.clone()];
+    let projects = [project];
+    let again = suggest(
+        &Sources {
+            projects: &projects,
+            ..sources
+        },
+        &declined,
+    );
+    assert_eq!(again, []);
+}
+
+#[test]
+fn dismissals_are_kept_up_to_a_limit_oldest_out_first() {
+    let mut declined = Declined::default();
+    assert!(declined.dismiss("a"));
+    assert!(!declined.dismiss("a"));
+    for n in 0..Declined::MAX_KEYS {
+        declined.dismiss(&format!("k{n}"));
+    }
+    assert_eq!(declined.keys.len(), Declined::MAX_KEYS);
+    assert!(!declined.keys.contains(&"a".to_owned()));
+    assert!(
+        declined
+            .keys
+            .contains(&format!("k{}", Declined::MAX_KEYS - 1))
+    );
 }

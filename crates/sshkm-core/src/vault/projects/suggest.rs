@@ -20,7 +20,10 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::{MAX_MEMBERS, MAX_NAME, Project, ProjectColor, ProjectMember, check_name, folder_text};
+use super::{
+    MAX_MEMBERS, MAX_NAME, Project, ProjectColor, ProjectMember, check_name, folder_text,
+    is_valid_member,
+};
 
 /// Most suggestions offered at once.
 pub const MAX_SUGGESTIONS: usize = 50;
@@ -160,13 +163,28 @@ pub struct LoginFacts {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Declined {
-    /// Suggestions dismissed, by key.
-    pub keys: BTreeSet<String>,
+    /// Suggestions dismissed, by key, oldest first.
+    pub keys: Vec<String>,
     /// Members left out of an accepted suggestion, by its key.
     pub members: BTreeMap<String, Vec<ProjectMember>>,
 }
 
 impl Declined {
+    /// Most dismissals kept: past it, the oldest is forgotten.
+    pub const MAX_KEYS: usize = 1000;
+
+    /// Stops suggesting `key`. Returns whether that is news.
+    pub fn dismiss(&mut self, key: &str) -> bool {
+        if self.keys.iter().any(|k| k == key) {
+            return false;
+        }
+        if self.keys.len() >= Self::MAX_KEYS {
+            self.keys.remove(0);
+        }
+        self.keys.push(key.to_owned());
+        true
+    }
+
     /// Remembers what `suggestion` offered that the user didn't keep.
     pub fn left_out(&mut self, suggestion: &ProjectSuggestion, kept: &[ProjectMember]) {
         let left: Vec<ProjectMember> = suggestion
@@ -284,6 +302,30 @@ impl ProjectSuggestion {
             ProjectMember::Login { id } => self.logins.contains(id),
             ProjectMember::Environment { group } => self.environments.contains(group),
             ProjectMember::Folder { path } => self.folders.contains(path),
+        }
+    }
+
+    /// Drops members a project can't take ([`is_valid_member`]): a group
+    /// named with `/` in KeePassXC, an alias with quotes.
+    fn retain_valid(&mut self) {
+        let valid: Vec<ProjectMember> = self
+            .member_list()
+            .into_iter()
+            .filter(is_valid_member)
+            .collect();
+        self.hosts.clear();
+        self.keys.clear();
+        self.environments.clear();
+        self.folders.clear();
+        self.logins.clear();
+        for member in valid {
+            match member {
+                ProjectMember::Host { alias } => self.hosts.push(alias),
+                ProjectMember::Key { fingerprint } => self.keys.push(fingerprint),
+                ProjectMember::Environment { group } => self.environments.push(group),
+                ProjectMember::Folder { path } => self.folders.push(path),
+                ProjectMember::Login { id } => self.logins.push(id),
+            }
         }
     }
 
@@ -489,6 +531,7 @@ pub fn suggest(sources: &Sources<'_>, declined: &Declined) -> Vec<ProjectSuggest
                 suggestion.name.clone_from(&project.name);
                 suggestion.color = project.color;
             }
+            suggestion.retain_valid();
             taken.drop_from(&mut suggestion);
             if let Some(left_out) = declined.members.get(&suggestion.key) {
                 suggestion.drop_declined(left_out);
@@ -779,8 +822,17 @@ fn domains(sources: &Sources<'_>, out: &mut Vec<ProjectSuggestion>) {
 pub fn find_repositories(roots: &[PathBuf]) -> Vec<Repository> {
     let mut found = Vec::new();
     let mut seen = 0usize;
+    // `code` and `Code` are one folder on a disk that ignores case, and a
+    // root may be a link: each is searched once, by its real path, so the
+    // working trees come with the names they have on disk.
+    let mut canonical_roots: Vec<PathBuf> = Vec::new();
+    for root in roots.iter().filter_map(|root| canonical(root)) {
+        if !canonical_roots.contains(&root) {
+            canonical_roots.push(root);
+        }
+    }
     let mut queue: std::collections::VecDeque<(PathBuf, usize)> =
-        roots.iter().map(|root| (root.clone(), 0)).collect();
+        canonical_roots.into_iter().map(|root| (root, 0)).collect();
     let mut visited: BTreeSet<PathBuf> = BTreeSet::new();
     while let Some((folder, depth)) = queue.pop_front() {
         if seen >= MAX_FOLDERS_SEEN || found.len() >= MAX_REPOSITORIES {
@@ -822,15 +874,49 @@ pub fn find_repositories(roots: &[PathBuf]) -> Vec<Repository> {
     found
 }
 
-/// The `url`s of the `[remote "…"]` sections of a Git config file.
+/// A folder's real path: links followed, names as the disk has them, and
+/// on Windows without the `\\?\` prefix where a drive letter does.
+pub fn canonical(path: &Path) -> Option<PathBuf> {
+    let real = std::fs::canonicalize(path).ok()?;
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        let mut components = real.components();
+        if let Some(Component::Prefix(prefix)) = components.next()
+            && let Prefix::VerbatimDisk(letter) = prefix.kind()
+        {
+            let mut plain = PathBuf::from(format!("{}:\\", char::from(letter)));
+            plain.extend(components.filter(|c| !matches!(c, Component::RootDir)));
+            return Some(plain);
+        }
+    }
+    Some(real)
+}
+
+/// The `url`s of the `[remote "…"]` sections of a Git config file. Only a
+/// regular file is read, and no more than [`MAX_GIT_CONFIG`] bytes of it:
+/// a pipe or a device there would never end.
 fn read_remotes(config: &Path) -> Vec<String> {
-    let Ok(meta) = std::fs::metadata(config) else {
+    use std::io::Read as _;
+    let Ok(meta) = std::fs::symlink_metadata(config) else {
         return Vec::new();
     };
-    if meta.len() > MAX_GIT_CONFIG {
+    if !meta.is_file() || meta.len() > MAX_GIT_CONFIG {
         return Vec::new();
     }
-    let Ok(text) = std::fs::read_to_string(config) else {
+    let Ok(file) = std::fs::File::open(config) else {
+        return Vec::new();
+    };
+    let mut bytes = Vec::new();
+    if file
+        .take(MAX_GIT_CONFIG + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
+        || bytes.len() as u64 > MAX_GIT_CONFIG
+    {
+        return Vec::new();
+    }
+    let Ok(text) = String::from_utf8(bytes) else {
         return Vec::new();
     };
     let mut in_remote = false;

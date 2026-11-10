@@ -190,6 +190,7 @@ const candidates: ProjectSuggestion[] = [
     {
       folders: ['~/code/billing-service'],
       keys: ['SHA256:u9Fh2KdL7pQ3zX8mV1bN6rT4wY0sGcJ5aE2iOkHjUyB'],
+      environments: ['billing'],
     },
   ),
   suggestion('shop', 'shop', [{ type: 'gitFolder', folder: '~/code/shop-admin' }], {
@@ -209,6 +210,32 @@ const inPickedFolder = suggestion(
 const dismissed = new Set<string>();
 /** Members left out when a suggestion was accepted, by its key: not offered again. */
 const leftOut = new Map<string, Set<string>>();
+
+/** A member as one string, as the backend's records key them. */
+function memberKey(m: ProjectMember): string {
+  switch (m.type) {
+    case 'host':
+      return `host:${m.alias}`;
+    case 'key':
+      return `key:${m.fingerprint}`;
+    case 'login':
+      return `login:${m.id}`;
+    case 'environment':
+      return `env:${m.group}`;
+    case 'folder':
+      return `folder:${m.path}`;
+  }
+}
+
+function memberList(s: ProjectSuggestion): ProjectMember[] {
+  return [
+    ...s.hosts.map((alias): ProjectMember => ({ type: 'host', alias })),
+    ...s.keys.map((fingerprint): ProjectMember => ({ type: 'key', fingerprint })),
+    ...s.environments.map((group): ProjectMember => ({ type: 'environment', group })),
+    ...s.folders.map((path): ProjectMember => ({ type: 'folder', path })),
+    ...s.logins.map((id): ProjectMember => ({ type: 'login', id })),
+  ];
+}
 let offered: ProjectSuggestion[] = [];
 
 const COLORS: ProjectColor[] = [
@@ -231,19 +258,28 @@ function nextColor(taken: ProjectColor[]): ProjectColor {
 
 /** What the backend's `suggest` gives for the candidates: taken members and dismissals left out. */
 function suggestions(): ProjectSuggestion[] {
-  const held = (pick: (p: MockProject) => string[]) => new Set(projects.flatMap(pick));
-  const folders = held((p) => p.folders);
-  const keys = held((p) => p.keys);
+  const held = new Set(
+    projects
+      .flatMap((p) =>
+        memberList({ ...p, key: '', existing: null, reasons: [], name: p.name, color: p.color }),
+      )
+      .map(memberKey),
+  );
   const colors = projects.map((p) => p.color);
   offered = candidates
     .filter((c) => !dismissed.has(c.key))
     .map((c) => {
       const existing = projects.find((p) => p.name.toLowerCase() === c.key);
       const declined = leftOut.get(c.key) ?? new Set<string>();
+      const keep = (m: ProjectMember) => !held.has(memberKey(m)) && !declined.has(memberKey(m));
+      const kept = memberList(c).filter(keep);
       const s: ProjectSuggestion = {
         ...c,
-        folders: c.folders.filter((f) => !folders.has(f) && !declined.has(f)),
-        keys: c.keys.filter((k) => !keys.has(k) && !declined.has(k)),
+        hosts: kept.flatMap((m) => (m.type === 'host' ? [m.alias] : [])),
+        keys: kept.flatMap((m) => (m.type === 'key' ? [m.fingerprint] : [])),
+        environments: kept.flatMap((m) => (m.type === 'environment' ? [m.group] : [])),
+        folders: kept.flatMap((m) => (m.type === 'folder' ? [m.path] : [])),
+        logins: kept.flatMap((m) => (m.type === 'login' ? [m.id] : [])),
       };
       if (existing) {
         s.existing = existing.id;
@@ -255,7 +291,7 @@ function suggestions(): ProjectSuggestion[] {
       }
       return s;
     })
-    .filter((s) => s.folders.length + s.keys.length > 0);
+    .filter((s) => memberList(s).length > 0);
   return offered;
 }
 
@@ -314,6 +350,14 @@ export const projectsHandlers: Record<string, Handler> = {
     const s = offered.find((o) => o.key === key);
     if (!s) return fail('not_found', 'the suggestion; look for suggestions again');
     const chosen = members as ProjectMember[];
+    const offeredKeys = new Set(memberList(s).map(memberKey));
+    // Every member is checked before anything changes, as the backend does.
+    for (const m of chosen) {
+      if (!offeredKeys.has(memberKey(m))) {
+        return fail('invalid_input', 'not part of the suggestion');
+      }
+      if (m.type === 'login' && !isMockEntry(m.id)) return fail('not_found', `entry ${m.id}`);
+    }
     let target = s.existing ? projects.find((p) => p.id === s.existing) : undefined;
     if (!target) {
       const { name: text, color } = input as ProjectInput;
@@ -324,20 +368,32 @@ export const projectsHandlers: Record<string, Handler> = {
       projects.push(target);
     }
     for (const m of chosen) {
-      if (m.type === 'folder' && s.folders.includes(m.path)) target.folders.push(m.path);
-      else if (m.type === 'key' && s.keys.includes(m.fingerprint)) target.keys.push(m.fingerprint);
-      else return fail('invalid_input', 'not part of the suggestion');
+      const list =
+        m.type === 'host'
+          ? target.hosts
+          : m.type === 'key'
+            ? target.keys
+            : m.type === 'environment'
+              ? target.environments
+              : m.type === 'folder'
+                ? target.folders
+                : target.logins;
+      const value =
+        m.type === 'host'
+          ? m.alias
+          : m.type === 'key'
+            ? m.fingerprint
+            : m.type === 'environment'
+              ? m.group
+              : m.type === 'folder'
+                ? m.path
+                : m.id;
+      if (!list.includes(value)) list.push(value);
     }
     target.modified = now();
+    const chosenKeys = new Set(chosen.map(memberKey));
     const declined = leftOut.get(s.key) ?? new Set<string>();
-    for (const value of [...s.folders, ...s.keys]) {
-      const keptKey = chosen.some(
-        (m) =>
-          (m.type === 'folder' && m.path === value) ||
-          (m.type === 'key' && m.fingerprint === value),
-      );
-      if (!keptKey) declined.add(value);
-    }
+    for (const k of offeredKeys) if (!chosenKeys.has(k)) declined.add(k);
     leftOut.set(s.key, declined);
     offered = offered.filter((o) => o.key !== key);
     return view(target, true);

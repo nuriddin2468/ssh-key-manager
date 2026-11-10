@@ -973,8 +973,16 @@ impl Vault {
     }
 
     /// The vault's logins outside the recycle bin as suggestions see them:
-    /// their KeePass group and their own tags (not the `project/…` ones).
+    /// their KeePass group and the user's own tags. A `project/<name>` tag
+    /// for a name no record knows counts as the tag `<name>`; the app's own
+    /// `project/` tags don't count.
     pub fn suggestion_logins(&self) -> Vec<suggest::LoginFacts> {
+        let known: BTreeSet<String> = self
+            .stored_projects()
+            .iter()
+            .flat_map(|(_, stored)| std::iter::once(&stored.name.v).chain(&stored.aka))
+            .map(|name| name.to_lowercase())
+            .collect();
         self.db
             .iter_all_entries()
             .filter(|entry| !envs::is_environment(entry))
@@ -986,8 +994,12 @@ impl Vault {
                     tags: entry
                         .tags
                         .iter()
-                        .filter(|t| !t.trim().starts_with(TAG_PREFIX))
-                        .cloned()
+                        .map(|t| t.trim())
+                        .filter_map(|t| match t.strip_prefix(TAG_PREFIX) {
+                            Some(name) if known.contains(&name.to_lowercase()) => None,
+                            Some(name) => Some(name.to_owned()),
+                            None => Some(t.to_owned()),
+                        })
                         .collect(),
                 })
             })

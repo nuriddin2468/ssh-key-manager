@@ -440,3 +440,40 @@ fn dismissals_are_kept_up_to_a_limit_oldest_out_first() {
             .contains(&format!("k{}", Declined::MAX_KEYS - 1))
     );
 }
+
+#[test]
+fn a_project_tag_no_project_has_is_suggested_by_its_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = crate::vault::VaultPaths::new(dir.path().join("vault.kdbx"));
+    let (mut vault, _) =
+        crate::vault::Vault::create(&paths, &secrecy::SecretString::from("master")).unwrap();
+    let mut entry = |title: &str, tags: &[&str]| {
+        let id = vault
+            .add_entry(&crate::vault::EntryInput {
+                title: title.into(),
+                ..crate::vault::EntryInput::default()
+            })
+            .unwrap();
+        let uuid = uuid::Uuid::parse_str(&id).unwrap();
+        vault.db.entry_mut(uuid.into()).unwrap().tags =
+            tags.iter().map(|t| (*t).to_owned()).collect();
+        id
+    };
+    let thesis = entry("Thesis", &["project/thesis"]);
+    let shop = entry("Shop", &["project/Shop"]);
+    drop(entry);
+    let id = vault
+        .add_project(&crate::vault::projects::ProjectInput {
+            name: "Shop".into(),
+            color: ProjectColor::Blue,
+        })
+        .unwrap();
+    assert_eq!(
+        vault.project(&id).unwrap().logins,
+        std::slice::from_ref(&shop)
+    );
+    let logins = vault.suggestion_logins();
+    let tags_of = |id: &str| logins.iter().find(|l| l.id == id).unwrap().tags.clone();
+    assert_eq!(tags_of(&thesis), ["thesis"]);
+    assert_eq!(tags_of(&shop), Vec::<String>::new());
+}

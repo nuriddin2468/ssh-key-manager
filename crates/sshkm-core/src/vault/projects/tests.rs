@@ -159,18 +159,21 @@ fn names_are_labels_unique_in_any_case() {
 fn logins_are_members_by_id_whatever_their_own_tags_say() {
     let dir = tempfile::tempdir().unwrap();
     let mut vault = vault(&dir, "vault");
-    // The user's own tag named like a project makes nothing a member, and a
-    // `project/…` tag no project wrote goes at the next write.
+    // The user's own tag named like a project makes nothing a member; a
+    // `project/` tag for a name no project has is theirs and stays.
     let tagged = login(&mut vault, "Tagged in KeePassXC");
-    set_tags(&mut vault, &tagged, &["work", " shop ", "project/Shop", ""]);
+    set_tags(&mut vault, &tagged, &["work", " shop ", ""]);
+    let thesis = login(&mut vault, "Thesis");
+    set_tags(&mut vault, &thesis, &["project/thesis", "work"]);
     let chosen = login(&mut vault, "Chosen");
     let trashed = login(&mut vault, "Old");
     let id = vault.add_project(&input("Shop")).unwrap();
     assert_eq!(vault.project(&id).unwrap().logins, Vec::<String>::new());
     add(&mut vault, &id, &login_member(&chosen));
     add(&mut vault, &id, &login_member(&trashed));
-    assert_eq!(tags(&vault, &tagged), ["work", "shop"]);
+    assert_eq!(tags(&vault, &tagged), ["work", " shop ", ""]);
     assert_eq!(tags(&vault, &chosen), ["project/Shop"]);
+    assert_eq!(tags(&vault, &thesis), ["project/thesis", "work"]);
     vault.trash_entry(&trashed).unwrap();
     assert_eq!(
         vault.project(&id).unwrap().logins,
@@ -193,7 +196,8 @@ fn logins_are_members_by_id_whatever_their_own_tags_say() {
     vault.remove_project(&id).unwrap();
     assert_eq!(tags(&vault, &chosen), Vec::<String>::new());
     assert_eq!(tags(&vault, &trashed), Vec::<String>::new());
-    assert_eq!(tags(&vault, &tagged), ["work", "shop"]);
+    assert_eq!(tags(&vault, &tagged), ["work", " shop ", ""]);
+    assert_eq!(tags(&vault, &thesis), ["project/thesis", "work"]);
     assert_eq!(vault.projects(), Vec::<Project>::new());
     assert!(vault.project(&id).is_err());
     assert!(vault.update_project(&id, &input("Again")).is_err());
@@ -223,6 +227,49 @@ fn logins_are_members_by_id_whatever_their_own_tags_say() {
             .check_project_member(&login_member(gone), false)
             .is_ok()
     );
+}
+
+#[test]
+fn a_login_tagged_with_a_project_in_keepassxc_joins_it_unless_taken_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "vault");
+    let early = login(&mut vault, "Tagged before");
+    set_tags(&mut vault, &early, &["project/thesis"]);
+    // Made with the name of a tag: the tagged login is in it at once.
+    let id = vault.add_project(&input("Thesis")).unwrap();
+    assert_eq!(
+        vault.project(&id).unwrap().logins,
+        std::slice::from_ref(&early)
+    );
+    assert_eq!(tags(&vault, &early), ["project/Thesis"]);
+
+    // Tagged later in KeePassXC: it joins at the next change.
+    let later = login(&mut vault, "Tagged later");
+    set_tags(&mut vault, &later, &["project/Thesis"]);
+    add(&mut vault, &id, &host("lab"));
+    vault.update_project(&id, &input("Thesis")).unwrap();
+    let renamed = ProjectInput {
+        name: "Thesis".into(),
+        color: ProjectColor::Green,
+    };
+    vault.update_project(&id, &renamed).unwrap();
+    let mut logins = vault.project(&id).unwrap().logins;
+    logins.sort();
+    let mut expected = vec![early.clone(), later.clone()];
+    expected.sort();
+    assert_eq!(logins, expected);
+
+    // Taken out in the app, it stays out though KeePassXC still tags it.
+    vault
+        .set_project_member(&id, &login_member(&later), false)
+        .unwrap();
+    set_tags(&mut vault, &later, &["project/Thesis"]);
+    vault.update_project(&id, &input("Thesis")).unwrap();
+    assert_eq!(
+        vault.project(&id).unwrap().logins,
+        std::slice::from_ref(&early)
+    );
+    assert_eq!(tags(&vault, &later), Vec::<String>::new());
 }
 
 #[test]
@@ -367,6 +414,22 @@ fn changes_made_on_two_devices_before_they_sync_all_survive() {
 }
 
 #[test]
+fn a_rename_that_lost_leaves_no_tag_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut laptop, mut desktop) = (vault(&dir, "laptop"), vault(&dir, "desktop"));
+    let id = laptop.add_project(&input("Shop")).unwrap();
+    let github = login(&mut laptop, "GitHub");
+    add(&mut laptop, &id, &login_member(&github));
+    sync(&mut laptop, &mut desktop);
+    laptop.update_project(&id, &input("Shop A")).unwrap();
+    desktop.update_project(&id, &input("Shop B")).unwrap();
+    sync(&mut laptop, &mut desktop);
+    let name = laptop.project(&id).unwrap().name;
+    assert_eq!(desktop.project(&id).unwrap().name, name);
+    assert_eq!(tags(&laptop, &github), [format!("project/{name}")]);
+}
+
+#[test]
 fn the_order_records_come_in_doesnt_matter() {
     let dir = tempfile::tempdir().unwrap();
     for reverse in [false, true] {
@@ -498,11 +561,6 @@ fn a_sync_skips_what_it_cant_take_one_record_at_a_time() {
     let fine = new_id();
     let t = at(0);
     let records = [
-        // From too far in the future.
-        record(
-            &new_id(),
-            &serde_json::json!({"name": {"v": "Ahead", "t": at(60)}, "color": {"v": "blue", "t": t}}),
-        ),
         record(
             &new_id(),
             &serde_json::json!({"name": {"v": "a;b", "t": t}, "color": {"v": "blue", "t": t}}),
@@ -533,6 +591,91 @@ fn a_sync_skips_what_it_cant_take_one_record_at_a_time() {
     let sent = vault.project_records();
     assert!(sent[0].record.contains("gadget:x") && sent[0].record.contains("future"));
     assert!(!sent[0].record.contains("bad alias"));
+}
+
+#[test]
+fn times_ahead_of_this_clock_are_taken_as_a_few_minutes_ahead() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "vault");
+    let id = new_id();
+    vault
+        .merge_projects(&[record(
+            &id,
+            &serde_json::json!({"name": {"v": "Ahead", "t": at(600)}, "color": {"v": "blue", "t": i64::MAX}}),
+        )])
+        .unwrap();
+    assert_eq!(names(&vault), ["Ahead"]);
+    let stored = vault.stored_project(&id).unwrap();
+    assert!(stored.times().all(|t| t <= at(6)), "{stored:?}");
+    // A change here still wins, without overflowing.
+    vault.update_project(&id, &input("Here")).unwrap();
+    assert_eq!(names(&vault), ["Here"]);
+}
+
+#[test]
+fn a_project_brought_back_by_a_removed_member_isnt_pruned() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "vault");
+    let day = 24 * 60 * 60 * 1000;
+    let id = new_id();
+    let json = serde_json::json!({
+        "name": {"v": "Back", "t": now_ms() - 600 * day},
+        "color": {"v": "blue", "t": now_ms() - 600 * day},
+        "removed": now_ms() - 500 * day,
+        "members": {
+            "host:kept": {"a": now_ms() - 600 * day},
+            "host:dropped": {"a": now_ms() - 600 * day, "r": now_ms() - 450 * day},
+        },
+    });
+    vault.merge_projects(&[record(&id, &json)]).unwrap();
+    assert_eq!(names(&vault), ["Back"]);
+    assert_eq!(vault.project_records().len(), 1);
+    assert_eq!(names(&vault), ["Back"]);
+}
+
+#[test]
+fn past_the_limit_live_projects_are_sent_before_removed_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "vault");
+    let t = at(0);
+    let live = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+    let removed: Vec<ProjectRecord> = (0..MAX_RECORDS)
+        .map(|n| {
+            record(
+                &new_id(),
+                &serde_json::json!({"name": {"v": format!("gone{n}"), "t": t}, "color": {"v": "blue", "t": t}, "removed": t + 1}),
+            )
+        })
+        .collect();
+    vault.merge_projects(&removed).unwrap();
+    vault
+        .merge_projects(&[record(
+            live,
+            &serde_json::json!({"name": {"v": "Live", "t": t}, "color": {"v": "blue", "t": t}}),
+        )])
+        .unwrap();
+    let sent = vault.project_records();
+    assert_eq!(sent.len(), MAX_RECORDS);
+    assert_eq!(sent[0].id, live);
+}
+
+#[test]
+fn a_snapshot_puts_back_what_a_failed_change_did() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "vault");
+    let before = vault.snapshot();
+    let id = vault.add_project(&input("Shop")).unwrap();
+    assert!(
+        vault
+            .set_project_member(
+                &id,
+                &login_member("6f1c2d3e-0000-4000-8000-0000000000aa"),
+                true
+            )
+            .is_err()
+    );
+    vault.restore(before);
+    assert_eq!(vault.projects(), Vec::<Project>::new());
 }
 
 #[test]

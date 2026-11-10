@@ -451,14 +451,13 @@ impl VaultRuntime {
         self.access_then(
             true,
             |vault| {
+                let before = vault.snapshot();
                 let result = match work(vault) {
                     Ok(result) => result,
                     Err(error) => {
                         // What a change that failed halfway made in memory
                         // must not go out with the next save.
-                        if let Err(reload) = vault.discard_changes() {
-                            log::warn!("vault: a failed change was not undone: {reload}");
-                        }
+                        vault.restore(before);
                         return Err(error);
                     }
                 };

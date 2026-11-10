@@ -36,7 +36,7 @@ fn pem() -> String {
             body.push(char::from(alphabet[(state % 64) as usize]));
         }
     }
-    format!("-----BEGIN TEST KEY-----\n{body}\n-----END TEST KEY-----")
+    format!("-----BEGIN TEST PRIVATE KEY-----\n{body}\n-----END TEST PRIVATE KEY-----")
 }
 
 fn variable(name: &str) -> LeakSecret {
@@ -817,14 +817,18 @@ fn no_two_keys_share_a_line_that_is_looked_for_alone() {
             let name = format!("{kind}_{n}");
             let text = real_key_with(dir.path(), &name, algorithm, passphrase);
             keys.push((name.clone(), text));
+            let path = dir.path().join(&name);
             if passphrase.is_none() {
+                let pass = SecretString::from("correct horse");
+                if let Ok(text) = convert(&path, None, KeyFileFormat::Pkcs8, Some(&pass), None) {
+                    keys.push((format!("{name} as encrypted PKCS#8"), text.to_string()));
+                }
                 for format in [
                     KeyFileFormat::Ppk3,
                     KeyFileFormat::Ppk2,
                     KeyFileFormat::Pkcs8,
                     KeyFileFormat::Pem,
                 ] {
-                    let path = dir.path().join(&name);
                     if let Ok(text) = convert(&path, None, format, None, None) {
                         keys.push((format!("{name} as {format:?}"), text.to_string()));
                     }
@@ -1108,4 +1112,130 @@ fn keys_are_found_however_their_lines_are_laid_out() {
             "{name}: twice in YAML"
         );
     }
+}
+
+/// Random bytes from a counter, the same on every run.
+fn noise(seed: u32, len: usize) -> Vec<u8> {
+    let mut state = seed.max(1);
+    (0..len)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state.to_le_bytes()[0]
+        })
+        .collect()
+}
+
+/// `bytes` in base64, wrapped at `width` as `openssl base64` (64) and GNU
+/// `base64` (76) write it.
+fn wrapped(bytes: &[u8], width: usize) -> String {
+    let encoded = Base64::encode_string(bytes);
+    encoded
+        .as_bytes()
+        .chunks(width)
+        .map(|chunk| std::str::from_utf8(chunk).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn found_with(dir: &Path, text: &str, matcher: &Matcher) -> usize {
+    let path = file(dir, "found.txt", text);
+    let files = [ScanFile {
+        path,
+        place: tracked(),
+        size: 0,
+    }];
+    scan_files(&files, matcher, &ScanControl::default())
+        .unwrap()
+        .findings
+        .len()
+}
+
+#[test]
+fn other_files_of_the_same_kind_in_base64_are_not_leaks() {
+    let dir = tempfile::tempdir().unwrap();
+    // PKCS#12 bundles share their first bytes (version, content type and
+    // lengths): their base64 shares the first line.
+    let header = [
+        0x30, 0x82, 0x0b, 0x59, 0x02, 0x01, 0x03, 0x30, 0x82, 0x0b, 0x1f, 0x06, 0x09, 0x2a, 0x86,
+        0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x01, 0xa0, 0x82, 0x0b, 0x10, 0x04, 0x82, 0x0b, 0x0c,
+        0x30, 0x82, 0x0b, 0x08, 0x30, 0x82, 0x05, 0x3f, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7,
+        0x0d, 0x01, 0x07, 0x06, 0xa0, 0x82, 0x05, 0x30, 0x30, 0x82, 0x05, 0x2c, 0x02, 0x01, 0x00,
+    ];
+    let bundle = |seed| [&header[..], &noise(seed, 1200)].concat();
+    for width in [64, 76] {
+        let ours = wrapped(&bundle(7), width);
+        let theirs = wrapped(&bundle(9), width);
+        assert_eq!(ours.lines().next(), theirs.lines().next());
+        let matcher = Matcher::new(vec![known("BUILD_CERTIFICATE_BASE64", &ours)]);
+        assert_eq!(
+            found_with(dir.path(), &theirs, &matcher),
+            0,
+            "width {width}"
+        );
+        assert_eq!(found_with(dir.path(), &ours, &matcher), 1, "width {width}");
+        // As one line, as `base64 -w0` or a JSON field has it.
+        let one_line = format!("{{\"p12\":\"{}\"}}", ours.replace('\n', ""));
+        assert_eq!(
+            found_with(dir.path(), &one_line, &matcher),
+            1,
+            "width {width}"
+        );
+    }
+
+    // Plists in base64 share their first lines.
+    let plist = |seed| {
+        let value = Base64::encode_string(&noise(seed, 48));
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>Token</key><string>{value}</string></dict></plist>\n"
+        )
+    };
+    let ours = wrapped(plist(3).as_bytes(), 76);
+    let theirs = wrapped(plist(5).as_bytes(), 76);
+    assert_eq!(
+        ours.lines().take(2).collect::<Vec<_>>(),
+        theirs.lines().take(2).collect::<Vec<_>>()
+    );
+    let matcher = Matcher::new(vec![known("PROFILE", &ours)]);
+    assert_eq!(found_with(dir.path(), &theirs, &matcher), 0);
+    assert_eq!(found_with(dir.path(), &ours, &matcher), 1);
+}
+
+#[test]
+fn a_pgp_public_key_is_not_a_leak_of_its_private_key() {
+    let dir = tempfile::tempdir().unwrap();
+    // GnuPG's layout: a secret key packet holds the public key packet's
+    // body, so after their 3-byte headers both blocks' base64 is the same
+    // until the secret part.
+    let public_part = noise(11, 400);
+    let secret_part = noise(13, 600);
+    let len = |n: usize| u16::try_from(n).unwrap().to_be_bytes();
+    let private_packet = [
+        &[0x95][..],
+        &len(public_part.len() + secret_part.len()),
+        &public_part,
+        &secret_part,
+    ]
+    .concat();
+    let public_packet = [&[0x99][..], &len(public_part.len()), &public_part].concat();
+    let armor = |kind: &str, body: &[u8]| {
+        format!(
+            "-----BEGIN PGP {kind} KEY BLOCK-----\n\n{}\n=AbCd\n-----END PGP {kind} KEY BLOCK-----\n",
+            wrapped(body, 64)
+        )
+    };
+    let private = armor("PRIVATE", &private_packet);
+    let public = armor("PUBLIC", &public_packet);
+    let shared = private
+        .lines()
+        .filter(|line| line.len() == 64 && public.lines().any(|other| other == *line))
+        .count();
+    assert!(shared > 3, "the blocks share {shared} lines");
+
+    let matcher = Matcher::new(vec![known("GPG_PRIVATE_KEY", &private)]);
+    assert_eq!(found_with(dir.path(), &public, &matcher), 0);
+    assert_eq!(found_with(dir.path(), &private, &matcher), 1);
+    let session = serde_json::json!({ "content": private }).to_string();
+    assert_eq!(found_with(dir.path(), &session, &matcher), 1);
 }

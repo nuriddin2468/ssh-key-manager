@@ -209,10 +209,11 @@ pub struct Form {
 ///   inside a larger base64 string (`Authorization: Basic …`) too; and for
 ///   an address with a password (`postgres://user:pw@host`), the password
 ///   alone, as it is and decoded.
-/// - Several lines (a private key): with `\n` and with `\r\n`, escaped in
-///   JSON once and twice, with `\n` written out (as in a `.env` file), in
-///   base64, and the long lines of its private body on their own
-///   ([`body_lines`]), so it is found whatever escaped the line breaks.
+/// - Several lines: with `\n` and with `\r\n`, escaped in JSON once and
+///   twice, with `\n` written out (as in a `.env` file), in base64, as one
+///   line if it is all base64, and for a private key the long lines of its
+///   body on their own ([`body_lines`]), so it is found however its lines
+///   are laid out.
 pub fn forms(value: &str) -> Vec<Form> {
     let mut out: Vec<Form> = Vec::new();
     if !searchable(value) {
@@ -239,6 +240,9 @@ pub fn forms(value: &str) -> Vec<Form> {
         push(lf.replace('\n', "\\n").into_bytes(), None, None);
         for core in base64_cores(lf.as_bytes()) {
             push(core.to_vec(), Some(Encoding::Base64), None);
+        }
+        if let Some(one_line) = unwrapped(&lf) {
+            push(one_line.as_bytes().to_vec(), None, None);
         }
         for (index, line) in body_lines(&lf) {
             push(line.as_bytes().to_vec(), None, Some(index));
@@ -275,39 +279,57 @@ pub fn forms(value: &str) -> Vec<Form> {
     out
 }
 
+/// Where [`body_lines`] is in a value.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Block {
+    /// Outside a private key: lines are not looked for alone.
+    Other,
+    /// Between `-----BEGIN … PRIVATE KEY-----` and `-----END`.
+    PrivateKey,
+    /// PuTTY's `Private-Lines`, up to the next header (`Private-MAC`).
+    PuttyPrivate,
+}
+
 /// The lines of a multi-line value worth looking for alone, with their
-/// index: long lines of base64 in its private parts. Left out: `-----BEGIN`
-/// and `-----END`, `Key: value` headers (`Proc-Type`, PuTTY's), the blocks
-/// that are public anyway (a certificate, a public key, PuTTY's
-/// `Public-Lines`), and the first line of an OpenSSH key, which every key
-/// shares. What is left is unique to the key: no two keys share such a
-/// line, whatever their kind, format or comment (see the tests).
+/// index: long base64 lines of a private key's body, in a PEM or OpenSSH
+/// `-----BEGIN … PRIVATE KEY-----` block or PuTTY's `Private-Lines`. Left
+/// out: `Key: value` headers (`Proc-Type`, `DEK-Info`) and the first line of
+/// an OpenSSH key, which every key shares. What is left is unique to the
+/// key: no two keys share such a line, whatever their kind, format or
+/// comment (see the tests). Other multi-line values — a certificate, a
+/// PKCS#12 bundle or plist in base64, a PGP key, whose lines may be the
+/// same as another file's — are found by their whole forms only.
 fn body_lines(text: &str) -> Vec<(u32, &str)> {
     let mut out = Vec::new();
-    let mut public = false;
+    let mut block = Block::Other;
     for (index, line) in text.lines().map(str::trim).enumerate() {
         if let Some(header) = line.strip_prefix("-----BEGIN ") {
-            public = header.contains("CERTIFICATE") || header.contains("PUBLIC KEY");
+            // Not PGP's: its private block starts with the public key.
+            block = if header.ends_with(" PRIVATE KEY-----") || header == "PRIVATE KEY-----" {
+                Block::PrivateKey
+            } else {
+                Block::Other
+            };
             continue;
         }
         if line.starts_with("-----END ") {
-            public = false;
-            continue;
-        }
-        if line.starts_with("Public-Lines:") {
-            public = true;
+            block = Block::Other;
             continue;
         }
         if line.starts_with("Private-Lines:") {
-            public = false;
+            block = Block::PuttyPrivate;
             continue;
         }
-        if public
+        if line.contains(':') {
+            if block == Block::PuttyPrivate {
+                block = Block::Other;
+            }
+            continue;
+        }
+        if block == Block::Other
             || line.starts_with(OPENSSH_MAGIC)
             || line.chars().count() < MIN_LINE_CHARS
-            || !line
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"+/=-_".contains(&b))
+            || !is_base64_line(line)
             || !distinct_at_least(line, MIN_LINE_DISTINCT)
         {
             continue;
@@ -315,6 +337,23 @@ fn body_lines(text: &str) -> Vec<(u32, &str)> {
         out.push((u32::try_from(index).unwrap_or(u32::MAX), line));
     }
     out
+}
+
+fn is_base64_line(line: &str) -> bool {
+    line.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"+/=-_".contains(&b))
+}
+
+/// A value of base64 lines only (a PKCS#12 bundle, a certificate as `base64`
+/// writes it) as one line, as `base64 -w0` or a JSON field would have it.
+fn unwrapped(text: &str) -> Option<Zeroizing<String>> {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    (lines.len() > 1 && lines.iter().all(|line| is_base64_line(line)))
+        .then(|| Zeroizing::new(lines.concat()))
 }
 
 /// At most [`MAX_CHARS`] characters of `value`.

@@ -299,17 +299,15 @@ fn real_tempdir() -> (tempfile::TempDir, PathBuf) {
 fn a_code_folder_is_searched_once_whatever_its_case_or_links() {
     let (_dir, root) = real_tempdir();
     std::fs::create_dir_all(root.join("Code").join("shop").join(".git")).unwrap();
-    // `code` and `Code` are one folder where the disk ignores case.
-    let mut roots: Vec<PathBuf> = ["code", "Code"]
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(root.join("Code"), root.join("work")).unwrap();
+    // `code` and `Code` are one folder where the disk ignores case; `work`
+    // is a link to it where links can be made.
+    let roots: Vec<PathBuf> = ["code", "Code", "work"]
         .iter()
         .map(|folder| root.join(folder))
         .filter(|path| path.is_dir())
         .collect();
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(root.join("Code"), root.join("work")).unwrap();
-        roots.push(root.join("work"));
-    }
     let found = find_repositories(&roots);
     let texts: Vec<String> = found
         .iter()

@@ -5,19 +5,28 @@
 //! the vault runtime keeps ([`crate::vault::VaultRuntime::projects_copy`]),
 //! so projects still show next to the SSH sections; changing one needs the
 //! vault. A folder joins a project only from the system folder dialog this
-//! side opens ([`projects_add_folder`]), never by a path the page names.
+//! side opens ([`projects_add_folder`]) or from a suggestion this side made
+//! ([`projects_accept_suggestion`]), never by a path the page names.
+//!
+//! Suggestions (`sshkm_core::vault::projects::suggest`) change nothing by
+//! themselves: the user accepts or dismisses each one.
 
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use sshkm_core::ErrorCode;
+use serde::{Deserialize, Serialize};
+use sshkm_core::config::{HostKind, SshConfig};
 use sshkm_core::paths::home_dir;
+use sshkm_core::vault::projects::suggest::{self, Declined, HostFacts, ProjectSuggestion};
 use sshkm_core::vault::projects::{self, Project, ProjectInput, ProjectMember};
+use sshkm_core::{ErrorCode, fsutil, keys};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use super::{Shared, blocking};
 use crate::confirm::Localized;
 use crate::error::{AppError, AppResult};
+use crate::state::AppState;
 
 /// Emitted when a sync with one of the user's devices changed the projects.
 pub const CHANGED_EVENT: &str = "projects-changed";
@@ -121,7 +130,12 @@ pub async fn projects_add_folder(
         let name = state
             .vault
             .with(&app, |vault| Ok(vault.project(&id)?.name))?;
-        let Some(folder) = pick_folder(&app, &name)? else {
+        let title = Localized::new(
+            format!("Add a folder to {name}"),
+            format!("Добавить папку в {name}"),
+            format!("{name} loyihasiga papka qo‘shish"),
+        );
+        let Some(folder) = pick_folder(&app, title.pick())? else {
             return Ok(None);
         };
         let text = projects::folder_text(&folder, home_dir().as_deref())?;
@@ -134,15 +148,8 @@ pub async fn projects_add_folder(
     .await
 }
 
-fn pick_folder(app: &AppHandle, project: &str) -> AppResult<Option<PathBuf>> {
-    let mut dialog = app.dialog().file().set_title(
-        Localized::new(
-            format!("Add a folder to {project}"),
-            format!("Добавить папку в {project}"),
-            format!("{project} loyihasiga papka qo‘shish"),
-        )
-        .pick(),
-    );
+fn pick_folder(app: &AppHandle, title: &str) -> AppResult<Option<PathBuf>> {
+    let mut dialog = app.dialog().file().set_title(title);
     if let Some(home) = home_dir() {
         dialog = dialog.set_directory(home);
     }
@@ -162,4 +169,240 @@ fn pick_folder(app: &AppHandle, project: &str) -> AppResult<Option<PathBuf>> {
         )));
     }
     Ok(Some(path))
+}
+
+/// What the user said about suggestions on this computer: what they
+/// turned down, and the folders they asked to look into for Git working
+/// trees besides the usual code folders.
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct SuggestionPrefs {
+    declined: Declined,
+    folders: Vec<PathBuf>,
+}
+
+const PREFS_FILE: &str = "project-suggestions.json";
+/// Most dismissals and folders kept.
+const MAX_PREFS: usize = 500;
+
+/// The suggestions made last: the only ones [`projects_accept_suggestion`]
+/// takes, so the folders it adds are ones this side found.
+static OFFERED: Mutex<Vec<ProjectSuggestion>> = Mutex::new(Vec::new());
+
+fn offered() -> MutexGuard<'static, Vec<ProjectSuggestion>> {
+    OFFERED.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn prefs_path(state: &AppState) -> PathBuf {
+    state.vault.data_dir().join(PREFS_FILE)
+}
+
+fn load_prefs(state: &AppState) -> SuggestionPrefs {
+    std::fs::read(prefs_path(state))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn save_prefs(state: &AppState, prefs: &SuggestionPrefs) -> AppResult<()> {
+    let json = serde_json::to_vec_pretty(prefs)
+        .map_err(|e| AppError::invalid(format!("suggestion settings: {e}")))?;
+    Ok(fsutil::atomic_write(&prefs_path(state), &json, 0o600)?)
+}
+
+/// The hosts of `~/.ssh/config` as suggestions see them: each alias of a
+/// `Host` block that isn't a pattern, with the fingerprints of the keys its
+/// `IdentityFile`s name.
+fn host_facts(state: &AppState) -> AppResult<Vec<HostFacts>> {
+    let config = SshConfig::load(&state.paths.config)?;
+    let fingerprints: Vec<(String, String)> = keys::scan(&state.paths.dir)?
+        .keys
+        .into_iter()
+        .filter_map(|key| Some((key.private_path?, key.fingerprint?)))
+        .collect();
+    let usage = config.identity_usage(&state.paths);
+    let mut facts = Vec::new();
+    for host in config.hosts() {
+        if host.kind != HostKind::Host || host.is_wildcard {
+            continue;
+        }
+        let keys: Vec<String> = usage
+            .iter()
+            .filter(|u| u.host_id == Some(host.id) && u.resolved)
+            .filter_map(|u| {
+                fingerprints
+                    .iter()
+                    .find(|(path, _)| *path == u.path)
+                    .map(|(_, fingerprint)| fingerprint.clone())
+            })
+            .collect();
+        for alias in host.patterns.iter().filter(|p| !p.starts_with('!')) {
+            facts.push(HostFacts {
+                alias: alias.clone(),
+                host_name: host.host_name.clone(),
+                proxy_jump: host.proxy_jump.clone(),
+                keys: keys.clone(),
+            });
+        }
+    }
+    Ok(facts)
+}
+
+/// Where to look for Git working trees: the usual code folders in the home
+/// folder that exist, and those the user added.
+fn code_roots(prefs: &SuggestionPrefs) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = home_dir()
+        .map(|home| {
+            suggest::CODE_FOLDERS
+                .iter()
+                .map(|folder| home.join(folder))
+                .filter(|path| path.is_dir())
+                .collect()
+        })
+        .unwrap_or_default();
+    for folder in &prefs.folders {
+        if folder.is_dir() && !roots.contains(folder) {
+            roots.push(folder.clone());
+        }
+    }
+    roots
+}
+
+fn suggestions(app: &AppHandle, state: &AppState) -> AppResult<Vec<ProjectSuggestion>> {
+    let prefs = load_prefs(state);
+    let hosts = host_facts(state)?;
+    let repositories = suggest::find_repositories(&code_roots(&prefs));
+    let home = home_dir();
+    let found = state.vault.with_quietly(app, |vault| {
+        let projects = vault.projects();
+        let groups = vault.environment_groups();
+        let logins = vault.suggestion_logins();
+        Ok(suggest::suggest(
+            &suggest::Sources {
+                hosts: &hosts,
+                environment_groups: &groups,
+                logins: &logins,
+                repositories: &repositories,
+                projects: &projects,
+                home: home.as_deref(),
+            },
+            &prefs.declined,
+        ))
+    })?;
+    offered().clone_from(&found);
+    Ok(found)
+}
+
+/// Projects the app proposes from environments, Git working trees in the
+/// usual code folders (only their `.git/config` is read), `~/.ssh/config`
+/// and the vault's KeePass groups and tags. Nothing changes until the user
+/// accepts one. Needs the vault: projects live in it.
+#[tauri::command]
+pub async fn projects_suggestions(
+    app: AppHandle,
+    state: State<'_, Shared>,
+) -> AppResult<Vec<ProjectSuggestion>> {
+    blocking(&state, move |state| suggestions(&app, state)).await
+}
+
+/// Makes the suggestion `key` a project named and colored as `input`, or
+/// adds to the existing project it names, with the `members` the user kept.
+/// Members that weren't in the suggestion are refused; those the user left
+/// out aren't suggested again.
+#[tauri::command]
+pub async fn projects_accept_suggestion(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    key: String,
+    input: ProjectInput,
+    members: Vec<ProjectMember>,
+) -> AppResult<Project> {
+    blocking(&state, move |state| {
+        let suggestion = offered()
+            .iter()
+            .find(|s| s.key == key)
+            .cloned()
+            .ok_or_else(|| AppError::not_found("the suggestion; look for suggestions again"))?;
+        if let Some(member) = members.iter().find(|m| !suggestion.offers(m)) {
+            return Err(AppError::invalid(format!(
+                "not part of the suggestion: {member:?}"
+            )));
+        }
+        let project = state.vault.change(&app, &state.backup_dir, |vault| {
+            let id = match &suggestion.existing {
+                Some(id) => id.clone(),
+                None => vault.add_project(&input)?,
+            };
+            for member in &members {
+                vault.set_project_member(&id, member, true)?;
+            }
+            Ok(vault.project(&id)?)
+        })?;
+        offered().retain(|s| s.key != key);
+        let mut prefs = load_prefs(state);
+        let before = prefs.declined.clone();
+        prefs.declined.left_out(&suggestion, &members);
+        if prefs.declined != before {
+            save_prefs(state, &prefs)?;
+        }
+        Ok(project)
+    })
+    .await
+}
+
+/// Stops suggesting `key` on this computer.
+#[tauri::command]
+pub async fn projects_dismiss_suggestion(state: State<'_, Shared>, key: String) -> AppResult<()> {
+    blocking(&state, move |state| {
+        let mut prefs = load_prefs(state);
+        if prefs.declined.keys.len() < MAX_PREFS && prefs.declined.keys.insert(key.clone()) {
+            save_prefs(state, &prefs)?;
+        }
+        offered().retain(|s| s.key != key);
+        Ok(())
+    })
+    .await
+}
+
+/// Suggests again what was turned down on this computer.
+#[tauri::command]
+pub async fn projects_restore_suggestions(state: State<'_, Shared>) -> AppResult<()> {
+    blocking(&state, move |state| {
+        let mut prefs = load_prefs(state);
+        if prefs.declined != Declined::default() {
+            prefs.declined = Declined::default();
+            save_prefs(state, &prefs)?;
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// Asks for a folder in a system dialog to look into for Git working trees
+/// from now on, and returns the suggestions with it; `None` when the dialog
+/// was cancelled.
+#[tauri::command]
+pub async fn projects_suggest_in_folder(
+    app: AppHandle,
+    state: State<'_, Shared>,
+) -> AppResult<Option<Vec<ProjectSuggestion>>> {
+    blocking(&state, move |state| {
+        // No dialog while the vault is locked.
+        state.vault.with(&app, |_| Ok(()))?;
+        let title = Localized::new(
+            "Choose a folder with your code",
+            "Выберите папку с вашим кодом",
+            "Kodingiz joylashgan papkani tanlang",
+        );
+        let Some(folder) = pick_folder(&app, title.pick())? else {
+            return Ok(None);
+        };
+        let mut prefs = load_prefs(state);
+        if !prefs.folders.contains(&folder) && prefs.folders.len() < MAX_PREFS {
+            prefs.folders.push(folder);
+            save_prefs(state, &prefs)?;
+        }
+        suggestions(&app, state).map(Some)
+    })
+    .await
 }

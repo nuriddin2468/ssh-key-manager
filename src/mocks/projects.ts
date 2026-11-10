@@ -2,11 +2,14 @@
 // keys, environments, logins and folders together, as the real backend keeps
 // them in the vault. While the mock vault is locked the list shows without
 // logins and changes fail, as with the copy the backend keeps for then.
+// Suggestions: a few Git folders, one of them for the existing Shop, and
+// what a folder picked to look into finds.
 
 import type { Project } from '@/bindings/Project';
 import type { ProjectColor } from '@/bindings/ProjectColor';
 import type { ProjectInput } from '@/bindings/ProjectInput';
 import type { ProjectMember } from '@/bindings/ProjectMember';
+import type { ProjectSuggestion } from '@/bindings/ProjectSuggestion';
 import { isMockEntry, isMockVaultUnlocked, mockEntryId } from './vault';
 
 type Handler = (args: Record<string, unknown>) => unknown;
@@ -160,6 +163,102 @@ function setMember(
 
 let nextFolder = 1;
 
+const suggestion = (
+  key: string,
+  name: string,
+  reasons: ProjectSuggestion['reasons'],
+  members: Partial<Pick<ProjectSuggestion, 'folders' | 'hosts' | 'keys' | 'environments'>>,
+): ProjectSuggestion => ({
+  key,
+  name,
+  color: 'teal',
+  existing: null,
+  reasons,
+  folders: [],
+  hosts: [],
+  keys: [],
+  environments: [],
+  logins: [],
+  ...members,
+});
+
+const candidates: ProjectSuggestion[] = [
+  suggestion(
+    'billing-service',
+    'billing-service',
+    [{ type: 'gitFolder', folder: '~/code/billing-service' }],
+    {
+      folders: ['~/code/billing-service'],
+      keys: ['SHA256:u9Fh2KdL7pQ3zX8mV1bN6rT4wY0sGcJ5aE2iOkHjUyB'],
+    },
+  ),
+  suggestion('shop', 'shop', [{ type: 'gitFolder', folder: '~/code/shop-admin' }], {
+    folders: ['~/code/shop-admin'],
+  }),
+  suggestion('dotfiles', 'dotfiles', [{ type: 'gitFolder', folder: '~/dotfiles' }], {
+    folders: ['~/dotfiles'],
+  }),
+];
+/** Found once the user picks a folder to look into. */
+const inPickedFolder = suggestion(
+  'client-portal',
+  'client-portal',
+  [{ type: 'gitFolder', folder: '~/work/client-portal' }],
+  { folders: ['~/work/client-portal'] },
+);
+const dismissed = new Set<string>();
+/** Members left out when a suggestion was accepted, by its key: not offered again. */
+const leftOut = new Map<string, Set<string>>();
+let offered: ProjectSuggestion[] = [];
+
+const COLORS: ProjectColor[] = [
+  'teal',
+  'blue',
+  'indigo',
+  'violet',
+  'pink',
+  'red',
+  'orange',
+  'amber',
+  'green',
+  'slate',
+];
+
+function nextColor(taken: ProjectColor[]): ProjectColor {
+  const counts = COLORS.map((c) => taken.filter((t) => t === c).length);
+  return COLORS[counts.indexOf(Math.min(...counts))] ?? 'teal';
+}
+
+/** What the backend's `suggest` gives for the candidates: taken members and dismissals left out. */
+function suggestions(): ProjectSuggestion[] {
+  const held = (pick: (p: MockProject) => string[]) => new Set(projects.flatMap(pick));
+  const folders = held((p) => p.folders);
+  const keys = held((p) => p.keys);
+  const colors = projects.map((p) => p.color);
+  offered = candidates
+    .filter((c) => !dismissed.has(c.key))
+    .map((c) => {
+      const existing = projects.find((p) => p.name.toLowerCase() === c.key);
+      const declined = leftOut.get(c.key) ?? new Set<string>();
+      const s: ProjectSuggestion = {
+        ...c,
+        folders: c.folders.filter((f) => !folders.has(f) && !declined.has(f)),
+        keys: c.keys.filter((k) => !keys.has(k) && !declined.has(k)),
+      };
+      if (existing) {
+        s.existing = existing.id;
+        s.name = existing.name;
+        s.color = existing.color;
+      } else {
+        s.color = nextColor(colors);
+        colors.push(s.color);
+      }
+      return s;
+    })
+    .filter((s) => s.folders.length + s.keys.length > 0);
+  return offered;
+}
+
 export const projectsHandlers: Record<string, Handler> = {
   projects_list: () => {
     const unlocked = isMockVaultUnlocked();
@@ -204,6 +303,58 @@ export const projectsHandlers: Record<string, Handler> = {
     const p = editable(id);
     if (p instanceof Promise) return p;
     return setMember(p, m, Boolean(included)) ?? view(p, true);
+  },
+  projects_suggestions: () => {
+    if (!isMockVaultUnlocked()) return fail('vault_locked', 'the vault is locked');
+    resolveLogins();
+    return suggestions();
+  },
+  projects_accept_suggestion: ({ key, input, members }) => {
+    if (!isMockVaultUnlocked()) return fail('vault_locked', 'the vault is locked');
+    const s = offered.find((o) => o.key === key);
+    if (!s) return fail('not_found', 'the suggestion; look for suggestions again');
+    const chosen = members as ProjectMember[];
+    let target = s.existing ? projects.find((p) => p.id === s.existing) : undefined;
+    if (!target) {
+      const { name: text, color } = input as ProjectInput;
+      const name = checkName(text);
+      if (typeof name !== 'string') return name;
+      if (taken(name)) return fail('already_exists', name);
+      target = project(crypto.randomUUID(), name, color, {}, []);
+      projects.push(target);
+    }
+    for (const m of chosen) {
+      if (m.type === 'folder' && s.folders.includes(m.path)) target.folders.push(m.path);
+      else if (m.type === 'key' && s.keys.includes(m.fingerprint)) target.keys.push(m.fingerprint);
+      else return fail('invalid_input', 'not part of the suggestion');
+    }
+    target.modified = now();
+    const declined = leftOut.get(s.key) ?? new Set<string>();
+    for (const value of [...s.folders, ...s.keys]) {
+      const keptKey = chosen.some(
+        (m) =>
+          (m.type === 'folder' && m.path === value) ||
+          (m.type === 'key' && m.fingerprint === value),
+      );
+      if (!keptKey) declined.add(value);
+    }
+    leftOut.set(s.key, declined);
+    offered = offered.filter((o) => o.key !== key);
+    return view(target, true);
+  },
+  projects_dismiss_suggestion: ({ key }) => {
+    dismissed.add(String(key));
+    offered = offered.filter((o) => o.key !== key);
+  },
+  projects_restore_suggestions: () => {
+    dismissed.clear();
+    leftOut.clear();
+  },
+  // Stands in for the folder dialog: the picked folder holds one more project.
+  projects_suggest_in_folder: () => {
+    if (!isMockVaultUnlocked()) return fail('vault_locked', 'the vault is locked');
+    if (!candidates.includes(inPickedFolder)) candidates.push(inPickedFolder);
+    return suggestions();
   },
   // Stands in for the system folder dialog: picks a new folder under ~/code.
   projects_add_folder: ({ id }) => {

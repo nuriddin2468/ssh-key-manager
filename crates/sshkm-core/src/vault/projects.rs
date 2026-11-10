@@ -35,6 +35,8 @@ use super::own_devices::time as record_time;
 use super::{Vault, in_group, rfc3339};
 use crate::{Error, Result, fsutil};
 
+pub mod suggest;
+
 const PREFIX: &str = "sshkm.project.";
 /// Most projects a vault has, not counting removed ones.
 pub const MAX_PROJECTS: usize = 256;
@@ -783,6 +785,34 @@ impl Vault {
             entry.tags = tags;
             entry.times.last_modification = Some(Times::now());
         }
+    }
+
+    /// The vault's logins outside the recycle bin as suggestions see them:
+    /// their KeePass group and tags.
+    pub fn suggestion_logins(&self) -> Vec<suggest::LoginFacts> {
+        self.db
+            .iter_all_entries()
+            .filter(|entry| !envs::is_environment(entry))
+            .filter_map(|entry| {
+                let summary = self.summary(&entry);
+                (!summary.in_trash).then(|| suggest::LoginFacts {
+                    id: summary.id,
+                    group: summary.group,
+                    tags: entry.tags.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// The project groups of the environments outside the recycle bin.
+    pub fn environment_groups(&self) -> Vec<String> {
+        let groups: BTreeSet<String> = self
+            .environments()
+            .into_iter()
+            .filter(|env| !env.in_trash && !env.project.is_empty())
+            .map(|env| env.project)
+            .collect();
+        groups.into_iter().collect()
     }
 
     /// The ids of the logins outside the recycle bin, by each of their

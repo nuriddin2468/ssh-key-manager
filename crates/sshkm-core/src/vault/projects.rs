@@ -317,16 +317,26 @@ impl Stored {
             .fold(now_ms(), |now, t| now.max(t.saturating_add(1)))
     }
 
-    /// Brings every time later than `latest` back to it: a device whose
-    /// clock ran ahead can't make its changes win for good, and its records
-    /// are still taken.
-    fn clamp(&mut self, latest: i64) {
-        self.name.t = self.name.t.min(latest);
-        self.color.t = self.color.t.min(latest);
-        self.removed = self.removed.map(|t| t.min(latest));
-        for presence in self.members.values_mut() {
-            presence.a = presence.a.min(latest);
-            presence.r = presence.r.map(|t| t.min(latest));
+    /// Brings every time later than `latest` back: to the time `mine` (this
+    /// device's copy) has for it, if any, else to `latest`. A device whose
+    /// clock ran ahead can't make its changes win for good, its records are
+    /// still taken, and a time taken once doesn't climb again with this
+    /// clock when the same record comes back.
+    fn clamp(&mut self, latest: i64, mine: Option<&Self>) {
+        let cap = |t: i64, known: Option<i64>| {
+            if t > latest {
+                known.map_or(latest, |k| k.min(latest))
+            } else {
+                t
+            }
+        };
+        self.name.t = cap(self.name.t, mine.map(|m| m.name.t));
+        self.color.t = cap(self.color.t, mine.map(|m| m.color.t));
+        self.removed = self.removed.map(|t| cap(t, mine.and_then(|m| m.removed)));
+        for (key, presence) in &mut self.members {
+            let known = mine.and_then(|m| m.members.get(key));
+            presence.a = cap(presence.a, known.map(|k| k.a));
+            presence.r = presence.r.map(|t| cap(t, known.and_then(|k| k.r)));
         }
     }
 
@@ -741,7 +751,7 @@ impl Vault {
     /// come in doesn't matter. Returns whether anything changed.
     pub fn merge_projects(&mut self, theirs: &[ProjectRecord]) -> Result<bool> {
         let latest = now_ms() + MAX_AHEAD_MS;
-        let mut changed = false;
+        let mut changed = self.heal_clock();
         let mut live = self
             .stored_projects()
             .iter()
@@ -751,8 +761,8 @@ impl Vault {
             let Some(mut incoming) = parse(&record.id, &record.record) else {
                 continue;
             };
-            incoming.clamp(latest);
             let mine = self.stored_project(&record.id);
+            incoming.clamp(latest, mine.as_ref());
             let was_live = mine.as_ref().is_some_and(Stored::is_live);
             let merged = match mine.clone() {
                 Some(mut mine) => {
@@ -830,6 +840,21 @@ impl Vault {
         Ok(changed)
     }
 
+    /// Brings this vault's own times later than [`MAX_AHEAD_MS`] from now
+    /// back to that, so that a device whose clock was once ahead heals once
+    /// it is right. Returns whether any changed.
+    fn heal_clock(&mut self) -> bool {
+        let latest = now_ms() + MAX_AHEAD_MS;
+        let mut changed = false;
+        for (id, mut stored) in self.stored_projects() {
+            if stored.times().any(|t| t > latest) {
+                stored.clamp(latest, None);
+                changed |= self.put_project(&id, &stored).is_ok();
+            }
+        }
+        changed
+    }
+
     /// Forgets what was removed longer ago than [`KEEP_REMOVED_MS`].
     fn prune_projects(&mut self) {
         let before = now_ms() - KEEP_REMOVED_MS;
@@ -854,24 +879,27 @@ impl Vault {
         self.write_tags();
     }
 
-    /// A login tagged (in KeePassXC) with a live project's name that was
-    /// never put into that project nor taken out of it joins it: the
-    /// `project/` tag says so explicitly, unlike the user's own tags. Not
-    /// when another project has or had that name: the tag may be that one's.
+    /// A login tagged (in KeePassXC) with a live project's name joins it:
+    /// the `project/` tag says so explicitly, unlike the user's own tags.
+    /// Not when a project that has or had that name — this one, one removed
+    /// or joined into it, one renamed — holds the login or took it out: the
+    /// tag is then that project's doing, and the record says what holds.
     fn adopt_tagged_logins(&mut self) {
         let all = self.stored_projects();
-        let named_elsewhere = |id: &str, name: &str| {
-            all.iter().any(|(other, stored)| {
-                other != id
-                    && (same_name(&stored.name.v, name)
-                        || stored.aka.iter().any(|old| same_name(old, name)))
+        let mut live: BTreeMap<String, &str> = BTreeMap::new();
+        for (id, stored) in all.iter().filter(|(_, stored)| stored.is_live()) {
+            // Of two live projects with one name, the one they join into.
+            live.entry(stored.name.v.to_lowercase())
+                .or_insert(id.as_str());
+        }
+        let decided = |name: &str, login: &str| {
+            let key = format!("login:{login}");
+            all.iter().any(|(_, stored)| {
+                (same_name(&stored.name.v, name)
+                    || stored.aka.iter().any(|old| same_name(old, name)))
+                    && stored.members.contains_key(&key)
             })
         };
-        let live: BTreeMap<String, &str> = all
-            .iter()
-            .filter(|(id, stored)| stored.is_live() && !named_elsewhere(id, &stored.name.v))
-            .map(|(id, stored)| (stored.name.v.to_lowercase(), id.as_str()))
-            .collect();
         let mut adopted: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for entry in self.db.iter_all_entries() {
             if envs::is_environment(&entry) {
@@ -883,16 +911,9 @@ impl Vault {
                 .iter()
                 .filter_map(|t| t.trim().strip_prefix(TAG_PREFIX))
             {
-                let Some(id) = live.get(&name.to_lowercase()) else {
-                    continue;
-                };
-                let known = all
-                    .iter()
-                    .find(|(other, _)| other == id)
-                    .is_some_and(|(_, stored)| {
-                        stored.members.contains_key(&format!("login:{login}"))
-                    });
-                if !known {
+                if let Some(id) = live.get(&name.to_lowercase())
+                    && !decided(name, &login)
+                {
                     adopted
                         .entry((*id).to_owned())
                         .or_default()
@@ -1055,10 +1076,15 @@ impl Vault {
         parse(id, json)
     }
 
+    /// A live project, to change: with times ahead of this clock brought
+    /// back ([`Self::heal_clock`]), so a change's time stays near now.
     fn live_project(&self, id: &str) -> Result<Stored> {
-        self.stored_project(id)
+        let mut stored = self
+            .stored_project(id)
             .filter(Stored::is_live)
-            .ok_or_else(|| Error::NotFound(format!("project {id}")))
+            .ok_or_else(|| Error::NotFound(format!("project {id}")))?;
+        stored.clamp(now_ms() + MAX_AHEAD_MS, None);
+        Ok(stored)
     }
 
     fn put_project(&mut self, id: &str, stored: &Stored) -> Result<()> {

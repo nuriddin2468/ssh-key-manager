@@ -15,8 +15,8 @@ const SEVERITY_TEXT = {
 interface ChecksListProps {
   areas: Area[];
   results: CheckResults;
-  /** The vault is locked: its checks didn't run. */
-  locked: boolean;
+  /** Areas whose checks wait for the vault to be unlocked. */
+  lockedAreas: ReadonlySet<Area>;
   /** Checks that didn't run (the vault's while it is locked, the breach check while it is off). */
   notRun: ReadonlySet<CheckId>;
   /** More at the end of a check's row, e.g. a way to turn it on. */
@@ -38,7 +38,7 @@ interface ChecksListProps {
 export function ChecksList({
   areas,
   results,
-  locked,
+  lockedAreas,
   notRun,
   extras,
   footers,
@@ -76,7 +76,7 @@ export function ChecksList({
         <div id={listId} className="grid grid-cols-[repeat(auto-fit,minmax(320px,1fr))] gap-2.5">
           {areas.map((area) => {
             const { tone, Icon } = AREA_LOOK[area];
-            const areaLocked = area === 'passwords' && locked;
+            const areaLocked = lockedAreas.has(area);
             return (
               <div key={area} className="glass flex flex-col gap-1 rounded-2xl p-3">
                 <h3 className="flex items-center gap-2 px-1 pb-1 text-[12.5px] font-semibold text-fg-2">

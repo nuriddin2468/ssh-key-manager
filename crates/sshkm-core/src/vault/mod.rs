@@ -29,6 +29,7 @@ mod export;
 mod generator;
 mod import;
 mod kdf;
+mod known;
 mod location;
 mod own_devices;
 mod recovery;
@@ -164,7 +165,9 @@ pub fn probe(paths: &VaultPaths) -> Result<VaultFiles> {
 }
 
 /// What an entry is for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
+)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
 pub enum EntryKind {

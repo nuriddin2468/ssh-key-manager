@@ -21,12 +21,12 @@ ticks it here, with its link.
   staging, production.
 - **Protection levels per project**, chosen per environment file:
 
-  | Level | On disk | Systems | Default for |
-  |---|---|---|---|
-  | 1. File always | a regular `.env` | all | `local` |
-  | 2. File while the vault is unlocked | written on unlock, wiped on lock, sleep and quit | all | — |
-  | 3. Virtual file | nothing: a named pipe (FIFO) the app answers | macOS, Linux | — |
-  | No file | nothing; used through the app's terminal ("Run in terminal") | all | `remote` |
+  | Level                               | On disk                                                      | Systems      | Default for |
+  | ----------------------------------- | ------------------------------------------------------------ | ------------ | ----------- |
+  | 1. File always                      | a regular `.env`                                             | all          | `local`     |
+  | 2. File while the vault is unlocked | written on unlock, wiped on lock, sleep and quit             | all          | —           |
+  | 3. Virtual file                     | nothing: a named pipe (FIFO) the app answers                 | macOS, Linux | —           |
+  | No file                             | nothing; used through the app's terminal ("Run in terminal") | all          | `remote`    |
 
   A `remote` environment gets a file only when the user chooses level 2 for it, with a
   warning.
@@ -35,9 +35,9 @@ ticks it here, with its link.
   (added with consent) and on the leak scanner. MCP may come back later as an add-on.
 - **Projects are labels, not folders.** An item can belong to several projects (a shared
   bastion, one GitHub key). **Personal** is everything in no project; it is never shared.
-- **Projects are the main navigation.** A project's page is where things are *used*
+- **Projects are the main navigation.** A project's page is where things are _used_
   (connect, copy, run, open a terminal in its folder); the type sections — Keys, Hosts,
-  Passwords, Environments — become a library where things are *managed*. Projects must
+  Passwords, Environments — become a library where things are _managed_. Projects must
   replace navigation, not add a dimension next to it.
 - **Projects are suggested, not built by hand**: from environments' project names, Git
   folders and remotes, `ProxyJump` chains, host name prefixes and domains, KeePass groups.
@@ -45,12 +45,14 @@ ticks it here, with its link.
 ## Steps
 
 ### 1. Choose the shell — in review
+
 Local shells in the Terminal (Local shell, New session → This computer) and for
 Environments' Run in terminal: PowerShell 7, Windows PowerShell, Command Prompt, Git Bash
 and WSL distributions on Windows; the user's shell, `/etc/shells` and Homebrew's on macOS
 and Linux. Settings → Terminal → Default shell. `src-tauri/src/terminal/shells.rs`.
 
 ### 2. Projects — next
+
 The foundation for everything below.
 
 1. **Model and storage** (`sshkm-core`): a project has a name, a color, folders, and
@@ -68,6 +70,7 @@ The foundation for everything below.
    audit findings for the project. Adding items to a project from the library.
 
 ### 3. Managed `.env` files
+
 Environments get files, inside projects.
 
 - Bindings: environment → file(s) in the project's folders (`.env`, `.env.local`,
@@ -85,10 +88,16 @@ Environments get files, inside projects.
   folders, unmanaged `.env` files found on disk with "Take under management".
 
 ### 4. Protection
-1. **Leak scanner** (can start before step 2 lands): the vault knows the exact values, so
-   it finds them without false positives — in staged files (a pre-commit check), shell
-   history, stray `.env` files and AI tools' session history (Claude Code, Cursor…). In
-   Audit.
+
+1. **Leak scanner — in review** (PR_LINK): the vault knows the exact values, so it
+   finds them without false positives — secret variables and entry passwords, as they are,
+   escaped in JSON, percent-encoded or in base64, a private key by its lines; values too
+   short or plain to mean anything are skipped. In AI tools' session history (Claude Code,
+   Codex, Gemini CLI, Continue, Cline, Roo Code, Aider), the shell history, and folders the
+   user picks: what Git would commit there, and `.env` files anywhere. In Audit, with
+   rotation as the advice, Show file, and Redact in place for AI session files. No
+   pre-commit check while there is no CLI. Cursor's chats (SQLite) aren't read yet.
+   `crates/sshkm-core/src/leaks`, `src-tauri/src/commands/leaks.rs`.
 2. **Level 2** (file only while unlocked), exclusion from backups where the system allows
    it (Time Machine, Dropbox), agents' ignore rules added with consent, and **shared
    secrets**: one value used by several environments, so changing a key once updates
@@ -98,6 +107,7 @@ Environments get files, inside projects.
    answer per open; a list of tools it was checked with.
 
 ### 5. Teams
+
 1. **Project file in the repository** (no secrets): hosts (HostName, User, Port,
    ProxyJump), their host key fingerprints, environment and variable names. Cloning a repo
    offers to add the hosts and trust their keys — no blind first connection. Risky options
@@ -106,6 +116,7 @@ Environments get files, inside projects.
    keys (age format) and committed to the repository.
 
 ### Later, maybe
+
 - MCP server for AI agents (list, run without seeing values, ask the human for a value).
 - CLI (`sshkm run`) and a shell hook.
 

@@ -1,0 +1,6 @@
+{
+  "kind": "new",
+  "en": "Audit: the leak scanner finds your vault's secrets where they shouldn't be — in the history of Claude Code, Codex and other AI tools, in your shell history, and in project files Git would commit. It reads files on this computer only, names the secret, file and line, never the value, and can redact the value in an AI session.",
+  "ru": "Аудит: «Поиск утечек» находит секреты из хранилища там, где их быть не должно, — в истории Claude Code, Codex и других ИИ-инструментов, в истории оболочки и в файлах проектов, которые попадут в Git. Он только читает файлы на этом компьютере, показывает секрет, файл и строку, но не значение, и может затереть значение в сессии ИИ.",
+  "uz": "Audit: «Sizib chiqishlarni qidirish» ombordagi sirlarni boʻlmasligi kerak boʻlgan joylardan topadi — Claude Code, Codex va boshqa AI vositalari tarixidan, shell tarixidan va Git commit qiladigan loyiha fayllaridan. U faqat shu kompyuterdagi fayllarni oʻqiydi, sir, fayl va qatorni koʻrsatadi, qiymatni emas, va AI seansidagi qiymatni oʻchira oladi."
+}

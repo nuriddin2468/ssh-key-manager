@@ -30,6 +30,8 @@
 //!   generator.
 //! - [`p2p`]: two copies of the app talking over the local network: device
 //!   keys, the encrypted session and its pairing code.
+//! - [`leaks`]: the leak scanner, which finds the vault's secrets in AI
+//!   tools' session history, the shell history and picked folders.
 //! - [`shell_history`]: hosts worth adding, found in the user's shell
 //!   history with their consent; passwords in it are only counted.
 //! - [`sync`]: three-way merges that keep the user's own computers in step.
@@ -60,6 +62,7 @@ pub mod fsutil;
 pub mod hosts_file;
 pub mod keys;
 pub mod known_hosts;
+pub mod leaks;
 pub mod net;
 pub mod p2p;
 pub mod paths;

@@ -285,7 +285,7 @@ fn stored(entry: &EntryRef<'_>) -> Stored {
 
 /// The variables of an environment entry with their values: in the order
 /// kept in its marker, then those added elsewhere (KeePassXC) by name.
-fn variables_of(entry: &EntryRef<'_>) -> Vec<EnvVariable> {
+pub(super) fn variables_of(entry: &EntryRef<'_>) -> Vec<EnvVariable> {
     let stored = stored(entry);
     let mut found: Vec<(&str, &Value<String>)> = entry
         .fields
@@ -778,7 +778,7 @@ impl Vault {
         Ok(entry)
     }
 
-    fn env_summary(&self, entry: &EntryRef<'_>) -> EnvSummary {
+    pub(super) fn env_summary(&self, entry: &EntryRef<'_>) -> EnvSummary {
         let bin = self.db.meta.recyclebin_uuid;
         let in_trash = in_group(entry.parent().id(), bin, &self.db);
         let group = if in_trash {

@@ -1,7 +1,7 @@
 {
   "name": "sshkey-manager",
   "private": true,
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Manage SSH keys, hosts, known_hosts and ssh-agent on macOS, Windows and Linux",
   "license": "AGPL-3.0-only",
   "homepage": "https://github.com/nuriddin2468/ssh-key-manager",

@@ -1,6 +1,0 @@
-{
-  "kind": "fixed",
-  "en": "Nearby: after you sent something to another computer, or received something, the window didn't close on Done, and new pairings and sends were refused until the app restarted. It closes now. Cancel while connecting also stops at once, and nothing is sent after it.",
-  "ru": "«Рядом»: после отправки чего-либо на другой компьютер или получения окно не закрывалось по кнопке «Готово», а новые сопряжения и отправки не начинались до перезапуска приложения. Теперь окно закрывается. «Отмена» во время подключения тоже срабатывает сразу, и после неё ничего не отправляется.",
-  "uz": "Yaqin atrofda: boshqa kompyuterga biror narsa yuborilgan yoki qabul qilingandan keyin oyna «Tayyor» tugmasi bilan yopilmasdi, yangi juftlash va yuborishlar esa ilova qayta ishga tushguncha boshlanmasdi. Endi oyna yopiladi. Ulanish paytida «Bekor qilish» ham darhol ishlaydi va undan keyin hech narsa yuborilmaydi."
-}

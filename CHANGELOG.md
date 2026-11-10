@@ -4,6 +4,25 @@ What changed in each version of SSH Key Manager. The app shows these notes in yo
 
 <!-- Made from changelog/releases.json by scripts/changelog.mjs: edit that file, then run `node scripts/changelog.mjs write`. -->
 
+## 0.10.0 (2026-11-09)
+
+### Before you update
+
+- The browser extension now offers to update a saved password when you change it on a site's password-change form. And if signing in with a filled password fails, it asks “Couldn't sign in?” once, with Update and Remove from vault (to the recycle bin).
+
+### New
+
+- Import passwords now reads Chrome, Edge, Brave, Vivaldi and Firefox directly, after the system asks your permission, so no plain-text export file is needed. Where a browser can't be read (Safari, or passwords Chrome on Windows keeps to itself), the CSV guide is still there.
+- The browser extension's popup lists the logins saved for the site you're on: change a login's username or password, or move it to the vault's recycle bin. The previous version stays in the entry's history. This needs the new version of both the app and the extension.
+
+### Improved
+
+- Importing passwords again finds logins whose password changed: they're marked “Different password”, and importing updates the entry, keeping the old password in its history, instead of adding a copy. Compare shows both passwords and, where the file says, when each changed. New logins are listed first.
+
+### Fixed
+
+- Nearby: after you sent something to another computer, or received something, the window didn't close on Done, and new pairings and sends were refused until the app restarted. It closes now. Cancel while connecting also stops at once, and nothing is sent after it.
+
 ## 0.9.0 (2026-11-09)
 
 ### New

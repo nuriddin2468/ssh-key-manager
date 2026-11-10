@@ -15,6 +15,7 @@ import type { PromptAnswer } from '@/bindings/PromptAnswer';
 import type { PromptAsk } from '@/bindings/PromptAsk';
 import type { SaveOffer } from '@/bindings/SaveOffer';
 import type { SessionState } from '@/bindings/SessionState';
+import type { ShellInfo } from '@/bindings/ShellInfo';
 import type { SignIn } from '@/bindings/SignIn';
 import type { TerminalEvent } from '@/bindings/TerminalEvent';
 import type { TerminalInfo } from '@/bindings/TerminalInfo';
@@ -385,6 +386,7 @@ export function terminalHandlers(hosts: () => HostEntry[]): Record<string, Handl
           user: host?.user ?? (name.includes('.com') ? 'git' : 'dev'),
           host: host?.hostName ?? name,
           proxyJump: host?.proxyJump ?? null,
+          shell: null,
           startedAt: new Date().toISOString(),
           phase: 'connecting',
         },
@@ -417,15 +419,50 @@ export function terminalHandlers(hosts: () => HostEntry[]): Record<string, Handl
     },
     terminal_list: () => [...sessions.values()].map((session) => ({ ...session.info })),
     terminal_open_external: () => undefined,
+    terminal_shells: () => MOCK_SHELLS,
+    terminal_open_local: ({ shell, events }) => {
+      const found = findShell(shell);
+      if (!found) {
+        return Promise.reject({
+          code: 'not_found',
+          message: 'this shell isn’t on this computer anymore',
+        });
+      }
+      return openLocalShell(found.name, found, [], events as Emit);
+    },
   };
 }
 
+/** The shells the browser preview offers, as a Mac would. */
+export const MOCK_SHELLS: ShellInfo[] = [
+  { id: '/bin/zsh', name: 'Zsh', path: '/bin/zsh', kind: 'unix', default: true },
+  { id: '/bin/bash', name: 'Bash', path: '/bin/bash', kind: 'unix', default: false },
+  {
+    id: '/opt/homebrew/bin/fish',
+    name: 'fish',
+    path: '/opt/homebrew/bin/fish',
+    kind: 'unix',
+    default: false,
+  },
+  { id: '/bin/sh', name: 'sh', path: '/bin/sh', kind: 'unix', default: false },
+];
+
+/** The shell `id` names (the default one for `null`), as `shells::find` finds it. */
+export function findShell(id: unknown): ShellInfo | undefined {
+  return MOCK_SHELLS.find((shell) => (id ? shell.id === id : shell.default));
+}
+
 /**
- * A local shell with a secret environment's variables, for `envs_run`
- * (mocks/envs.ts): it starts connected, `env` lists the variables, and it
- * stays out of the connection history.
+ * A local shell, for `terminal_open_local` and, with a secret environment's
+ * variables, `envs_run` (mocks/envs.ts): it starts connected, `env` lists the
+ * variables, and it stays out of the connection history.
  */
-export function openLocalShell(label: string, vars: [string, string][], emit: Emit): TerminalInfo {
+export function openLocalShell(
+  label: string,
+  shell: ShellInfo,
+  vars: [string, string][],
+  emit: Emit,
+): TerminalInfo {
   nextId += 1;
   const session: Session = {
     info: {
@@ -434,6 +471,7 @@ export function openLocalShell(label: string, vars: [string, string][], emit: Em
       user: null,
       host: null,
       proxyJump: null,
+      shell: shell.name,
       startedAt: new Date().toISOString(),
       phase: 'connected',
     },
@@ -451,10 +489,12 @@ export function openLocalShell(label: string, vars: [string, string][], emit: Em
       phase: 'connected',
       signIn: { password: null, oneTimeCode: null, key: null, passphrase: null },
     });
-    write(
-      session,
-      `\x1b[2m${vars.length} variables of ${label} are set in this shell.${RESET}\r\n`,
-    );
+    if (vars.length > 0) {
+      write(
+        session,
+        `\x1b[2m${vars.length} variables of ${label} are set in this shell.${RESET}\r\n`,
+      );
+    }
     prompt(session);
   }, 50);
   return { ...session.info };

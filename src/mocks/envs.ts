@@ -21,7 +21,7 @@ import type { ParseProblem } from '@/bindings/ParseProblem';
 import type { TerminalEvent } from '@/bindings/TerminalEvent';
 import type { VaultStatus } from '@/bindings/VaultStatus';
 import { isVariableName, looksSecretName } from '@/features/envs/model';
-import { openLocalShell } from './terminal';
+import { findShell, openLocalShell } from './terminal';
 import { vaultHandlers } from './vault';
 
 type Handler = (args: Record<string, unknown>) => unknown;
@@ -446,12 +446,15 @@ export const envsHandlers: Record<string, Handler> = {
     pending = null;
     return result;
   },
-  envs_run: async ({ id, events }) => {
+  envs_run: async ({ id, shell, events }) => {
     await requireUnlocked();
     const item = find(id);
     if (!item) return fail('not_found', `environment ${id}`);
+    const found = findShell(shell);
+    if (!found) return fail('not_found', 'this shell isn’t on this computer anymore');
     return openLocalShell(
       `${item.project} · ${item.name}`,
+      found,
       item.vars.map((x) => [x.name, x.value]),
       events as (message: ArrayBuffer | TerminalEvent) => void,
     );

@@ -15,6 +15,7 @@ const tab: Tab = {
     alias: 'prod',
     user: 'ubuntu',
     host: '10.0.4.12',
+    shell: null,
     proxyJump: 'bastion',
     startedAt: '2026-11-03T10:00:00Z',
     phase: 'connecting',

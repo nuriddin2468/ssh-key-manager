@@ -109,7 +109,7 @@ export function SessionView({
         <div className="flex flex-wrap items-center gap-2.5 border-t border-white/[0.06] bg-white/[0.03] px-4 py-3">
           <span className="text-fg-2">
             {[
-              t('terminal.ended.title'),
+              t(tab.local ? 'terminal.local.ended.title' : 'terminal.ended.title'),
               tab.state.exitCode !== null
                 ? t('terminal.ended.exitCode', { code: tab.state.exitCode })
                 : null,
@@ -122,7 +122,7 @@ export function SessionView({
           </span>
           <span className="flex-1" />
           <Button variant="primary" size="sm" onClick={() => onReconnect()}>
-            {t('terminal.ended.reconnect')}
+            {t(tab.local ? 'terminal.local.ended.restart' : 'terminal.ended.reconnect')}
           </Button>
           <Button size="sm" onClick={onCloseTab}>
             {t('terminal.ended.closeTab')}
@@ -141,7 +141,9 @@ function Connecting({ tab, onShowPrompt }: { tab: Tab; onShowPrompt: () => void 
         aria-hidden="true"
         className="size-7 animate-spin rounded-full border-[3px] border-warning/25 border-t-warning motion-reduce:animate-none"
       />
-      <p className="text-[14px] font-semibold">{t('terminal.connecting', { alias: tab.alias })}</p>
+      <p className="text-[14px] font-semibold">
+        {t(tab.local ? 'terminal.local.starting' : 'terminal.connecting', { alias: tab.alias })}
+      </p>
       {tab.prompt ? (
         <>
           <p className="max-w-[420px] text-muted">
@@ -393,7 +395,7 @@ export function StatusBar({ tab, onFind, onOpenHost, onDisconnect }: StatusBarPr
           onClick={onDisconnect}
           className="rounded px-1 text-critical hover:text-[#ffbdbd]"
         >
-          {t('terminal.status.disconnect')}
+          {t(tab.local ? 'terminal.local.status.stop' : 'terminal.status.disconnect')}
         </button>
       ) : null}
     </div>

@@ -29,6 +29,7 @@ import {
 } from '@/features/passwords/SecurityDialogs';
 import { useVaultSettings } from '@/features/passwords/useVaultSettings';
 import { useVaultMutation } from '@/features/passwords/vault';
+import { shellDetail, shellName, useShells } from '@/features/terminal/shells';
 import { LANGUAGE_NAMES, LANGUAGES, type Language, setLanguage, storedLanguage } from '@/i18n';
 import { displayPath } from '@/lib/format';
 import { fileManagerName } from '@/lib/platform';
@@ -118,6 +119,7 @@ export function SettingsPage() {
             </Row>
           </Group>
 
+          <TerminalGroup />
           <ShellHistorySection />
           <PasswordsGroup />
           <VaultLocationSection />
@@ -196,6 +198,50 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
       <span className="shrink-0 font-medium">{label}</span>
       <span className="ml-auto flex min-w-0 items-center justify-end gap-2">{children}</span>
     </div>
+  );
+}
+
+/**
+ * The shell local sessions open in: in the Terminal and with an
+ * environment's "Run in terminal". A chosen shell that is gone shows (and
+ * opens) as the system's.
+ */
+function TerminalGroup() {
+  const { t } = useTranslation();
+  const settings = useSettings();
+  const shells = useShells().data;
+  if (!shells || shells.length === 0) return null;
+  const system = shells.find((shell) => shell.default);
+  const chosen = shells.some((shell) => shell.id === settings.defaultShell)
+    ? (settings.defaultShell as string)
+    : 'system';
+
+  return (
+    <Group title={t('settings.terminal')}>
+      <Row label={t('settings.defaultShell')}>
+        <Select
+          aria-label={t('settings.defaultShell')}
+          size="sm"
+          className="w-[220px]"
+          value={chosen}
+          onValueChange={(next) =>
+            updateSettings({ defaultShell: next === 'system' ? null : next })
+          }
+          options={[
+            {
+              value: 'system',
+              label: t('settings.shellSystem'),
+              hint: system ? shellName(t, system) : undefined,
+            },
+            ...shells.map((shell) => ({
+              value: shell.id,
+              label: shellName(t, shell),
+              hint: shellDetail(shell, shells) ?? undefined,
+            })),
+          ]}
+        />
+      </Row>
+    </Group>
   );
 }
 

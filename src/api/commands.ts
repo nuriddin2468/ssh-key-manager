@@ -76,6 +76,7 @@ import type { SecretPreset } from '@/bindings/SecretPreset';
 import type { SendRequest } from '@/bindings/SendRequest';
 import type { ServerKeys } from '@/bindings/ServerKeys';
 import type { ServerKeysAction } from '@/bindings/ServerKeysAction';
+import type { ShellInfo } from '@/bindings/ShellInfo';
 import type { SshPing } from '@/bindings/SshPing';
 import type { Strength } from '@/bindings/Strength';
 import type { SyncDecisions } from '@/bindings/SyncDecisions';
@@ -349,6 +350,20 @@ export const api = {
 
   /** Opens the system terminal with `ssh <alias>`. */
   terminalOpenExternal: (alias: string) => call<void>('terminal_open_external', { alias }),
+  /** The shells a local session can run, the default first. */
+  terminalShells: () => call<ShellInfo[]>('terminal_shells'),
+  /** Starts a shell on this computer (`null`: the default one), like `terminalOpen`. */
+  terminalOpenLocal: (
+    shell: string | null,
+    size: { cols: number; rows: number },
+    onMessage: (message: TerminalMessage) => void,
+  ) =>
+    call<TerminalInfo>('terminal_open_local', {
+      shell,
+      cols: size.cols,
+      rows: size.rows,
+      events: isTauri() ? new Channel<TerminalMessage>(onMessage) : onMessage,
+    }),
   /**
    * Starts `ssh <alias>` in a terminal. Output arrives as `ArrayBuffer`s and
    * everything else as `TerminalEvent`s, in order, on `onMessage`.
@@ -452,14 +467,19 @@ export const api = {
   envsExport: (id: string, format: EnvFormat) =>
     call<EnvExport | null>('envs_export', { id, format }),
   envsExportAnyway: () => call<EnvExport>('envs_export_anyway'),
-  /** Starts the user's shell with the environment's variables, like `terminalOpen`. */
+  /**
+   * Starts a shell with the environment's variables, like `terminalOpen`:
+   * `shell` (an id from `terminalShells`) or, when `null`, the default one.
+   */
   envsRun: (
     id: string,
+    shell: string | null,
     size: { cols: number; rows: number },
     onMessage: (message: TerminalMessage) => void,
   ) =>
     call<TerminalInfo>('envs_run', {
       id,
+      shell,
       cols: size.cols,
       rows: size.rows,
       events: isTauri() ? new Channel<TerminalMessage>(onMessage) : onMessage,

@@ -25,6 +25,8 @@ pub struct TerminalInfo {
     pub host: Option<String>,
     /// `ProxyJump`, if any.
     pub proxy_jump: Option<String>,
+    /// The shell's name, for a shell on this computer instead of `ssh`.
+    pub shell: Option<String>,
     /// RFC 3339, UTC.
     pub started_at: String,
     pub phase: Phase,

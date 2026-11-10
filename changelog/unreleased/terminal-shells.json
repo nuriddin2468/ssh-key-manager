@@ -1,0 +1,6 @@
+{
+  "kind": "new",
+  "en": "Terminal: open a shell on this computer next to your ssh sessions, with Local shell or from New session. Choose which one opens in Settings → Terminal: PowerShell, Command Prompt, Git Bash or a WSL distribution on Windows; zsh, bash, fish and others on macOS and Linux. Environments can run their variables in any of them too.",
+  "ru": "Терминал: рядом с сессиями ssh теперь можно открыть оболочку на этом компьютере — кнопкой «Локальная оболочка» или в окне «Новая сессия». Какую открывать, выбирается в «Настройки» → «Терминал»: PowerShell, командная строка, Git Bash или дистрибутив WSL в Windows; zsh, bash, fish и другие в macOS и Linux. Окружения тоже можно запустить в любой из них.",
+  "uz": "Terminal: endi ssh seanslari yonida shu kompyuterdagi shellni ochish mumkin — «Mahalliy shell» tugmasi yoki «Yangi seans» oynasi orqali. Qaysi biri ochilishini Sozlamalar → Terminal boʻlimida tanlang: Windowsda PowerShell, Buyruq satri, Git Bash yoki WSL distributivi; macOS va Linuxda zsh, bash, fish va boshqalar. Muhitlarni ham ularning istalganida ishga tushirish mumkin."
+}

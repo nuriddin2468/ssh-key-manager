@@ -29,6 +29,7 @@ use crate::confirm::Localized;
 use crate::error::{AppError, AppResult};
 use crate::process;
 use crate::terminal::Sink;
+use crate::terminal::shells;
 use crate::terminal::types::TerminalInfo;
 use crate::types::CopyResult;
 
@@ -390,14 +391,16 @@ pub async fn envs_export_anyway(app: AppHandle, state: State<'_, Shared>) -> App
     .await
 }
 
-/// Opens the user's shell in the app's terminal with the environment's
-/// variables in its environment, and nowhere else. Output and events arrive
-/// on `events`, as for `terminal_open`.
+/// Opens a shell in the app's terminal with the environment's variables in
+/// its environment, and nowhere else: `shell` (an id from `terminal_shells`)
+/// or the default one. Output and events arrive on `events`, as for
+/// `terminal_open`.
 #[tauri::command]
 pub async fn envs_run(
     app: AppHandle,
     state: State<'_, Shared>,
     id: String,
+    shell: Option<String>,
     cols: u16,
     rows: u16,
     events: Channel<InvokeResponseBody>,
@@ -413,10 +416,11 @@ pub async fn envs_run(
                 .collect();
             Ok((format!("{} · {}", env.project, env.name), vars))
         })?;
+        let shell = shells::find(shell.as_deref())?;
         let sink: Arc<dyn Sink> = Arc::new(events);
         shared
             .terminals
-            .open_local(&label, &vars, &state.paths.home, (cols, rows), sink)
+            .open_local(&label, &shell, &vars, &state.paths.home, (cols, rows), sink)
     })
     .await
 }

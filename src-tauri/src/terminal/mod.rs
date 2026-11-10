@@ -25,6 +25,7 @@
 pub mod bridge;
 mod external;
 mod local;
+pub mod shells;
 pub(crate) mod store;
 pub(crate) mod text;
 pub mod types;
@@ -169,6 +170,7 @@ impl Terminals {
             user: resolved.as_ref().and_then(|r| r.user.clone()),
             host: resolved.as_ref().and_then(|r| r.host_name.clone()),
             proxy_jump: resolved.as_ref().and_then(|r| r.proxy_jump.clone()),
+            shell: None,
             started_at: OffsetDateTime::now_utc()
                 .format(&Rfc3339)
                 .unwrap_or_default(),
@@ -287,6 +289,7 @@ pub fn spawn_detached(
         user: None,
         host: None,
         proxy_jump: None,
+        shell: None,
         started_at: String::new(),
         phase: Phase::Connecting,
     };

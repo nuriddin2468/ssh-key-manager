@@ -288,6 +288,15 @@ pub struct DeviceKey {
     pub key: Zeroizing<[u8; 32]>,
 }
 
+/// The vault's database at one moment ([`Vault::snapshot`]).
+pub struct Snapshot(Database);
+
+impl std::fmt::Debug for Snapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Snapshot")
+    }
+}
+
 /// An unlocked vault. Dropping it locks the vault.
 pub struct Vault {
     paths: VaultPaths,
@@ -507,14 +516,17 @@ impl Vault {
         Ok(true)
     }
 
-    /// Drops every change made in memory and not saved: re-reads the
-    /// database as it is on disk. For a change that failed halfway, so the
-    /// next save doesn't write what is left of it.
-    pub fn discard_changes(&mut self) -> Result<()> {
-        let bytes = read_database(&self.paths.database)?;
-        self.db = parse_database(&bytes, &self.secret)?;
-        self.disk_hash = sha256(&bytes);
-        Ok(())
+    /// The database as it is in memory now, to put back with
+    /// [`Self::restore`] if a change fails halfway.
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot(self.db.clone())
+    }
+
+    /// Puts back the database of `snapshot`, dropping every change made in
+    /// memory since, so the next save doesn't write what is left of a
+    /// change that failed.
+    pub fn restore(&mut self, snapshot: Snapshot) {
+        self.db = snapshot.0;
     }
 
     /// Re-reads the key slots file if it changed on disk. When it is gone,

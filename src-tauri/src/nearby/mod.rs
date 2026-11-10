@@ -1234,11 +1234,12 @@ impl AppSide<'_> {
         state
             .vault
             .with_quietly(app, |vault| {
+                let before = vault.snapshot();
                 let changed = match work(vault) {
                     Ok(changed) => changed,
                     Err(error) => {
                         // Nothing of a merge that failed halfway is kept.
-                        let _ = vault.discard_changes();
+                        vault.restore(before);
                         return Err(error.into());
                     }
                 };

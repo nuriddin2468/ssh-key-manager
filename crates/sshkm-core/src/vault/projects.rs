@@ -12,8 +12,10 @@
 //! A project's logins also carry the KeePass tag `project/<name>`
 //! ([`TAG_PREFIX`]), so KeePassXC shows and filters by them. The record is
 //! what counts: the tags are written from the records after every change
-//! and sync, so the user's own tags never make or break a membership, and a
-//! `project/…` tag edited elsewhere is put back.
+//! and sync ([`Vault::sync_tags`]), so the user's own tags never make or
+//! break a membership. Only `project/` tags with a name some record has or
+//! had are the app's; a login tagged in KeePassXC with a live project's
+//! name joins it, unless it was taken out of it before.
 //!
 //! Records go to the user's other devices as they are stored, and two
 //! copies of a record merge field by field and member by member: the name
@@ -59,10 +61,13 @@ const MAX_STORED_MEMBERS: usize = 8 * MAX_MEMBERS;
 const MAX_RECORD: usize = 2 * 1024 * 1024;
 /// Longest project name, in characters.
 const MAX_NAME: usize = 64;
+/// Most former names a record keeps.
+const MAX_AKA: usize = 16;
 /// Longest folder, host alias or fingerprint, in bytes.
 const MAX_REFERENCE: usize = 4096;
-/// How far ahead of this computer's clock a record from another device may
-/// be dated, in milliseconds, for clocks a little apart.
+/// How far ahead of this computer's clock a time from another device is
+/// taken as it is, in milliseconds, for clocks a little apart; a later one
+/// is taken as this much ahead.
 const MAX_AHEAD_MS: i64 = 5 * 60 * 1000;
 /// How long a removed project or member is remembered, in milliseconds: a
 /// device that syncs after longer than that may bring it back.
@@ -256,6 +261,9 @@ struct Stored {
     /// its name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     joined: Option<String>,
+    /// Names it had before, newest last: tags with them are its own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    aka: Vec<String>,
     /// Whatever a later version keeps here.
     #[serde(flatten)]
     rest: Map<String, Value>,
@@ -272,6 +280,7 @@ impl Stored {
             members: BTreeMap::new(),
             removed: None,
             joined: None,
+            aka: Vec::new(),
             rest: Map::new(),
         }
     }
@@ -304,7 +313,32 @@ impl Stored {
     /// A time for a change now, later than every time it holds, so that a
     /// change here always wins over what it changes.
     fn tick(&self) -> i64 {
-        self.times().fold(now_ms(), |now, t| now.max(t + 1))
+        self.times()
+            .fold(now_ms(), |now, t| now.max(t.saturating_add(1)))
+    }
+
+    /// Brings every time later than `latest` back to it: a device whose
+    /// clock ran ahead can't make its changes win for good, and its records
+    /// are still taken.
+    fn clamp(&mut self, latest: i64) {
+        self.name.t = self.name.t.min(latest);
+        self.color.t = self.color.t.min(latest);
+        self.removed = self.removed.map(|t| t.min(latest));
+        for presence in self.members.values_mut() {
+            presence.a = presence.a.min(latest);
+            presence.r = presence.r.map(|t| t.min(latest));
+        }
+    }
+
+    /// Remembers `name` as one it had, unless it is its name now.
+    fn remember_name(&mut self, name: &str) {
+        if same_name(name, &self.name.v) || self.aka.iter().any(|n| same_name(n, name)) {
+            return;
+        }
+        if self.aka.len() >= MAX_AKA {
+            self.aka.remove(0);
+        }
+        self.aka.push(name.to_owned());
     }
 
     /// The members in the project, of every kind this version knows.
@@ -335,7 +369,15 @@ impl Stored {
                     .or_insert_with(|| value.clone());
             }
         }
+        let before = self.name.v.clone();
         self.name.merge(&other.name);
+        // The name that lost is one it had: its tags go.
+        for name in std::iter::once(&before)
+            .chain([&other.name.v])
+            .chain(&other.aka)
+        {
+            self.remember_name(name);
+        }
         self.color.merge(&other.color);
         self.take_members(other);
         if other.removed > self.removed {
@@ -361,11 +403,20 @@ impl Stored {
     }
 
     /// Forgets removals older than `before`: the members, and the whole
-    /// record once it is removed. Returns `false` for a record to drop.
+    /// record once it is removed. A member's removal later than the
+    /// project's is kept, since it may be what keeps the project. Returns
+    /// `false` for a record to drop.
     fn prune(&mut self, before: i64) -> bool {
-        self.members
-            .retain(|_, p| p.present() || p.r.is_none_or(|r| r >= before));
-        self.is_live() || self.removed.is_none_or(|r| r >= before)
+        if !self.is_live() {
+            return self.removed.is_none_or(|r| r >= before);
+        }
+        let removed = self.removed;
+        self.members.retain(|_, p| {
+            p.present()
+                || p.r
+                    .is_none_or(|r| r >= before || removed.is_some_and(|gone| r > gone))
+        });
+        true
     }
 }
 
@@ -522,7 +573,8 @@ impl Vault {
         Ok(project_view(id.to_owned(), &stored, &self.login_ids()))
     }
 
-    /// Adds a project and returns its id.
+    /// Adds a project and returns its id. Logins already tagged
+    /// `project/<name>` are its members.
     pub fn add_project(&mut self, input: &ProjectInput) -> Result<String> {
         let name = check_name(&input.name)?;
         let live: Vec<(String, Stored)> = self
@@ -540,6 +592,8 @@ impl Vault {
         }
         let id = new_id();
         self.put_project(&id, &Stored::new(name, input.color, now_ms()))?;
+        // Logins tagged `project/<name>` in KeePassXC are in it at once.
+        self.sync_tags();
         Ok(id)
     }
 
@@ -561,7 +615,8 @@ impl Vault {
         }
         let t = stored.tick();
         if stored.name.v != name {
-            stored.name = Lww { v: name, t };
+            let old = std::mem::replace(&mut stored.name, Lww { v: name, t });
+            stored.remember_name(&old.v);
         }
         if stored.color.v != color {
             stored.color = Lww {
@@ -570,7 +625,7 @@ impl Vault {
             };
         }
         self.put_project(id, &stored)?;
-        self.write_tags();
+        self.sync_tags();
         Ok(())
     }
 
@@ -583,7 +638,7 @@ impl Vault {
         stored.joined = None;
         self.put_project(id, &stored)?;
         self.prune_projects();
-        self.write_tags();
+        self.sync_tags();
         Ok(())
     }
 
@@ -646,7 +701,7 @@ impl Vault {
         stored.members.insert(key, next);
         self.put_project(id, &stored)?;
         if matches!(member, ProjectMember::Login { .. }) {
-            self.write_tags();
+            self.sync_tags();
         }
         Ok(true)
     }
@@ -655,23 +710,33 @@ impl Vault {
     /// removed longer ago than [`KEEP_REMOVED_MS`] are left out.
     pub fn project_records(&self) -> Vec<ProjectRecord> {
         let before = now_ms() - KEEP_REMOVED_MS;
-        self.stored_projects()
+        let mut kept: Vec<(String, Stored)> = self
+            .stored_projects()
             .into_iter()
-            .filter_map(|(id, mut stored)| {
-                if !stored.prune(before) {
-                    return None;
-                }
+            .filter_map(|(id, mut stored)| stored.prune(before).then_some((id, stored)))
+            .collect();
+        // Past [`MAX_RECORDS`], live projects go first, then the latest
+        // removals.
+        kept.sort_by_key(|(id, stored)| {
+            (
+                !stored.is_live(),
+                std::cmp::Reverse(stored.removed),
+                id.clone(),
+            )
+        });
+        kept.into_iter()
+            .take(MAX_RECORDS)
+            .filter_map(|(id, stored)| {
                 let record = serde_json::to_string(&stored).ok()?;
                 Some(ProjectRecord { id, record })
             })
-            .take(MAX_RECORDS)
             .collect()
     }
 
     /// Takes in the records another own device sent, member by member
-    /// ([`Stored::merge`]). A record this version can't read, one dated
-    /// more than [`MAX_AHEAD_MS`] from now, and those past [`MAX_RECORDS`]
-    /// are skipped. Then projects that end up with one name are joined, and
+    /// ([`Stored::merge`]). A record this version can't read, and those
+    /// past [`MAX_RECORDS`], are skipped; times more than [`MAX_AHEAD_MS`]
+    /// from now are taken as that. Then projects that end up with one name are joined, and
     /// the logins' tags are written from the result, so the order records
     /// come in doesn't matter. Returns whether anything changed.
     pub fn merge_projects(&mut self, theirs: &[ProjectRecord]) -> Result<bool> {
@@ -683,12 +748,10 @@ impl Vault {
             .filter(|(_, stored)| stored.is_live())
             .count();
         for record in theirs.iter().take(MAX_RECORDS) {
-            let Some(incoming) = parse(&record.id, &record.record) else {
+            let Some(mut incoming) = parse(&record.id, &record.record) else {
                 continue;
             };
-            if incoming.times().any(|t| t > latest) {
-                continue;
-            }
+            incoming.clamp(latest);
             let mine = self.stored_project(&record.id);
             let was_live = mine.as_ref().is_some_and(Stored::is_live);
             let merged = match mine.clone() {
@@ -715,7 +778,7 @@ impl Vault {
         }
         if changed {
             self.prune_projects();
-            self.write_tags();
+            self.sync_tags();
         }
         Ok(changed)
     }
@@ -781,11 +844,86 @@ impl Vault {
     }
 
     /// Writes each login's `project/…` tags from the records: one for each
-    /// live project it is in, none for any other. Other tags stay as they
-    /// are. Only entries whose tags change are touched.
+    /// live project it is in. A `project/<name>` tag for a name a record
+    /// knows, now or before, and the login isn't in, goes; one for a name no
+    /// record knows is the user's and stays. Other tags stay as they are.
+    /// First, logins tagged with a project in KeePassXC join it
+    /// ([`Self::adopt_tagged_logins`]).
+    fn sync_tags(&mut self) {
+        self.adopt_tagged_logins();
+        self.write_tags();
+    }
+
+    /// A login tagged (in KeePassXC) with a live project's name that was
+    /// never put into that project nor taken out of it joins it: the
+    /// `project/` tag says so explicitly, unlike the user's own tags. Not
+    /// when another project has or had that name: the tag may be that one's.
+    fn adopt_tagged_logins(&mut self) {
+        let all = self.stored_projects();
+        let named_elsewhere = |id: &str, name: &str| {
+            all.iter().any(|(other, stored)| {
+                other != id
+                    && (same_name(&stored.name.v, name)
+                        || stored.aka.iter().any(|old| same_name(old, name)))
+            })
+        };
+        let live: BTreeMap<String, &str> = all
+            .iter()
+            .filter(|(id, stored)| stored.is_live() && !named_elsewhere(id, &stored.name.v))
+            .map(|(id, stored)| (stored.name.v.to_lowercase(), id.as_str()))
+            .collect();
+        let mut adopted: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for entry in self.db.iter_all_entries() {
+            if envs::is_environment(&entry) {
+                continue;
+            }
+            let login = entry.id().uuid().to_string();
+            for name in entry
+                .tags
+                .iter()
+                .filter_map(|t| t.trim().strip_prefix(TAG_PREFIX))
+            {
+                let Some(id) = live.get(&name.to_lowercase()) else {
+                    continue;
+                };
+                let known = all
+                    .iter()
+                    .find(|(other, _)| other == id)
+                    .is_some_and(|(_, stored)| {
+                        stored.members.contains_key(&format!("login:{login}"))
+                    });
+                if !known {
+                    adopted
+                        .entry((*id).to_owned())
+                        .or_default()
+                        .push(login.clone());
+                }
+            }
+        }
+        for (id, logins) in adopted {
+            let Some(mut stored) = self.stored_project(&id) else {
+                continue;
+            };
+            let t = stored.tick();
+            for login in logins {
+                if stored.count("login") < MAX_MEMBERS {
+                    stored
+                        .members
+                        .entry(format!("login:{login}"))
+                        .or_insert(Presence { a: t, r: None });
+                }
+            }
+            let _ = self.put_project(&id, &stored);
+        }
+    }
+
+    /// The tag writing half of [`Self::sync_tags`].
     fn write_tags(&mut self) {
+        let mut known: BTreeSet<String> = BTreeSet::new();
         let mut wanted: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for (_, stored) in self.stored_projects() {
+            known.insert(stored.name.v.to_lowercase());
+            known.extend(stored.aka.iter().map(|name| name.to_lowercase()));
             if !stored.is_live() {
                 continue;
             }
@@ -795,6 +933,10 @@ impl Vault {
                 }
             }
         }
+        let ours = |t: &str| {
+            t.strip_prefix(TAG_PREFIX)
+                .is_some_and(|name| known.contains(&name.to_lowercase()))
+        };
         let none = BTreeSet::new();
         let changes: Vec<(EntryId, Vec<String>)> = self
             .db
@@ -806,7 +948,7 @@ impl Vault {
                     .tags
                     .iter()
                     .map(|t| t.trim())
-                    .filter(|t| t.starts_with(TAG_PREFIX))
+                    .filter(|t| ours(t))
                     .map(str::to_owned)
                     .collect();
                 if has == *want {
@@ -814,7 +956,7 @@ impl Vault {
                 }
                 let mut tags: Vec<String> = Vec::new();
                 for t in entry.tags.iter().map(|t| t.trim()) {
-                    if !t.is_empty() && !t.starts_with(TAG_PREFIX) && !tags.iter().any(|x| x == t) {
+                    if !t.is_empty() && !ours(t) && !tags.iter().any(|x| x == t) {
                         tags.push(t.to_owned());
                     }
                 }

@@ -89,7 +89,7 @@ Environments get files, inside projects.
 
 ### 4. Protection
 
-1. **Leak scanner — in review** (PR_LINK): the vault knows the exact values, so it
+1. **Leak scanner — in review** ([#36](https://github.com/nuriddin2468/ssh-key-manager/pull/36)): the vault knows the exact values, so it
    finds them without false positives — secret variables and entry passwords, as they are,
    escaped in JSON, percent-encoded or in base64, a private key by its lines; values too
    short or plain to mean anything are skipped. In AI tools' session history (Claude Code,

@@ -51,7 +51,7 @@ Environments' Run in terminal: PowerShell 7, Windows PowerShell, Command Prompt,
 and WSL distributions on Windows; the user's shell, `/etc/shells` and Homebrew's on macOS
 and Linux. Settings → Terminal → Default shell. `src-tauri/src/terminal/shells.rs`.
 
-### 2. Projects — next
+### 2. Projects — in progress
 
 The foundation for everything below.
 
@@ -60,7 +60,8 @@ The foundation for everything below.
    tag, environments by their existing `Environments/<project>` group. Kept in the vault,
    so it syncs to the user's devices with it; a copy without secrets (names and
    references) shows projects while the vault is locked, as the SSH sections work then.
-   Nothing is written into `~/.ssh/config` for membership.
+   Nothing is written into `~/.ssh/config` for membership. In review:
+   [#34](https://github.com/nuriddin2468/ssh-key-manager/pull/34).
 2. **Suggestions**: the app proposes projects from what it finds (see Decisions); the user
    confirms each.
 3. **Navigation and the project page**: projects (Personal first) at the top of the

@@ -109,6 +109,14 @@ fn scan(path: &Path, place: LeakPlace) -> Vec<LeakFinding> {
         .findings
 }
 
+/// `path` under `root`, with `/` between its parts on every system.
+fn relative(path: &Path, root: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
 fn ai() -> LeakPlace {
     LeakPlace::AiSession {
         tool: AiTool::ClaudeCode,
@@ -599,12 +607,7 @@ fn folders_give_what_git_would_commit_and_env_files_anywhere() {
     let got: Vec<(String, LeakPlace)> = listing
         .files
         .iter()
-        .map(|f| {
-            (
-                f.path.strip_prefix(root).unwrap().display().to_string(),
-                f.place.clone(),
-            )
-        })
+        .map(|f| (relative(&f.path, root), f.place.clone()))
         .collect();
     let file_in = |git, repository: &Option<String>| LeakPlace::File {
         git,
@@ -723,12 +726,7 @@ fn ai_histories_and_shell_histories_are_listed() {
     let mut names: Vec<(String, LeakPlace)> = listing
         .files
         .iter()
-        .map(|f| {
-            (
-                f.path.strip_prefix(home).unwrap().display().to_string(),
-                f.place.clone(),
-            )
-        })
+        .map(|f| (relative(&f.path, home), f.place.clone()))
         .collect();
     names.sort_by(|a, b| a.0.cmp(&b.0));
     let session = |tool| LeakPlace::AiSession { tool };

@@ -524,7 +524,8 @@ impl Vault {
 
     /// Puts back the database of `snapshot`, dropping every change made in
     /// memory since, so the next save doesn't write what is left of a
-    /// change that failed.
+    /// change that failed. Only for a change that saved nothing in between:
+    /// the hash of the file on disk stays as it is.
     pub fn restore(&mut self, snapshot: Snapshot) {
         self.db = snapshot.0;
     }

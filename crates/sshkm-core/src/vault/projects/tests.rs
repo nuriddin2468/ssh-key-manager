@@ -613,6 +613,73 @@ fn times_ahead_of_this_clock_are_taken_as_a_few_minutes_ahead() {
 }
 
 #[test]
+fn a_keepassxc_tag_joins_a_project_made_by_a_join_or_made_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut a, mut b) = (vault(&dir, "a"), vault(&dir, "b"));
+    let on_a = a.add_project(&input("Shop")).unwrap();
+    let on_b = b.add_project(&input("Shop")).unwrap();
+    sync(&mut a, &mut b);
+    let kept = on_a.min(on_b);
+    // Tagged in KeePassXC after the join: it joins the project.
+    let tagged = login(&mut a, "Tagged after the join");
+    set_tags(&mut a, &tagged, &["project/Shop"]);
+    // It joins at the next change of a project's name, color or logins.
+    let green = ProjectInput {
+        name: "Shop".into(),
+        color: ProjectColor::Green,
+    };
+    a.update_project(&kept, &green).unwrap();
+    assert_eq!(
+        a.project(&kept).unwrap().logins,
+        std::slice::from_ref(&tagged)
+    );
+    assert_eq!(tags(&a, &tagged), ["project/Shop"]);
+
+    // Deleted and made again: its old logins stay out, a login tagged
+    // afterwards joins the new one.
+    a.remove_project(&kept).unwrap();
+    assert_eq!(tags(&a, &tagged), Vec::<String>::new());
+    set_tags(&mut a, &tagged, &["project/Shop"]);
+    let fresh = login(&mut a, "Tagged for the new one");
+    set_tags(&mut a, &fresh, &["project/Shop"]);
+    let again = a.add_project(&input("Shop")).unwrap();
+    assert_eq!(
+        a.project(&again).unwrap().logins,
+        std::slice::from_ref(&fresh)
+    );
+    assert_eq!(tags(&a, &tagged), Vec::<String>::new());
+}
+
+#[test]
+fn a_time_from_a_clock_ahead_doesnt_undo_a_later_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut peer = vault(&dir, "peer");
+    let id = new_id();
+    let from_fast = serde_json::json!({
+        "name": {"v": "Shop", "t": at(-10)},
+        "color": {"v": "blue", "t": at(-10)},
+        "members": {"host:x": {"a": at(600)}},
+    });
+    peer.merge_projects(&[record(&id, &from_fast)]).unwrap();
+    assert_eq!(peer.project(&id).unwrap().hosts, ["x"]);
+    peer.set_project_member(&id, &host("x"), false).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    // The same record again: its time doesn't climb with this clock.
+    peer.merge_projects(&[record(&id, &from_fast)]).unwrap();
+    assert_eq!(peer.project(&id).unwrap().hosts, Vec::<String>::new());
+
+    // A device whose own record is dated ahead (its clock was) heals: the
+    // next merge brings its times back.
+    let mut fast = vault(&dir, "fast");
+    let own = new_id();
+    fast.put_project(&own, &parse(&own, &from_fast.to_string()).unwrap())
+        .unwrap();
+    fast.merge_projects(&[]).unwrap();
+    let healed = fast.stored_project(&own).unwrap();
+    assert!(healed.times().all(|t| t <= at(6)), "{healed:?}");
+}
+
+#[test]
 fn a_project_brought_back_by_a_removed_member_isnt_pruned() {
     let dir = tempfile::tempdir().unwrap();
     let mut vault = vault(&dir, "vault");

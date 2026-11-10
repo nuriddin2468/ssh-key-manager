@@ -4,6 +4,8 @@ import type { LeakPlace } from '@/bindings/LeakPlace';
 import type { LeakSecret } from '@/bindings/LeakSecret';
 import {
   groupLeaks,
+  isLeakIgnoreEntry,
+  leakIgnoreKey,
   leakKind,
   placeNames,
   repositories,
@@ -46,6 +48,8 @@ function finding(secret: LeakSecret, place: LeakPlace, path: string): LeakFindin
     modified: null,
   };
 }
+
+const seenOther = finding(token, { kind: 'aiSession', tool: 'codex' }, '/h/other.jsonl');
 
 const file = (git: 'tracked' | 'untracked' | 'ignored' | 'outside', repository: string | null) =>
   ({ kind: 'file', git, repository }) as const;
@@ -113,10 +117,23 @@ describe('leak model', () => {
       finding(token, { kind: 'aiSession', tool: 'codex' }, '/h/.codex/a.jsonl'),
       finding(token, { kind: 'aiSession', tool: 'codex' }, '/h/.codex/b.jsonl'),
     ];
-    const ignored = new Set(seen.map((f) => f.id));
+    const ignored = seen.map(leakIgnoreKey);
     const later = finding(token, { kind: 'aiSession', tool: 'codex' }, '/h/.codex/c.jsonl');
     const { open, hidden } = splitIgnored([...seen, later], ignored);
     expect(open.map((g) => g.findings.map((f) => f.path))).toEqual([['/h/.codex/c.jsonl']]);
     expect(hidden.map((g) => g.findings.length)).toEqual([2]);
+  });
+
+  it('shows an ignored leak again when the file gets more of it', () => {
+    const history = finding(github, { kind: 'shellHistory', shell: 'zsh' }, '/h/.zsh_history');
+    const ignored = [leakIgnoreKey(history), 'vault:weakPassword:x', `${history.id}#oops`];
+    expect(splitIgnored([history], ignored).open).toEqual([]);
+    const grown = { ...history, occurrences: history.occurrences + 1 };
+    expect(splitIgnored([grown], ignored).open.map((g) => g.findings)).toEqual([[grown]]);
+    // Fewer than when ignored (some redacted): still ignored.
+    const fewer = { ...history, occurrences: 3 };
+    expect(splitIgnored([fewer], [`${history.id}#5`]).open).toEqual([]);
+    expect(isLeakIgnoreEntry(leakIgnoreKey(history), history)).toBe(true);
+    expect(isLeakIgnoreEntry(leakIgnoreKey(grown), seenOther)).toBe(false);
   });
 });

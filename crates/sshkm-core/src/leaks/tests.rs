@@ -766,17 +766,85 @@ fn ai_histories_and_shell_histories_are_listed() {
 
 /// Private keys as `ssh-keygen` and this app write them, generated here.
 fn real_key(dir: &Path, name: &str, algorithm: crate::keys::GenerateAlgorithm) -> String {
+    real_key_with(dir, name, algorithm, None)
+}
+
+/// [`real_key`] with the comment many keys share, and a passphrase.
+fn real_key_with(
+    dir: &Path,
+    name: &str,
+    algorithm: crate::keys::GenerateAlgorithm,
+    passphrase: Option<&str>,
+) -> String {
     let info = crate::keys::generate(
         dir,
         &crate::keys::GenerateRequest {
             algorithm,
             file_name: name.into(),
-            comment: String::new(),
-            passphrase: None,
+            comment: "dev@laptop".into(),
+            passphrase: passphrase.map(SecretString::from),
         },
     )
     .unwrap();
     fs::read_to_string(info.private_path.unwrap()).unwrap()
+}
+
+/// The lines of `value` looked for alone.
+fn line_forms(value: &str) -> Vec<String> {
+    forms(value)
+        .into_iter()
+        .filter(|form| form.line.is_some())
+        .map(|form| String::from_utf8(form.bytes.to_vec()).unwrap())
+        .collect()
+}
+
+#[test]
+fn no_two_keys_share_a_line_that_is_looked_for_alone() {
+    use crate::keys::EcdsaCurve::{P256, P384};
+    use crate::keys::GenerateAlgorithm::{Ecdsa, Ed25519, Rsa};
+    use crate::keys::convert::{KeyFileFormat, convert};
+    let dir = tempfile::tempdir().unwrap();
+    let mut keys: Vec<(String, String)> = Vec::new();
+    let kinds = [
+        ("ed", Ed25519, None),
+        ("ed_pass", Ed25519, Some("correct horse")),
+        ("rsa", Rsa { bits: 3072 }, None),
+        ("ecdsa256", Ecdsa { curve: P256 }, None),
+        ("ecdsa384", Ecdsa { curve: P384 }, None),
+    ];
+    for (kind, algorithm, passphrase) in kinds {
+        for n in 0..2 {
+            let name = format!("{kind}_{n}");
+            let text = real_key_with(dir.path(), &name, algorithm, passphrase);
+            keys.push((name.clone(), text));
+            if passphrase.is_none() {
+                for format in [
+                    KeyFileFormat::Ppk3,
+                    KeyFileFormat::Ppk2,
+                    KeyFileFormat::Pkcs8,
+                    KeyFileFormat::Pem,
+                ] {
+                    let path = dir.path().join(&name);
+                    if let Ok(text) = convert(&path, None, format, None, None) {
+                        keys.push((format!("{name} as {format:?}"), text.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    for (i, (a, a_text)) in keys.iter().enumerate() {
+        let a_lines = line_forms(a_text);
+        assert!(!a_lines.is_empty(), "{a} has lines to look for");
+        for (b, b_text) in &keys[i + 1..] {
+            // The same key in two formats may share lines; different keys don't.
+            if a.split(' ').next() == b.split(' ').next() {
+                continue;
+            }
+            for line in line_forms(b_text) {
+                assert!(!a_lines.contains(&line), "{a} and {b} share {line}");
+            }
+        }
+    }
 }
 
 fn tracked() -> LeakPlace {
@@ -957,4 +1025,87 @@ fn findings_remember_the_file_for_redaction_but_never_show_it() {
     assert_eq!(found[0].file, FileId::of(&fs::metadata(&path).unwrap()));
     let json = serde_json::to_value(&found[0]).unwrap();
     assert!(json.get("file").is_none());
+}
+
+#[test]
+fn keys_are_found_however_their_lines_are_laid_out() {
+    use crate::keys::GenerateAlgorithm::{Ed25519, Rsa};
+    let dir = tempfile::tempdir().unwrap();
+    for (name, algorithm) in [("ed", Ed25519), ("rsa", Rsa { bits: 3072 })] {
+        let key = real_key(dir.path(), name, algorithm);
+        let key = key.trim_end();
+        let matcher = Matcher::new(vec![known("DEPLOY_KEY", key)]);
+        let indent = |n: usize| {
+            key.lines()
+                .map(|line| format!("{}{line}", " ".repeat(n)))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let numbered = key
+            .lines()
+            .enumerate()
+            .map(|(n, line)| format!("{:>6}\t{line}", n + 1))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let body: Vec<&str> = key.lines().collect();
+        let cases = [
+            ("YAML, 2 spaces", format!("ssh_key: |\n{}\n", indent(2))),
+            ("YAML, 4 spaces", format!("spec:\n  key: |\n{}\n", indent(4))),
+            ("YAML, 6 spaces", format!("a:\n  b:\n    key: |\n{}\n", indent(6))),
+            ("YAML, 12 spaces", format!("deep: |\n{}\n", indent(12))),
+            ("cat -n", numbered.clone()),
+            (
+                "cat -n in JSONL",
+                serde_json::json!({ "output": numbered }).to_string(),
+            ),
+            (
+                "a diff",
+                key.lines()
+                    .map(|line| format!("+{line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            (
+                "CRLF, in Codex's double-escaped arguments",
+                serde_json::json!({
+                    "arguments": serde_json::json!({ "content": key.replace('\n', "\r\n") }).to_string()
+                })
+                .to_string(),
+            ),
+            ("one private line alone", format!("x {} y\n", body[2])),
+        ];
+        let found_in = |path: &Path| {
+            let files = [ScanFile {
+                path: path.to_path_buf(),
+                place: tracked(),
+                size: 0,
+            }];
+            scan_files(&files, &matcher, &ScanControl::default())
+                .unwrap()
+                .findings
+        };
+        for (case, text) in cases {
+            let path = file(dir.path(), "case.txt", &text);
+            let found = found_in(&path);
+            assert_eq!(found.len(), 1, "{name}: {case}");
+            assert_eq!(found[0].occurrences, 1, "{name}: {case}");
+            // Redacting takes every line of it out.
+            let done = redact(&path, None, &matcher).unwrap();
+            assert_eq!(done.left, 0, "{name}: {case}");
+            assert_eq!(found_in(&path), [], "{name}: {case}");
+        }
+        // Two copies of one key are two occurrences, however close.
+        let twice = file(dir.path(), "twice.txt", &format!("{key}\n{key}\n"));
+        assert_eq!(found_in(&twice)[0].occurrences, 2, "{name}: twice");
+        let indented_twice = file(
+            dir.path(),
+            "twice.yaml",
+            &format!("a: |\n{}\nb: |\n{}\n", indent(4), indent(4)),
+        );
+        assert_eq!(
+            found_in(&indented_twice)[0].occurrences,
+            2,
+            "{name}: twice in YAML"
+        );
+    }
 }

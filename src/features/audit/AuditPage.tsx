@@ -35,7 +35,7 @@ import { ChecksList } from './ChecksList';
 import { FindingRow } from './FindingRow';
 import { LeakRow } from './LeakRow';
 import { LeakScanCard, leakKeys, useLeakStatus } from './LeakScan';
-import { splitIgnored } from './leakModel';
+import { isLeakIgnoreEntry, leakIgnoreKey, splitIgnored } from './leakModel';
 import {
   AREAS,
   type Area,
@@ -168,11 +168,13 @@ export function AuditPage() {
     { success: (fixed) => t('audit.fixedAuto', { count: fixed }) },
   );
 
-  const setIgnored = (ids: string[], value: boolean) =>
+  /** Adds `add` to the ignored findings after taking out what `drop` matches. */
+  const setIgnored = (add: string[], drop: (entry: string) => boolean) =>
     updateSettings({
-      ignoredFindings: value
-        ? [...settings.ignoredFindings, ...ids.filter((id) => !ignored.has(id))]
-        : settings.ignoredFindings.filter((other) => !ids.includes(other)),
+      ignoredFindings: [
+        ...settings.ignoredFindings.filter((entry) => !drop(entry)),
+        ...add.filter((id) => !ignored.has(id)),
+      ],
     });
 
   const scope =
@@ -191,10 +193,15 @@ export function AuditPage() {
     : '';
 
   const row = (item: AuditItem, muted: boolean) => {
-    const ids =
-      item.source === 'leak' ? item.group.findings.map((finding) => finding.id) : [item.ignoreId];
-    const ignore = muted ? undefined : () => setIgnored(ids, true);
-    const restore = muted ? () => setIgnored(ids, false) : undefined;
+    // A leak is ignored file by file, up to the occurrences seen now.
+    const findings = item.source === 'leak' ? item.group.findings : [];
+    const about = (entry: string) =>
+      item.source === 'leak'
+        ? findings.some((finding) => isLeakIgnoreEntry(entry, finding))
+        : entry === item.ignoreId;
+    const keys = item.source === 'leak' ? findings.map(leakIgnoreKey) : [item.ignoreId];
+    const ignore = muted ? undefined : () => setIgnored(keys, about);
+    const restore = muted ? () => setIgnored([], about) : undefined;
     if (item.source === 'leak') {
       return (
         <LeakRow

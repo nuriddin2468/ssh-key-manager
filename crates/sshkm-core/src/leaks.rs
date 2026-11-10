@@ -349,12 +349,17 @@ fn scan_file(
 /// Bytes between two matches of a secret that still make them one
 /// occurrence: a line break as it is or escaped (`\n`, `\r\n`, `\\n`).
 const JOIN_GAP: u64 = 4;
+/// Bytes between two lines of a multi-line value that still make them one
+/// occurrence: a line break with indentation (YAML), a line number
+/// (`cat -n`), a diff's `+`, escaped once or twice. Less than a key's
+/// `-----END …-----` and `-----BEGIN …-----` lines together, so two copies
+/// of one key stay two.
+const LINE_GAP: u64 = 40;
 
 /// Matches of one secret in one file, grouped: matches that overlap or
 /// nearly touch (a key's lines, or the whole key and one of its lines) are
-/// one occurrence. An occurrence counts when it holds a whole form of the
-/// value, or two of its lines ([`needles::Form::line`]): a line alone may
-/// be one that every key of its kind has.
+/// one occurrence. A line of a key found alone counts too: only lines of
+/// its private part are looked for alone, and no two keys share one.
 #[derive(Default)]
 struct Occurrences {
     current: Option<Occurrence>,
@@ -368,8 +373,9 @@ struct Occurrences {
 struct Occurrence {
     line: u32,
     end: u64,
-    whole: bool,
-    lines: Vec<u32>,
+    /// Where the last line of a multi-line value found in it ends: the next
+    /// line may be up to [`LINE_GAP`] further.
+    line_end: Option<u64>,
     encodings: BTreeSet<Encoding>,
     ranges: Vec<(u64, u64)>,
 }
@@ -383,27 +389,27 @@ impl Occurrences {
     }
 
     fn add(&mut self, hit: &search::Hit, owner: &needles::Owner) {
-        let joins = self
-            .current
-            .as_ref()
-            .is_some_and(|current| hit.start <= current.end + JOIN_GAP);
+        let joins = self.current.as_ref().is_some_and(|current| {
+            let next_line = owner.line.is_some()
+                && current
+                    .line_end
+                    .is_some_and(|end| hit.start <= end + LINE_GAP);
+            next_line || hit.start <= current.end + JOIN_GAP
+        });
         if !joins {
             self.close();
         }
         let current = self.current.get_or_insert_with(|| Occurrence {
             line: hit.line,
             end: hit.end,
-            whole: false,
-            lines: Vec::new(),
+            line_end: None,
             encodings: BTreeSet::new(),
             ranges: Vec::new(),
         });
         current.end = current.end.max(hit.end);
         current.line = current.line.min(hit.line);
-        match owner.line {
-            None => current.whole = true,
-            Some(line) if !current.lines.contains(&line) => current.lines.push(line),
-            Some(_) => {}
+        if owner.line.is_some() {
+            current.line_end = Some(current.line_end.map_or(hit.end, |end| end.max(hit.end)));
         }
         current.encodings.extend(owner.encoding);
         if self.ranges.is_some() {
@@ -415,9 +421,6 @@ impl Occurrences {
         let Some(occurrence) = self.current.take() else {
             return;
         };
-        if !occurrence.whole && occurrence.lines.len() < 2 {
-            return;
-        }
         self.counted = self.counted.saturating_add(1);
         self.first_line = Some(
             self.first_line

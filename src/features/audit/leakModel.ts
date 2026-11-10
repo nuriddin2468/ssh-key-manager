@@ -93,16 +93,40 @@ export function groupLeaks(findings: readonly LeakFinding[]): LeakGroup[] {
 }
 
 /**
+ * How an ignored leak is remembered: the finding (secret and file) and how
+ * many times the secret was in the file, so it shows again when a growing
+ * file (a shell history, a running session) gets it once more.
+ */
+export function leakIgnoreKey(finding: LeakFinding): string {
+  return `${finding.id}#${finding.occurrences}`;
+}
+
+/** Whether an ignored-findings entry is about `finding`, whatever its count. */
+export function isLeakIgnoreEntry(entry: string, finding: LeakFinding): boolean {
+  return entry.startsWith(`${finding.id}#`);
+}
+
+/**
  * The groups of findings not ignored and of those ignored. A leak is ignored
- * finding by finding (file by file), so a new place it turns up in shows.
+ * file by file, up to the occurrences seen then: a new file the secret turns
+ * up in, or more of it in the same file, shows.
  */
 export function splitIgnored(
   findings: readonly LeakFinding[],
-  ignored: ReadonlySet<string>,
+  ignored: Iterable<string>,
 ): { open: LeakGroup[]; hidden: LeakGroup[] } {
+  const seen = new Map<string, number>();
+  for (const entry of ignored) {
+    const at = entry.lastIndexOf('#');
+    if (!entry.startsWith('leak:') || at < 0) continue;
+    const count = Number(entry.slice(at + 1));
+    const id = entry.slice(0, at);
+    if (Number.isInteger(count)) seen.set(id, Math.max(seen.get(id) ?? 0, count));
+  }
+  const isIgnored = (finding: LeakFinding) => finding.occurrences <= (seen.get(finding.id) ?? 0);
   return {
-    open: groupLeaks(findings.filter((finding) => !ignored.has(finding.id))),
-    hidden: groupLeaks(findings.filter((finding) => ignored.has(finding.id))),
+    open: groupLeaks(findings.filter((finding) => !isIgnored(finding))),
+    hidden: groupLeaks(findings.filter(isIgnored)),
   };
 }
 

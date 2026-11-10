@@ -194,8 +194,8 @@ pub struct Form {
     pub bytes: Zeroizing<Vec<u8>>,
     /// How it is encoded: `None` for as it is, or escaped in JSON.
     pub encoding: Option<Encoding>,
-    /// For a line of a multi-line value, which one (from 0): such a form
-    /// counts only next to another line of the same value.
+    /// For a line of a multi-line value, which one (from 0): lines of one
+    /// value near each other are one occurrence.
     pub line: Option<u32>,
 }
 
@@ -280,8 +280,8 @@ pub fn forms(value: &str) -> Vec<Form> {
 /// and `-----END`, `Key: value` headers (`Proc-Type`, PuTTY's), the blocks
 /// that are public anyway (a certificate, a public key, PuTTY's
 /// `Public-Lines`), and the first line of an OpenSSH key, which every key
-/// shares. Lines found alone still count only next to another line of the
-/// same value.
+/// shares. What is left is unique to the key: no two keys share such a
+/// line, whatever their kind, format or comment (see the tests).
 fn body_lines(text: &str) -> Vec<(u32, &str)> {
     let mut out = Vec::new();
     let mut public = false;

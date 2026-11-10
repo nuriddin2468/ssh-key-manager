@@ -477,3 +477,70 @@ fn a_project_tag_no_project_has_is_suggested_by_its_name() {
     assert_eq!(tags_of(&thesis), ["thesis"]);
     assert_eq!(tags_of(&shop), Vec::<String>::new());
 }
+
+#[test]
+fn logins_left_out_when_accepting_stay_out_though_tagged() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = crate::vault::VaultPaths::new(dir.path().join("vault.kdbx"));
+    let (mut vault, _) =
+        crate::vault::Vault::create(&paths, &secrecy::SecretString::from("master")).unwrap();
+    let mut tagged = |title: &str| {
+        let id = vault
+            .add_entry(&crate::vault::EntryInput {
+                title: title.into(),
+                ..crate::vault::EntryInput::default()
+            })
+            .unwrap();
+        let uuid = uuid::Uuid::parse_str(&id).unwrap();
+        vault.db.entry_mut(uuid.into()).unwrap().tags = vec!["project/thesis".into()];
+        id
+    };
+    let (kept, unchecked) = (tagged("Kept"), tagged("Unchecked"));
+    drop(tagged);
+    let logins = vault.suggestion_logins();
+    let offered = suggest(
+        &Sources {
+            logins: &logins,
+            ..Sources::default()
+        },
+        &Declined::default(),
+    );
+    let thesis = offered.iter().find(|s| s.name == "thesis").unwrap();
+    assert_eq!(thesis.logins.len(), 2);
+    let keep = [ProjectMember::Login { id: kept.clone() }];
+    let input = crate::vault::projects::ProjectInput {
+        name: thesis.name.clone(),
+        color: thesis.color,
+    };
+    let id = vault.accept_suggestion(thesis, &input, &keep).unwrap();
+    assert_eq!(
+        vault.project(&id).unwrap().logins,
+        std::slice::from_ref(&kept)
+    );
+    let tags = |vault: &crate::vault::Vault, id: &str| {
+        let uuid = uuid::Uuid::parse_str(id).unwrap();
+        vault.db.entry(uuid.into()).unwrap().tags.clone()
+    };
+    assert_eq!(tags(&vault, &unchecked), Vec::<String>::new());
+    // Tagged again in KeePassXC, it still stays out.
+    let uuid = uuid::Uuid::parse_str(&unchecked).unwrap();
+    vault.db.entry_mut(uuid.into()).unwrap().tags = vec!["project/thesis".into()];
+    vault
+        .update_project(
+            &id,
+            &crate::vault::projects::ProjectInput {
+                name: "thesis".into(),
+                color: ProjectColor::Slate,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        vault.project(&id).unwrap().logins,
+        std::slice::from_ref(&kept)
+    );
+    // Members it didn't offer are refused before anything changes.
+    let other = [ProjectMember::Host {
+        alias: "elsewhere".into(),
+    }];
+    assert!(vault.accept_suggestion(thesis, &input, &other).is_err());
+}

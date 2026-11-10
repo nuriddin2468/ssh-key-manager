@@ -333,11 +333,6 @@ pub async fn projects_accept_suggestion(
         };
         let suggestion = suggestion
             .ok_or_else(|| AppError::not_found("the suggestion; look for suggestions again"))?;
-        if let Some(member) = members.iter().find(|m| !suggestion.offers(m)) {
-            return Err(AppError::invalid(format!(
-                "not part of the suggestion: {member:?}"
-            )));
-        }
         let project = state.vault.change(&app, &state.backup_dir, |vault| {
             if vault.vault_id() != for_vault {
                 return Err(AppError::not_found(
@@ -346,16 +341,7 @@ pub async fn projects_accept_suggestion(
             }
             // Every member is checked before anything changes; a failure
             // after that is undone with the rest of the change.
-            for member in &members {
-                vault.check_project_member(member, true)?;
-            }
-            let id = match &suggestion.existing {
-                Some(id) => id.clone(),
-                None => vault.add_project(&input)?,
-            };
-            for member in &members {
-                vault.set_project_member(&id, member, true)?;
-            }
+            let id = vault.accept_suggestion(&suggestion, &input, &members)?;
             Ok(vault.project(&id)?)
         })?;
         offered().1.retain(|s| s.key != key);

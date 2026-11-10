@@ -716,6 +716,64 @@ impl Vault {
         Ok(true)
     }
 
+    /// Makes `suggestion` a project named and colored as `input`, or adds
+    /// to the existing project it names, with the members the user `kept`.
+    /// Each must be one the suggestion offers and one a project takes; all
+    /// are checked before anything changes. Logins it offered that weren't
+    /// kept are recorded as taken out, so a `project/` tag on them doesn't
+    /// bring them in. Returns the project's id.
+    pub fn accept_suggestion(
+        &mut self,
+        suggestion: &suggest::ProjectSuggestion,
+        input: &ProjectInput,
+        kept: &[ProjectMember],
+    ) -> Result<String> {
+        for member in kept {
+            if !suggestion.offers(member) {
+                return Err(Error::invalid(format!(
+                    "not part of the suggestion: {member:?}"
+                )));
+            }
+            self.check_project_member(member, true)?;
+        }
+        let id = match &suggestion.existing {
+            Some(id) => {
+                self.live_project(id)?;
+                id.clone()
+            }
+            None => self.add_project(input)?,
+        };
+        for member in kept {
+            self.set_project_member(&id, member, true)?;
+        }
+        let left_out: Vec<&String> = suggestion
+            .logins
+            .iter()
+            .filter(|login| {
+                !kept
+                    .iter()
+                    .any(|m| matches!(m, ProjectMember::Login { id } if id == *login))
+            })
+            .collect();
+        if !left_out.is_empty() {
+            let mut stored = self.live_project(&id)?;
+            let t = stored.tick();
+            for login in left_out {
+                let key = format!("login:{login}");
+                let next = match stored.members.get(&key) {
+                    Some(p) if !p.present() => continue,
+                    Some(p) => Presence { a: p.a, r: Some(t) },
+                    None if stored.members.len() >= MAX_STORED_MEMBERS => continue,
+                    None => Presence { a: 0, r: Some(t) },
+                };
+                stored.members.insert(key, next);
+            }
+            self.put_project(&id, &stored)?;
+            self.sync_tags();
+        }
+        Ok(id)
+    }
+
     /// Every record, tombstones too, to send to another own device; those
     /// removed longer ago than [`KEEP_REMOVED_MS`] are left out.
     pub fn project_records(&self) -> Vec<ProjectRecord> {

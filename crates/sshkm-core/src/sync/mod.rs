@@ -24,7 +24,7 @@ pub use self::host_keys::HostKeys;
 pub use self::merge::{
     Base, Change, Conflict, Field, Hasher, Item, Plan, agree, digest, digests, plan,
 };
-use crate::vault::projects::{self, ProjectRecord};
+use crate::vault::projects::ProjectRecord;
 use crate::vault::{DeviceRecord, check_records};
 use crate::{Error, Result};
 
@@ -86,8 +86,9 @@ impl Manifest {
                 }
             }
         }
-        check_records(&self.devices)?;
-        projects::check_records(&self.projects)
+        // Project records are taken one by one when they merge: one this
+        // version can't read is skipped, never the whole sync.
+        check_records(&self.devices)
     }
 }
 

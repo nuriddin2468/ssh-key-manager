@@ -435,16 +435,43 @@ impl VaultRuntime {
         work: impl FnOnce(&mut Vault) -> AppResult<T>,
         save: impl FnOnce(&mut Vault) -> sshkm_core::Result<()>,
     ) -> AppResult<T> {
-        self.with(app, |vault| {
-            let result = work(vault)?;
-            if let Err(error) = save(vault) {
-                // Reload what is on disk, whatever happened to the write.
-                let _ = vault.refresh();
-                return Err(error.into());
-            }
-            self.remember_projects(vault);
-            Ok(result)
+        self.change_then_save_or(work, save, || {
+            let _ = app.emit(LOCKED_EVENT, LockReason::Changed);
         })
+    }
+
+    /// [`Self::change_then_save`], calling `on_changed` as
+    /// [`Self::access_then`] does.
+    fn change_then_save_or<T>(
+        &self,
+        work: impl FnOnce(&mut Vault) -> AppResult<T>,
+        save: impl FnOnce(&mut Vault) -> sshkm_core::Result<()>,
+        on_changed: impl FnOnce(),
+    ) -> AppResult<T> {
+        self.access_then(
+            true,
+            |vault| {
+                let result = match work(vault) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        // What a change that failed halfway made in memory
+                        // must not go out with the next save.
+                        if let Err(reload) = vault.discard_changes() {
+                            log::warn!("vault: a failed change was not undone: {reload}");
+                        }
+                        return Err(error);
+                    }
+                };
+                if let Err(error) = save(vault) {
+                    // Reload what is on disk, whatever happened to the write.
+                    let _ = vault.refresh();
+                    return Err(error.into());
+                }
+                self.remember_projects(vault);
+                Ok(result)
+            },
+            on_changed,
+        )
     }
 
     /// Copies `text` so that clipboard history and cloud clipboards skip it,
@@ -686,6 +713,44 @@ mod tests {
         assert_eq!(runtime.lock_due(true), Some(LockReason::Sleep));
         assert!(runtime.lock_now());
         assert_eq!(runtime.lock_due(true), None);
+    }
+
+    #[test]
+    fn a_change_that_fails_halfway_leaves_nothing_behind() {
+        use sshkm_core::vault::projects::{ProjectColor, ProjectInput, ProjectMember};
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(&dir.path().join("data"), &dir.path().join("vault.kdbx"));
+        let (vault, _) = Vault::create(&rt.paths(), &s("master")).unwrap();
+        rt.set_unlocked(vault);
+        let backups = dir.path().join("backups");
+        let input = ProjectInput {
+            name: "Shop".into(),
+            color: ProjectColor::Blue,
+        };
+        // The project is made, then a member it can't take fails the change.
+        let failed = rt.change_then_save_or(
+            |vault| {
+                let id = vault.add_project(&input)?;
+                let gone = ProjectMember::Login {
+                    id: "6f1c2d3e-0000-4000-8000-0000000000aa".into(),
+                };
+                vault.set_project_member(&id, &gone, true)?;
+                Ok(())
+            },
+            |vault| vault.save(&backups),
+            || {},
+        );
+        assert!(failed.is_err());
+        assert_eq!(run(&rt, false, |vault| Ok(vault.projects().len())), 0);
+        // The next change doesn't save it either, and trying again works.
+        rt.change_then_save_or(
+            |vault| Ok(vault.add_project(&input)?),
+            |vault| vault.save(&backups),
+            || {},
+        )
+        .unwrap();
+        let reopened = Vault::unlock(&rt.paths(), &s("master")).unwrap();
+        assert_eq!(reopened.projects().len(), 1);
     }
 
     #[test]

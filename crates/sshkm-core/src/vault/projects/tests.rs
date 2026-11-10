@@ -58,6 +58,23 @@ fn tags_on_disk(vault: &Vault, secret: &SecretString, title: &str) -> Vec<String
     entry.tags.clone()
 }
 
+fn tags(vault: &Vault, entry: &str) -> Vec<String> {
+    vault.find(entry).unwrap().tags.clone()
+}
+
+fn set_tags(vault: &mut Vault, entry: &str, tags: &[&str]) {
+    let id = super::super::parse_id(entry).unwrap();
+    vault.db.entry_mut(id).unwrap().tags = tags.iter().map(|t| (*t).to_owned()).collect();
+}
+
+fn add(vault: &mut Vault, id: &str, member: &ProjectMember) {
+    assert!(vault.set_project_member(id, member, true).unwrap());
+}
+
+fn login_member(id: &str) -> ProjectMember {
+    ProjectMember::Login { id: id.into() }
+}
+
 #[test]
 fn projects_are_kept_in_the_vault_with_their_members() {
     let dir = tempfile::tempdir().unwrap();
@@ -81,11 +98,8 @@ fn projects_are_kept_in_the_vault_with_their_members() {
         assert!(!vault.set_project_member(&id, &member, true).unwrap());
     }
     let github = login(&mut vault, "GitHub");
-    assert!(
-        vault
-            .set_project_member(&id, &ProjectMember::Login { id: github.clone() }, true)
-            .unwrap()
-    );
+    set_tags(&mut vault, &github, &["work"]);
+    add(&mut vault, &id, &login_member(&github));
     assert!(
         vault
             .set_project_member(&id, &host("shop-bastion"), false)
@@ -104,9 +118,12 @@ fn projects_are_kept_in_the_vault_with_their_members() {
     );
     assert_eq!(project.environments, ["shop-api"]);
     assert_eq!(project.folders, ["~/code/shop"]);
-    assert_eq!(project.logins, [github]);
-    // The tag is a KeePass tag, as KeePassXC reads and shows it.
-    assert_eq!(tags_on_disk(&vault, &secret, "GitHub"), ["Shop"]);
+    assert_eq!(project.logins, std::slice::from_ref(&github));
+    // A KeePass tag, as KeePassXC reads and shows it, next to the user's own.
+    assert_eq!(
+        tags_on_disk(&vault, &secret, "GitHub"),
+        ["work", "project/Shop"]
+    );
 }
 
 #[test]
@@ -123,6 +140,7 @@ fn names_are_labels_unique_in_any_case() {
         "  ",
         "a;b",
         "a,b",
+        "a:b",
         "a\tb",
         "line\nbreak",
         &"x".repeat(65),
@@ -138,52 +156,44 @@ fn names_are_labels_unique_in_any_case() {
 }
 
 #[test]
-fn logins_belong_by_tag_and_follow_renames_and_removals() {
+fn logins_are_members_by_id_whatever_their_own_tags_say() {
     let dir = tempfile::tempdir().unwrap();
     let mut vault = vault(&dir, "vault");
+    // The user's own tag named like a project makes nothing a member, and a
+    // `project/…` tag no project wrote goes at the next write.
     let tagged = login(&mut vault, "Tagged in KeePassXC");
-    {
-        let id = parse_id_for_test(&tagged);
-        let mut entry = vault.db.entry_mut(id).unwrap();
-        entry.tags = vec!["work".into(), " shop ".into(), String::new()];
-    }
+    set_tags(&mut vault, &tagged, &["work", " shop ", "project/Shop", ""]);
+    let chosen = login(&mut vault, "Chosen");
     let trashed = login(&mut vault, "Old");
     let id = vault.add_project(&input("Shop")).unwrap();
-    // A login already tagged with the name is a member at once.
-    assert_eq!(
-        vault.project(&id).unwrap().logins,
-        std::slice::from_ref(&tagged)
-    );
-    vault
-        .set_project_member(
-            &id,
-            &ProjectMember::Login {
-                id: trashed.clone(),
-            },
-            true,
-        )
-        .unwrap();
+    assert_eq!(vault.project(&id).unwrap().logins, Vec::<String>::new());
+    add(&mut vault, &id, &login_member(&chosen));
+    add(&mut vault, &id, &login_member(&trashed));
+    assert_eq!(tags(&vault, &tagged), ["work", "shop"]);
+    assert_eq!(tags(&vault, &chosen), ["project/Shop"]);
     vault.trash_entry(&trashed).unwrap();
     assert_eq!(
         vault.project(&id).unwrap().logins,
-        std::slice::from_ref(&tagged)
+        std::slice::from_ref(&chosen)
     );
 
     vault.update_project(&id, &input("Shop Co")).unwrap();
-    let tags = |vault: &Vault, entry: &str| vault.find(entry).unwrap().tags.clone();
-    assert_eq!(tags(&vault, &tagged), ["work", "Shop Co"]);
-    assert_eq!(tags(&vault, &trashed), ["Shop Co"]);
-    assert_eq!(
-        vault.project(&id).unwrap().logins,
-        std::slice::from_ref(&tagged)
-    );
+    assert_eq!(tags(&vault, &chosen), ["project/Shop Co"]);
+    assert_eq!(tags(&vault, &trashed), ["project/Shop Co"]);
+    let work = vault.add_project(&input("work")).unwrap();
+    add(&mut vault, &work, &login_member(&chosen));
+    assert_eq!(tags(&vault, &chosen), ["project/Shop Co", "project/work"]);
 
     vault
-        .set_project_member(&id, &ProjectMember::Login { id: tagged.clone() }, false)
+        .set_project_member(&id, &login_member(&chosen), false)
         .unwrap();
-    assert_eq!(tags(&vault, &tagged), ["work"]);
+    assert_eq!(tags(&vault, &chosen), ["project/work"]);
+    // Removing project "work" leaves the user's own `work` tag alone.
+    vault.remove_project(&work).unwrap();
     vault.remove_project(&id).unwrap();
+    assert_eq!(tags(&vault, &chosen), Vec::<String>::new());
     assert_eq!(tags(&vault, &trashed), Vec::<String>::new());
+    assert_eq!(tags(&vault, &tagged), ["work", "shop"]);
     assert_eq!(vault.projects(), Vec::<Project>::new());
     assert!(vault.project(&id).is_err());
     assert!(vault.update_project(&id, &input("Again")).is_err());
@@ -198,13 +208,21 @@ fn logins_belong_by_tag_and_follow_renames_and_removals() {
     let again = vault.add_project(&input("Shop")).unwrap();
     assert!(
         vault
-            .set_project_member(&again, &ProjectMember::Login { id: env }, true)
+            .set_project_member(&again, &login_member(&env), true)
             .is_err()
     );
-}
-
-fn parse_id_for_test(id: &str) -> EntryId {
-    super::super::parse_id(id).unwrap()
+    // A login that is gone can't go in, and can still come out.
+    let gone = "6f1c2d3e-0000-4000-8000-0000000000aa";
+    assert!(
+        vault
+            .set_project_member(&again, &login_member(gone), true)
+            .is_err()
+    );
+    assert!(
+        vault
+            .check_project_member(&login_member(gone), false)
+            .is_ok()
+    );
 }
 
 #[test]
@@ -218,6 +236,7 @@ fn members_are_checked() {
         host("prod*"),
         host("!prod"),
         host("a\nb"),
+        host("say\"hi"),
         ProjectMember::Key {
             fingerprint: "MD5:aa:bb".into(),
         },
@@ -236,10 +255,9 @@ fn members_are_checked() {
         ProjectMember::Folder {
             path: "~/a\nb".into(),
         },
-        ProjectMember::Login {
-            id: "not-an-id".into(),
-        },
+        login_member("not-an-id"),
     ] {
+        assert!(!is_valid_member(&bad), "{bad:?}");
         assert!(
             vault.set_project_member(&id, &bad, true).is_err(),
             "{bad:?}"
@@ -281,7 +299,14 @@ fn folders_are_kept_relative_to_home() {
     assert_eq!(folder_path("~/code", None), None);
 }
 
-/// A record as another device would send it, changed at `modified`.
+/// Sends each vault's records to the other, as a sync does both ways.
+fn sync(a: &mut Vault, b: &mut Vault) {
+    let (from_a, from_b) = (a.project_records(), b.project_records());
+    a.merge_projects(&from_b).unwrap();
+    b.merge_projects(&from_a).unwrap();
+}
+
+/// A record as another device would send it.
 fn record(id: &str, json: &Value) -> ProjectRecord {
     ProjectRecord {
         id: id.into(),
@@ -289,84 +314,134 @@ fn record(id: &str, json: &Value) -> ProjectRecord {
     }
 }
 
+/// Milliseconds from now, for records dated around it.
+fn at(minutes: i64) -> i64 {
+    now_ms() + minutes * 60_000
+}
+
 #[test]
-fn a_sync_takes_what_changed_last() {
+fn changes_made_on_two_devices_before_they_sync_all_survive() {
     let dir = tempfile::tempdir().unwrap();
-    let mut vault = vault(&dir, "vault");
-    let id = vault.add_project(&input("Shop")).unwrap();
-    let github = login(&mut vault, "GitHub");
-    vault
-        .set_project_member(&id, &ProjectMember::Login { id: github.clone() }, true)
+    let (mut laptop, mut desktop) = (vault(&dir, "laptop"), vault(&dir, "desktop"));
+    let id = laptop.add_project(&input("Shop")).unwrap();
+    add(&mut laptop, &id, &host("shop-prod"));
+    add(&mut laptop, &id, &host("shop-old"));
+    sync(&mut laptop, &mut desktop);
+    assert_eq!(
+        desktop.project(&id).unwrap().hosts,
+        ["shop-old", "shop-prod"]
+    );
+
+    // Each adds, removes and renames something before they sync again.
+    add(
+        &mut laptop,
+        &id,
+        &ProjectMember::Folder {
+            path: "~/code/shop".into(),
+        },
+    );
+    laptop
+        .update_project(
+            &id,
+            &ProjectInput {
+                name: "Shop".into(),
+                color: ProjectColor::Green,
+            },
+        )
         .unwrap();
+    add(&mut desktop, &id, &host("shop-db"));
+    desktop
+        .set_project_member(&id, &host("shop-old"), false)
+        .unwrap();
+    desktop.update_project(&id, &input("Shop Co")).unwrap();
+    sync(&mut laptop, &mut desktop);
 
-    // Older than the one here: not taken.
-    let old = record(
-        &id,
-        &serde_json::json!({"name": "Old", "modified": "2020-01-01T00:00:00Z"}),
-    );
-    assert!(!vault.merge_projects(&[old]).unwrap());
-    assert_eq!(names(&vault), ["Shop"]);
+    for vault in [&laptop, &desktop] {
+        let project = vault.project(&id).unwrap();
+        assert_eq!(project.name, "Shop Co");
+        assert_eq!(project.color, ProjectColor::Green);
+        assert_eq!(project.hosts, ["shop-db", "shop-prod"]);
+        assert_eq!(project.folders, ["~/code/shop"]);
+    }
+    assert_eq!(laptop.project_records(), desktop.project_records());
+}
 
-    // Renamed there later: taken, and the tag here moves along. Fields of a
-    // later version are kept.
-    let in_minutes = |minutes: i64| {
-        let text = (OffsetDateTime::now_utc() + Duration::minutes(minutes))
-            .format(&time::format_description::well_known::Rfc3339)
+#[test]
+fn the_order_records_come_in_doesnt_matter() {
+    let dir = tempfile::tempdir().unwrap();
+    for reverse in [false, true] {
+        // A phone got "Acme" (b1) and put a login in it; meanwhile the desktop
+        // and the laptop joined their two "Acme"s into a1, the smaller id.
+        let mut phone = vault(&dir, &format!("phone-{reverse}"));
+        let (a1, b1) = (
+            "00000000-0000-4000-8000-000000000001",
+            "ffffffff-0000-4000-8000-000000000001",
+        );
+        let early = at(-60);
+        phone
+            .merge_projects(&[record(
+                b1,
+                &serde_json::json!({"name": {"v": "Acme", "t": early}, "color": {"v": "blue", "t": early}}),
+            )])
             .unwrap();
-        format!("{}Z", &text[..19])
-    };
-    let later = in_minutes(1);
-    let renamed = record(
-        &id,
-        &serde_json::json!({
-            "name": "Shop Co",
-            "color": "a-color-of-the-future",
-            "hosts": ["shop-prod"],
-            "modified": later,
-            "future": {"x": 1},
-        }),
-    );
-    assert!(
-        vault
-            .merge_projects(std::slice::from_ref(&renamed))
-            .unwrap()
-    );
-    let project = vault.project(&id).unwrap();
-    assert_eq!(project.name, "Shop Co");
-    assert_eq!(project.color, ProjectColor::Teal);
-    assert_eq!(project.logins, std::slice::from_ref(&github));
-    assert_eq!(vault.find(&github).unwrap().tags, ["Shop Co"]);
-    assert_eq!(vault.project_records(), [renamed]);
+        let github = login(&mut phone, "GitHub");
+        add(&mut phone, b1, &login_member(&github));
+        let join = at(1);
+        let mut records = vec![
+            record(
+                b1,
+                &serde_json::json!({"name": {"v": "Acme", "t": early}, "color": {"v": "blue", "t": early}, "removed": join, "joined": a1}),
+            ),
+            record(
+                a1,
+                &serde_json::json!({"name": {"v": "Acme", "t": early}, "color": {"v": "teal", "t": early}}),
+            ),
+        ];
+        if reverse {
+            records.reverse();
+        }
+        assert!(phone.merge_projects(&records).unwrap());
+        let projects = phone.projects();
+        assert_eq!(projects.len(), 1, "{reverse}");
+        assert_eq!(projects[0].id, a1);
+        assert_eq!(
+            projects[0].logins,
+            std::slice::from_ref(&github),
+            "{reverse}"
+        );
+        assert_eq!(tags(&phone, &github), ["project/Acme"], "{reverse}");
 
-    // From too far in the future: not taken.
-    let ahead = record(
-        &id,
-        &serde_json::json!({"name": "Ahead", "modified": "2999-01-01T00:00:00Z"}),
-    );
-    assert!(!vault.merge_projects(&[ahead]).unwrap());
-
-    // Removed there, later still: removed here, with its tag.
-    let latest = in_minutes(2);
-    let removed = record(
-        &id,
-        &serde_json::json!({"modified": latest, "removed": latest}),
-    );
-    assert!(vault.merge_projects(&[removed]).unwrap());
-    assert_eq!(vault.projects(), Vec::<Project>::new());
-    assert_eq!(vault.find(&github).unwrap().tags, Vec::<String>::new());
-
-    // A record that isn't one is skipped, and refused by the check.
-    let bad = record(
-        &uuid::Uuid::nil().to_string(),
-        &serde_json::json!({"name": "a;b", "modified": "2026-01-01T00:00:00Z"}),
-    );
-    assert!(check_records(std::slice::from_ref(&bad)).is_err());
-    assert!(!vault.merge_projects(&[bad]).unwrap());
-    let not_an_id = record(
-        "x",
-        &serde_json::json!({"name": "Fine", "modified": "2026-01-01T00:00:00Z"}),
-    );
-    assert!(check_records(&[not_an_id]).is_err());
+        // Two projects swap names: A becomes C, B becomes A.
+        let (pa, pb) = (
+            "10000000-0000-4000-8000-000000000001",
+            "20000000-0000-4000-8000-000000000002",
+        );
+        let named = |name: &str, t: i64, login: &str| {
+            serde_json::json!({
+                "name": {"v": name, "t": t},
+                "color": {"v": "blue", "t": early},
+                "members": {format!("login:{login}"): {"a": early}},
+            })
+        };
+        let (la, lb) = (login(&mut phone, "A login"), login(&mut phone, "B login"));
+        phone
+            .merge_projects(&[
+                record(pa, &named("A", early, &la)),
+                record(pb, &named("B", early, &lb)),
+            ])
+            .unwrap();
+        assert_eq!(tags(&phone, &la), ["project/A"]);
+        let mut swap = vec![
+            record(pa, &named("C", join, &la)),
+            record(pb, &named("A", join, &lb)),
+        ];
+        if reverse {
+            swap.reverse();
+        }
+        phone.merge_projects(&swap).unwrap();
+        assert_eq!(tags(&phone, &la), ["project/C"], "{reverse}");
+        assert_eq!(tags(&phone, &lb), ["project/A"], "{reverse}");
+    }
 }
 
 #[test]
@@ -375,46 +450,126 @@ fn projects_made_on_two_computers_with_one_name_become_one() {
     let mut laptop = vault(&dir, "laptop");
     let mut desktop = vault(&dir, "desktop");
     let on_laptop = laptop.add_project(&input("Shop")).unwrap();
-    laptop
-        .set_project_member(&on_laptop, &host("shop-prod"), true)
-        .unwrap();
+    add(&mut laptop, &on_laptop, &host("shop-prod"));
     let on_desktop = desktop.add_project(&input("shop")).unwrap();
-    desktop
-        .set_project_member(&on_desktop, &host("shop-db"), true)
-        .unwrap();
+    add(&mut desktop, &on_desktop, &host("shop-db"));
     laptop.add_project(&input("Blog")).unwrap();
 
-    let from_laptop = laptop.project_records();
-    let from_desktop = desktop.project_records();
-    assert!(check_records(&from_laptop).is_ok());
-    assert!(laptop.merge_projects(&from_desktop).unwrap());
-    assert!(desktop.merge_projects(&from_laptop).unwrap());
+    sync(&mut laptop, &mut desktop);
     // Once more, as the next sync would.
-    let (from_laptop, from_desktop) = (laptop.project_records(), desktop.project_records());
-    laptop.merge_projects(&from_desktop).unwrap();
-    desktop.merge_projects(&from_laptop).unwrap();
+    sync(&mut laptop, &mut desktop);
 
     let kept = on_laptop.clone().min(on_desktop.clone());
     for vault in [&laptop, &desktop] {
         let projects = vault.projects();
         assert_eq!(projects.len(), 2, "{projects:?}");
         let shop = projects.iter().find(|p| p.id == kept).unwrap();
-        let mut hosts = shop.hosts.clone();
-        hosts.sort();
-        assert_eq!(hosts, ["shop-db", "shop-prod"]);
+        assert_eq!(shop.hosts, ["shop-db", "shop-prod"]);
     }
     assert_eq!(laptop.projects(), desktop.projects());
+    assert_eq!(laptop.project_records(), desktop.project_records());
+}
+
+#[test]
+fn a_removal_wins_over_older_changes_and_a_later_change_wins_over_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut laptop, mut desktop) = (vault(&dir, "laptop"), vault(&dir, "desktop"));
+    let id = laptop.add_project(&input("Shop")).unwrap();
+    sync(&mut laptop, &mut desktop);
+    laptop.remove_project(&id).unwrap();
+    sync(&mut laptop, &mut desktop);
+    assert_eq!(desktop.projects(), Vec::<Project>::new());
+
+    // A change made after the removal brings it back, on both.
+    let later = at(1);
+    let back = record(
+        &id,
+        &serde_json::json!({"name": {"v": "Shop", "t": 0}, "color": {"v": "blue", "t": 0}, "members": {"host:shop-prod": {"a": later}}}),
+    );
+    assert!(desktop.merge_projects(&[back]).unwrap());
+    sync(&mut laptop, &mut desktop);
+    assert_eq!(laptop.project(&id).unwrap().hosts, ["shop-prod"]);
+}
+
+#[test]
+fn a_sync_skips_what_it_cant_take_one_record_at_a_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "vault");
+    let fine = new_id();
+    let t = at(0);
+    let records = [
+        // From too far in the future.
+        record(
+            &new_id(),
+            &serde_json::json!({"name": {"v": "Ahead", "t": at(60)}, "color": {"v": "blue", "t": t}}),
+        ),
+        record(
+            &new_id(),
+            &serde_json::json!({"name": {"v": "a;b", "t": t}, "color": {"v": "blue", "t": t}}),
+        ),
+        record(
+            "not-an-id",
+            &serde_json::json!({"name": {"v": "X", "t": t}, "color": {"v": "blue", "t": t}}),
+        ),
+        record(&new_id(), &serde_json::json!({"name": "old format"})),
+        // Fine, with a color and a kind of member of a later version.
+        record(
+            &fine,
+            &serde_json::json!({
+                "name": {"v": "Fine", "t": t},
+                "color": {"v": "a-color-of-the-future", "t": t},
+                "members": {"host:fine-prod": {"a": t}, "gadget:x": {"a": t}, "host:bad alias": {"a": t}},
+                "future": {"x": 1},
+            }),
+        ),
+    ];
+    assert!(vault.merge_projects(&records).unwrap());
+    let projects = vault.projects();
+    assert_eq!(projects.len(), 1);
+    assert_eq!(projects[0].name, "Fine");
+    assert_eq!(projects[0].color, ProjectColor::Teal);
+    assert_eq!(projects[0].hosts, ["fine-prod"]);
+    // What a later version keeps goes on to the next device.
+    let sent = vault.project_records();
+    assert!(sent[0].record.contains("gadget:x") && sent[0].record.contains("future"));
+    assert!(!sent[0].record.contains("bad alias"));
+}
+
+#[test]
+fn removals_are_forgotten_after_a_while() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "vault");
+    let long_ago = now_ms() - KEEP_REMOVED_MS - 1;
+    let (old, recent) = (new_id(), new_id());
+    vault
+        .merge_projects(&[
+            record(
+                &old,
+                &serde_json::json!({"name": {"v": "Old", "t": 0}, "color": {"v": "blue", "t": 0}, "removed": long_ago}),
+            ),
+            record(
+                &recent,
+                &serde_json::json!({"name": {"v": "Kept", "t": 0}, "color": {"v": "blue", "t": 0},
+                    "members": {"host:gone": {"a": 0, "r": long_ago}, "host:here": {"a": 1}}}),
+            ),
+        ])
+        .unwrap();
+    let sent = vault.project_records();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].id, recent);
+    assert!(!sent[0].record.contains("host:gone"));
 }
 
 #[test]
 fn a_sync_brings_no_more_projects_than_a_vault_holds() {
     let dir = tempfile::tempdir().unwrap();
     let mut vault = vault(&dir, "vault");
+    let t = at(0);
     let records: Vec<ProjectRecord> = (0..=MAX_PROJECTS)
         .map(|n| {
             record(
                 &new_id(),
-                &serde_json::json!({"name": format!("p{n}"), "modified": "2026-01-01T00:00:00Z"}),
+                &serde_json::json!({"name": {"v": format!("p{n}"), "t": t}, "color": {"v": "blue", "t": t}}),
             )
         })
         .collect();

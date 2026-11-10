@@ -13,7 +13,7 @@ type Handler = (args: Record<string, unknown>) => unknown;
 
 const fail = (code: string, message: string) => Promise.reject({ code, message });
 const now = () => `${new Date().toISOString().slice(0, 19)}Z`;
-const NAME_CHARS = /[\p{Cc};,]/u;
+const NAME_CHARS = /[\p{Cc};,:]/u;
 
 /** Logins by entry title, resolved once the mock vault has its ids. */
 interface MockProject extends Omit<Project, 'logins'> {
@@ -101,7 +101,7 @@ function checkName(text: unknown): string | Promise<never> {
     return fail('invalid_input', 'project names are at most 64 characters');
   }
   if (NAME_CHARS.test(name)) {
-    return fail('invalid_input', "project names can't have `;`, `,` or control characters");
+    return fail('invalid_input', "project names can't have `;`, `,`, `:` or control characters");
   }
   return name;
 }

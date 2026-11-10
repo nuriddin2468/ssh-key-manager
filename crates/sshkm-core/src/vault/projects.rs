@@ -720,8 +720,9 @@ impl Vault {
     /// to the existing project it names, with the members the user `kept`.
     /// Each must be one the suggestion offers and one a project takes; all
     /// are checked before anything changes. Logins it offered that weren't
-    /// kept are recorded as taken out, so a `project/` tag on them doesn't
-    /// bring them in. Returns the project's id.
+    /// kept, and that the project didn't hold already, are recorded as taken
+    /// out, so a `project/` tag on them doesn't bring them in. Returns the
+    /// project's id.
     pub fn accept_suggestion(
         &mut self,
         suggestion: &suggest::ProjectSuggestion,
@@ -736,11 +737,14 @@ impl Vault {
             }
             self.check_project_member(member, true)?;
         }
+        // Logins the project holds already (added since the suggestion was
+        // made, or by a sync) stay, whatever the suggestion's list says.
+        let held: BTreeSet<String> = match &suggestion.existing {
+            Some(id) => self.project(id)?.logins.into_iter().collect(),
+            None => BTreeSet::new(),
+        };
         let id = match &suggestion.existing {
-            Some(id) => {
-                self.live_project(id)?;
-                id.clone()
-            }
+            Some(id) => id.clone(),
             None => self.add_project(input)?,
         };
         for member in kept {
@@ -750,9 +754,10 @@ impl Vault {
             .logins
             .iter()
             .filter(|login| {
-                !kept
-                    .iter()
-                    .any(|m| matches!(m, ProjectMember::Login { id } if id == *login))
+                !held.contains(*login)
+                    && !kept
+                        .iter()
+                        .any(|m| matches!(m, ProjectMember::Login { id } if id == *login))
             })
             .collect();
         if !left_out.is_empty() {

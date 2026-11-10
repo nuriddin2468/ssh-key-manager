@@ -544,3 +544,56 @@ fn logins_left_out_when_accepting_stay_out_though_tagged() {
     }];
     assert!(vault.accept_suggestion(thesis, &input, &other).is_err());
 }
+
+#[test]
+fn a_login_that_joined_since_the_suggestion_stays_when_left_unticked() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = crate::vault::VaultPaths::new(dir.path().join("vault.kdbx"));
+    let (mut vault, _) =
+        crate::vault::Vault::create(&paths, &secrecy::SecretString::from("master")).unwrap();
+    let mut grouped = |title: &str| {
+        let id = vault
+            .add_entry(&crate::vault::EntryInput {
+                title: title.into(),
+                ..crate::vault::EntryInput::default()
+            })
+            .unwrap();
+        let uuid = uuid::Uuid::parse_str(&id).unwrap();
+        vault.db.entry_mut(uuid.into()).unwrap().tags = vec!["thesis".into()];
+        id
+    };
+    let (first, second) = (grouped("First"), grouped("Second"));
+    drop(grouped);
+    let input = crate::vault::projects::ProjectInput {
+        name: "Thesis".into(),
+        color: ProjectColor::Blue,
+    };
+    let id = vault.add_project(&input).unwrap();
+    // The list the user looks at: both logins, to add to "Thesis".
+    let logins = vault.suggestion_logins();
+    let projects = vault.projects();
+    let offered = suggest(
+        &Sources {
+            logins: &logins,
+            projects: &projects,
+            ..Sources::default()
+        },
+        &Declined::default(),
+    );
+    let stale = offered
+        .iter()
+        .find(|s| s.existing.as_deref() == Some(&id))
+        .unwrap();
+    assert_eq!(stale.logins.len(), 2);
+    // Meanwhile the second joins (in the app, or by a sync).
+    vault
+        .set_project_member(&id, &ProjectMember::Login { id: second.clone() }, true)
+        .unwrap();
+    let keep = [ProjectMember::Login { id: first.clone() }];
+    vault.accept_suggestion(stale, &input, &keep).unwrap();
+    let mut members = vault.project(&id).unwrap().logins;
+    members.sort();
+    let mut expected = vec![first, second];
+    expected.sort();
+    assert_eq!(members, expected);
+}

@@ -63,7 +63,8 @@ The foundation for everything below.
    Nothing is written into `~/.ssh/config` for membership. In review:
    [#34](https://github.com/nuriddin2468/ssh-key-manager/pull/34).
 2. **Suggestions**: the app proposes projects from what it finds (see Decisions); the user
-   confirms each.
+   confirms each. In review:
+   [#35](https://github.com/nuriddin2468/ssh-key-manager/pull/35).
 3. **Navigation and the project page**: projects (Personal first) at the top of the
    sidebar, the library below, system sections last. The project page: hosts (connect),
    environments (file state, run), logins (copy), keys (in the agent or not), folders

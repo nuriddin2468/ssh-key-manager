@@ -13,7 +13,8 @@
 //! choosing.
 //!
 //! The lists are worked out from what the computer looks like, passed in, so
-//! the Windows one is tested on every platform.
+//! the Windows one is tested on every platform (the Unix one needs Unix
+//! paths, and is tested there).
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -138,7 +139,7 @@ fn wslenv<'a>(current: &str, names: impl Iterator<Item = &'a str>) -> String {
 // ---------------------------------------------------------------------------
 // macOS and Linux
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 /// The shells listed by name, with their usual names, in the order the list
 /// shows them after the default.
 const UNIX_SHELLS: [(&str, &str); 13] = [
@@ -166,7 +167,7 @@ const UNIX_EXTRA_DIRS: [&str; 4] = [
     "/run/current-system/sw/bin",
 ];
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 /// What the list on macOS and Linux is made of.
 struct UnixProbe<'a> {
     /// The user's shell: `$SHELL`, else the user database's.
@@ -180,7 +181,7 @@ struct UnixProbe<'a> {
     canonical: &'a dyn Fn(&Path) -> Option<PathBuf>,
 }
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 fn unix_shells(probe: &UnixProbe<'_>) -> Vec<Shell> {
     let listed = probe
         .etc_shells
@@ -495,6 +496,7 @@ mod tests {
 
     use super::*;
 
+    #[cfg(unix)]
     fn unix(
         user_shell: Option<&str>,
         etc_shells: &str,
@@ -527,6 +529,7 @@ mod tests {
     /// macOS: the user's zsh first, the rest of /etc/shells in the usual
     /// order, Homebrew's fish found though /etc/shells doesn't list it.
     #[test]
+    #[cfg(unix)]
     fn macos_lists_the_users_shell_first() {
         let shells = unix(
             Some("/bin/zsh"),
@@ -566,6 +569,7 @@ mod tests {
     /// Debian: /bin and /usr/bin are one folder, sh is dash, and tmux and
     /// rbash aren't shells to offer.
     #[test]
+    #[cfg(unix)]
     fn linux_lists_each_shell_once() {
         let shells = unix(
             Some("/bin/bash"),
@@ -596,6 +600,7 @@ mod tests {
     /// A shell that isn't on the well-known list is listed when it's the
     /// user's; without a user shell the first one found is the default.
     #[test]
+    #[cfg(unix)]
     fn the_users_own_shell_is_always_there() {
         let shells = unix(
             Some("/usr/local/bin/oil"),
@@ -752,10 +757,9 @@ mod tests {
         );
     }
 
-    /// The command for a WSL distribution carries `WSLENV`; a Unix shell
-    /// runs as `$SHELL`, whatever the variables say.
+    /// The command for a WSL distribution carries `WSLENV`.
     #[test]
-    fn commands_set_what_the_shell_needs() {
+    fn wsl_gets_the_variables_through_wslenv() {
         let shells = windows(
             &[r"C:\Windows\System32\wsl.exe"],
             &WINDOWS_VARS,
@@ -771,7 +775,12 @@ mod tests {
         assert!(wslenv.ends_with("TOKEN/u"), "{wslenv}");
         let listed = wslenv.split(':').filter(|entry| *entry == "TOKEN/u");
         assert_eq!(listed.count(), 1, "{wslenv}");
+    }
 
+    /// A Unix shell runs as `$SHELL`, whatever the variables say.
+    #[test]
+    #[cfg(unix)]
+    fn unix_shells_run_as_the_shell() {
         let shells = unix(Some("/bin/zsh"), "", &[], &["/bin/zsh"], &[]);
         let zsh = Shell {
             info: shells[0].clone(),

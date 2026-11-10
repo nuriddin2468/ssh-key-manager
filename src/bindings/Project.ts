@@ -24,9 +24,8 @@ keys: Array<string>,
  */
 environments: Array<string>, 
 /**
- * The vault's logins tagged with the project's name, by entry id, not
- * counting those in the recycle bin. Empty in the copy kept for while
- * the vault is locked.
+ * The vault's logins by entry id, not counting those in the recycle
+ * bin or gone. Empty in the copy kept for while the vault is locked.
  */
 logins: Array<string>, 
 /**

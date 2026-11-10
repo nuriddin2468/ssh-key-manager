@@ -507,6 +507,16 @@ impl Vault {
         Ok(true)
     }
 
+    /// Drops every change made in memory and not saved: re-reads the
+    /// database as it is on disk. For a change that failed halfway, so the
+    /// next save doesn't write what is left of it.
+    pub fn discard_changes(&mut self) -> Result<()> {
+        let bytes = read_database(&self.paths.database)?;
+        self.db = parse_database(&bytes, &self.secret)?;
+        self.disk_hash = sha256(&bytes);
+        Ok(())
+    }
+
     /// Re-reads the key slots file if it changed on disk. When it is gone,
     /// the slots in memory stay and the next write puts it back.
     fn reload_slots(&mut self) -> Result<bool> {

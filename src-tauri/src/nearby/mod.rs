@@ -1234,7 +1234,14 @@ impl AppSide<'_> {
         state
             .vault
             .with_quietly(app, |vault| {
-                let changed = work(vault)?;
+                let changed = match work(vault) {
+                    Ok(changed) => changed,
+                    Err(error) => {
+                        // Nothing of a merge that failed halfway is kept.
+                        let _ = vault.discard_changes();
+                        return Err(error.into());
+                    }
+                };
                 if changed {
                     if let Err(error) = vault.save(&backup_dir) {
                         let _ = vault.refresh();

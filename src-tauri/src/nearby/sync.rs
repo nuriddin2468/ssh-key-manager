@@ -648,7 +648,7 @@ mod tests {
     fn project_records_go_both_ways() {
         let record = |id: &str, name: &str| ProjectRecord {
             id: id.into(),
-            record: format!(r#"{{"name":"{name}","modified":"2026-11-10T10:00:00Z"}}"#),
+            record: format!(r#"{{"name":{{"v":"{name}","t":1}},"color":{{"v":"blue","t":1}}}}"#),
         };
         let (left, right) = (
             Script::own("alice", "s", LEFT),

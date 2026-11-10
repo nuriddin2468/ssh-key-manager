@@ -1,8 +1,6 @@
-//! Searching a file in chunks, and overwriting what was found.
+//! Searching a file in chunks.
 
-use std::fs;
-use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::io::{self, Read};
 use std::sync::atomic::Ordering;
 
 use zeroize::Zeroizing;
@@ -163,31 +161,4 @@ fn fill(reader: &mut impl Read, buffer: &mut Vec<u8>, want: usize) -> io::Result
 )]
 fn newlines(bytes: &[u8]) -> u32 {
     u32::try_from(bytes.iter().filter(|b| **b == b'\n').count()).unwrap_or(u32::MAX)
-}
-
-/// Writes `marker(len)` over each range of the file at `path`, in place:
-/// nothing else of the file changes, and it is never truncated.
-pub(super) fn overwrite(
-    path: &Path,
-    ranges: &[(u64, u64)],
-    marker: impl Fn(usize) -> Vec<u8>,
-) -> io::Result<()> {
-    if ranges.is_empty() {
-        return Ok(());
-    }
-    let mut file = fs::OpenOptions::new().read(true).write(true).open(path)?;
-    let len = file.metadata()?.len();
-    if ranges.iter().any(|(_, end)| *end > len) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "the file got shorter since it was read",
-        ));
-    }
-    for &(start, end) in ranges {
-        let size = usize::try_from(end - start)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "match too long"))?;
-        file.seek(SeekFrom::Start(start))?;
-        file.write_all(&marker(size))?;
-    }
-    file.sync_all()
 }

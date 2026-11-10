@@ -238,6 +238,7 @@ export const leaksHandlers: Record<string, Handler> = {
       files: done.length,
       replaced: done.reduce((sum, f) => sum + f.occurrences, 0),
       left: 0,
+      stale: 0,
     };
   },
 };

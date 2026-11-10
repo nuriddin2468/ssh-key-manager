@@ -53,3 +53,47 @@ impl Vault {
         out
     }
 }
+
+impl Vault {
+    /// The one secret `key` names ([`LeakSecret::key`]), if the vault still
+    /// has it as a secret: for redacting it, without reading the others.
+    pub fn known_secret(&self, key: &str) -> Option<KnownSecret> {
+        if let Some(id) = key.strip_prefix("entry:") {
+            let entry = self.find(id).ok()?;
+            if is_environment(&entry) {
+                return None;
+            }
+            let summary = self.summary(&entry);
+            let password = entry.get(fields::PASSWORD).unwrap_or_default();
+            if summary.in_trash || password.is_empty() {
+                return None;
+            }
+            return Some(KnownSecret {
+                secret: LeakSecret::Password {
+                    entry_id: summary.id,
+                    title: summary.title,
+                    entry_kind: summary.kind,
+                },
+                value: SecretString::from(password),
+            });
+        }
+        let (env_id, name) = key.strip_prefix("var:")?.split_once(':')?;
+        let detail = self.environment(env_id).ok()?;
+        let secret = detail
+            .variables
+            .iter()
+            .any(|var| var.name == name && var.secret && !var.empty);
+        if detail.summary.in_trash || !secret {
+            return None;
+        }
+        Some(KnownSecret {
+            secret: LeakSecret::Variable {
+                env_id: detail.summary.id,
+                project: detail.summary.project,
+                environment: detail.summary.name,
+                name: name.to_owned(),
+            },
+            value: self.env_value(env_id, name).ok()?,
+        })
+    }
+}

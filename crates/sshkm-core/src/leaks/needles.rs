@@ -24,6 +24,15 @@ const MIN_BASE64: usize = 12;
 /// Most of a value that is looked for: a longer one is found by its
 /// beginning.
 const MAX_CHARS: usize = 8 * 1024;
+/// Values longer than this are not given to zxcvbn, which is quadratic in
+/// the length; they are taken as strong.
+const MAX_RATED: usize = 32;
+/// A part of a path at least this long, with capitals, small letters and
+/// digits, is random: the value is a secret that starts with `/`.
+const RANDOM_PART: usize = 16;
+/// The first characters of every OpenSSH private key's body (base64 of
+/// `openssh-key-v1`): the same in every key, so never looked for alone.
+const OPENSSH_MAGIC: &str = "b3BlbnNzaC1rZXktdjE";
 /// Values that are names, settings or words rather than secrets, compared
 /// without case.
 const PLAIN: &[&str] = &[
@@ -50,8 +59,10 @@ const PLAIN: &[&str] = &[
 
 /// Whether a value means something when it is found: at least
 /// [`MIN_CHARS`] characters, not a number, date, version or address, not a
-/// path, a plain URL, an email address or a version, not a word that
-/// configs are full of, and not something zxcvbn would guess at once (score 0).
+/// path, a plain URL or an email address — by their shape, so a random
+/// value that starts with `/` or has an `@` still is one (`/xK9#mQ2$vL7p`
+/// is a secret, `/var/lib/data` is not) — not a word that configs are full
+/// of, and not something zxcvbn guesses at once (score 0).
 pub fn searchable(value: &str) -> bool {
     let value = value.trim();
     let chars = value.chars().count();
@@ -64,57 +75,80 @@ pub fn searchable(value: &str) -> bool {
     {
         return false;
     }
-    if distinct(value) < MIN_DISTINCT {
+    if !distinct_at_least(value, MIN_DISTINCT) {
         return false;
     }
-    let lower = value.to_ascii_lowercase();
-    if PLAIN.contains(&lower.as_str()) {
+    if PLAIN.iter().any(|plain| value.eq_ignore_ascii_case(plain)) {
         return false;
     }
-    if is_path(value) || is_plain_url(value) || is_email(value) || is_version(value) {
+    if is_plain_url(value) || is_version(value) || is_path(value) || is_email(value) {
         return false;
     }
-    // zxcvbn is quadratic in the length; anything this long is not a word.
-    if chars <= 32 {
-        let estimate = zxcvbn::zxcvbn(value, &[]);
-        if u8::from(estimate.score()) == 0 {
-            return false;
-        }
-    }
-    true
+    chars > MAX_RATED || u8::from(zxcvbn::zxcvbn(value, &[]).score()) > 0
 }
 
-fn distinct(text: &str) -> usize {
-    let mut seen: Vec<char> = text.chars().collect();
-    seen.sort_unstable();
-    seen.dedup();
-    seen.len()
+/// Whether `text` has at least `n` (at most 16) different characters. Keeps
+/// no copy of it on the heap.
+fn distinct_at_least(text: &str, n: usize) -> bool {
+    let mut seen = [0_u32; 16];
+    let mut count = 0;
+    let mut enough = false;
+    for c in text.chars() {
+        let c = u32::from(c);
+        if !seen[..count].contains(&c) {
+            seen[count] = c;
+            count += 1;
+            if count >= n.min(seen.len()) {
+                enough = true;
+                break;
+            }
+        }
+    }
+    zeroize::Zeroize::zeroize(&mut seen);
+    enough
 }
 
 /// `1.2.3`, `v2.0.1-beta.1`, `10.4+build7`.
 fn is_version(value: &str) -> bool {
     let value = value.strip_prefix('v').unwrap_or(value);
     let core = value.split(['-', '+']).next().unwrap_or_default();
-    let parts: Vec<&str> = core.split('.').collect();
-    parts.len() >= 2
-        && parts
-            .iter()
-            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    let mut parts = 0;
+    for part in core.split('.') {
+        if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
+            return false;
+        }
+        parts += 1;
+    }
+    parts >= 2
         && value[core.len()..]
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || "-+.".contains(c))
 }
 
+/// `/var/lib/data`, `~/.ssh/id_ed25519`, `C:\\Users\\dev`: starts like a path,
+/// has only the characters paths are made of, and no part of it is random.
 fn is_path(value: &str) -> bool {
     let bytes = value.as_bytes();
-    value.starts_with('/')
+    let starts = value.starts_with('/')
         || value.starts_with("~/")
         || value.starts_with("./")
         || value.starts_with("../")
         || (bytes.len() > 2
             && bytes[0].is_ascii_alphabetic()
             && bytes[1] == b':'
-            && matches!(bytes[2], b'\\' | b'/'))
+            && matches!(bytes[2], b'\\' | b'/'));
+    starts
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-~/\\: ".contains(c))
+        && !value.split(['/', '\\']).any(is_random_part)
+}
+
+fn is_random_part(part: &str) -> bool {
+    part.len() >= RANDOM_PART
+        && part.bytes().any(|b| b.is_ascii_uppercase())
+        && part.bytes().any(|b| b.is_ascii_lowercase())
+        && part.bytes().any(|b| b.is_ascii_digit())
 }
 
 /// `scheme://host[:port][/]`: an address with nothing secret in it.
@@ -136,75 +170,149 @@ fn is_plain_url(value: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || "-.:[]".contains(c))
 }
 
+/// `dev@example.com`: an address's characters, and a top-level domain of
+/// letters only (`Tr0ub4dor@x7.Kq9z` is a password).
 fn is_email(value: &str) -> bool {
     let Some((user, domain)) = value.split_once('@') else {
         return false;
     };
+    let top = domain.rsplit('.').next().unwrap_or_default();
     !user.is_empty()
-        && !value.contains(char::is_whitespace)
-        && !domain.contains('@')
+        && user
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._%+-".contains(c))
         && domain.contains('.')
         && domain
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || "-.".contains(c))
+        && top.len() >= 2
+        && top.bytes().all(|b| b.is_ascii_alphabetic())
 }
 
-/// The forms `value` takes in files, with how each is encoded (`None` for
-/// as it is, or escaped in JSON). A value that isn't [`searchable`] has
+/// One form of a value, as it would be in a file.
+pub struct Form {
+    pub bytes: Zeroizing<Vec<u8>>,
+    /// How it is encoded: `None` for as it is, or escaped in JSON.
+    pub encoding: Option<Encoding>,
+    /// For a line of a multi-line value, which one (from 0): such a form
+    /// counts only next to another line of the same value.
+    pub line: Option<u32>,
+}
+
+/// The forms `value` takes in files. A value that isn't [`searchable`] has
 /// none.
 ///
-/// - One line: as it is; escaped in JSON and percent-encoded if that
-///   changes it; in base64 (standard and URL alphabets) at each of the
-///   three byte alignments, so it is found inside a larger base64 string
-///   (`Authorization: Basic …`) too; and for an address with a password
-///   (`postgres://user:pw@host`), the password alone, as it is and decoded.
+/// - One line: as it is; escaped in JSON, and again (JSON inside a JSON
+///   string, as Codex keeps a tool's arguments); percent-encoded in capitals
+///   and in small letters, and with `+` for spaces; in base64 (standard and
+///   URL alphabets) at each of the three byte alignments, so it is found
+///   inside a larger base64 string (`Authorization: Basic …`) too; and for
+///   an address with a password (`postgres://user:pw@host`), the password
+///   alone, as it is and decoded.
 /// - Several lines (a private key): with `\n` and with `\r\n`, escaped in
-///   JSON, with `\n` written out (as in a `.env` file), in base64, and each
-///   long line on its own, so it is found whatever escaped the line breaks.
-pub fn forms(value: &str) -> Vec<(Zeroizing<Vec<u8>>, Option<Encoding>)> {
-    let mut out: Vec<(Zeroizing<Vec<u8>>, Option<Encoding>)> = Vec::new();
+///   JSON once and twice, with `\n` written out (as in a `.env` file), in
+///   base64, and the long lines of its private body on their own
+///   ([`body_lines`]), so it is found whatever escaped the line breaks.
+pub fn forms(value: &str) -> Vec<Form> {
+    let mut out: Vec<Form> = Vec::new();
     if !searchable(value) {
         return out;
     }
     let value = Zeroizing::new(cap(value.trim()));
-    let mut push = |bytes: Vec<u8>, encoding: Option<Encoding>| {
+    let mut push = |bytes: Vec<u8>, encoding: Option<Encoding>, line: Option<u32>| {
         let bytes = Zeroizing::new(bytes);
-        if !bytes.is_empty() && !out.iter().any(|(known, _)| **known == *bytes) {
-            out.push((bytes, encoding));
+        if !bytes.is_empty() && !out.iter().any(|known| *known.bytes == *bytes) {
+            out.push(Form {
+                bytes,
+                encoding,
+                line,
+            });
         }
     };
     if value.contains('\n') {
         let lf = Zeroizing::new(value.replace("\r\n", "\n"));
-        push(lf.as_bytes().to_vec(), None);
-        push(lf.replace('\n', "\r\n").into_bytes(), None);
-        push(json_escaped(&lf).into_bytes(), None);
-        push(lf.replace('\n', "\\n").into_bytes(), None);
+        push(lf.as_bytes().to_vec(), None, None);
+        push(lf.replace('\n', "\r\n").into_bytes(), None, None);
+        let json = json_escaped(&lf);
+        push(json_escaped(&json).as_bytes().to_vec(), None, None);
+        push(json.as_bytes().to_vec(), None, None);
+        push(lf.replace('\n', "\\n").into_bytes(), None, None);
         for core in base64_cores(lf.as_bytes()) {
-            push(core, Some(Encoding::Base64));
+            push(core.to_vec(), Some(Encoding::Base64), None);
         }
-        for line in lf.lines().map(str::trim) {
-            if line.chars().count() >= MIN_LINE_CHARS
-                && !line.starts_with("-----")
-                && distinct(line) >= MIN_LINE_DISTINCT
-            {
-                push(line.as_bytes().to_vec(), None);
-            }
+        for (index, line) in body_lines(&lf) {
+            push(line.as_bytes().to_vec(), None, Some(index));
         }
     } else {
-        push(value.as_bytes().to_vec(), None);
-        push(json_escaped(&value).into_bytes(), None);
-        push(percent_encoded(&value).into_bytes(), Some(Encoding::Url));
+        push(value.as_bytes().to_vec(), None, None);
+        let json = json_escaped(&value);
+        push(json_escaped(&json).as_bytes().to_vec(), None, None);
+        push(json.as_bytes().to_vec(), None, None);
+        let percent = Zeroizing::new(percent_encoded(&value, HEX));
+        push(percent.as_bytes().to_vec(), Some(Encoding::Url), None);
+        push(
+            percent_encoded(&value, HEX_LOWER).into_bytes(),
+            Some(Encoding::Url),
+            None,
+        );
+        push(
+            percent.replace("%20", "+").into_bytes(),
+            Some(Encoding::Url),
+            None,
+        );
         for core in base64_cores(value.as_bytes()) {
-            push(core, Some(Encoding::Base64));
+            push(core.to_vec(), Some(Encoding::Base64), None);
         }
         if let Some(password) = url_password(&value) {
             let decoded = Zeroizing::new(percent_decoded(&password));
             for candidate in [&*password, &*decoded] {
                 if searchable(candidate) {
-                    push(candidate.as_bytes().to_vec(), None);
+                    push(candidate.as_bytes().to_vec(), None, None);
                 }
             }
         }
+    }
+    out
+}
+
+/// The lines of a multi-line value worth looking for alone, with their
+/// index: long lines of base64 in its private parts. Left out: `-----BEGIN`
+/// and `-----END`, `Key: value` headers (`Proc-Type`, PuTTY's), the blocks
+/// that are public anyway (a certificate, a public key, PuTTY's
+/// `Public-Lines`), and the first line of an OpenSSH key, which every key
+/// shares. Lines found alone still count only next to another line of the
+/// same value.
+fn body_lines(text: &str) -> Vec<(u32, &str)> {
+    let mut out = Vec::new();
+    let mut public = false;
+    for (index, line) in text.lines().map(str::trim).enumerate() {
+        if let Some(header) = line.strip_prefix("-----BEGIN ") {
+            public = header.contains("CERTIFICATE") || header.contains("PUBLIC KEY");
+            continue;
+        }
+        if line.starts_with("-----END ") {
+            public = false;
+            continue;
+        }
+        if line.starts_with("Public-Lines:") {
+            public = true;
+            continue;
+        }
+        if line.starts_with("Private-Lines:") {
+            public = false;
+            continue;
+        }
+        if public
+            || line.starts_with(OPENSSH_MAGIC)
+            || line.chars().count() < MIN_LINE_CHARS
+            || !line
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"+/=-_".contains(&b))
+            || !distinct_at_least(line, MIN_LINE_DISTINCT)
+        {
+            continue;
+        }
+        out.push((u32::try_from(index).unwrap_or(u32::MAX), line));
     }
     out
 }
@@ -218,31 +326,35 @@ fn cap(value: &str) -> String {
 }
 
 /// `value` as it is inside a JSON string, without the quotes.
-fn json_escaped(value: &str) -> String {
-    let quoted = serde_json::to_string(value).unwrap_or_default();
-    quoted
-        .strip_prefix('"')
-        .and_then(|q| q.strip_suffix('"'))
-        .unwrap_or_default()
-        .to_owned()
+fn json_escaped(value: &str) -> Zeroizing<String> {
+    let quoted = Zeroizing::new(serde_json::to_string(value).unwrap_or_default());
+    Zeroizing::new(
+        quoted
+            .strip_prefix('"')
+            .and_then(|q| q.strip_suffix('"'))
+            .unwrap_or_default()
+            .to_owned(),
+    )
 }
 
-/// Percent-encoding of everything but `A-Z a-z 0-9 - . _ ~`, in capitals.
-fn percent_encoded(value: &str) -> String {
+/// Percent-encoding of everything but `A-Z a-z 0-9 - . _ ~`, with the hex
+/// digits of `hex`.
+fn percent_encoded(value: &str, hex: &[u8; 16]) -> String {
     let mut out = String::with_capacity(value.len() * 3);
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
             out.push(char::from(byte));
         } else {
             out.push('%');
-            out.push(char::from(HEX[usize::from(byte >> 4)]));
-            out.push(char::from(HEX[usize::from(byte & 15)]));
+            out.push(char::from(hex[usize::from(byte >> 4)]));
+            out.push(char::from(hex[usize::from(byte & 15)]));
         }
     }
     out
 }
 
 const HEX: &[u8; 16] = b"0123456789ABCDEF";
+const HEX_LOWER: &[u8; 16] = b"0123456789abcdef";
 
 fn percent_decoded(value: &str) -> String {
     let bytes = value.as_bytes();
@@ -279,8 +391,8 @@ const BASE64_URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuv
 /// The characters of `bytes`' base64 form that don't depend on what comes
 /// before or after it, at each of the three positions it can start at in a
 /// larger encoded string, in both alphabets.
-fn base64_cores(bytes: &[u8]) -> Vec<Vec<u8>> {
-    let mut out = Vec::new();
+fn base64_cores(bytes: &[u8]) -> Vec<Zeroizing<Vec<u8>>> {
+    let mut out: Vec<Zeroizing<Vec<u8>>> = Vec::new();
     for alphabet in [BASE64, BASE64_URL] {
         for offset in 0..3_usize {
             let mut padded = Zeroizing::new(vec![0_u8; offset]);
@@ -291,7 +403,7 @@ fn base64_cores(bytes: &[u8]) -> Vec<Vec<u8>> {
             let skip = [0, 2, 3][offset];
             let known = padded.len() * 4 / 3;
             if known > skip && known - skip >= MIN_BASE64 {
-                let core = encoded[skip..known].to_vec();
+                let core = Zeroizing::new(encoded[skip..known].to_vec());
                 if !out.contains(&core) {
                     out.push(core);
                 }
@@ -320,13 +432,23 @@ fn base64(bytes: &[u8], alphabet: &[u8; 64]) -> Vec<u8> {
     out
 }
 
+/// A secret a pattern is a form of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Owner {
+    /// Its index in [`Matcher::secrets`].
+    pub secret: usize,
+    pub encoding: Option<Encoding>,
+    /// [`Form::line`].
+    pub line: Option<u32>,
+}
+
 /// Every form of every secret, searched at once. Holds the values (in the
 /// automaton too), so it is neither serialisable nor shown by `Debug`;
 /// drop it when the scan is done.
 pub struct Matcher {
     automaton: Option<AhoCorasick>,
     /// For each pattern, the secrets whose form it is, and how.
-    owners: Vec<Vec<(usize, Option<Encoding>)>>,
+    owners: Vec<Vec<Owner>>,
     secrets: Vec<LeakSecret>,
     longest: usize,
 }
@@ -346,7 +468,7 @@ impl Matcher {
     pub fn new(known: Vec<KnownSecret>) -> Self {
         let mut patterns: Vec<Zeroizing<Vec<u8>>> = Vec::new();
         let mut index: HashMap<Vec<u8>, usize> = HashMap::new();
-        let mut owners: Vec<Vec<(usize, Option<Encoding>)>> = Vec::new();
+        let mut owners: Vec<Vec<Owner>> = Vec::new();
         let mut secrets = Vec::new();
         for KnownSecret { secret, value } in known {
             let forms = forms(value.expose_secret());
@@ -355,7 +477,12 @@ impl Matcher {
             }
             let id = secrets.len();
             secrets.push(secret);
-            for (bytes, encoding) in forms {
+            for Form {
+                bytes,
+                encoding,
+                line,
+            } in forms
+            {
                 let at = if let Some(&at) = index.get(bytes.as_slice()) {
                     at
                 } else {
@@ -365,8 +492,12 @@ impl Matcher {
                     owners.push(Vec::new());
                     at
                 };
-                if !owners[at].iter().any(|(owner, _)| *owner == id) {
-                    owners[at].push((id, encoding));
+                if !owners[at].iter().any(|owner| owner.secret == id) {
+                    owners[at].push(Owner {
+                        secret: id,
+                        encoding,
+                        line,
+                    });
                 }
             }
         }
@@ -391,17 +522,6 @@ impl Matcher {
         }
     }
 
-    /// Only the secret `key` names ([`LeakSecret::key`]) of `known`: for
-    /// [`super::redact`].
-    pub fn only(known: Vec<KnownSecret>, key: &str) -> Self {
-        Self::new(
-            known
-                .into_iter()
-                .filter(|known| known.secret.key() == key)
-                .collect(),
-        )
-    }
-
     /// Secrets that are looked for.
     pub fn len(&self) -> usize {
         self.secrets.len()
@@ -424,7 +544,7 @@ impl Matcher {
         self.longest
     }
 
-    pub(super) fn owners(&self, pattern: usize) -> &[(usize, Option<Encoding>)] {
+    pub(super) fn owners(&self, pattern: usize) -> &[Owner] {
         self.owners.get(pattern).map_or(&[], Vec::as_slice)
     }
 

@@ -146,10 +146,15 @@ fn plain_values_are_not_looked_for() {
         assert!(!searchable(plain), "{plain:?} should not be looked for");
         assert!(forms(plain).is_empty(), "{plain:?}");
     }
+    // Random values with the shape of a path or an address are secrets.
     for secret in [
         TOKEN,
         PASSWORD,
         QUOTED,
+        "/xK9#mQ2$vL7pR4w",
+        "~/Zq8!kLm2#Vn5",
+        "/7nLq0vW3+eYbZr2KcT8uHf1sJx5Pa9mDg4Rk6Bt",
+        "Tr0ub4dor@x7.Kq9z",
         "postgres://app:Xq9!vL2#mT@db:5432/shop",
         "https://hooks.example.com/services/T0A1/B2C3/xY7zQ9wL",
         "correct horse battery staple",
@@ -163,7 +168,12 @@ fn values_are_looked_for_in_the_forms_files_hold_them_in() {
     let forms_of = |value: &str| -> Vec<(String, Option<Encoding>)> {
         forms(value)
             .into_iter()
-            .map(|(bytes, encoding)| (String::from_utf8(bytes.to_vec()).unwrap(), encoding))
+            .map(|form| {
+                (
+                    String::from_utf8(form.bytes.to_vec()).unwrap(),
+                    form.encoding,
+                )
+            })
             .collect()
     };
     let found = |text: &str, value: &str| {
@@ -177,6 +187,18 @@ fn values_are_looked_for_in_the_forms_files_hold_them_in() {
     assert!(quoted.contains(&(QUOTED.to_owned(), None)));
     assert!(quoted.contains(&(r#"pa\"ss\\wo7rd-Zq"#.to_owned(), None)));
     assert!(quoted.contains(&("pa%22ss%5Cwo7rd-Zq".to_owned(), Some(Encoding::Url))));
+    assert!(quoted.contains(&("pa%22ss%5cwo7rd-Zq".to_owned(), Some(Encoding::Url))));
+    // JSON inside a JSON string, as Codex keeps a tool's arguments.
+    let arguments = serde_json::to_string(&serde_json::json!({
+        "arguments": serde_json::to_string(&serde_json::json!({ "cmd": format!("echo {QUOTED}") })).unwrap()
+    }))
+    .unwrap();
+    assert!(found(&arguments, QUOTED));
+    let spaced = forms_of("correct horse battery staple");
+    assert!(spaced.contains(&(
+        "correct+horse+battery+staple".to_owned(),
+        Some(Encoding::Url)
+    )));
     let json =
         serde_json::to_string(&serde_json::json!({ "content": format!("KEY={QUOTED}") })).unwrap();
     assert!(found(&json, QUOTED));
@@ -280,8 +302,8 @@ fn a_scan_reports_where_never_what() {
 
     let json = serde_json::to_string(&findings).unwrap();
     for value in [TOKEN, PASSWORD, &key, "8080"] {
-        for (form, _) in forms(value) {
-            let form = String::from_utf8(form.to_vec()).unwrap();
+        for form in forms(value) {
+            let form = String::from_utf8(form.bytes.to_vec()).unwrap();
             assert!(!json.contains(&form), "a finding holds a form of a value");
         }
     }
@@ -419,16 +441,14 @@ fn redacting_replaces_the_value_in_place() {
     let path = file(dir.path(), "s.jsonl", &lines.join("\n"));
     let before = fs::read(&path).unwrap();
 
-    let token = Matcher::only(
-        vec![known("API_TOKEN", TOKEN), known("Q", QUOTED)],
-        "var:11111111-2222-3333-4444-555555555555:API_TOKEN",
-    );
+    let token = Matcher::new(vec![known("API_TOKEN", TOKEN)]);
     assert_eq!(token.len(), 1);
-    let done = redact(&path, &token).unwrap();
+    let done = redact(&path, None, &token).unwrap();
     assert_eq!(
         done,
         Redacted {
             replaced: 2,
+            skipped: 0,
             left: 0
         }
     );
@@ -445,7 +465,7 @@ fn redacting_replaces_the_value_in_place() {
     assert!(text.contains(r#"pa\"ss\\wo7rd-Zq"#));
 
     let key_matcher = Matcher::new(vec![known("PRIVATE_KEY", &key), known("Q", QUOTED)]);
-    let done = redact(&path, &key_matcher).unwrap();
+    let done = redact(&path, None, &key_matcher).unwrap();
     assert_eq!(done.left, 0);
     let text = fs::read_to_string(&path).unwrap();
     assert!(!text.contains(key.lines().nth(1).unwrap()));
@@ -522,7 +542,7 @@ fn env_files_are_known_by_name() {
 struct FakeGit(Vec<(PathBuf, GitFiles)>);
 
 impl GitLister for FakeGit {
-    fn list(&self, folder: &Path) -> Option<GitFiles> {
+    fn list(&self, folder: &Path, _: &ScanControl) -> Option<GitFiles> {
         self.0
             .iter()
             .find(|(root, _)| root == folder)
@@ -561,6 +581,7 @@ fn folders_give_what_git_would_commit_and_env_files_anywhere() {
         GitFiles {
             tracked: vec!["src/main.rs".into(), "logo.png".into()],
             untracked: vec!["notes.md".into(), "nested/".into()],
+            truncated: false,
         },
     )]);
     let folders = [root.to_path_buf()];
@@ -641,6 +662,7 @@ fn a_folder_inside_a_working_tree_is_listed_from_there() {
         GitFiles {
             tracked: vec!["main.rs".into()],
             untracked: vec![],
+            truncated: false,
         },
     )]);
     let listing = list_files(
@@ -740,4 +762,199 @@ fn ai_histories_and_shell_histories_are_listed() {
             ),
         ]
     );
+}
+
+/// Private keys as `ssh-keygen` and this app write them, generated here.
+fn real_key(dir: &Path, name: &str, algorithm: crate::keys::GenerateAlgorithm) -> String {
+    let info = crate::keys::generate(
+        dir,
+        &crate::keys::GenerateRequest {
+            algorithm,
+            file_name: name.into(),
+            comment: String::new(),
+            passphrase: None,
+        },
+    )
+    .unwrap();
+    fs::read_to_string(info.private_path.unwrap()).unwrap()
+}
+
+fn tracked() -> LeakPlace {
+    LeakPlace::File {
+        git: GitState::Tracked,
+        repository: None,
+    }
+}
+
+fn names_in(path: &Path, matcher: &Matcher) -> Vec<String> {
+    let files = [ScanFile {
+        path: path.to_path_buf(),
+        place: tracked(),
+        size: 0,
+    }];
+    let mut names: Vec<String> = scan_files(&files, matcher, &ScanControl::default())
+        .unwrap()
+        .findings
+        .into_iter()
+        .map(|f| match f.secret {
+            LeakSecret::Variable { name, .. } => name,
+            LeakSecret::Password { title, .. } => title,
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn other_keys_of_the_same_kind_are_not_leaks() {
+    use crate::keys::GenerateAlgorithm::{Ed25519, Rsa};
+    let dir = tempfile::tempdir().unwrap();
+    let keys = dir.path().join("keys");
+    fs::create_dir(&keys).unwrap();
+    let deploy = real_key(&keys, "deploy", Ed25519);
+    let backup = real_key(&keys, "backup", Ed25519);
+    let other = real_key(&keys, "other", Ed25519);
+    let rsa = real_key(&keys, "rsa", Rsa { bits: 3072 });
+    let other_rsa = real_key(&keys, "other_rsa", Rsa { bits: 3072 });
+    // Every unencrypted ed25519 key starts with the same line, and so does
+    // every RSA-3072 key.
+    assert_eq!(deploy.lines().nth(1), other.lines().nth(1));
+    assert_eq!(rsa.lines().nth(1), other_rsa.lines().nth(1));
+
+    let matcher = Matcher::new(vec![
+        known("DEPLOY_KEY", &deploy),
+        known("BACKUP_KEY", &backup),
+        known("RSA_KEY", &rsa),
+    ]);
+    let none: Vec<String> = Vec::new();
+    assert_eq!(names_in(&keys.join("other"), &matcher), none);
+    assert_eq!(names_in(&keys.join("other_rsa"), &matcher), none);
+    // This repository's own test key, made with ssh-keygen.
+    let testdata = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/keys/testdata/openssh_ed25519");
+    assert_eq!(names_in(&testdata, &matcher), none);
+    assert_eq!(names_in(&keys.join("deploy"), &matcher), ["DEPLOY_KEY"]);
+    assert_eq!(names_in(&keys.join("backup"), &matcher), ["BACKUP_KEY"]);
+    assert_eq!(names_in(&keys.join("rsa"), &matcher), ["RSA_KEY"]);
+    // Public keys are public.
+    assert_eq!(names_in(&keys.join("deploy.pub"), &matcher), none);
+    assert_eq!(names_in(&keys.join("rsa.pub"), &matcher), none);
+
+    // A key read by an AI tool, as JSON, and inside a tool's JSON arguments.
+    let session = file(
+        dir.path(),
+        "session.jsonl",
+        &[
+            serde_json::json!({ "content": deploy }).to_string(),
+            serde_json::json!({ "content": other }).to_string(),
+            serde_json::json!({
+                "arguments": serde_json::json!({ "content": backup }).to_string()
+            })
+            .to_string(),
+        ]
+        .join("\n"),
+    );
+    assert_eq!(names_in(&session, &matcher), ["BACKUP_KEY", "DEPLOY_KEY"]);
+
+    // Redacting one key leaves another key's shared lines alone.
+    let before = fs::read(keys.join("other")).unwrap();
+    let done = redact(&keys.join("other"), None, &matcher).unwrap();
+    assert_eq!((done.replaced, done.left), (0, 0));
+    assert_eq!(fs::read(keys.join("other")).unwrap(), before);
+    let done = redact(&session, None, &matcher).unwrap();
+    assert_eq!(done.left, 0);
+    let text = fs::read_to_string(&session).unwrap();
+    assert!(text.contains(other.lines().nth(2).unwrap()));
+    assert!(!text.contains(deploy.lines().nth(2).unwrap()));
+}
+
+#[test]
+fn putty_keys_are_found_by_their_private_lines_only() {
+    use crate::keys::GenerateAlgorithm;
+    use crate::keys::convert::{KeyFileFormat, convert};
+    let dir = tempfile::tempdir().unwrap();
+    real_key(dir.path(), "id", GenerateAlgorithm::Ed25519);
+    let ppk = convert(
+        &dir.path().join("id"),
+        None,
+        KeyFileFormat::Ppk3,
+        None,
+        None,
+    )
+    .unwrap();
+    let matcher = Matcher::new(vec![known("PPK", &ppk)]);
+    let none: Vec<String> = Vec::new();
+    // The public lines are the `.pub` file's: no leak there.
+    assert_eq!(names_in(&dir.path().join("id.pub"), &matcher), none);
+    let copy = file(dir.path(), "copy.ppk", &ppk);
+    assert_eq!(names_in(&copy, &matcher), ["PPK"]);
+}
+
+#[test]
+fn a_file_rewritten_during_redaction_keeps_its_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("chat.json");
+    let v1 = format!("{{\"t\":\"1\",\"s\":\"{TOKEN}\",\"u\":\"{TOKEN}\"}}\n");
+    // A tool rewrites the whole file: an earlier field grew by 2 bytes.
+    let v2 = format!("{{\"t\":\"100\",\"s\":\"{TOKEN}\",\"u\":\"{TOKEN}\"}}\n");
+    fs::write(&path, &v1).unwrap();
+    let matcher = Matcher::new(vec![known("API_TOKEN", TOKEN)]);
+
+    let mut handle = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    let ranges = occurrence_ranges(&mut handle, &matcher).unwrap();
+    assert_eq!(ranges.len(), 2);
+    fs::write(&path, &v2).unwrap();
+    let (replaced, skipped) = write_markers(&mut handle, &ranges, &matcher).unwrap();
+    assert_eq!((replaced, skipped), (0, 2));
+    let text = fs::read_to_string(&path).unwrap();
+    assert_eq!(text, v2);
+    serde_json::from_str::<serde_json::Value>(&text).unwrap();
+
+    // Done again, it finds the values where they are now.
+    let done = redact(&path, None, &matcher).unwrap();
+    assert_eq!((done.replaced, done.skipped, done.left), (2, 0, 0));
+    let text = fs::read_to_string(&path).unwrap();
+    serde_json::from_str::<serde_json::Value>(&text).unwrap();
+    assert!(!text.contains(TOKEN));
+}
+
+#[cfg(unix)]
+#[test]
+fn redaction_refuses_links_and_replaced_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = file(
+        dir.path(),
+        "real.jsonl",
+        &format!("{{\"c\":\"{TOKEN}\"}}\n"),
+    );
+    let matcher = Matcher::new(vec![known("API_TOKEN", TOKEN)]);
+    let scanned = FileId::of(&fs::metadata(&real).unwrap());
+
+    let link = dir.path().join("link.jsonl");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let refused = redact(&link, None, &matcher).unwrap_err();
+    assert_eq!(refused.kind(), io::ErrorKind::InvalidData);
+
+    // Replaced since the scan, as tools that save by renaming do.
+    let new = file(dir.path(), "new.jsonl", &format!("{{\"c\":\"{TOKEN}\"}}\n"));
+    fs::rename(&new, &real).unwrap();
+    let refused = redact(&real, scanned, &matcher).unwrap_err();
+    assert_eq!(refused.kind(), io::ErrorKind::InvalidData);
+    assert!(fs::read_to_string(&real).unwrap().contains(TOKEN));
+
+    let now = FileId::of(&fs::metadata(&real).unwrap());
+    assert_eq!(redact(&real, now, &matcher).unwrap().replaced, 1);
+}
+
+#[test]
+fn findings_remember_the_file_for_redaction_but_never_show_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = file(dir.path(), "s.jsonl", TOKEN);
+    let found = scan(&path, ai());
+    assert_eq!(found[0].file, FileId::of(&fs::metadata(&path).unwrap()));
+    let json = serde_json::to_value(&found[0]).unwrap();
+    assert!(json.get("file").is_none());
 }

@@ -11,6 +11,7 @@ import {
   secretKey,
   secretLabel,
   shortPath,
+  splitIgnored,
 } from './leakModel';
 import { checkResults, leakItem } from './model';
 
@@ -105,5 +106,17 @@ describe('leak model', () => {
     expect(scanPercent({ phase: 'reading', bytesDone: 0, bytesTotal: 0 })).toBe(0);
     expect(scanPercent({ phase: 'reading', bytesDone: 50, bytesTotal: 200 })).toBe(25);
     expect(scanPercent({ phase: 'reading', bytesDone: 300, bytesTotal: 200 })).toBe(100);
+  });
+
+  it('ignores the files seen, so a new place a secret turns up in shows', () => {
+    const seen = [
+      finding(token, { kind: 'aiSession', tool: 'codex' }, '/h/.codex/a.jsonl'),
+      finding(token, { kind: 'aiSession', tool: 'codex' }, '/h/.codex/b.jsonl'),
+    ];
+    const ignored = new Set(seen.map((f) => f.id));
+    const later = finding(token, { kind: 'aiSession', tool: 'codex' }, '/h/.codex/c.jsonl');
+    const { open, hidden } = splitIgnored([...seen, later], ignored);
+    expect(open.map((g) => g.findings.map((f) => f.path))).toEqual([['/h/.codex/c.jsonl']]);
+    expect(hidden.map((g) => g.findings.length)).toEqual([2]);
   });
 });

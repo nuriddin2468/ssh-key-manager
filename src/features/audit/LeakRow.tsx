@@ -68,9 +68,16 @@ export function LeakRow({ group, muted, onIgnore, onRestore }: LeakRowProps) {
 
   const redact = useAppMutation((ids: string[]) => api.leaksRedact(ids), {
     success: (done) =>
-      done.left > 0
-        ? t('audit.leaks.redactedLeft', { count: done.files, left: done.left })
-        : t('audit.leaks.redacted', { count: done.files }),
+      [
+        done.files > 0 || (done.left === 0 && done.stale === 0)
+          ? done.left > 0
+            ? t('audit.leaks.redactedLeft', { count: done.files, left: done.left })
+            : t('audit.leaks.redacted', { count: done.files })
+          : null,
+        done.stale > 0 ? t('audit.leaks.redactStale', { count: done.stale }) : null,
+      ]
+        .filter(Boolean)
+        .join(' '),
     onSuccess: () => {
       setRedacting(null);
       void queryClient.invalidateQueries({ queryKey: ['leaks'] });

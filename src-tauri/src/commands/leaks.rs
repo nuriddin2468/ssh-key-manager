@@ -20,7 +20,9 @@
 )]
 
 use std::collections::{BTreeMap, HashSet};
+use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, Once, PoisonError};
 
@@ -139,6 +141,10 @@ pub struct LeakRedaction {
     pub replaced: u32,
     /// Occurrences still found after, in files changed or not.
     pub left: u32,
+    /// Findings left as they are because the value or the file changed since
+    /// the scan (rotated, removed from the vault, or the file replaced):
+    /// scanning again shows where it is now.
+    pub stale: u32,
 }
 
 /// A running scan.
@@ -332,9 +338,14 @@ pub async fn leaks_start(app: AppHandle, state: State<'_, Shared>) -> AppResult<
 }
 
 fn start(app: &AppHandle, state: &AppState) -> AppResult<()> {
-    if scans(app).running.is_some() {
-        return Ok(());
-    }
+    // Locking the vault meanwhile changes it, and the scan doesn't start.
+    let before = {
+        let scans = scans(app);
+        if scans.running.is_some() {
+            return Ok(());
+        }
+        scans.generation
+    };
     let settings = load_settings(state);
     let folders: Vec<PathBuf> = settings
         .folders
@@ -360,8 +371,8 @@ fn start(app: &AppHandle, state: &AppState) -> AppResult<()> {
         .vault
         .with(app, |vault| Ok(Matcher::new(vault.known_secrets())))?;
     let mut scans = scans(app);
-    // Another start got here first.
-    if scans.running.is_some() {
+    // Another start got here first, or the vault locked meanwhile.
+    if scans.running.is_some() || scans.generation != before {
         return Ok(());
     }
     scans.secrets = count(matcher.len());
@@ -388,6 +399,8 @@ fn start(app: &AppHandle, state: &AppState) -> AppResult<()> {
     let spawned = std::thread::Builder::new()
         .name("leak-scan".into())
         .spawn(move || {
+            // Clears the scan if this thread ends without doing so (a panic).
+            let _guard = RunningGuard(generation);
             let outcome = job.run(&matcher, &control, &SystemGit, |files, bytes| {
                 let mut scans = current();
                 if scans.generation == generation
@@ -418,6 +431,18 @@ fn start(app: &AppHandle, state: &AppState) -> AppResult<()> {
         ));
     }
     Ok(())
+}
+
+/// Ends the scan of its generation when dropped, unless it ended already.
+struct RunningGuard(u64);
+
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        let mut scans = current();
+        if scans.generation == self.0 {
+            scans.running = None;
+        }
+    }
 }
 
 /// What one scan reads.
@@ -472,9 +497,13 @@ pub fn leaks_cancel() {
     }
 }
 
-/// The last scan's findings, most severe first.
+/// The last scan's findings, most severe first; none while the vault is
+/// locked, since they name its secrets.
 #[tauri::command]
-pub fn leaks_findings(app: AppHandle) -> Vec<LeakFinding> {
+pub fn leaks_findings(app: AppHandle, state: State<'_, Shared>) -> Vec<LeakFinding> {
+    if !state.vault.is_unlocked() {
+        return Vec::new();
+    }
     scans(&app)
         .last
         .as_ref()
@@ -497,8 +526,7 @@ pub async fn leaks_redact(
 }
 
 fn redact(app: &AppHandle, state: &AppState, ids: &[String]) -> AppResult<LeakRedaction> {
-    // The files and secrets, from the scan's own findings.
-    let targets: Vec<LeakFinding> = {
+    let targets = {
         let scans = scans(app);
         if scans.running.is_some() {
             return Err(AppError::new(
@@ -506,48 +534,23 @@ fn redact(app: &AppHandle, state: &AppState, ids: &[String]) -> AppResult<LeakRe
                 "wait for the scan to finish",
             ));
         }
-        let Some(last) = scans.last.as_ref() else {
-            return Ok(LeakRedaction::default());
-        };
-        last.findings
-            .iter()
-            .filter(|f| f.redactable && ids.contains(&f.id))
-            .cloned()
-            .collect()
+        let findings = scans.last.as_ref().map_or(&[][..], |last| &last.findings);
+        redaction_targets(findings, ids)
     };
-    let mut by_secret: BTreeMap<String, Vec<LeakFinding>> = BTreeMap::new();
-    for finding in targets {
-        by_secret
-            .entry(finding.secret.key())
-            .or_default()
-            .push(finding);
-    }
-    let mut done = LeakRedaction::default();
-    let mut results: Vec<(String, u32)> = Vec::new();
-    for (key, findings) in by_secret {
-        let matcher = state
-            .vault
-            .with(app, |vault| Ok(Matcher::only(vault.known_secrets(), &key)))?;
-        if matcher.is_empty() {
-            continue;
-        }
-        for finding in findings {
-            let outcome = leaks::redact(Path::new(&finding.path), &matcher)?;
-            done.files += u32::from(outcome.replaced > 0);
-            done.replaced = done.replaced.saturating_add(outcome.replaced);
-            done.left = done.left.saturating_add(outcome.left);
-            results.push((finding.id, outcome.left));
-        }
-    }
+    let applied = apply_redaction(&targets, |key| {
+        state.vault.with(app, |vault| Ok(vault.known_secret(key)))
+    })?;
+    let done = applied.summary;
     log::info!(
-        "leak scan: redacted {} places in {} files, {} left",
+        "leak scan: redacted {} places in {} files, {} left, {} changed since the scan",
         done.replaced,
         done.files,
-        done.left
+        done.left,
+        done.stale
     );
     let mut scans = scans(app);
     if let Some(last) = scans.last.as_mut() {
-        for (id, left) in results {
+        for (id, left) in applied.left {
             if left == 0 {
                 last.findings.retain(|f| f.id != id);
             } else if let Some(finding) = last.findings.iter_mut().find(|f| f.id == id) {
@@ -556,6 +559,75 @@ fn redact(app: &AppHandle, state: &AppState, ids: &[String]) -> AppResult<LeakRe
         }
     }
     Ok(done)
+}
+
+/// The findings `ids` names that may be redacted: the last scan's, in an AI
+/// tool's session history. Others, and ids the scan didn't give, are left
+/// out.
+fn redaction_targets(findings: &[LeakFinding], ids: &[String]) -> Vec<LeakFinding> {
+    findings
+        .iter()
+        .filter(|f| f.redactable && ids.contains(&f.id))
+        .cloned()
+        .collect()
+}
+
+/// What [`apply_redaction`] did.
+struct Applied {
+    summary: LeakRedaction,
+    /// For each finding redacted, the occurrences left in its file. Those
+    /// that changed since the scan aren't listed: they stay as they are.
+    left: Vec<(String, u32)>,
+}
+
+/// Redacts each target's secret in its file, the value read with `secret`
+/// (`None`: the vault no longer has it as a secret). A target whose value
+/// or file changed since the scan is counted as stale and kept, so the user
+/// scans again rather than reading "done".
+fn apply_redaction(
+    targets: &[LeakFinding],
+    mut secret: impl FnMut(&str) -> AppResult<Option<leaks::KnownSecret>>,
+) -> AppResult<Applied> {
+    let mut by_secret: BTreeMap<String, Vec<&LeakFinding>> = BTreeMap::new();
+    for finding in targets {
+        by_secret
+            .entry(finding.secret.key())
+            .or_default()
+            .push(finding);
+    }
+    let mut done = LeakRedaction::default();
+    let mut left = Vec::new();
+    for (key, findings) in by_secret {
+        let matcher = Matcher::new(secret(&key)?.into_iter().collect());
+        for finding in findings {
+            if matcher.is_empty() {
+                done.stale += 1;
+                continue;
+            }
+            match leaks::redact(Path::new(&finding.path), finding.file, &matcher) {
+                Ok(outcome) if outcome.replaced == 0 && outcome.left == 0 => done.stale += 1,
+                Ok(outcome) => {
+                    done.files += u32::from(outcome.replaced > 0);
+                    done.replaced = done.replaced.saturating_add(outcome.replaced);
+                    done.left = done.left.saturating_add(outcome.left);
+                    left.push((finding.id.clone(), outcome.left));
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::InvalidData | io::ErrorKind::NotFound
+                    ) =>
+                {
+                    done.stale += 1;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+    Ok(Applied {
+        summary: done,
+        left,
+    })
 }
 
 /// The scan's folder dialog: several folders at once.
@@ -585,7 +657,14 @@ fn pick_folders(app: &AppHandle) -> Vec<PathBuf> {
 struct SystemGit;
 
 impl SystemGit {
-    fn ls_files(folder: &Path, args: &[&str]) -> Option<Vec<PathBuf>> {
+    /// The paths `git ls-files -z <args>` lists in `folder`, read as Git
+    /// writes them, at most [`leaks::sources::MAX_FILES`] (then `true`);
+    /// `None` if Git failed or `control` was cancelled, which stops it.
+    fn ls_files(
+        folder: &Path,
+        args: &[&str],
+        control: &ScanControl,
+    ) -> Option<(Vec<PathBuf>, bool)> {
         let mut command = process::command("git");
         command
             .args([
@@ -597,28 +676,63 @@ impl SystemGit {
             ])
             .arg(folder)
             .args(["ls-files", "-z"])
-            .args(args);
-        let output = command.output().ok()?;
-        if !output.status.success() {
+            .args(args)
+            .stderr(Stdio::null());
+        let mut child = command.spawn().ok()?;
+        let mut reader = BufReader::new(child.stdout.take()?);
+        let stop = |child: &mut std::process::Child| {
+            let _ = child.kill();
+            let _ = child.wait();
+        };
+        let mut paths = Vec::new();
+        let mut truncated = false;
+        let mut entry = Vec::new();
+        loop {
+            entry.clear();
+            match reader.read_until(0, &mut entry) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(_) => {
+                    stop(&mut child);
+                    return None;
+                }
+            }
+            if control.cancelled() {
+                stop(&mut child);
+                return None;
+            }
+            if entry.last() == Some(&0) {
+                entry.pop();
+            }
+            // A nested repository is listed as its folder.
+            if entry.is_empty() || entry.ends_with(b"/") {
+                continue;
+            }
+            if paths.len() >= leaks::sources::MAX_FILES {
+                truncated = true;
+                stop(&mut child);
+                break;
+            }
+            if let Ok(path) = std::str::from_utf8(&entry) {
+                paths.push(PathBuf::from(path));
+            }
+        }
+        if !truncated && !child.wait().ok()?.success() {
             return None;
         }
-        Some(
-            output
-                .stdout
-                .split(|b| *b == 0)
-                .filter(|path| !path.is_empty() && !path.ends_with(b"/"))
-                .filter_map(|path| std::str::from_utf8(path).ok())
-                .map(PathBuf::from)
-                .collect(),
-        )
+        Some((paths, truncated))
     }
 }
 
 impl GitLister for SystemGit {
-    fn list(&self, folder: &Path) -> Option<GitFiles> {
+    fn list(&self, folder: &Path, control: &ScanControl) -> Option<GitFiles> {
+        let (tracked, cut) = Self::ls_files(folder, &["--cached"], control)?;
+        let (untracked, cut_too) =
+            Self::ls_files(folder, &["--others", "--exclude-standard"], control)?;
         Some(GitFiles {
-            tracked: Self::ls_files(folder, &["--cached"])?,
-            untracked: Self::ls_files(folder, &["--others", "--exclude-standard"])?,
+            tracked,
+            untracked,
+            truncated: cut || cut_too,
         })
     }
 }
@@ -654,7 +768,7 @@ mod tests {
     struct NoGit;
 
     impl GitLister for NoGit {
-        fn list(&self, _: &Path) -> Option<GitFiles> {
+        fn list(&self, _: &Path, _: &ScanControl) -> Option<GitFiles> {
             None
         }
     }
@@ -818,7 +932,8 @@ mod tests {
         std::fs::write(repo.join("draft.md"), "x").unwrap();
         std::fs::write(repo.join(".env"), "x").unwrap();
         assert!(git(&["add", "app.js", ".gitignore"]));
-        let files = SystemGit.list(repo).unwrap();
+        let control = ScanControl::default();
+        let files = SystemGit.list(repo, &control).unwrap();
         let mut tracked = files.tracked.clone();
         tracked.sort();
         assert_eq!(
@@ -826,6 +941,103 @@ mod tests {
             [PathBuf::from(".gitignore"), PathBuf::from("app.js")]
         );
         assert_eq!(files.untracked, [PathBuf::from("draft.md")]);
-        assert!(SystemGit.list(&repo.join("missing")).is_none());
+        assert!(!files.truncated);
+        assert!(SystemGit.list(&repo.join("missing"), &control).is_none());
+        control.cancel.store(true, Ordering::Relaxed);
+        assert!(SystemGit.list(repo, &control).is_none());
+    }
+
+    fn token_finding(path: &Path, redactable: bool) -> LeakFinding {
+        let files = [leaks::ScanFile {
+            path: path.to_path_buf(),
+            place: if redactable {
+                leaks::LeakPlace::AiSession {
+                    tool: AiTool::Codex,
+                }
+            } else {
+                leaks::LeakPlace::ShellHistory {
+                    shell: shell_history::Shell::Zsh,
+                }
+            },
+            size: 0,
+        }];
+        let matcher = Matcher::new(vec![token("Zr8-kP2w-Qm5x-Lv7n")]);
+        leaks::scan_files(&files, &matcher, &ScanControl::default())
+            .unwrap()
+            .findings
+            .remove(0)
+    }
+
+    fn token(value: &str) -> KnownSecret {
+        KnownSecret {
+            secret: LeakSecret::Variable {
+                env_id: "e1".into(),
+                project: "shop".into(),
+                environment: "prod".into(),
+                name: "TOKEN".into(),
+            },
+            value: SecretString::from(value),
+        }
+    }
+
+    #[test]
+    fn only_findings_of_ai_sessions_from_the_scan_are_redacted() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = dir.path().join("s.jsonl");
+        let history = dir.path().join(".zsh_history");
+        std::fs::write(&session, "{\"c\":\"Zr8-kP2w-Qm5x-Lv7n\"}\n").unwrap();
+        std::fs::write(&history, "export TOKEN=Zr8-kP2w-Qm5x-Lv7n\n").unwrap();
+        let findings = [
+            token_finding(&session, true),
+            token_finding(&history, false),
+        ];
+        let ids = |list: &[LeakFinding]| list.iter().map(|f| f.id.clone()).collect::<Vec<_>>();
+
+        let asked = vec![
+            findings[0].id.clone(),
+            findings[1].id.clone(),
+            "leak:00000000000000000000000000000000".to_owned(),
+        ];
+        assert_eq!(
+            ids(&redaction_targets(&findings, &asked)),
+            [findings[0].id.clone()]
+        );
+        assert_eq!(redaction_targets(&findings, &["made up".to_owned()]), []);
+
+        let applied = apply_redaction(&redaction_targets(&findings, &asked), |_| {
+            Ok(Some(token("Zr8-kP2w-Qm5x-Lv7n")))
+        })
+        .unwrap();
+        assert_eq!(
+            applied.summary,
+            LeakRedaction {
+                files: 1,
+                replaced: 1,
+                left: 0,
+                stale: 0
+            }
+        );
+        assert_eq!(applied.left, [(findings[0].id.clone(), 0)]);
+        assert!(!std::fs::read_to_string(&session).unwrap().contains("Zr8"));
+        assert!(std::fs::read_to_string(&history).unwrap().contains("Zr8"));
+    }
+
+    #[test]
+    fn a_value_changed_since_the_scan_is_not_reported_as_redacted() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = dir.path().join("s.jsonl");
+        std::fs::write(&session, "{\"c\":\"Zr8-kP2w-Qm5x-Lv7n\"}\n").unwrap();
+        let target = [token_finding(&session, true)];
+
+        // Rotated in the vault: the new value isn't in the file.
+        let rotated = apply_redaction(&target, |_| Ok(Some(token("Nw4-Jx8q-Hb2t-Pc6r")))).unwrap();
+        // Gone from the vault, or no longer a secret.
+        let gone = apply_redaction(&target, |_| Ok(None)).unwrap();
+        for applied in [rotated, gone] {
+            assert_eq!(applied.summary.stale, 1);
+            assert_eq!(applied.summary.replaced, 0);
+            assert_eq!(applied.left, [], "the finding stays");
+        }
+        assert!(std::fs::read_to_string(&session).unwrap().contains("Zr8"));
     }
 }

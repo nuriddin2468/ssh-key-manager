@@ -92,6 +92,20 @@ export function groupLeaks(findings: readonly LeakFinding[]): LeakGroup[] {
   return [...groups.values()];
 }
 
+/**
+ * The groups of findings not ignored and of those ignored. A leak is ignored
+ * finding by finding (file by file), so a new place it turns up in shows.
+ */
+export function splitIgnored(
+  findings: readonly LeakFinding[],
+  ignored: ReadonlySet<string>,
+): { open: LeakGroup[]; hidden: LeakGroup[] } {
+  return {
+    open: groupLeaks(findings.filter((finding) => !ignored.has(finding.id))),
+    hidden: groupLeaks(findings.filter((finding) => ignored.has(finding.id))),
+  };
+}
+
 /** The tools (or shells) a group's files belong to, each once, in order. */
 export function placeNames(group: LeakGroup): string[] {
   const names: string[] = [];

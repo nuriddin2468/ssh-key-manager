@@ -1789,6 +1789,10 @@ const en = {
         "Every place the value is in {{file}} is replaced with [REDACTED]; the rest of the session stays. This can't be undone. It doesn't take the value back from the AI provider, so rotate it too.",
       redactTextMany:
         "Every place the value is in these files is replaced with [REDACTED]; the rest of each session stays. This can't be undone. It doesn't take the value back from the AI provider, so rotate it too.",
+      redactStale_one:
+        "{{count}} file wasn't changed: the value or the file changed since the scan. Scan again to see where it is now.",
+      redactStale_other:
+        "{{count}} files weren't changed: the value or the files changed since the scan. Scan again to see where it is now.",
       redactConfirm: 'Redact',
       redacted_one: 'Redacted in {{count}} file',
       redacted_other: 'Redacted in {{count}} files',

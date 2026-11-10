@@ -15,4 +15,10 @@ replaced: number,
 /**
  * Occurrences still found after, in files changed or not.
  */
-left: number, };
+left: number, 
+/**
+ * Findings left as they are because the value or the file changed since
+ * the scan (rotated, removed from the vault, or the file replaced):
+ * scanning again shows where it is now.
+ */
+stale: number, };

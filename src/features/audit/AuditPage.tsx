@@ -35,7 +35,7 @@ import { ChecksList } from './ChecksList';
 import { FindingRow } from './FindingRow';
 import { LeakRow } from './LeakRow';
 import { LeakScanCard, leakKeys, useLeakStatus } from './LeakScan';
-import { groupLeaks } from './leakModel';
+import { splitIgnored } from './leakModel';
 import {
   AREAS,
   type Area,
@@ -117,13 +117,19 @@ export function AuditPage() {
   const areas = AREAS.filter((a) => (a !== 'passwords' && a !== 'leaks') || hasVault);
   const lockedAreas = new Set<Area>(locked ? ['passwords', 'leaks'] : []);
   const ignored = new Set(settings.ignoredFindings);
-  const all = bySeverity([
+  const others = [
     ...(audit.data?.findings ?? []).map(sshItem),
     ...(vault?.findings ?? []).map(vaultItem),
-    ...(locked ? [] : groupLeaks(leakFindings.data ?? []).map(leakItem)),
+  ];
+  const leaks = splitIgnored(locked ? [] : (leakFindings.data ?? []), ignored);
+  const open = bySeverity([
+    ...others.filter((item) => !ignored.has(item.ignoreId)),
+    ...leaks.open.map(leakItem),
   ]);
-  const open = all.filter((item) => !ignored.has(item.ignoreId));
-  const hidden = all.filter((item) => ignored.has(item.ignoreId));
+  const hidden = bySeverity([
+    ...others.filter((item) => ignored.has(item.ignoreId)),
+    ...leaks.hidden.map(leakItem),
+  ]);
   const counts = { critical: 0, warning: 0, info: 0 };
   for (const item of open) counts[item.severity] += 1;
   const results = checkResults(open);
@@ -162,11 +168,11 @@ export function AuditPage() {
     { success: (fixed) => t('audit.fixedAuto', { count: fixed }) },
   );
 
-  const setIgnored = (id: string, value: boolean) =>
+  const setIgnored = (ids: string[], value: boolean) =>
     updateSettings({
       ignoredFindings: value
-        ? [...settings.ignoredFindings, id]
-        : settings.ignoredFindings.filter((other) => other !== id),
+        ? [...settings.ignoredFindings, ...ids.filter((id) => !ignored.has(id))]
+        : settings.ignoredFindings.filter((other) => !ids.includes(other)),
     });
 
   const scope =
@@ -185,8 +191,10 @@ export function AuditPage() {
     : '';
 
   const row = (item: AuditItem, muted: boolean) => {
-    const ignore = muted ? undefined : () => setIgnored(item.ignoreId, true);
-    const restore = muted ? () => setIgnored(item.ignoreId, false) : undefined;
+    const ids =
+      item.source === 'leak' ? item.group.findings.map((finding) => finding.id) : [item.ignoreId];
+    const ignore = muted ? undefined : () => setIgnored(ids, true);
+    const restore = muted ? () => setIgnored(ids, false) : undefined;
     if (item.source === 'leak') {
       return (
         <LeakRow

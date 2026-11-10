@@ -38,7 +38,7 @@ mod tests;
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::fs;
-use std::io;
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -47,6 +47,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use zeroize::Zeroizing;
 
 pub use self::needles::Matcher;
 pub use self::sources::{
@@ -180,6 +181,36 @@ pub struct LeakFinding {
     pub redactable: bool,
     /// When the file last changed, RFC 3339 in UTC.
     pub modified: Option<String>,
+    /// The file the scan read, for [`redact`]; not for the page.
+    #[serde(skip)]
+    #[cfg_attr(feature = "ts", ts(skip))]
+    pub file: Option<FileId>,
+}
+
+/// Which file a path named when it was read: its device and inode (Unix;
+/// `None` elsewhere).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FileId {
+    dev: u64,
+    ino: u64,
+}
+
+impl FileId {
+    pub fn of(meta: &fs::Metadata) -> Option<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Some(Self {
+                dev: meta.dev(),
+                ino: meta.ino(),
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = meta;
+            None
+        }
+    }
 }
 
 /// A file to search, and what it is.
@@ -266,7 +297,7 @@ fn scan_file(
     // Text only: a NUL in the first chunk of a picked file means binary.
     // Session histories are text, however large.
     let text_only = matches!(file.place, LeakPlace::File { .. });
-    let mut found: HashMap<usize, Tally> = HashMap::new();
+    let mut found: HashMap<usize, Occurrences> = HashMap::new();
     let complete = search::search(
         handle,
         matcher,
@@ -276,11 +307,8 @@ fn scan_file(
             ..search::Options::default()
         },
         |hit| {
-            for &(secret, encoding) in matcher.owners(hit.pattern) {
-                found
-                    .entry(secret)
-                    .and_modify(|tally| tally.add(&hit, encoding))
-                    .or_insert_with(|| Tally::new(&hit, encoding));
+            for owner in matcher.owners(hit.pattern) {
+                found.entry(owner.secret).or_default().add(&hit, owner);
             }
         },
     )?;
@@ -296,60 +324,114 @@ fn scan_file(
     Ok(Some(
         found
             .into_iter()
-            .map(|(secret, tally)| {
+            .filter_map(|(secret, occurrences)| {
+                let occurrences = occurrences.finish();
+                let line = occurrences.first_line?;
                 let secret = matcher.secret(secret).clone();
-                LeakFinding {
+                Some(LeakFinding {
                     id: finding_id(&secret, &path),
                     severity: severity(&file.place),
                     redactable: matches!(file.place, LeakPlace::AiSession { .. }),
                     place: file.place.clone(),
                     path: path.clone(),
-                    line: tally.first_line,
-                    occurrences: tally.occurrences,
-                    encodings: tally.encodings.into_iter().collect(),
+                    line,
+                    occurrences: occurrences.counted,
+                    encodings: occurrences.encodings.into_iter().collect(),
                     modified: modified.clone(),
+                    file: FileId::of(&meta),
                     secret,
-                }
+                })
             })
             .collect(),
     ))
-}
-
-/// Matches of one secret in one file. Matches that overlap or nearly touch
-/// (a key's lines, or the whole key and one of its lines) are one
-/// occurrence.
-struct Tally {
-    first_line: u32,
-    occurrences: u32,
-    last_end: u64,
-    encodings: BTreeSet<Encoding>,
 }
 
 /// Bytes between two matches of a secret that still make them one
 /// occurrence: a line break as it is or escaped (`\n`, `\r\n`, `\\n`).
 const JOIN_GAP: u64 = 4;
 
-impl Tally {
-    fn new(hit: &search::Hit, encoding: Option<Encoding>) -> Self {
+/// Matches of one secret in one file, grouped: matches that overlap or
+/// nearly touch (a key's lines, or the whole key and one of its lines) are
+/// one occurrence. An occurrence counts when it holds a whole form of the
+/// value, or two of its lines ([`needles::Form::line`]): a line alone may
+/// be one that every key of its kind has.
+#[derive(Default)]
+struct Occurrences {
+    current: Option<Occurrence>,
+    counted: u32,
+    first_line: Option<u32>,
+    encodings: BTreeSet<Encoding>,
+    /// The byte ranges of the counted occurrences' matches, when kept.
+    ranges: Option<Vec<(u64, u64)>>,
+}
+
+struct Occurrence {
+    line: u32,
+    end: u64,
+    whole: bool,
+    lines: Vec<u32>,
+    encodings: BTreeSet<Encoding>,
+    ranges: Vec<(u64, u64)>,
+}
+
+impl Occurrences {
+    fn keeping_ranges() -> Self {
         Self {
-            first_line: hit.line,
-            occurrences: 1,
-            last_end: hit.end,
-            encodings: encoding.into_iter().collect(),
+            ranges: Some(Vec::new()),
+            ..Self::default()
         }
     }
 
-    fn add(&mut self, hit: &search::Hit, encoding: Option<Encoding>) {
-        if hit.start <= self.last_end + JOIN_GAP {
-            self.last_end = self.last_end.max(hit.end);
-            if self.occurrences == 1 {
-                self.first_line = self.first_line.min(hit.line);
-            }
-        } else {
-            self.occurrences = self.occurrences.saturating_add(1);
-            self.last_end = hit.end;
+    fn add(&mut self, hit: &search::Hit, owner: &needles::Owner) {
+        let joins = self
+            .current
+            .as_ref()
+            .is_some_and(|current| hit.start <= current.end + JOIN_GAP);
+        if !joins {
+            self.close();
         }
-        self.encodings.extend(encoding);
+        let current = self.current.get_or_insert_with(|| Occurrence {
+            line: hit.line,
+            end: hit.end,
+            whole: false,
+            lines: Vec::new(),
+            encodings: BTreeSet::new(),
+            ranges: Vec::new(),
+        });
+        current.end = current.end.max(hit.end);
+        current.line = current.line.min(hit.line);
+        match owner.line {
+            None => current.whole = true,
+            Some(line) if !current.lines.contains(&line) => current.lines.push(line),
+            Some(_) => {}
+        }
+        current.encodings.extend(owner.encoding);
+        if self.ranges.is_some() {
+            current.ranges.push((hit.start, hit.end));
+        }
+    }
+
+    fn close(&mut self) {
+        let Some(occurrence) = self.current.take() else {
+            return;
+        };
+        if !occurrence.whole && occurrence.lines.len() < 2 {
+            return;
+        }
+        self.counted = self.counted.saturating_add(1);
+        self.first_line = Some(
+            self.first_line
+                .map_or(occurrence.line, |line| line.min(occurrence.line)),
+        );
+        self.encodings.extend(occurrence.encodings);
+        if let Some(ranges) = &mut self.ranges {
+            ranges.extend(occurrence.ranges);
+        }
+    }
+
+    fn finish(mut self) -> Self {
+        self.close();
+        self
     }
 }
 
@@ -397,24 +479,74 @@ pub fn finding_id(secret: &LeakSecret, path: &str) -> String {
 pub struct Redacted {
     /// Places in the file the value was replaced at.
     pub replaced: u32,
-    /// Occurrences still found after: in a form the replacement doesn't
-    /// cover, or written meanwhile.
+    /// Places it was at that held something else by the time they were
+    /// written: the file changed meanwhile. Left as they are.
+    pub skipped: u32,
+    /// Occurrences found after: in a form the replacement doesn't cover, or
+    /// written meanwhile.
     pub left: u32,
 }
 
-/// Replaces every match of `matcher`'s secrets in the file at `path` with a
-/// marker of the same length (`[REDACTED___]`), in place: the file keeps
-/// its size and lines, JSON stays valid, and what a running tool appends
-/// meanwhile is kept. Then searches the file again.
-pub fn redact(path: &Path, matcher: &Matcher) -> io::Result<Redacted> {
-    let mut ranges: Vec<(u64, u64)> = Vec::new();
-    search::search(
-        fs::File::open(path)?,
-        matcher,
-        search::Options::default(),
-        |hit| ranges.push((hit.start, hit.end)),
-    )
+/// Replaces every occurrence of `matcher`'s secrets in the file at `path`
+/// with a marker of the same length (`[REDACTED___]`), in place: the file
+/// keeps its size and lines, JSON stays valid, and what a running tool
+/// appends meanwhile is kept. Then searches what the path holds again.
+///
+/// The file is the one the scan read: a symbolic link, or another file than
+/// `scanned`, is refused with [`io::ErrorKind::InvalidData`]. Each place is
+/// read back right before it is written and written only if it still holds
+/// the value, so a tool that rewrote the file meanwhile, moving everything,
+/// loses nothing.
+pub fn redact(path: &Path, scanned: Option<FileId>, matcher: &Matcher) -> io::Result<Redacted> {
+    let mut file = open_checked(path, scanned, true)?;
+    let ranges = occurrence_ranges(&mut file, matcher)?;
+    let (replaced, skipped) = write_markers(&mut file, &ranges, matcher)?;
+    drop(file);
+    let mut now = open_checked(path, None, false)?;
+    let left = count_occurrences(&mut now, matcher)?;
+    Ok(Redacted {
+        replaced,
+        skipped,
+        left,
+    })
+}
+
+/// Opens `path` (for writing too, with `write`), refusing a symbolic link,
+/// anything but a regular file, and another file than `scanned`.
+fn open_checked(path: &Path, scanned: Option<FileId>, write: bool) -> io::Result<fs::File> {
+    let refused = |why: &str| io::Error::new(io::ErrorKind::InvalidData, why.to_owned());
+    let file = fs::OpenOptions::new().read(true).write(write).open(path)?;
+    let opened = file.metadata()?;
+    let named = fs::symlink_metadata(path)?;
+    if named.file_type().is_symlink() || !opened.is_file() {
+        return Err(refused("not a regular file"));
+    }
+    // The path still names the file opened, which is the one scanned.
+    let id = FileId::of(&opened);
+    if id != FileId::of(&named) || scanned.is_some_and(|scanned| Some(scanned) != id) {
+        return Err(refused("the file was replaced since the scan"));
+    }
+    Ok(file)
+}
+
+/// The byte ranges of the occurrences of `matcher`'s secrets in `file`,
+/// sorted, overlapping ones merged.
+fn occurrence_ranges(file: &mut fs::File, matcher: &Matcher) -> io::Result<Vec<(u64, u64)>> {
+    file.seek(SeekFrom::Start(0))?;
+    let mut found: HashMap<usize, Occurrences> = HashMap::new();
+    search::search(&mut *file, matcher, search::Options::default(), |hit| {
+        for owner in matcher.owners(hit.pattern) {
+            found
+                .entry(owner.secret)
+                .or_insert_with(Occurrences::keeping_ranges)
+                .add(&hit, owner);
+        }
+    })
     .map_err(search::Stop::into_io)?;
+    let mut ranges: Vec<(u64, u64)> = found
+        .into_values()
+        .flat_map(|occurrences| occurrences.finish().ranges.unwrap_or_default())
+        .collect();
     ranges.sort_unstable();
     let mut merged: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
     for (start, end) in ranges {
@@ -423,25 +555,69 @@ pub fn redact(path: &Path, matcher: &Matcher) -> io::Result<Redacted> {
             _ => merged.push((start, end)),
         }
     }
-    search::overwrite(path, &merged, marker)?;
-    let mut left = 0_u32;
-    let mut last_end: Option<u64> = None;
-    search::search(
-        fs::File::open(path)?,
-        matcher,
-        search::Options::default(),
-        |hit| {
-            if last_end.is_none_or(|end| hit.start > end + JOIN_GAP) {
-                left = left.saturating_add(1);
-            }
-            last_end = Some(last_end.map_or(hit.end, |end| end.max(hit.end)));
-        },
-    )
-    .map_err(search::Stop::into_io)?;
-    Ok(Redacted {
-        replaced: u32::try_from(merged.len()).unwrap_or(u32::MAX),
-        left,
+    Ok(merged)
+}
+
+/// Writes a marker over each range that still holds forms of `matcher`'s
+/// secrets from end to end; returns how many were written and how many
+/// skipped.
+fn write_markers(
+    file: &mut fs::File,
+    ranges: &[(u64, u64)],
+    matcher: &Matcher,
+) -> io::Result<(u32, u32)> {
+    let (mut replaced, mut skipped) = (0_u32, 0_u32);
+    for &(start, end) in ranges {
+        let len = usize::try_from(end - start)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "match too long"))?;
+        file.seek(SeekFrom::Start(start))?;
+        let mut now = Zeroizing::new(vec![0_u8; len]);
+        if file.read_exact(&mut now).is_err() || !covered(&now, matcher) {
+            skipped = skipped.saturating_add(1);
+            continue;
+        }
+        file.seek(SeekFrom::Start(start))?;
+        file.write_all(&marker(len))?;
+        replaced = replaced.saturating_add(1);
+    }
+    file.sync_all()?;
+    Ok((replaced, skipped))
+}
+
+/// Whether `bytes` are made of `matcher`'s patterns from end to end.
+fn covered(bytes: &[u8], matcher: &Matcher) -> bool {
+    let Some(automaton) = matcher.automaton() else {
+        return false;
+    };
+    let mut spans: Vec<(usize, usize)> = automaton
+        .find_overlapping_iter(bytes)
+        .map(|found| (found.start(), found.end()))
+        .collect();
+    spans.sort_unstable();
+    let mut reach = 0;
+    for (start, end) in spans {
+        if start > reach {
+            return false;
+        }
+        reach = reach.max(end);
+    }
+    !bytes.is_empty() && reach == bytes.len()
+}
+
+/// How many occurrences of `matcher`'s secrets `file` holds.
+fn count_occurrences(file: &mut fs::File, matcher: &Matcher) -> io::Result<u32> {
+    file.seek(SeekFrom::Start(0))?;
+    let mut found: HashMap<usize, Occurrences> = HashMap::new();
+    search::search(&mut *file, matcher, search::Options::default(), |hit| {
+        for owner in matcher.owners(hit.pattern) {
+            found.entry(owner.secret).or_default().add(&hit, owner);
+        }
     })
+    .map_err(search::Stop::into_io)?;
+    Ok(found
+        .into_values()
+        .map(|occurrences| occurrences.finish().counted)
+        .sum())
 }
 
 /// A marker `len` bytes long: `[REDACTED]`, padded with `_` inside the

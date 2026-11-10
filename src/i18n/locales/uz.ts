@@ -1818,6 +1818,10 @@ const uz = {
         '{{file}} dagi qiymat hamma joyda [REDACTED] bilan almashtiriladi, seansning qolgan qismi oʻzgarmaydi. Buni qaytarib boʻlmaydi. AI provayderi qiymatni allaqachon olgan, shuning uchun uni ham almashtiring.',
       redactTextMany:
         'Bu fayllardagi qiymat hamma joyda [REDACTED] bilan almashtiriladi, seanslarning qolgan qismi oʻzgarmaydi. Buni qaytarib boʻlmaydi. AI provayderi qiymatni allaqachon olgan, shuning uchun uni ham almashtiring.',
+      redactStale_one:
+        '{{count}} ta fayl oʻzgarmadi: tekshiruvdan keyin qiymat yoki fayl oʻzgargan. U hozir qayerda ekanini koʻrish uchun qayta tekshiring.',
+      redactStale_other:
+        '{{count}} ta fayl oʻzgarmadi: tekshiruvdan keyin qiymat yoki fayllar oʻzgargan. U hozir qayerda ekanini koʻrish uchun qayta tekshiring.',
       redactConfirm: 'Oʻchirish',
       redacted_one: '{{count}} ta faylda oʻchirildi',
       redacted_other: '{{count}} ta faylda oʻchirildi',

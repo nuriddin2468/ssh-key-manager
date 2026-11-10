@@ -3,7 +3,7 @@
 //!
 //! | Tool | Session history |
 //! |---|---|
-//! | Claude Code | `~/.claude/projects/` (transcripts, tool output), `~/.claude/file-history/` (copies of edited files), `~/.claude/history.jsonl` (prompts), `~/.claude.json`; `$CLAUDE_CONFIG_DIR` instead of `~/.claude` |
+//! | Claude Code | `~/.claude/projects/` (transcripts, tool output), `~/.claude/file-history/` (copies of edited files), `~/.claude/history.jsonl` (prompts); `$CLAUDE_CONFIG_DIR` instead of `~/.claude` |
 //! | Codex | `~/.codex/sessions/`, `~/.codex/archived_sessions/`, `~/.codex/history.jsonl`; `$CODEX_HOME` instead of `~/.codex` |
 //! | Gemini CLI | `~/.gemini/tmp/` (chats, logs, checkpoints) |
 //! | Continue | `~/.continue/sessions/`, `~/.continue/dev_data/` |
@@ -126,7 +126,6 @@ pub fn ai_locations(
         at(AiTool::ClaudeCode, claude.join("projects")),
         at(AiTool::ClaudeCode, claude.join("file-history")),
         at(AiTool::ClaudeCode, claude.join("history.jsonl")),
-        at(AiTool::ClaudeCode, home.join(".claude.json")),
         at(AiTool::Codex, codex.join("sessions")),
         at(AiTool::Codex, codex.join("archived_sessions")),
         at(AiTool::Codex, codex.join("history.jsonl")),
@@ -188,13 +187,16 @@ pub struct GitFiles {
     pub tracked: Vec<PathBuf>,
     /// Neither tracked nor ignored.
     pub untracked: Vec<PathBuf>,
+    /// Git listed more than [`MAX_FILES`]; the rest are left out.
+    pub truncated: bool,
 }
 
 /// Asks Git which files of a working tree it would commit.
 pub trait GitLister {
-    /// The files under `folder`, which is in a working tree; `None` when
-    /// Git can't say (it isn't installed, or failed).
-    fn list(&self, folder: &Path) -> Option<GitFiles>;
+    /// The files under `folder`, which is in a working tree, at most
+    /// [`MAX_FILES`] of each kind; `None` when Git can't say (it isn't
+    /// installed, or failed) or `control` was cancelled.
+    fn list(&self, folder: &Path, control: &ScanControl) -> Option<GitFiles>;
 }
 
 /// What to search, and where it was found.
@@ -355,7 +357,11 @@ impl Lister {
 
         let mut repositories: Vec<Repository> = Vec::new();
         for (root, listed_from) in trees {
-            let files = git.list(&listed_from);
+            let files = git.list(&listed_from, control);
+            if control.cancelled() {
+                return Err(Cancelled);
+            }
+            self.truncated |= files.as_ref().is_some_and(|files| files.truncated);
             let repository = Some(root.display().to_string());
             if let Some(files) = &files {
                 for (paths, state) in [

@@ -157,8 +157,8 @@ const UNIX_SHELLS: [(&str, &str); 13] = [
     ("sh", "sh"),
 ];
 
-#[cfg(any(unix, test))]
 /// Folders a shell may be installed in that a GUI app's `PATH` often lacks.
+#[cfg(unix)]
 const UNIX_EXTRA_DIRS: [&str; 4] = [
     "/opt/homebrew/bin",
     "/usr/local/bin",

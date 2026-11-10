@@ -2,7 +2,8 @@
 //! is one (see [`conversation`]).
 //!
 //! 1. Each sends its [`Manifest`]: hosts, their server keys, and the
-//!    records of the user's devices. The side that connected goes first.
+//!    records of the user's devices and projects. The side that connected
+//!    goes first.
 //! 2. Each works out on its own what to take ([`plan`]) and sorts it:
 //!    - changes nobody needs to look at;
 //!    - changes that add a directive running a program or reaching beyond
@@ -38,6 +39,7 @@ use sshkm_core::sync::{
     Base, Change, Conflict, Hasher, MAX_MANIFEST, Manifest, agree, digest, digests, plan,
 };
 use sshkm_core::vault::DeviceRecord;
+use sshkm_core::vault::projects::ProjectRecord;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -57,6 +59,7 @@ pub struct SyncLocal {
     pub config: SshConfig,
     pub known: KnownHosts,
     pub devices: Vec<DeviceRecord>,
+    pub projects: Vec<ProjectRecord>,
     pub state: SyncState,
     pub hasher: Hasher,
 }
@@ -76,13 +79,15 @@ pub struct SyncState {
 }
 
 /// What a sync writes: the files that changed, checked against the
-/// revisions they had when it started, and the other side's device records.
+/// revisions they had when it started, and the other side's device and
+/// project records.
 pub struct SyncWrite {
     pub config: Option<SshConfig>,
     pub config_revision: String,
     pub known: Option<KnownHosts>,
     pub known_revision: String,
     pub devices: Vec<DeviceRecord>,
+    pub projects: Vec<ProjectRecord>,
 }
 
 /// What the user of the side that connected decides on.
@@ -187,6 +192,7 @@ fn talk(
         host_keys: host_keys::collect(&local.known, &hosts),
         hosts,
         devices: local.devices.clone(),
+        projects: local.projects.clone(),
     };
     let _ = session.stream().set_read_timeout(Some(STEP_TIMEOUT));
     let Message::Manifest { manifest: theirs } = swap(
@@ -237,6 +243,7 @@ fn talk(
             known: (known != local.known).then_some(known),
             known_revision: local.known.revision(),
             devices: theirs.devices.clone(),
+            projects: theirs.projects.clone(),
         },
     );
     // What is on disk now: the other side's snapshot must match it.
@@ -635,6 +642,26 @@ mod tests {
             left.config_text()
                 .contains("HostName 10.9.9.9\n    IdentityFile ~/.ssh/id_a")
         );
+    }
+
+    #[test]
+    fn project_records_go_both_ways() {
+        let record = |id: &str, name: &str| ProjectRecord {
+            id: id.into(),
+            record: format!(r#"{{"name":"{name}","modified":"2026-11-10T10:00:00Z"}}"#),
+        };
+        let (left, right) = (
+            Script::own("alice", "s", LEFT),
+            Script::own("bob", "s", RIGHT),
+        );
+        let shop = record("6f1c2d3e-0000-4000-8000-000000000001", "Shop");
+        let blog = record("6f1c2d3e-0000-4000-8000-000000000002", "Blog");
+        *left.projects.lock().unwrap() = vec![shop.clone()];
+        *right.projects.lock().unwrap() = vec![blog.clone()];
+        let ((_, left), (_, right)) = sync(left, right);
+        // Each side merges what the other sent into its vault.
+        assert_eq!(*left.projects.lock().unwrap(), [blog]);
+        assert_eq!(*right.projects.lock().unwrap(), [shop]);
     }
 
     #[test]

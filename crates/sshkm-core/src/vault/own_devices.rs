@@ -332,7 +332,7 @@ fn parse(key: &str, json: &str) -> Option<Stored> {
 
 /// A time as the records keep it: RFC 3339 in UTC, to the second, as
 /// `2026-11-04T10:30:00Z`.
-fn time(text: &str) -> Option<OffsetDateTime> {
+pub(super) fn time(text: &str) -> Option<OffsetDateTime> {
     if text.len() != 20 || !text.ends_with('Z') {
         return None;
     }

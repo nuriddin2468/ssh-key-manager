@@ -16,6 +16,7 @@ use sshkm_core::p2p::protocol::{Intent, Item, SecretText, VaultState};
 use sshkm_core::p2p::{Identity, PeerKey, accept, connect};
 use sshkm_core::sync::Hasher;
 use sshkm_core::vault::DeviceRecord;
+use sshkm_core::vault::projects::ProjectRecord;
 use zeroize::Zeroizing;
 
 use super::pairing::{PairingFailure, PairingPhase, Purpose, Side, conversation};
@@ -86,6 +87,8 @@ pub struct Script {
     pub sync_state: Mutex<SyncState>,
     /// Device records the other side sent in a sync.
     pub devices: Mutex<Vec<DeviceRecord>>,
+    /// The project records this side sends, and then the other side's.
+    pub projects: Mutex<Vec<ProjectRecord>>,
 }
 
 impl Script {
@@ -121,6 +124,7 @@ impl Script {
             known: Mutex::default(),
             sync_state: Mutex::default(),
             devices: Mutex::default(),
+            projects: Mutex::default(),
         }
     }
 
@@ -256,6 +260,7 @@ impl Side for Script {
             config: self.config.lock().unwrap().clone(),
             known: self.known.lock().unwrap().clone(),
             devices: Vec::new(),
+            projects: self.projects.lock().unwrap().clone(),
             state: self.sync_state.lock().unwrap().clone(),
             hasher: Hasher::new(Zeroizing::new([u8::try_from(self.name.len()).unwrap(); 32])),
         })
@@ -268,6 +273,7 @@ impl Side for Script {
             *self.known.lock().unwrap() = known.clone();
         }
         self.devices.lock().unwrap().clone_from(&write.devices);
+        self.projects.lock().unwrap().clone_from(&write.projects);
         Ok(())
     }
     fn sync_keep(&self, _: PeerKey, state: &SyncState) -> Result<(), PairingFailure> {

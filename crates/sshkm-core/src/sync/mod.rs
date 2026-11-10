@@ -2,9 +2,10 @@
 //!
 //! Each computer sends the other a [`Manifest`]: its hosts as they go to
 //! another computer ([`hosts`]), the server keys it trusts for them
-//! ([`host_keys`]), and the records of the user's devices. Each then works
-//! out by itself what to take from the other ([`plan`]). The comparison is
-//! against a snapshot of what both had after they last synced ([`Base`]).
+//! ([`host_keys`]), and the records of the user's devices and projects.
+//! Each then works out by itself what to take from the other ([`plan`]).
+//! The comparison is against a snapshot of what both had after they last
+//! synced ([`Base`]).
 //! An item only one of them changed goes the way of the change. One both
 //! changed differently is a [`Conflict`] for the user. After applying, the
 //! two compare what they have ([`agree`]), and what agrees becomes the next
@@ -23,6 +24,7 @@ pub use self::host_keys::HostKeys;
 pub use self::merge::{
     Base, Change, Conflict, Field, Hasher, Item, Plan, agree, digest, digests, plan,
 };
+use crate::vault::projects::{self, ProjectRecord};
 use crate::vault::{DeviceRecord, check_records};
 use crate::{Error, Result};
 
@@ -41,6 +43,9 @@ pub struct Manifest {
     pub hosts: Vec<Item>,
     pub host_keys: Vec<HostKeys>,
     pub devices: Vec<DeviceRecord>,
+    /// Missing from versions before projects.
+    #[serde(default)]
+    pub projects: Vec<ProjectRecord>,
 }
 
 impl Manifest {
@@ -81,7 +86,8 @@ impl Manifest {
                 }
             }
         }
-        check_records(&self.devices)
+        check_records(&self.devices)?;
+        projects::check_records(&self.projects)
     }
 }
 
@@ -162,6 +168,7 @@ mod tests {
                 }],
             }],
             devices: Vec::new(),
+            projects: Vec::new(),
         };
         assert!(fine.check().is_ok());
         let with = |item: Item| Manifest {

@@ -31,6 +31,7 @@ mod import;
 mod kdf;
 mod location;
 mod own_devices;
+pub mod projects;
 mod recovery;
 mod slots;
 #[cfg(test)]

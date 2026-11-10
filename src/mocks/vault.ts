@@ -114,6 +114,16 @@ const entries: MockEntry[] = [
 
 const fail = (code: string, message: string) => Promise.reject({ code, message });
 
+/** Whether the mock vault is open: projects show their logins only then. */
+export const isMockVaultUnlocked = () => unlocked;
+
+/** The id of the entry titled `title` (not in the recycle bin), for other mocks. */
+export const mockEntryId = (title: string) =>
+  entries.find((e) => e.detail.title === title && !e.detail.inTrash)?.detail.id;
+
+/** Whether `id` is an entry of the mock vault. */
+export const isMockEntry = (id: string) => entries.some((e) => e.detail.id === id);
+
 function requireUnlocked(): Promise<never> | undefined {
   if (!unlocked) return fail('vault_locked', 'the vault is locked');
   lastActivity = Date.now();

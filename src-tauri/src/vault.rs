@@ -25,7 +25,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sshkm_core::vault::{Vault, VaultPaths};
+use sshkm_core::vault::projects::{self, Project};
+use sshkm_core::vault::{self as core_vault, Vault, VaultPaths};
 use sshkm_core::{ErrorCode, ExposeSecret, SecretString, fsutil};
 use tauri::{AppHandle, Emitter};
 
@@ -37,6 +38,8 @@ pub const LOCKED_EVENT: &str = "vault-locked";
 pub const UNLOCKED_EVENT: &str = "vault-unlocked";
 
 const SETTINGS_FILE: &str = "vault.json";
+/// The projects without secrets, shown while the vault is locked.
+const PROJECTS_COPY: &str = "projects.json";
 const DATABASE_FILE: &str = "vault.kdbx";
 const TICK: Duration = Duration::from_secs(5);
 /// A tick that comes this late means the computer was asleep.
@@ -283,6 +286,7 @@ impl VaultRuntime {
     pub fn set_unlocked(&self, vault: Vault) {
         // Logins read from a browser for the vault open before are not for this one.
         crate::commands::browser_import::forget();
+        self.remember_projects(&vault);
         *lock(&self.unlocked) = Some(vault);
         self.touch();
         if let Some(app) = self.app.get() {
@@ -304,11 +308,36 @@ impl VaultRuntime {
     /// Drops the unlocked vault and clears a secret it copied. Returns
     /// whether it was unlocked.
     fn lock_now(&self) -> bool {
-        let was_unlocked = lock(&self.unlocked).take().is_some();
-        if was_unlocked {
-            self.clear_copied_secret();
+        let Some(vault) = lock(&self.unlocked).take() else {
+            return false;
+        };
+        // What another computer changed meanwhile shows while it is locked.
+        self.remember_projects(&vault);
+        drop(vault);
+        self.clear_copied_secret();
+        true
+    }
+
+    /// Keeps the copy of the vault's projects without secrets that shows
+    /// while it is locked ([`projects::save_copy`]). A copy that can't be
+    /// written is logged: it only makes the locked view out of date.
+    pub fn remember_projects(&self, vault: &Vault) {
+        let path = self.data_dir.join(PROJECTS_COPY);
+        if let Err(error) = projects::save_copy(&path, vault.vault_id(), &vault.projects()) {
+            log::warn!("projects: the copy for a locked vault was not saved: {error}");
         }
-        was_unlocked
+    }
+
+    /// The projects kept for the vault while it is locked; none for another
+    /// vault, or with no vault.
+    pub fn projects_copy(&self) -> Vec<Project> {
+        let Some(vault_id) = core_vault::probe(&self.paths())
+            .ok()
+            .and_then(|files| files.vault_id)
+        else {
+            return Vec::new();
+        };
+        projects::load_copy(&self.data_dir.join(PROJECTS_COPY), &vault_id)
     }
 
     /// Records activity, postponing the auto-lock.
@@ -413,6 +442,7 @@ impl VaultRuntime {
                 let _ = vault.refresh();
                 return Err(error.into());
             }
+            self.remember_projects(vault);
             Ok(result)
         })
     }

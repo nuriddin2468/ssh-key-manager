@@ -250,27 +250,33 @@ fn members_are_checked() {
 
 #[test]
 fn folders_are_kept_relative_to_home() {
-    let home = Path::new("/home/me");
-    let text = |path: &str| folder_text(Path::new(path), Some(home)).ok();
-    assert_eq!(text("/home/me/code/shop").as_deref(), Some("~/code/shop"));
-    assert_eq!(text("/home/me").as_deref(), Some("~"));
-    assert_eq!(text("/srv/shop").as_deref(), Some("/srv/shop"));
-    assert_eq!(text("relative/path"), None);
-    assert_eq!(text("/home/me/../other"), None);
+    let root = Path::new(if cfg!(windows) { "C:\\" } else { "/" });
+    let home = root.join("home").join("me");
+    let srv = root.join("srv").join("shop");
+    let text = |path: &Path| folder_text(path, Some(&home)).ok();
     assert_eq!(
-        folder_text(Path::new("/home/me/code"), None)
-            .as_deref()
-            .ok(),
-        Some("/home/me/code")
+        text(&home.join("code").join("shop")).as_deref(),
+        Some("~/code/shop")
+    );
+    assert_eq!(text(&home).as_deref(), Some("~"));
+    assert_eq!(text(&srv).as_deref(), srv.to_str());
+    assert_eq!(text(Path::new("relative/path")), None);
+    assert_eq!(text(&home.join("..").join("other")), None);
+    assert_eq!(
+        folder_text(&home.join("code"), None).ok().as_deref(),
+        home.join("code").to_str()
     );
 
-    let path = |text: &str| folder_path(text, Some(home));
+    let path = |text: &str| folder_path(text, Some(&home));
     assert_eq!(path("~/code/shop"), Some(home.join("code").join("shop")));
-    assert_eq!(path("~"), Some(home.to_path_buf()));
+    assert_eq!(path("~"), Some(home.clone()));
     assert_eq!(path("~\\code"), Some(home.join("code")));
-    assert_eq!(path("/srv/shop"), Some("/srv/shop".into()));
+    assert_eq!(path(srv.to_str().unwrap()), Some(srv.clone()));
     assert_eq!(path("~/../etc"), None);
-    assert_eq!(path("/srv/../etc"), None);
+    assert_eq!(
+        path(root.join("srv").join("..").join("etc").to_str().unwrap()),
+        None
+    );
     assert_eq!(path("relative"), None);
     assert_eq!(folder_path("~/code", None), None);
 }

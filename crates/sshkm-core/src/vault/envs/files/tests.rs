@@ -1156,15 +1156,131 @@ fn history_keeps_only_the_latest_versions() {
         .as_ref()
         .map_or(0, |history| history.get_entries().len());
     assert_eq!(kept, 10);
-    // The newest are the ones kept.
-    let newest = f.vault.db.entry(id).unwrap().history.clone().unwrap();
-    let port = |version: &Entry| {
-        variables_of(version)
-            .into_iter()
-            .find(|var| var.name == "PORT")
-            .map(|var| var.value.expose_secret().to_owned())
-    };
-    assert_eq!(port(&newest.get_entries()[0]).as_deref(), Some("13"));
+    // The newest are the ones kept, oldest first as KeePass keeps them.
+    assert_eq!(
+        history_ports(&f),
+        ["4", "5", "6", "7", "8", "9", "10", "11", "12", "13"]
+    );
+}
+
+fn port_of(version: &Entry) -> String {
+    variables_of(version)
+        .into_iter()
+        .find(|var| var.name == "PORT")
+        .map(|var| var.value.expose_secret().to_owned())
+        .unwrap_or_default()
+}
+
+/// `PORT` of each earlier version of the fixture's environment, in the
+/// order the entry keeps them.
+fn history_ports(f: &Fixture) -> Vec<String> {
+    let id = parse_id(&f.env).unwrap();
+    let entry = f.vault.db.entry(id).unwrap();
+    entry
+        .history
+        .as_ref()
+        .map(|history| history.get_entries().iter().map(port_of).collect())
+        .unwrap_or_default()
+}
+
+/// A day in 2020, as a version's time.
+fn day(n: u32) -> chrono::NaiveDateTime {
+    chrono::NaiveDate::from_ymd_opt(2020, 1, n)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+}
+
+/// Gives the fixture's environment `versions` as its history, in that
+/// order, as a file another app wrote would have them.
+fn set_history(f: &mut Fixture, versions: Vec<Entry>) {
+    let id = parse_id(&f.env).unwrap();
+    let mut history = keepass::db::History::default();
+    // Each one added goes in front.
+    for version in versions.into_iter().rev() {
+        history.add_entry(version);
+    }
+    f.vault.db.entry_mut(id).unwrap().history = Some(history);
+}
+
+/// The fixture's environment as it is now, as an earlier version made on
+/// day `n`.
+fn version_now(f: &Fixture, n: u32) -> Entry {
+    let id = parse_id(&f.env).unwrap();
+    let mut version: Entry = f.vault.db.entry(id).unwrap().clone();
+    version.history = None;
+    version.times.last_modification = Some(day(n));
+    version
+}
+
+#[test]
+fn history_is_kept_oldest_first_whatever_order_it_came_in() {
+    for newest_first in [false, true] {
+        let mut f = Fixture::new();
+        f.vault.db.meta.history_max_items = Some(3);
+        let mut versions: Vec<Entry> = (1..=3)
+            .map(|n| {
+                let mut version = version_now(&f, n);
+                version.set("PORT", keepass::db::Value::unprotected(n.to_string()));
+                version
+            })
+            .collect();
+        // As KeePass and KeePassXC keep them, or as earlier versions of this
+        // app did.
+        if newest_first {
+            versions.reverse();
+        }
+        set_history(&mut f, versions);
+        f.set("PORT", "5", false);
+        // The oldest went, the newest stayed, the one this change kept is
+        // last.
+        assert_eq!(history_ports(&f), ["2", "3", "3000"], "{newest_first}");
+        f.set("PORT", "6", false);
+        assert_eq!(history_ports(&f), ["3", "3000", "5"], "{newest_first}");
+    }
+}
+
+#[test]
+fn a_variable_written_again_gets_the_newest_flag_and_note() {
+    for newest_first in [false, true] {
+        let mut f = Fixture::new();
+        let env = f.env.clone();
+        let mut versions = Vec::new();
+        for (n, secret, note) in [(1, false, "old"), (2, true, "new")] {
+            f.vault
+                .set_env_variable(
+                    &env,
+                    f.vault
+                        .env_variables(&env)
+                        .unwrap()
+                        .iter()
+                        .any(|var| var.name == "DB_HOST")
+                        .then_some("DB_HOST"),
+                    &EnvVarInput {
+                        name: "DB_HOST".into(),
+                        value: Some(s("db.internal")),
+                        secret,
+                        note: note.into(),
+                    },
+                )
+                .unwrap();
+            versions.push(version_now(&f, n));
+        }
+        f.vault.remove_env_variable(&env, "DB_HOST").unwrap();
+        if newest_first {
+            versions.reverse();
+        }
+        set_history(&mut f, versions);
+        f.bind(".env");
+        f.sync();
+        fs::write(
+            f.path(".env"),
+            "PORT=3000\nAPI_TOKEN=tok-1\nDB_HOST=db.internal\n",
+        )
+        .unwrap();
+        assert_eq!(f.sync().changes[0].added, ["DB_HOST"]);
+        assert_eq!(db_host(&f), Some((true, "new".into())), "{newest_first}");
+    }
 }
 
 #[test]

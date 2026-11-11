@@ -56,7 +56,9 @@ use self::disk::{Disk, Target};
 pub use self::disk::{find_env_files, ignore_in_git};
 use super::document::EnvDocument;
 use super::dotenv::{self, ParseProblem, ParsedEnv, ProblemKind};
-use super::{EnvComparison, EnvVariable, is_environment, looks_secret, variables_of};
+use super::{
+    EnvComparison, EnvVariable, history_newest_first, is_environment, looks_secret, variables_of,
+};
 pub use crate::leaks::GitState;
 use crate::vault::projects::{self, Project};
 use crate::vault::{Vault, in_group, parse_id};
@@ -1213,16 +1215,10 @@ impl Vault {
                     "the environment changed again since".into(),
                 ));
             }
-            entry
-                .history
-                .as_ref()
-                .and_then(|history| {
-                    history
-                        .get_entries()
-                        .iter()
-                        .map(variables_of)
-                        .find(|vars| revision(&key, &pairs(vars)) == undo.before)
-                })
+            history_newest_first(&entry)
+                .into_iter()
+                .map(variables_of)
+                .find(|vars| revision(&key, &pairs(vars)) == undo.before)
                 .ok_or_else(|| {
                     Error::NotFound("the earlier version isn't in the entry's history".into())
                 })?
@@ -1409,12 +1405,7 @@ impl Vault {
             return Vec::new();
         };
         let mut found: Vec<EnvVariable> = Vec::new();
-        for version in entry
-            .history
-            .as_ref()
-            .map(|history| history.get_entries().as_slice())
-            .unwrap_or_default()
-        {
+        for version in history_newest_first(&entry) {
             for var in variables_of(version) {
                 if !found.iter().any(|other| other.name == var.name) {
                     found.push(EnvVariable {

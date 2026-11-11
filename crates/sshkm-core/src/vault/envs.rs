@@ -589,27 +589,31 @@ impl Vault {
         if target.is_none() && name == current.summary.name && notes == current.notes {
             return Ok(());
         }
-        let mut entry = self
-            .db
-            .entry_mut(parse_id(id)?)
-            .ok_or_else(|| Error::NotFound(format!("environment {id}")))?;
-        let mut tracked = entry.track_changes();
-        if name != current.summary.name {
-            tracked.set(fields::TITLE, Value::unprotected(name));
-        }
-        if notes != current.notes {
-            if notes.is_empty() {
-                tracked.fields.remove(fields::NOTES);
-            } else {
-                tracked.set(fields::NOTES, Value::unprotected(notes));
+        let entry_id = parse_id(id)?;
+        {
+            let mut entry = self
+                .db
+                .entry_mut(entry_id)
+                .ok_or_else(|| Error::NotFound(format!("environment {id}")))?;
+            let mut tracked = entry.track_changes();
+            if name != current.summary.name {
+                tracked.set(fields::TITLE, Value::unprotected(name));
             }
+            if notes != current.notes {
+                if notes.is_empty() {
+                    tracked.fields.remove(fields::NOTES);
+                } else {
+                    tracked.set(fields::NOTES, Value::unprotected(notes));
+                }
+            }
+            if let Some(group) = target {
+                tracked
+                    .move_to(group)
+                    .map_err(|_| Error::NotFound(GROUP.into()))?;
+            }
+            tracked.times.last_modification = Some(Times::now());
         }
-        if let Some(group) = target {
-            tracked
-                .move_to(group)
-                .map_err(|_| Error::NotFound(GROUP.into()))?;
-        }
-        tracked.times.last_modification = Some(Times::now());
+        self.settle_history(entry_id, true);
         Ok(())
     }
 
@@ -877,37 +881,66 @@ impl Vault {
             let mut tracked = entry.track_changes();
             write_variables(&mut tracked, &before, &after);
         }
-        self.trim_history(entry_id);
+        self.settle_history(entry_id, true);
         Ok(())
     }
 
-    /// Keeps no more earlier versions of an entry than the database's
-    /// `HistoryMaxItems` says (10 when it says nothing; none is kept at 0;
-    /// all at -1), the newest ones, as KeePass does on saving: an editor
-    /// saving a managed file often would otherwise add a full copy each
-    /// time.
-    fn trim_history(&mut self, entry_id: keepass::db::EntryId) {
+    /// Puts an entry's earlier versions in the order KeePass keeps them,
+    /// oldest first by when each was made, after a change here: the
+    /// `keepass` crate puts the version a change keeps in front, so it is
+    /// moved to the end first (`added`), where KeePass and KeePassXC add
+    /// theirs. Then keeps no more than the database's `HistoryMaxItems` says
+    /// (10 when it says nothing, none at 0, all at -1), the newest, as
+    /// KeePass does on saving: an editor saving a managed file often would
+    /// otherwise add a full copy each time.
+    fn settle_history(&mut self, entry_id: keepass::db::EntryId, added: bool) {
         let max = match self.db.meta.history_max_items {
-            None => 10,
-            Some(max) if max < 0 => return,
-            Some(max) => usize::try_from(max).unwrap_or(usize::MAX),
+            None => Some(10),
+            Some(max) if max < 0 => None,
+            Some(max) => Some(usize::try_from(max).unwrap_or(usize::MAX)),
         };
         let Some(mut entry) = self.db.entry_mut(entry_id) else {
             return;
         };
-        let kept: Vec<Entry> = match entry.history.as_ref() {
-            Some(history) if history.get_entries().len() > max => {
-                history.get_entries()[..max].to_vec()
-            }
-            _ => return,
+        let Some(before) = entry.history.as_ref().map(|h| h.get_entries().clone()) else {
+            return;
         };
-        let mut trimmed = keepass::db::History::default();
-        // Newest first: each one added goes in front.
-        for version in kept.into_iter().rev() {
-            trimmed.add_entry(version);
+        let mut versions = before.clone();
+        if added && !versions.is_empty() {
+            let kept = versions.remove(0);
+            versions.push(kept);
         }
-        entry.history = Some(trimmed);
+        // Stable: of two made the same second, the later in place stays
+        // later.
+        versions.sort_by_key(|version| version.times.last_modification);
+        if let Some(max) = max
+            && versions.len() > max
+        {
+            versions.drain(..versions.len() - max);
+        }
+        if versions == before {
+            return;
+        }
+        let mut settled = keepass::db::History::default();
+        // Each one added goes in front.
+        for version in versions.into_iter().rev() {
+            settled.add_entry(version);
+        }
+        entry.history = Some(settled);
     }
+}
+
+/// An entry's earlier versions, newest first by when each was made; of two
+/// made the same second, the later in place (KeePass keeps them oldest
+/// first).
+pub(super) fn history_newest_first(entry: &Entry) -> Vec<&Entry> {
+    let mut versions: Vec<&Entry> = entry
+        .history
+        .as_ref()
+        .map(|history| history.get_entries().iter().rev().collect())
+        .unwrap_or_default();
+    versions.sort_by_key(|version| std::cmp::Reverse(version.times.last_modification));
+    versions
 }
 
 /// Writes `after` over the variables `before` of an entry, with the marker

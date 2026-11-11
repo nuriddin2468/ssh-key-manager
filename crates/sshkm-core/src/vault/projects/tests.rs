@@ -600,7 +600,12 @@ fn projects_made_on_two_computers_with_one_name_become_one() {
         let projects = vault.projects();
         assert_eq!(projects.len(), 2, "{projects:?}");
         let shop = projects.iter().find(|p| p.id == kept).unwrap();
-        assert_eq!(shop.hosts, ["shop-db", "shop-prod"]);
+        // Added on two devices at about the same time: which came first is
+        // the clocks' call, so only what it holds is checked here (the
+        // order is in `members_come_back_in_the_order_they_were_added`).
+        let mut hosts = shop.hosts.clone();
+        hosts.sort();
+        assert_eq!(hosts, ["shop-db", "shop-prod"]);
     }
     assert_eq!(laptop.projects(), desktop.projects());
     assert_eq!(laptop.project_records(), desktop.project_records());

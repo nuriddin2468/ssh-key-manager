@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
-import { FileDiff, Laptop, Lock } from 'lucide-react';
+import { FileDiff, Info, Laptop, Lock, TriangleAlert } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
+import type { HostsApplyResult } from '@/bindings/HostsApplyResult';
 import type { HostsChange } from '@/bindings/HostsChange';
 import type { HostsDiffLine } from '@/bindings/HostsDiffLine';
 import type { HostsFileInfo } from '@/bindings/HostsFileInfo';
@@ -23,14 +24,24 @@ export interface ReceivedNote {
   count: number;
 }
 
+/** Something the person should know before saving, shown above the diff. */
+export interface ReviewNote {
+  tone: 'info' | 'warning';
+  text: string;
+}
+
 interface ReviewDialogProps {
   revision: string;
   changes: HostsChange[];
   /** Saving found the file changed elsewhere; these are the changes carried over to it. */
   conflict: boolean;
   received?: ReceivedNote;
+  /** Read out with the description too, so nobody saves without them. */
+  notes?: ReviewNote[];
+  /** The toast after saving can undo it through the backup it made. */
+  undoable?: boolean;
   /** The file was written. */
-  onApplied: () => void;
+  onApplied: (result: HostsApplyResult) => void;
   /** The file changed elsewhere (`file` is how it is now), so nothing was written. */
   onStale: (file: HostsFileInfo) => void;
   onDone: () => void;
@@ -49,13 +60,15 @@ export function ReviewDialog({
   changes,
   conflict,
   received,
+  notes = [],
+  undoable = false,
   onApplied,
   onStale,
   onDone,
 }: ReviewDialogProps) {
   const { t } = useTranslation();
   const [flushDns, setFlushDns] = useState(true);
-  const { apply } = useHostsApply();
+  const { apply } = useHostsApply({ undo: undoable });
   const preview = useQuery({
     queryKey: ['hosts-file', 'preview', revision, changes],
     queryFn: () => api.previewHostsChanges(revision, changes),
@@ -76,7 +89,7 @@ export function ReviewDialog({
       { revision, changes, flushDns },
       {
         onSuccess: (result) => {
-          if (result.outcome === 'applied') onApplied();
+          if (result.outcome === 'applied') onApplied(result);
           else if (result.outcome === 'stale') onStale(result.file);
         },
       },
@@ -96,6 +109,12 @@ export function ReviewDialog({
             {t('hostsFile.reviewDescription')}
             {/* Read when the dialog opens: where the changes came from. */}
             {receivedText ? <span className="sr-only"> {receivedText}</span> : null}
+            {notes.map((note) => (
+              <span key={note.text} className="sr-only">
+                {' '}
+                {note.text}
+              </span>
+            ))}
           </>
         }
       />
@@ -110,6 +129,26 @@ export function ReviewDialog({
             {receivedText}
           </p>
         ) : null}
+        {notes.map((note) => (
+          // The dialog's description says it to screen readers already.
+          <p
+            key={note.text}
+            aria-hidden="true"
+            className={cn(
+              'flex gap-2.5 rounded-xl border px-3 py-2.5 text-[12.5px] leading-[18px] text-fg-2',
+              note.tone === 'warning'
+                ? 'border-warning-solid/30 bg-warning-solid/[0.09]'
+                : 'border-info-solid/30 bg-info-solid/[0.09]',
+            )}
+          >
+            {note.tone === 'warning' ? (
+              <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" strokeWidth={2} />
+            ) : (
+              <Info className="mt-0.5 size-4 shrink-0 text-info" strokeWidth={2} />
+            )}
+            {note.text}
+          </p>
+        ))}
         {conflict && !stale ? (
           <p
             role="alert"

@@ -101,6 +101,21 @@ const ru = {
     addHostsFile: 'Имена из файла hosts…',
     hostsFileGone: 'Нет в файле hosts',
     hostsFileShadowed: 'Для этого имени действует запись выше',
+    hostsFileAll: 'Использовать все записи',
+    hostsFileOnCount: 'Включено {{on}} из {{total}}',
+    hostsFileTurnOn_one: 'Включает {{count}} запись проекта «{{name}}».',
+    hostsFileTurnOn_few: 'Включает {{count}} записи проекта «{{name}}».',
+    hostsFileTurnOn_many: 'Включает {{count}} записей проекта «{{name}}».',
+    hostsFileTurnOn_other: 'Включает {{count}} записи проекта «{{name}}».',
+    hostsFileTurnOff_one: 'Выключает {{count}} запись проекта «{{name}}».',
+    hostsFileTurnOff_few: 'Выключает {{count}} записи проекта «{{name}}».',
+    hostsFileTurnOff_many: 'Выключает {{count}} записей проекта «{{name}}».',
+    hostsFileTurnOff_other: 'Выключает {{count}} записи проекта «{{name}}».',
+    hostsFileSharedNote: 'Эти имена есть и в других проектах: {{list}}. Изменение коснётся и их.',
+    hostsFileSeveralNote:
+      'Для {{names}} будет включено несколько записей; действует первая в файле.',
+    hostsFileMissingNote:
+      'Этих имён нет в файле hosts, поэтому для них ничего не добавляется: {{names}}.',
     newHost: 'Новый хост…',
     newKey: 'Создать ключ…',
     newLogin: 'Новый логин…',
@@ -1839,6 +1854,8 @@ const ru = {
     backupsEmpty: 'Копий пока нет. Первая появится, когда вы впервые сохраните изменение.',
     restore: 'Восстановить',
     restored: 'Копия восстановлена',
+    undoStale:
+      'Файл hosts с тех пор изменился, поэтому изменение не отменено. Прежняя копия — в «Резервных копиях».',
     restoreStale:
       'Пока было открыто окно ввода пароля, другая программа изменила файл hosts, поэтому ничего не восстановлено. Восстановите ещё раз, чтобы заменить и её изменения.',
     turnedOff: '{{name}} выключена',

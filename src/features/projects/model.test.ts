@@ -13,6 +13,7 @@ import {
   missing,
   nextColor,
   personal,
+  planHostsFileSwitch,
   problemsFirst,
   projectTone,
 } from './model';
@@ -188,5 +189,46 @@ describe('hosts file names', () => {
     const shop = project({ hostsFile: ['staging-api.internal', 'old.internal'] });
     expect([...missing(shop, { hostsFile: file }).hostsFile]).toEqual(['old.internal']);
     expect(missing(shop, {}).hostsFile.size).toBe(0);
+  });
+});
+
+describe('switching all of a project’s hosts file entries', () => {
+  const line = (n: number, names: string[], enabled: boolean, system = false) =>
+    ({ line: n, address: `10.0.0.${n}`, names, enabled, system }) as HostsFileEntry;
+  const file = [
+    line(1, ['localhost', 'app.test'], true, true),
+    line(2, ['app.test'], false),
+    line(3, ['api.test', 'docs.test'], true),
+    line(4, ['api.test'], false),
+    line(5, ['other.test'], false),
+  ];
+  const shop = project({
+    id: 'p1',
+    name: 'Shop',
+    hostsFile: ['app.test', 'api.test', 'gone.test'],
+  });
+  const blog = project({ id: 'p2', name: 'Blog', hostsFile: ['docs.test', 'api.test'] });
+
+  it('changes only entries in the other state, never the system’s or new ones', () => {
+    const on = planHostsFileSwitch(shop, [shop, blog], file, true);
+    expect(on.entries.map((e) => e.line)).toEqual([2, 3, 4]);
+    expect(on.lines.map((e) => e.line)).toEqual([2, 4]);
+    const off = planHostsFileSwitch(shop, [shop, blog], file, false);
+    expect(off.lines.map((e) => e.line)).toEqual([3]);
+  });
+
+  it('names other projects’ names on a changing line', () => {
+    const off = planHostsFileSwitch(shop, [shop, blog], file, false);
+    expect(off.shared).toEqual([
+      { name: 'api.test', projects: ['Blog'] },
+      { name: 'docs.test', projects: ['Blog'] },
+    ]);
+    expect(planHostsFileSwitch(shop, [shop], file, false).shared).toEqual([]);
+  });
+
+  it('warns when a name ends up with several entries on', () => {
+    // app.test: the system line and line 2; api.test: lines 3 and 4.
+    expect(planHostsFileSwitch(shop, [shop], file, true).several).toEqual(['app.test', 'api.test']);
+    expect(planHostsFileSwitch(shop, [shop], file, false).several).toEqual([]);
   });
 });

@@ -95,6 +95,18 @@ const uz = {
     addHostsFile: 'Hosts fayli nomlari…',
     hostsFileGone: 'Hosts faylida yoʻq',
     hostsFileShadowed: 'Bu nom uchun yuqoridagi yozuv ishlaydi',
+    hostsFileAll: 'Barcha yozuvlardan foydalanish',
+    hostsFileOnCount: '{{total}} tadan {{on}} tasi yoqilgan',
+    hostsFileTurnOn_one: '«{{name}}» loyihasining {{count}} ta yozuvi yoqiladi.',
+    hostsFileTurnOn_other: '«{{name}}» loyihasining {{count}} ta yozuvi yoqiladi.',
+    hostsFileTurnOff_one: '«{{name}}» loyihasining {{count}} ta yozuvi oʻchiriladi.',
+    hostsFileTurnOff_other: '«{{name}}» loyihasining {{count}} ta yozuvi oʻchiriladi.',
+    hostsFileSharedNote:
+      'Bu nomlar boshqa loyihalarda ham bor: {{list}}. Oʻzgarish ularga ham taʼsir qiladi.',
+    hostsFileSeveralNote:
+      '{{names}} uchun bir nechta yozuv yoqiladi; fayldagi birinchisi ishlaydi.',
+    hostsFileMissingNote:
+      'Bu nomlar hosts faylida yoʻq, shuning uchun ular uchun hech narsa qoʻshilmaydi: {{names}}.',
     newHost: 'Yangi xost…',
     newKey: 'Kalit yaratish…',
     newLogin: 'Yangi login…',
@@ -1743,6 +1755,8 @@ const uz = {
     backupsEmpty: 'Hozircha nusxalar yoʻq. Birinchi oʻzgarishni saqlaganingizda paydo boʻladi.',
     restore: 'Tiklash',
     restored: 'Nusxa tiklandi',
+    undoStale:
+      'Hosts fayli shundan beri oʻzgardi, shuning uchun oʻzgarish bekor qilinmadi. Oldingi nusxa «Zaxira nusxalar»da.',
     restoreStale:
       'Parol oynasi ochiq turganda boshqa dastur hosts faylini oʻzgartirdi, shuning uchun hech narsa tiklanmadi. Uning oʻzgarishlarini ham almashtirish uchun yana tiklang.',
     turnedOff: '{{name}} oʻchirildi',

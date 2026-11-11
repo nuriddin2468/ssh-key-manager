@@ -2,4 +2,9 @@
 import type { HostsApplyOutcome } from "./HostsApplyOutcome";
 import type { HostsFileInfo } from "./HostsFileInfo";
 
-export type HostsApplyResult = { outcome: HostsApplyOutcome, file: HostsFileInfo, };
+export type HostsApplyResult = { outcome: HostsApplyOutcome, file: HostsFileInfo, 
+/**
+ * When applied, the backup of the file as it was just before: restoring
+ * it undoes the change.
+ */
+backup: string | null, };

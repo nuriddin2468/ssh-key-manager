@@ -253,7 +253,8 @@ export const api = {
   applyHostsChanges: (vars: { revision: string; changes: HostsChange[]; flushDns: boolean }) =>
     call<HostsApplyResult>('apply_hosts_changes', vars),
   hostsBackups: () => call<HostsBackup[]>('list_hosts_backups'),
-  restoreHostsBackup: (vars: { path: string; flushDns: boolean }) =>
+  /** With `revision`, only over that revision of the file (an Undo). */
+  restoreHostsBackup: (vars: { path: string; flushDns: boolean; revision?: string | null }) =>
     call<HostsApplyResult>('restore_hosts_backup', vars),
   toolsGenerateSecret: (preset: SecretPreset) =>
     call<GeneratedSecret>('tools_generate_secret', { preset }),

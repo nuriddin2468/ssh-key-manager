@@ -1,4 +1,4 @@
-import { Switch as RSwitch } from 'radix-ui';
+import { Checkbox as RCheckbox, Switch as RSwitch } from 'radix-ui';
 import { type ComponentProps, type ReactNode, useId } from 'react';
 import { cn } from '@/lib/cn';
 
@@ -50,6 +50,35 @@ export function Switch({ className, ...props }: ComponentProps<typeof RSwitch.Ro
       {/* While pressed the knob stretches toward the other side, like macOS. */}
       <RSwitch.Thumb className="block h-4 w-4 translate-x-[3px] rounded-full bg-white shadow-[0_2px_4px_rgb(0_0_0/0.35)] transition-[translate,width] duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)] group-active:w-5 data-[state=checked]:translate-x-[19px] group-active:data-[state=checked]:translate-x-[15px]" />
     </RSwitch.Root>
+  );
+}
+
+/**
+ * A switch for a set of things that may be partly on: `'mixed'` puts the knob
+ * in the middle. It is a tri-state checkbox to screen readers ("partly
+ * checked"), which a switch can't be.
+ */
+export function MixedSwitch({
+  checked,
+  className,
+  ...props
+}: Omit<ComponentProps<typeof RCheckbox.Root>, 'checked'> & { checked: boolean | 'mixed' }) {
+  return (
+    <RCheckbox.Root
+      checked={checked === 'mixed' ? 'indeterminate' : checked}
+      className={cn(
+        'group relative h-[22px] w-[38px] shrink-0 rounded-full shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] transition-colors duration-150 disabled:opacity-50',
+        'bg-white/10 data-[state=checked]:bg-[linear-gradient(135deg,var(--accent-1),var(--accent-2))]',
+        'data-[state=indeterminate]:bg-[linear-gradient(90deg,rgb(var(--accent-rgb)/0.55),rgb(255_255_255/0.1))]',
+        className,
+      )}
+      {...props}
+    >
+      <span
+        aria-hidden="true"
+        className="block h-4 w-4 translate-x-[3px] rounded-full bg-white shadow-[0_2px_4px_rgb(0_0_0/0.35)] transition-[translate,width] duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)] group-active:w-5 group-data-[state=checked]:translate-x-[19px] group-data-[state=indeterminate]:translate-x-[11px] group-active:group-data-[state=checked]:translate-x-[15px]"
+      />
+    </RCheckbox.Root>
   );
 }
 

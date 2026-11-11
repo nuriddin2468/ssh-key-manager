@@ -244,3 +244,57 @@ export function memberKey(member: ProjectMember): string {
       return `hostsfile:${member.name}`;
   }
 }
+
+/** What switching all of a project's hosts file entries on or off does. */
+export interface HostsFilePlan {
+  /** The project's entries, not the system's, the switch acts on. */
+  entries: HostsFileEntry[];
+  /** Those not already in the state asked for: the ones that change. */
+  lines: HostsFileEntry[];
+  /** Names on a changing line that other projects hold, with those projects' names. */
+  shared: { name: string; projects: string[] }[];
+  /** Names that will have more than one entry on: the first in the file wins. */
+  several: string[];
+}
+
+/**
+ * Plans turning all of `project`'s hosts file entries `on` (or off): only
+ * entries in the other state change; names the file doesn't have add
+ * nothing; what else the change touches is named for the review.
+ */
+export function planHostsFileSwitch(
+  project: Project,
+  projects: Project[],
+  file: readonly HostsFileEntry[],
+  on: boolean,
+): HostsFilePlan {
+  const entries = hostsFileEntries(file, project.hostsFile).filter((entry) => !entry.system);
+  const lines = entries.filter((entry) => entry.enabled !== on);
+  const shared = new Map<string, string[]>();
+  for (const line of lines) {
+    for (const name of line.names.map(normalizeName)) {
+      for (const other of projects) {
+        if (other.id === project.id || !other.hostsFile.includes(name)) continue;
+        const holders = shared.get(name) ?? [];
+        if (!holders.includes(other.name)) holders.push(other.name);
+        shared.set(name, holders);
+      }
+    }
+  }
+  const several = on
+    ? project.hostsFile.filter(
+        (name) =>
+          file.filter(
+            (entry) =>
+              (entry.enabled || lines.includes(entry)) &&
+              entry.names.some((n) => normalizeName(n) === name),
+          ).length > 1,
+      )
+    : [];
+  return {
+    entries,
+    lines,
+    shared: [...shared].map(([name, holders]) => ({ name, projects: holders })),
+    several,
+  };
+}

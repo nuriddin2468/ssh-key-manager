@@ -249,10 +249,11 @@ function compress(rows: HostsDiffLine[]): HostsDiffLine[] {
 }
 
 function install(next: string[]): HostsApplyResult {
-  backups.push({ path: `/backups/hosts.${revision}.bak`, saved: new Date().toISOString(), lines });
+  const backup = `/backups/hosts.${revision}.bak`;
+  backups.push({ path: backup, saved: new Date().toISOString(), lines });
   lines = next;
   revision += 1;
-  return { outcome: 'applied', file: hostsFileInfo() };
+  return { outcome: 'applied', file: hostsFileInfo(), backup };
 }
 
 export const hostsFileHandlers: Record<string, (args: Record<string, unknown>) => unknown> = {
@@ -263,7 +264,7 @@ export const hostsFileHandlers: Record<string, (args: Record<string, unknown>) =
       : { stale: false, diff: compress(edited(changes as HostsChange[]).diff) },
   apply_hosts_changes: ({ revision: rev, changes }) =>
     rev !== `rev-${revision}`
-      ? { outcome: 'stale', file: hostsFileInfo() }
+      ? { outcome: 'stale', file: hostsFileInfo(), backup: null }
       : install(edited(changes as HostsChange[]).next),
   list_hosts_backups: () =>
     [...backups].reverse().map((b) => ({
@@ -271,9 +272,13 @@ export const hostsFileHandlers: Record<string, (args: Record<string, unknown>) =
       saved: b.saved,
       entries: b.lines.filter((l) => parse(l).kind === 'entry').length,
     })),
-  restore_hosts_backup: ({ path }) => {
+  restore_hosts_backup: ({ path, revision: rev }) => {
     const backup = backups.find((b) => b.path === path);
     if (!backup) return Promise.reject({ code: 'invalid_input', message: 'not a backup' });
+    // An Undo restores only over the file it changed.
+    if (rev && rev !== `rev-${revision}`) {
+      return { outcome: 'stale', file: hostsFileInfo(), backup: null };
+    }
     return install(backup.lines);
   },
   lookup_host: ({ name }) => {

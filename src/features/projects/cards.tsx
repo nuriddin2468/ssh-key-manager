@@ -35,12 +35,12 @@ import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Dialog } from '@/components/ui/Dialog';
 import { IconButton } from '@/components/ui/IconButton';
-import { Switch } from '@/components/ui/Switch';
+import { MixedSwitch, Switch } from '@/components/ui/Switch';
 import { findingTitle } from '@/features/audit/model';
 import { vaultFindingTitle } from '@/features/audit/vaultModel';
 import { editOf } from '@/features/hostsFile/draft';
 import { normalizeName } from '@/features/hostsFile/model';
-import { ReviewDialog } from '@/features/hostsFile/ReviewDialog';
+import { ReviewDialog, type ReviewNote } from '@/features/hostsFile/ReviewDialog';
 import { toastVaultError } from '@/features/passwords/vault';
 import { useTerminals } from '@/features/terminal/TerminalProvider';
 import { cn } from '@/lib/cn';
@@ -56,9 +56,11 @@ import {
   type Missing,
   memberKey,
   missing,
+  planHostsFileSwitch,
   problemsFirst,
 } from './model';
 import { AddToProjectButton } from './ProjectMenu';
+import { useProjects } from './queries';
 
 const COPIED = {
   username: 'passwords.copiedUsername',
@@ -602,8 +604,111 @@ function useHostsFileCard(
     icon: <Network className="size-3.5 text-[#A5B4FC]" strokeWidth={2.2} />,
     title: t('projects.cards.hostsFile'),
     count: names.length,
+    action:
+      project && info && !info.readOnly ? (
+        <HostsFileAllSwitch
+          project={project}
+          file={info.view.entries}
+          revision={info.revision}
+          gone={[...gone]}
+        />
+      ) : undefined,
     rows,
   };
+}
+
+/**
+ * One switch for all of the project's entries: on when all are, off when
+ * none is, in the middle when some are. It turns them all on (or, when all
+ * are on, off) through the hosts file's review: one diff, one password, one
+ * backup, and Undo in the toast. What else it touches is said first.
+ */
+function HostsFileAllSwitch({
+  project,
+  file,
+  revision,
+  gone,
+}: {
+  project: Project;
+  file: HostsFileEntry[];
+  revision: string;
+  gone: string[];
+}) {
+  const { t } = useTranslation();
+  const countId = useId();
+  const projects = useProjects().data ?? [];
+  const [target, setTarget] = useState<boolean | null>(null);
+  const now = planHostsFileSwitch(project, projects, file, true);
+  if (now.entries.length === 0) return null;
+  const on = now.entries.filter((entry) => entry.enabled).length;
+  const state = on === 0 ? false : on === now.entries.length ? true : 'mixed';
+  const plan = target === null ? null : planHostsFileSwitch(project, projects, file, target);
+  const notes: ReviewNote[] = [];
+  if (plan) {
+    const count = plan.lines.length;
+    notes.push({
+      tone: 'info',
+      text: target
+        ? t('projects.hostsFileTurnOn', { count, name: project.name })
+        : t('projects.hostsFileTurnOff', { count, name: project.name }),
+    });
+  }
+  if (plan && plan.shared.length > 0) {
+    notes.push({
+      tone: 'warning',
+      text: t('projects.hostsFileSharedNote', {
+        list: plan.shared.map((s) => `${s.name} (${s.projects.join(', ')})`).join(', '),
+      }),
+    });
+  }
+  if (plan && plan.several.length > 0) {
+    notes.push({
+      tone: 'warning',
+      text: t('projects.hostsFileSeveralNote', { names: plan.several.join(', ') }),
+    });
+  }
+  if (plan && gone.length > 0) {
+    notes.push({
+      tone: 'info',
+      text: t('projects.hostsFileMissingNote', { names: gone.join(', ') }),
+    });
+  }
+  return (
+    <span className="flex items-center gap-2">
+      <span id={countId} className="text-[12px] text-subtle tabular-nums">
+        {t('projects.hostsFileOnCount', { on, total: now.entries.length })}
+      </span>
+      <MixedSwitch
+        checked={state}
+        aria-label={t('projects.hostsFileAll')}
+        aria-describedby={countId}
+        // It shows the change for review first: screen readers say a dialog opens.
+        aria-haspopup="dialog"
+        onCheckedChange={() => setTarget(state !== true)}
+      />
+      <Dialog open={target !== null} onOpenChange={(open) => !open && setTarget(null)}>
+        {plan ? (
+          <ReviewDialog
+            revision={revision}
+            changes={plan.lines.map((entry) => ({
+              kind: 'set',
+              line: entry.line,
+              entry: { ...editOf(entry), enabled: target === true },
+            }))}
+            conflict={false}
+            notes={notes}
+            undoable
+            onApplied={() => setTarget(null)}
+            onStale={() => {
+              toast.error(t('hostsFile.stale'));
+              setTarget(null);
+            }}
+            onDone={() => setTarget(null)}
+          />
+        ) : null}
+      </Dialog>
+    </span>
+  );
 }
 
 /** Turns a hosts file line on or off through the hosts file's review. */
@@ -639,6 +744,7 @@ function HostsFileSwitch({
               },
             ]}
             conflict={false}
+            undoable
             onApplied={() => setReviewing(false)}
             onStale={() => {
               // The line may be another one now: the card shows the file again.

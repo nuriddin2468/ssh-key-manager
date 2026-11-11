@@ -93,6 +93,17 @@ const en = {
     addHostsFile: 'Hosts file names…',
     hostsFileGone: 'Not in the hosts file',
     hostsFileShadowed: 'An earlier entry wins for this name',
+    hostsFileAll: 'Use all entries',
+    hostsFileOnCount: '{{on}} of {{total}} on',
+    hostsFileTurnOn_one: 'Turns on {{count}} entry of {{name}}.',
+    hostsFileTurnOn_other: 'Turns on {{count}} entries of {{name}}.',
+    hostsFileTurnOff_one: 'Turns off {{count}} entry of {{name}}.',
+    hostsFileTurnOff_other: 'Turns off {{count}} entries of {{name}}.',
+    hostsFileSharedNote:
+      'Other projects use these names too: {{list}}. The change applies to them as well.',
+    hostsFileSeveralNote:
+      'More than one entry will be on for {{names}}; the first in the file wins.',
+    hostsFileMissingNote: 'Not in the hosts file, so nothing is added for: {{names}}.',
     newHost: 'New host…',
     newKey: 'Generate key…',
     newLogin: 'New login…',
@@ -1715,6 +1726,8 @@ const en = {
     backupsEmpty: 'No backups yet. One is saved the first time you save a change.',
     restore: 'Restore',
     restored: 'Backup restored',
+    undoStale:
+      'The hosts file has changed since, so the change wasn’t undone. The earlier copy is in Backups.',
     restoreStale:
       'Another program changed the hosts file while the password prompt was open, so nothing was restored. Restore again to replace its changes too.',
     turnedOff: '{{name}} turned off',

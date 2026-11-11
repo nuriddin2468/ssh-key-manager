@@ -9,6 +9,7 @@ import type { HostEdit } from '@/bindings/HostEdit';
 import { Button } from '@/components/ui/Button';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
 import { Tile } from '@/components/ui/Tile';
+import { aliasOf } from '@/features/projects/model';
 import { configChangeError } from './fileErrors';
 import { ConfigPreview, HostFields, useHostErrors } from './HostFields';
 import { EMPTY_FORM, editFromForm, type HostForm, previewLines } from './model';
@@ -20,10 +21,13 @@ import { EMPTY_FORM, editFromForm, type HostForm, previewLines } from './model';
  */
 export function AddHostDialog({
   onDone,
+  onSaved,
   initial,
   description,
 }: {
   onDone: () => void;
+  /** Called with the new host's name instead of opening it in Hosts. */
+  onSaved?: (alias: string) => void;
   initial?: HostForm;
   description?: string;
 }) {
@@ -46,8 +50,11 @@ export function AddHostDialog({
 
   const add = useAppMutation((next: HostEdit) => api.saveHost(next, revision), {
     success: () => t('hosts.added', { name: edit.patterns.join(' ') }),
-    onSuccess: (saved) => {
-      navigate({ page: 'hosts', hostId: saved.id });
+    onSuccess: (saved, next) => {
+      // A project holds a host by a name, not a pattern: without one, it opens.
+      const alias = aliasOf(next.patterns);
+      if (onSaved && alias) onSaved(alias);
+      else navigate({ page: 'hosts', hostId: saved.id });
       onDone();
     },
     onError: (error) => configChangeError(t, error),

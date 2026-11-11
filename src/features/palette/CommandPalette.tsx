@@ -31,7 +31,7 @@ import { api } from '@/api/commands';
 import { invalidateAll, useConfig, useKeys, useVaultEntries, useVaultStatus } from '@/api/queries';
 import { toastError } from '@/api/useAppMutation';
 import { useDialogs } from '@/app/dialogs';
-import { type Page, type Route, useRouter } from '@/app/router';
+import { type Page, type Route, useFreshNavigate, useRouter } from '@/app/router';
 import { NAV_PAGES, PALETTE_EVENT } from '@/app/useAppEvents';
 import type { Tone } from '@/components/ui/Tile';
 import { toastVaultError } from '@/features/passwords/vault';
@@ -121,7 +121,9 @@ export function CommandPalette() {
 
 function PaletteDialog({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
-  const { route, navigate } = useRouter();
+  const { route } = useRouter();
+  // What the palette opens starts without the way back to a project.
+  const navigate = useFreshNavigate();
   const dialogs = useDialogs();
   const connect = useConnect();
   const { setPickerOpen } = useTerminals();

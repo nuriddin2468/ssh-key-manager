@@ -27,6 +27,7 @@ import { Menu, MenuContent, MenuItem, MenuTrigger } from '@/components/ui/Menu';
 import { SearchField } from '@/components/ui/SearchField';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
+import { BackToProject } from '@/features/projects/BackToProject';
 import { ProjectDots, RowProjectButton } from '@/features/projects/ProjectMenu';
 import { cn } from '@/lib/cn';
 import { formatRelative, shortFingerprint } from '@/lib/format';
@@ -133,6 +134,7 @@ export function VaultBrowser({ entryId }: { entryId?: string }) {
   return (
     <>
       <Toolbar
+        leading={<BackToProject />}
         title={t('passwords.title')}
         meta={entries.data ? t('passwords.meta', { count: counts.all }) : undefined}
       >

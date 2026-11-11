@@ -59,6 +59,14 @@ export function hostAliases(hosts: HostEntry[]): Set<string> {
   return aliases;
 }
 
+/**
+ * The name a project holds a new host by: its first pattern that is a name,
+ * not a wildcard (`*.internal`) or a negation. `undefined` for none.
+ */
+export function aliasOf(patterns: readonly string[]): string | undefined {
+  return patterns.find((pattern) => !/[*?!]/.test(pattern));
+}
+
 /** What the library holds, as far as it is loaded: `undefined` while a part isn't. */
 export interface Library {
   hosts?: HostEntry[];
@@ -166,4 +174,53 @@ export function memberCounts(members: Members) {
     logins: members.logins.length,
     keys: members.keys.length,
   };
+}
+
+/** How many rows a card shows before "Show all". */
+export const CARD_LIMIT = 5;
+
+/**
+ * Rows with a problem first, then the ones just made on the page (so a new
+ * host shows even when the card is folded), the rest in their order.
+ */
+export function problemsFirst<T extends { problem?: boolean; fresh?: boolean }>(rows: T[]): T[] {
+  return [
+    ...rows.filter((row) => row.problem),
+    ...rows.filter((row) => !row.problem && row.fresh),
+    ...rows.filter((row) => !row.problem && !row.fresh),
+  ];
+}
+
+/**
+ * Splits cards of `rows` rows each into two columns of about the same
+ * height, in order: each card goes to the shorter column. Heights are those
+ * of the cards folded to `CARD_LIMIT` rows, so showing all of one card makes
+ * its column longer and moves no card to the other.
+ */
+export function cardColumns(rows: number[]): [number[], number[]] {
+  const columns: [number[], number[]] = [[], []];
+  const heights: [number, number] = [0, 0];
+  rows.forEach((count, index) => {
+    const side: 0 | 1 = heights[1] < heights[0] ? 1 : 0;
+    columns[side].push(index);
+    // A card's header, its rows (44 px each) and its "Show all" button.
+    heights[side] += 52 + 45 * Math.min(count, CARD_LIMIT) + (count > CARD_LIMIT ? 36 : 0);
+  });
+  return columns;
+}
+
+/** A member as one string, e.g. `host:prod`, for sets and React keys. */
+export function memberKey(member: ProjectMember): string {
+  switch (member.type) {
+    case 'host':
+      return `host:${member.alias}`;
+    case 'key':
+      return `key:${member.fingerprint}`;
+    case 'login':
+      return `login:${member.id}`;
+    case 'environment':
+      return `env:${member.group}`;
+    case 'folder':
+      return `folder:${member.path}`;
+  }
 }

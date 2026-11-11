@@ -21,15 +21,19 @@ export type Route =
   | { page: 'personal' }
   /** Projects the app proposes, to accept or dismiss. */
   | { page: 'suggestions' }
-  | { page: 'keys'; keyId?: string }
-  | { page: 'hosts'; hostId?: number }
+  /**
+   * `back` (on the Library's sections): the project an item was
+   * opened from, an id or `personal`, for a way back to it.
+   */
+  | { page: 'keys'; keyId?: string; back?: string }
+  | { page: 'hosts'; hostId?: number; back?: string }
   | { page: 'agent' }
   | { page: 'known' }
   /** `received` shows the hosts file group that came with that pairing as a change. */
   | { page: 'hostsFile'; line?: number; received?: number }
   | { page: 'audit' }
-  | { page: 'passwords'; entryId?: string }
-  | { page: 'envs'; envId?: string }
+  | { page: 'passwords'; entryId?: string; back?: string }
+  | { page: 'envs'; envId?: string; back?: string }
   /** `connect` starts a session to that alias; `nonce` makes each request a new one. */
   | { page: 'terminal'; connect?: string; nonce?: number }
   | { page: 'nearby' }
@@ -42,10 +46,20 @@ export type Page = Route['page'];
 /** Returns true to stop a navigation (it then asks the user itself). */
 type Blocker = (next: Route) => boolean;
 
+interface NavigateOptions {
+  /** Skips the page's guard. */
+  force?: boolean;
+  /**
+   * Opens the route as a section of its own, without the way back to a
+   * project: the sidebar, the menus and the palette (`useFreshNavigate`).
+   */
+  fresh?: boolean;
+}
+
 interface RouterValue {
   route: Route;
-  /** Goes to `route` unless a page blocks it; `force` skips the page's guard. */
-  navigate: (route: Route, options?: { force?: boolean }) => void;
+  /** Goes to `route` unless a page blocks it. */
+  navigate: (route: Route, options?: NavigateOptions) => void;
   setBlocker: (blocker: Blocker | null) => void;
 }
 
@@ -83,6 +97,19 @@ function devRoute(): Route | undefined {
   return undefined;
 }
 
+/**
+ * `next`, keeping the way back to a project while the user stays in the
+ * section it opened: another host, the editor closed, the last item
+ * deleted all keep "‹ Shop". A route with its own `back` (even none)
+ * replaces it; the sidebar, menus and palette drop it (`fresh`).
+ */
+export function withBack(current: Route, next: Route): Route {
+  if (next.page !== current.page || 'back' in next || !('back' in current) || !current.back) {
+    return next;
+  }
+  return { ...next, back: current.back } as Route;
+}
+
 /** Where the app opens: the project used last, Personal the first time. */
 export function homeRoute(): Route {
   const last = currentSettings().lastProject;
@@ -92,9 +119,9 @@ export function homeRoute(): Route {
 export function RouterProvider({ initial, children }: { initial?: Route; children: ReactNode }) {
   const [route, setRoute] = useState<Route>(() => initial ?? devRoute() ?? homeRoute());
   const blocker = useRef<Blocker | null>(null);
-  const navigate = useCallback((next: Route, options?: { force?: boolean }) => {
+  const navigate = useCallback((next: Route, options?: NavigateOptions) => {
     if (!options?.force && blocker.current?.(next)) return;
-    setRoute(next);
+    setRoute((current) => (options?.fresh ? next : withBack(current, next)));
   }, []);
   const setBlocker = useCallback((next: Blocker | null) => {
     blocker.current = next;
@@ -107,6 +134,15 @@ export function useRouter(): RouterValue {
   const value = use(RouterContext);
   if (!value) throw new Error('useRouter must be used inside <RouterProvider>');
   return value;
+}
+
+/**
+ * `navigate` for the sidebar, the menus and the palette: what they open
+ * starts without the way back to a project.
+ */
+export function useFreshNavigate(): (route: Route) => void {
+  const { navigate } = useRouter();
+  return useCallback((next: Route) => navigate(next, { fresh: true }), [navigate]);
 }
 
 /**

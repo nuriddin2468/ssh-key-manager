@@ -19,6 +19,7 @@ import { Tile } from '@/components/ui/Tile';
 import { CreateVault, RecoveryKeyScreen } from '@/features/passwords/CreateVault';
 import { UnlockVault } from '@/features/passwords/UnlockVault';
 import { usePendingRecoveryKey } from '@/features/passwords/vault';
+import { BackToProject } from '@/features/projects/BackToProject';
 import { EnvDialog } from './EnvDialog';
 import { EnvList } from './EnvList';
 import { EnvPane } from './EnvPane';
@@ -41,7 +42,7 @@ export function EnvsPage({ envId }: { envId?: string }) {
 
   return (
     <>
-      <Toolbar title={t('envs.title')} />
+      <Toolbar leading={<BackToProject />} title={t('envs.title')} />
       <PageBody>
         {recoveryKey ? (
           <RecoveryKeyScreen recoveryKey={recoveryKey} />
@@ -99,6 +100,7 @@ function EnvBrowser({ envId }: { envId?: string }) {
   return (
     <>
       <Toolbar
+        leading={<BackToProject />}
         title={t('envs.title')}
         meta={envs.data ? t('envs.meta', { count: active.length }) : undefined}
       >

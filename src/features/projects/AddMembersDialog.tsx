@@ -10,7 +10,7 @@ import { Checkbox } from '@/components/ui/Checkbox';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
 import { useVaultMutation } from '@/features/passwords/vault';
 import { cn } from '@/lib/cn';
-import { holds, type Library } from './model';
+import { holds, memberKey as keyOf, type Library } from './model';
 import { ProjectTile } from './ProjectTile';
 import { refreshSuggestions } from './queries';
 
@@ -83,21 +83,6 @@ const KINDS: { kind: Exclude<MemberKind, 'folder'>; icon: ReactNode }[] = [
   { kind: 'logins', icon: <RectangleEllipsis className="size-3.5" strokeWidth={2} /> },
   { kind: 'environments', icon: <Variable className="size-3.5" strokeWidth={2} /> },
 ];
-
-function keyOf(member: ProjectMember): string {
-  switch (member.type) {
-    case 'host':
-      return `host:${member.alias}`;
-    case 'key':
-      return `key:${member.fingerprint}`;
-    case 'login':
-      return `login:${member.id}`;
-    case 'environment':
-      return `env:${member.group}`;
-    case 'folder':
-      return `folder:${member.path}`;
-  }
-}
 
 /** Adds items of the library to a project: one kind at a time, ticked in a list. */
 export function AddMembersDialog({

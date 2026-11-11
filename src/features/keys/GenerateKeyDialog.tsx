@@ -38,7 +38,8 @@ const CURVE_BITS: Record<EcdsaCurve, number> = { p256: 256, p384: 384, p521: 521
 interface GenerateKeyDialogProps {
   onDone: () => void;
   /** Gets the new key instead of opening it on the Keys page. */
-  onCreated?: (key: KeyView) => void;
+  /** Instead of opening the key: it, and the alias of the host added with it. */
+  onCreated?: (key: KeyView, hostAlias?: string) => void;
 }
 
 export function GenerateKeyDialog({ onDone, onCreated }: GenerateKeyDialogProps) {
@@ -127,8 +128,8 @@ export function GenerateKeyDialog({ onDone, onCreated }: GenerateKeyDialogProps)
     {
       success: ({ key, saved }) =>
         t(saved ? 'generate.createdSaved' : 'generate.created', { name: key.name }),
-      onSuccess: ({ key }) => {
-        if (onCreated) onCreated(key);
+      onSuccess: ({ key }, vars) => {
+        if (onCreated) onCreated(key, vars.request.host?.alias);
         else navigate({ page: 'keys', keyId: key.id });
         onDone();
       },

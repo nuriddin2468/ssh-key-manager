@@ -3954,6 +3954,19 @@ const ru = {
     },
     files: {
       title: 'Файлы',
+      line: {
+        inSync_one: '{{count}} файл синхронен',
+        inSync_few: '{{count}} файла синхронны',
+        inSync_many: '{{count}} файлов синхронны',
+        inSync_other: '{{count}} файла синхронны',
+        attention_one: '{{count}} файл требует внимания',
+        attention_few: '{{count}} файла требуют внимания',
+        attention_many: '{{count}} файлов требуют внимания',
+        attention_other: '{{count}} файла требуют внимания',
+        syncing: 'Файлы синхронизируются…',
+        away: 'Файлы: папки нет на этом компьютере',
+        open: '{{state}}: показать файлы {{env}}',
+      },
       statusFailed: 'Не удалось проверить файлы',
       errors: {
         undoChanged:

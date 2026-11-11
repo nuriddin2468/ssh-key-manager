@@ -3662,6 +3662,15 @@ const en = {
     },
     files: {
       title: 'Files',
+      line: {
+        inSync_one: '{{count}} file in sync',
+        inSync_other: '{{count}} files in sync',
+        attention_one: '{{count}} file needs attention',
+        attention_other: '{{count}} files need attention',
+        syncing: 'Syncing files…',
+        away: 'Files: folder not on this computer',
+        open: '{{state}}: show the files of {{env}}',
+      },
       statusFailed: 'Couldn’t check the files',
       errors: {
         undoChanged:

@@ -3722,6 +3722,15 @@ const uz = {
     },
     files: {
       title: 'Fayllar',
+      line: {
+        inSync_one: '{{count}} ta fayl mos',
+        inSync_other: '{{count}} ta fayl mos',
+        attention_one: '{{count}} ta fayl eʼtibor talab qiladi',
+        attention_other: '{{count}} ta fayl eʼtibor talab qiladi',
+        syncing: 'Fayllar moslashtirilmoqda…',
+        away: 'Fayllar: papka bu kompyuterda yoʻq',
+        open: '{{state}}: {{env}} fayllarini koʻrsatish',
+      },
       statusFailed: 'Fayllarni tekshirib boʻlmadi',
       errors: {
         undoChanged:

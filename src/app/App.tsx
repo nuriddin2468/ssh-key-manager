@@ -105,7 +105,9 @@ function Shell() {
         ) : null}
         {route.page === 'audit' ? <AuditPage /> : null}
         {route.page === 'passwords' ? <PasswordsPage entryId={route.entryId} /> : null}
-        {route.page === 'envs' ? <EnvsPage envId={route.envId} /> : null}
+        {route.page === 'envs' ? (
+          <EnvsPage envId={route.envId} view={route.view} project={route.project} />
+        ) : null}
         {route.page === 'terminal' ? (
           <TerminalPage connect={route.connect} nonce={route.nonce} />
         ) : null}

@@ -22,22 +22,35 @@ import { usePendingRecoveryKey } from '@/features/passwords/vault';
 import { EnvDialog } from './EnvDialog';
 import { EnvList } from './EnvList';
 import { EnvPane } from './EnvPane';
+import { FilesCenter } from './files/FilesCenter';
+import { needsAction } from './files/model';
+import { useFileStatuses } from './files/queries';
 import { ImportEnvDialog } from './ImportEnvDialog';
 import { groupByProject, trashed } from './model';
 import { useEnvs } from './queries';
+import { type EnvsView, ViewTabs, viewPanelId } from './ViewTabs';
 
 /**
  * Secret environments: the variables of a project's `.env` files, kept in
  * the vault. Locked or missing, the page offers what the Passwords page
  * does: unlocking, or making the vault.
  */
-export function EnvsPage({ envId }: { envId?: string }) {
+interface EnvsPageProps {
+  envId?: string;
+  /** `files`: the management center instead of the environments. */
+  view?: 'files';
+  project?: string;
+}
+
+export function EnvsPage({ envId, view, project }: EnvsPageProps) {
   const { t } = useTranslation();
   const status = useVaultStatus();
   const recoveryKey = usePendingRecoveryKey();
   const state = status.data?.state;
 
-  if (!recoveryKey && state === 'unlocked') return <EnvBrowser envId={envId} />;
+  if (!recoveryKey && state === 'unlocked') {
+    return <EnvBrowser envId={envId} view={view} project={project} />;
+  }
 
   return (
     <>
@@ -77,10 +90,15 @@ type Editing =
   /** `into`: opened from an environment, which the import then goes to. */
   | { kind: 'import'; into?: EnvSummary };
 
-function EnvBrowser({ envId }: { envId?: string }) {
+function EnvBrowser({ envId, view, project }: EnvsPageProps) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const envs = useEnvs();
+  const statuses = useFileStatuses();
+  const attention = (statuses.data ?? []).filter((status) => needsAction(status.state)).length;
+  const showFiles = view === 'files';
+  const setView = (next: EnvsView) =>
+    navigate(next === 'files' ? { page: 'envs', view: 'files', project } : { page: 'envs', envId });
   const [query, setQuery] = useState('');
   const [dialog, setDialog] = useState<Editing | null>(null);
   const search = useRef<HTMLInputElement>(null);
@@ -100,45 +118,57 @@ function EnvBrowser({ envId }: { envId?: string }) {
     <>
       <Toolbar
         title={t('envs.title')}
-        meta={envs.data ? t('envs.meta', { count: active.length }) : undefined}
+        meta={envs.data && !showFiles ? t('envs.meta', { count: active.length }) : undefined}
       >
-        <SearchField
-          ref={search}
-          value={query}
-          onChange={setQuery}
-          label={t('envs.searchLabel')}
-          placeholder={t('envs.searchPlaceholder')}
-          className="w-[230px]"
-        />
-        <Menu>
-          <MenuTrigger asChild>
-            <IconButton
-              label={t('envs.more')}
-              variant="secondary"
-              icon={<MoreHorizontal className="size-4" strokeWidth={2} />}
+        <ViewTabs view={showFiles ? 'files' : 'envs'} onChange={setView} attention={attention} />
+        {showFiles ? null : (
+          <>
+            <SearchField
+              ref={search}
+              value={query}
+              onChange={setQuery}
+              label={t('envs.searchLabel')}
+              placeholder={t('envs.searchPlaceholder')}
+              className="w-[230px]"
             />
-          </MenuTrigger>
-          <MenuContent>
-            <MenuItem
-              icon={<FileUp className="size-[15px]" strokeWidth={1.9} />}
-              onSelect={() => setDialog({ kind: 'import' })}
+            <Menu>
+              <MenuTrigger asChild>
+                <IconButton
+                  label={t('envs.more')}
+                  variant="secondary"
+                  icon={<MoreHorizontal className="size-4" strokeWidth={2} />}
+                />
+              </MenuTrigger>
+              <MenuContent>
+                <MenuItem
+                  icon={<FileUp className="size-[15px]" strokeWidth={1.9} />}
+                  onSelect={() => setDialog({ kind: 'import' })}
+                >
+                  {t('envs.importEnv')}
+                </MenuItem>
+              </MenuContent>
+            </Menu>
+            <Button
+              variant="primary"
+              size="sm"
+              icon={<Plus className="size-3.5" strokeWidth={2.5} />}
+              onClick={() => setDialog({ kind: 'new' })}
             >
-              {t('envs.importEnv')}
-            </MenuItem>
-          </MenuContent>
-        </Menu>
-        <Button
-          variant="primary"
-          size="sm"
-          icon={<Plus className="size-3.5" strokeWidth={2.5} />}
-          onClick={() => setDialog({ kind: 'new' })}
-        >
-          {t('envs.newEnv')}
-        </Button>
+              {t('envs.newEnv')}
+            </Button>
+          </>
+        )}
       </Toolbar>
 
       <PageBody>
-        {envs.isPending ? (
+        {showFiles ? (
+          <div id={viewPanelId('files')} role="tabpanel" aria-label={t('envs.views.files')}>
+            <FilesCenter
+              project={project}
+              onProject={(next) => navigate({ page: 'envs', view: 'files', project: next })}
+            />
+          </div>
+        ) : envs.isPending ? (
           <div className="grid flex-1 place-items-center text-subtle">
             <Spinner className="size-6" />
           </div>
@@ -171,7 +201,12 @@ function EnvBrowser({ envId }: { envId?: string }) {
             }
           />
         ) : (
-          <div className="flex min-h-0 flex-1 items-stretch gap-4">
+          <div
+            id={viewPanelId('envs')}
+            role="tabpanel"
+            aria-label={t('envs.views.envs')}
+            className="flex min-h-0 flex-1 items-stretch gap-4"
+          >
             <EnvList
               groups={groups}
               trash={inTrash}

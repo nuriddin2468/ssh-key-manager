@@ -1,0 +1,6 @@
+{
+  "kind": "new",
+  "en": "Environments: write a local environment to .env files in its projects' folders with Add file…, and they stay in sync both ways: an edit in the file reaches the vault (with Undo), a change in the app rewrites the file, and if both changed you compare and choose. The Files view shows each file's state, files Git or a cloud folder would take, and .env files to take under management.",
+  "ru": "Окружения: «Добавить файл…» записывает локальное окружение в файлы .env в папках его проектов, и они синхронны в обе стороны: правка в файле попадает в хранилище (с отменой), изменение в приложении переписывает файл, а если изменились обе стороны, вы сравниваете и выбираете. Вид «Файлы» показывает состояние файлов, риски Git и облака и файлы .env, которые можно взять под управление.",
+  "uz": "Muhitlar: «Fayl qoʻshish…» mahalliy muhitni loyihalari papkalaridagi .env fayllarga yozadi va ular ikki tomonlama mos turadi: fayldagi tahrir omborga tushadi (bekor qilsa boʻladi), ilovadagi oʻzgarish faylni qayta yozadi, ikkalasi oʻzgarsa, solishtirib tanlaysiz. «Fayllar» koʻrinishi fayllar holatini, Git va bulut xavflarini va boshqaruvga olinadigan .env fayllarni koʻrsatadi."
+}

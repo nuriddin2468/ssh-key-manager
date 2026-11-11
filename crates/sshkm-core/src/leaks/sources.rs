@@ -35,7 +35,7 @@ pub const MAX_FILE_SIZE: u64 = 16 * 1024 * 1024;
 const MAX_DEPTH: usize = 16;
 /// Folders a walk doesn't go into: dependencies, builds, caches, and the
 /// system's own.
-const SKIP_DIRS: &[&str] = &[
+pub(crate) const SKIP_DIRS: &[&str] = &[
     ".git",
     "node_modules",
     ".pnpm-store",

@@ -14,7 +14,9 @@
 //! copies one: [`EnvDetail`] holds names, flags and notes only.
 
 mod detect;
+mod document;
 pub mod dotenv;
+pub mod files;
 mod format;
 #[cfg(test)]
 mod tests;
@@ -22,13 +24,15 @@ mod tests;
 use std::path::{Path, PathBuf};
 
 use keepass::Database;
-use keepass::db::{CustomDataItem, CustomDataValue, EntryRef, GroupId, Times, Value, fields};
+use keepass::db::{CustomDataItem, CustomDataValue, Entry, EntryRef, GroupId, Times, Value, fields};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 pub use self::detect::looks_secret;
+pub use self::document::EnvDocument;
 pub use self::dotenv::{ParseProblem, ParsedEnv, ProblemKind};
+pub use self::files::{EnvFile, EnvKind};
 pub use self::format::{EnvFormat, render};
 use super::export::{checked_target, write_private};
 use super::{Vault, check_field, duplicate, in_group, parse_id, rfc3339};
@@ -69,6 +73,8 @@ pub struct EnvSummary {
     pub project: String,
     /// `dev`, `staging`, `prod`…: the entry's title.
     pub name: String,
+    /// Local (it can have files) or remote.
+    pub kind: EnvKind,
     /// How many variables it has.
     pub variable_count: u32,
     /// How many of them are secret.
@@ -101,6 +107,8 @@ pub struct EnvDetail {
     pub summary: EnvSummary,
     pub notes: String,
     pub variables: Vec<EnvVarInfo>,
+    /// The files it is written to.
+    pub files: Vec<EnvFile>,
 }
 
 /// A new environment, or the new names of one.
@@ -272,7 +280,7 @@ fn var_name(field: &str) -> Option<&str> {
     }
 }
 
-fn stored(entry: &EntryRef<'_>) -> Stored {
+fn stored(entry: &Entry) -> Stored {
     match entry
         .custom_data
         .get(MARKER)
@@ -285,7 +293,7 @@ fn stored(entry: &EntryRef<'_>) -> Stored {
 
 /// The variables of an environment entry with their values: in the order
 /// kept in its marker, then those added elsewhere (KeePassXC) by name.
-pub(super) fn variables_of(entry: &EntryRef<'_>) -> Vec<EnvVariable> {
+pub(super) fn variables_of(entry: &Entry) -> Vec<EnvVariable> {
     let stored = stored(entry);
     let mut found: Vec<(&str, &Value<String>)> = entry
         .fields
@@ -512,17 +520,20 @@ impl Vault {
                     note: var.note,
                 })
                 .collect(),
+            files: files::files_of(&entry),
         })
     }
 
     /// The variables of an environment with their values.
     pub fn env_variables(&self, id: &str) -> Result<Vec<EnvVariable>> {
-        Ok(variables_of(&self.env_entry(id)?))
+        let entry = self.env_entry(id)?;
+        Ok(variables_of(&entry))
     }
 
     /// One variable's value.
     pub fn env_value(&self, id: &str, name: &str) -> Result<SecretString> {
-        variables_of(&self.env_entry(id)?)
+        let entry = self.env_entry(id)?;
+        variables_of(&entry)
             .into_iter()
             .find(|var| var.name == name)
             .map(|var| var.value)
@@ -800,6 +811,7 @@ impl Vault {
             id: entry.id().uuid().to_string(),
             project,
             name: entry.get(fields::TITLE).unwrap_or_default().to_owned(),
+            kind: files::kind_of(entry),
             variable_count: count(vars.len()),
             secret_count: count(vars.iter().filter(|var| var.secret).count()),
             in_trash,

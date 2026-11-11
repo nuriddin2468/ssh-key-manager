@@ -193,7 +193,7 @@ fn comment(out: &mut String, note: &str) {
 
 /// A `.env` value: bare when it is only safe characters, else in the
 /// quotes every loader reads the same way, escaping only as a last resort.
-fn dotenv_value(out: &mut String, value: &str) {
+pub(super) fn dotenv_value(out: &mut String, value: &str) {
     let bare = value
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || "_-./:@%+,=".contains(c));

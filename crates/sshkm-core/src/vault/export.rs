@@ -203,7 +203,7 @@ pub(super) fn checked_target(target: &Path, paths: &VaultPaths, ssh_dir: &Path) 
 /// file id there, so it compares canonical paths (junctions and symbolic
 /// links resolved).
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct FileId(Identity);
+pub(in crate::vault) struct FileId(Identity);
 
 #[cfg(unix)]
 type Identity = (u64, u64);
@@ -211,7 +211,7 @@ type Identity = (u64, u64);
 type Identity = PathBuf;
 
 impl FileId {
-    fn of(path: &Path) -> Option<Self> {
+    pub(in crate::vault) fn of(path: &Path) -> Option<Self> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;

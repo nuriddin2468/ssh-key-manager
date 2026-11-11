@@ -57,7 +57,33 @@ pub fn atomic_write(path: &Path, bytes: &[u8], new_file_mode: u32) -> Result<()>
 /// nothing is written and the call fails with [`Error::Unsupported`].
 #[cfg(windows)]
 pub(crate) fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    let target = resolve_symlinks(path)?;
+    write_private_at(&resolve_symlinks(path)?, bytes)
+}
+
+/// Replaces `path` with a new file that holds `bytes` and that only this
+/// user can read: mode 0600 on Unix; on Windows an access list for nobody
+/// but the user, `SYSTEM` and `Administrators`, set as the file is made,
+/// as [`atomic_write_private`] does. Unlike [`atomic_write`], a symbolic
+/// link at `path` is never followed: the new file is renamed over whatever
+/// is there, a link included.
+pub fn replace_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    #[cfg(windows)]
+    {
+        write_private_at(path, bytes)
+    }
+    #[cfg(not(windows))]
+    {
+        let tmp = write_temp(path, bytes, None, 0o600)?;
+        tmp.persist(path).map_err(|e| Error::io(e.error, path))?;
+        sync_parent(path);
+        Ok(())
+    }
+}
+
+/// The private write of [`atomic_write_private`] to `target` as it is.
+#[cfg(windows)]
+fn write_private_at(target: &Path, bytes: &[u8]) -> Result<()> {
+    let target = target.to_path_buf();
     let (dir, prefix) = temp_location(&target);
     let created = tempfile::Builder::new()
         .prefix(&prefix)
@@ -407,6 +433,38 @@ mod tests {
                 .is_symlink()
         );
         assert_eq!(fs::read_to_string(&real).unwrap(), "new");
+    }
+
+    #[test]
+    fn private_replacements_are_owner_only_and_never_follow_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".env");
+        fs::write(&path, "OLD=1\n").unwrap();
+        replace_private(&path, b"NEW=1\n").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"NEW=1\n");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            let elsewhere = dir.path().join("elsewhere");
+            fs::write(&elsewhere, "keep").unwrap();
+            fs::remove_file(&path).unwrap();
+            std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+            replace_private(&path, b"NEW=2\n").unwrap();
+            assert_eq!(fs::read_to_string(&elsewhere).unwrap(), "keep");
+            assert!(!fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
+            assert_eq!(fs::read(&path).unwrap(), b"NEW=2\n");
+        }
+        #[cfg(windows)]
+        {
+            use crate::perms::{PermKind, check};
+            let report = check(&path, PermKind::PrivateKey);
+            assert!(report.ok, "{report:?}");
+        }
     }
 
     #[test]

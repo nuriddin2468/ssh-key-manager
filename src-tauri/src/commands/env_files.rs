@@ -24,7 +24,7 @@ use sshkm_core::vault::envs::files::{
 use sshkm_core::vault::envs::{
     self, EnvDetail, EnvImportPreview, EnvInput, ImportChoice, looks_secret,
 };
-use sshkm_core::vault::projects::{self, ProjectMember};
+use sshkm_core::vault::projects;
 use tauri::{AppHandle, State};
 
 use super::envs::{EnvImported, ImportTarget, unignored_in_git};
@@ -433,12 +433,11 @@ pub async fn envs_files_adopt(
         let vars = envs::chosen_variables(parsed, &every);
         let imported = state.vault.change(&app, &state.backup_dir, |vault| {
             let id = match &target {
-                ImportTarget::New {
-                    project: group,
-                    name,
-                } => {
+                // In the project whose folder has the file.
+                ImportTarget::New { part, name, .. } => {
                     let id = vault.add_environment(&EnvInput {
-                        project: group.clone(),
+                        project: Some(project.clone()),
+                        part: part.clone(),
                         name: name.clone(),
                         notes: String::new(),
                     })?;
@@ -447,9 +446,10 @@ pub async fn envs_files_adopt(
                 }
                 ImportTarget::Existing { id } => id.clone(),
             };
-            let group = vault.environment(&id)?.summary.project;
-            if !vault.project(&project)?.environments.contains(&group) {
-                vault.set_project_member(&project, &ProjectMember::Environment { group }, true)?;
+            // Its files are written while the project holding it has their
+            // folder: an existing one moves into this project.
+            if vault.environment(&id)?.summary.project.as_deref() != Some(project.as_str()) {
+                vault.move_environment(&id, Some(&project))?;
             }
             let counts = vault.import_env_variables(&id, &vars)?;
             vault.bind_env_file(&id, &file, &ctx)?;

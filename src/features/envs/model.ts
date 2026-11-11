@@ -1,37 +1,65 @@
-// The Environments page's model: grouping by project, searching, the names
-// a variable may have and the import's starting choices. No React here.
+// The Environments page's model: environments by project and part,
+// searching, the names a variable may have and the import's starting
+// choices. No React here.
 
 import type { EnvImportPreview } from '@/bindings/EnvImportPreview';
 import type { EnvSummary } from '@/bindings/EnvSummary';
 import type { ImportChoice } from '@/bindings/ImportChoice';
 
-/** A project and its environments, in the backend's order. */
-export interface ProjectGroup {
-  project: string;
+/** Project names by id, to show where an environment is. */
+export type ProjectNames = ReadonlyMap<string, string>;
+
+/** A project (or Personal, `null`) and its environments, part by part. */
+export interface ProjectSection {
+  project: string | null;
+  parts: PartGroup[];
+}
+
+/** One part of a project and its stages; `part` is empty for none. */
+export interface PartGroup {
+  part: string;
   envs: EnvSummary[];
 }
 
 /**
  * The environments outside the recycle bin that match `query` (a project,
- * an environment's name, or both as `project dev`), grouped by project. The
- * backend sorts them already: by project, then from development to
- * production.
+ * a part, a stage, or several as `shop back prod`): Personal first, then
+ * the projects by name, each by part. The backend sorts the stages from
+ * development to production already.
  */
-export function groupByProject(envs: readonly EnvSummary[], query = ''): ProjectGroup[] {
-  const groups: ProjectGroup[] = [];
+export function sectionsOf(
+  envs: readonly EnvSummary[],
+  names: ProjectNames,
+  query = '',
+): ProjectSection[] {
+  const sections = new Map<string, ProjectSection>();
   for (const env of envs) {
-    if (env.inTrash || !matches(env, query)) continue;
-    const last = groups.at(-1);
-    if (last && last.project === env.project) last.envs.push(env);
-    else groups.push({ project: env.project, envs: [env] });
+    if (env.inTrash || !matches(env, names, query)) continue;
+    const key = env.project ?? '';
+    let section = sections.get(key);
+    if (!section) {
+      section = { project: env.project, parts: [] };
+      sections.set(key, section);
+    }
+    const part = section.parts.find((p) => same(p.part, env.part));
+    if (part) part.envs.push(env);
+    else section.parts.push({ part: env.part, envs: [env] });
   }
-  return groups;
+  const order = (section: ProjectSection) =>
+    section.project === null ? '' : `1${(names.get(section.project) ?? '').toLowerCase()}`;
+  return [...sections.values()]
+    .map((section) => ({
+      ...section,
+      parts: [...section.parts].sort((a, b) => a.part.localeCompare(b.part)),
+    }))
+    .sort((a, b) => order(a).localeCompare(order(b)));
 }
 
-/** Every word of `query` is in the project's or the environment's name. */
-export function matches(env: EnvSummary, query: string): boolean {
+/** Every word of `query` is in the environment's project, part or stage. */
+export function matches(env: EnvSummary, names: ProjectNames, query: string): boolean {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  const text = `${env.project} ${env.name}`.toLowerCase();
+  const project = env.project ? (names.get(env.project) ?? '') : '';
+  const text = `${project} ${env.part} ${env.name}`.toLowerCase();
   return words.every((word) => text.includes(word));
 }
 
@@ -40,14 +68,46 @@ export function trashed(envs: readonly EnvSummary[]): EnvSummary[] {
   return envs.filter((env) => env.inTrash);
 }
 
-/** The projects there are, for suggestions. */
-export function projects(envs: readonly EnvSummary[]): string[] {
-  return [...new Set(envs.filter((env) => !env.inTrash).map((env) => env.project))];
+/** The parts a project (or Personal, `null`) has, for suggestions. */
+export function partsOf(envs: readonly EnvSummary[], project: string | null): string[] {
+  const parts: string[] = [];
+  for (const env of envs) {
+    if (env.inTrash || env.project !== project || env.part === '') continue;
+    if (!parts.some((part) => same(part, env.part))) parts.push(env.part);
+  }
+  return parts;
 }
 
-/** `shop-api / prod`. */
-export function envLabel(env: Pick<EnvSummary, 'project' | 'name'>): string {
-  return `${env.project} / ${env.name}`;
+/** Where an environment is: `Shop · backend`, `Shop`, `backend`, or nothing. */
+export function whereLabel(project: string | null | undefined, part: string): string {
+  return [project ?? '', part].filter(Boolean).join(' · ');
+}
+
+/**
+ * `Shop · backend · prod`; without the part when the project has one
+ * (`shown` false), as it then shows none.
+ */
+export function envLabel(
+  env: Pick<EnvSummary, 'project' | 'part' | 'name'>,
+  names: ProjectNames,
+  shown = true,
+): string {
+  const project = env.project ? names.get(env.project) : undefined;
+  return whereLabel(whereLabel(project, shown ? env.part : '') || null, env.name);
+}
+
+/** Whether a project (or Personal) has more than one part: only then are parts shown. */
+export function showsParts(envs: readonly EnvSummary[], project: string | null): boolean {
+  const parts = new Set(
+    envs
+      .filter((env) => !env.inTrash && env.project === project)
+      .map((env) => env.part.toLowerCase()),
+  );
+  return parts.size > 1;
+}
+
+function same(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
 }
 
 /** Production environments get a warning colour, so they are hard to mistake. */
@@ -75,22 +135,24 @@ export function initialChoices(preview: EnvImportPreview): ImportChoice[] {
 }
 
 /**
- * Whether `project` has an environment named `name` (ignoring case) outside
- * the recycle bin, other than `except`; the backend refuses it too.
+ * Whether `project` (or Personal, `null`) has the stage `name` in `part`
+ * (ignoring case) outside the recycle bin, other than `except`; the backend
+ * refuses it too.
  */
 export function nameTaken(
   envs: readonly EnvSummary[],
-  project: string,
+  project: string | null,
+  part: string,
   name: string,
   except?: string,
 ): boolean {
-  const wanted = name.trim().toLowerCase();
   return envs.some(
     (env) =>
       !env.inTrash &&
       env.id !== except &&
-      env.project === project.trim() &&
-      env.name.toLowerCase() === wanted,
+      env.project === project &&
+      same(env.part, part.trim()) &&
+      same(env.name, name.trim()),
   );
 }
 

@@ -114,7 +114,6 @@ export function personal(projects: Project[], library: Library): Members {
   const held = (pick: (p: Project) => string[]) => new Set(projects.flatMap(pick));
   const hosts = held((p) => p.hosts);
   const keys = held((p) => p.keys);
-  const groups = held((p) => p.environments);
   const logins = held((p) => p.logins);
   return {
     hosts: (library.hosts ?? [])
@@ -124,13 +123,10 @@ export function personal(projects: Project[], library: Library): Members {
     keys: (library.keys ?? []).flatMap((k) =>
       k.fingerprint && !keys.has(k.fingerprint) ? [k.fingerprint] : [],
     ),
-    environments: [
-      ...new Set(
-        (library.envs ?? [])
-          .filter((e) => !e.inTrash && e.project && !groups.has(e.project))
-          .map((e) => e.project),
-      ),
-    ],
+    // In no project: the backend says which project has each.
+    environments: (library.envs ?? [])
+      .filter((e) => !e.inTrash && e.project === null)
+      .map((e) => e.id),
     logins: (library.entries ?? [])
       .filter((e) => !e.inTrash && e.kind === 'login' && !logins.has(e.id))
       .map((e) => e.id),
@@ -155,8 +151,8 @@ export interface Missing {
 export function missing(project: Project, library: Library, goneFolders: string[] = []): Missing {
   const aliases = library.hosts && !library.includes ? hostAliases(library.hosts) : undefined;
   const fingerprints = library.keys ? new Set(library.keys.map((k) => k.fingerprint)) : undefined;
-  const groups = library.envs
-    ? new Set(library.envs.filter((e) => !e.inTrash).map((e) => e.project))
+  const envIds = library.envs
+    ? new Set(library.envs.filter((e) => !e.inTrash).map((e) => e.id))
     : undefined;
   const listed = library.hostsFile
     ? new Set(library.hostsFile.flatMap((entry) => entry.names.map(normalizeName)))
@@ -164,7 +160,7 @@ export function missing(project: Project, library: Library, goneFolders: string[
   return {
     hosts: new Set(aliases ? project.hosts.filter((h) => !aliases.has(h)) : []),
     keys: new Set(fingerprints ? project.keys.filter((k) => !fingerprints.has(k)) : []),
-    environments: new Set(groups ? project.environments.filter((g) => !groups.has(g)) : []),
+    environments: new Set(envIds ? project.environments.filter((id) => !envIds.has(id)) : []),
     folders: new Set(goneFolders.filter((folder) => project.folders.includes(folder))),
     hostsFile: new Set(listed ? project.hostsFile.filter((name) => !listed.has(name)) : []),
   };
@@ -189,7 +185,7 @@ export function holds(project: Project, member: ProjectMember): boolean {
     case 'login':
       return project.logins.includes(member.id);
     case 'environment':
-      return project.environments.includes(member.group);
+      return project.environments.includes(member.id);
     case 'folder':
       return project.folders.includes(member.path);
     case 'hostsFile':
@@ -304,7 +300,7 @@ export function projectProblems(
   const members: ProjectMember[] = [
     ...[...gone.hosts].map((alias): ProjectMember => ({ type: 'host', alias })),
     ...[...gone.folders].map((path): ProjectMember => ({ type: 'folder', path })),
-    ...[...gone.environments].map((group): ProjectMember => ({ type: 'environment', group })),
+    ...[...gone.environments].map((id): ProjectMember => ({ type: 'environment', id })),
     ...[...gone.keys].map((fingerprint): ProjectMember => ({ type: 'key', fingerprint })),
     ...[...gone.hostsFile].map((name): ProjectMember => ({ type: 'hostsFile', name })),
   ];
@@ -415,7 +411,7 @@ export function memberKey(member: ProjectMember): string {
     case 'login':
       return `login:${member.id}`;
     case 'environment':
-      return `env:${member.group}`;
+      return `envid:${member.id}`;
     case 'folder':
       return `folder:${member.path}`;
     case 'hostsFile':

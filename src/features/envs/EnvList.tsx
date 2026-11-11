@@ -2,25 +2,34 @@ import { ChevronRight, Trash2 } from 'lucide-react';
 import { type KeyboardEvent, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { EnvSummary } from '@/bindings/EnvSummary';
-import { AddToProjectButton, ProjectChips } from '@/features/projects/ProjectMenu';
+import { PersonalTile, ProjectTile } from '@/features/projects/ProjectTile';
+import { useProjects } from '@/features/projects/queries';
 import { cn } from '@/lib/cn';
-import { isProduction, type ProjectGroup } from './model';
+import { envLabel, isProduction, type ProjectNames, type ProjectSection } from './model';
 
 interface EnvListProps {
-  groups: ProjectGroup[];
+  sections: ProjectSection[];
+  names: ProjectNames;
   trash: EnvSummary[];
   selectedId: string | undefined;
   query: string;
   onSelect: (id: string) => void;
 }
 
-/** The projects and their environments, then the recycle bin, folded. */
-export function EnvList({ groups, trash, selectedId, query, onSelect }: EnvListProps) {
+/**
+ * Personal and the projects with their environments, by part when a project
+ * has more than one, then the recycle bin, folded.
+ */
+export function EnvList({ sections, names, trash, selectedId, query, onSelect }: EnvListProps) {
   const { t } = useTranslation();
+  const projects = useProjects().data ?? [];
   const list = useRef<HTMLDivElement>(null);
   const trashId = useId();
   const [trashOpen, setTrashOpen] = useState(() => trash.some((env) => env.id === selectedId));
-  const visible = [...groups.flatMap((group) => group.envs), ...(trashOpen ? trash : [])];
+  const visible = [
+    ...sections.flatMap((section) => section.parts.flatMap((part) => part.envs)),
+    ...(trashOpen ? trash : []),
+  ];
 
   // Arrow keys move through the list, like a native source list.
   const onKey = (event: KeyboardEvent) => {
@@ -44,35 +53,47 @@ export function EnvList({ groups, trash, selectedId, query, onSelect }: EnvListP
         onKeyDown={onKey}
         className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-2"
       >
-        {groups.length === 0 && query ? (
+        {sections.length === 0 && query ? (
           <p className="px-3 py-8 text-center text-subtle">{t('envs.noMatches')}</p>
         ) : null}
-        {groups.map((group) => (
-          <section key={group.project} aria-label={group.project} className="flex flex-col gap-0.5">
-            <div className="flex min-h-7 items-center gap-1.5 pr-1">
-              <h2 className="min-w-0 flex-1 truncate px-2.5 pt-1 pb-1 text-[12px] font-semibold tracking-[0.02em] text-subtle">
-                {group.project}
+        {sections.map((section) => {
+          const project = projects.find((p) => p.id === section.project);
+          const title = section.project
+            ? (names.get(section.project) ?? '')
+            : t('projects.personal');
+          // Parts show when the project has more than one.
+          const withParts = section.parts.length > 1;
+          return (
+            <section
+              key={section.project ?? 'personal'}
+              aria-label={title}
+              className="flex flex-col gap-0.5"
+            >
+              <h2 className="flex min-h-7 items-center gap-2 px-2.5 pt-1 pb-1 text-[12.5px] font-semibold">
+                {project ? <ProjectTile project={project} size={18} /> : <PersonalTile size={18} />}
+                <span className="min-w-0 truncate">{title}</span>
               </h2>
-              <AddToProjectButton
-                member={{ type: 'environment', group: group.project }}
-                name={group.project}
-                className="size-7"
-              />
-            </div>
-            <ProjectChips
-              member={{ type: 'environment', group: group.project }}
-              className="px-2.5 pb-1"
-            />
-            {group.envs.map((env) => (
-              <EnvRow
-                key={env.id}
-                env={env}
-                selected={env.id === selectedId}
-                onSelect={() => onSelect(env.id)}
-              />
-            ))}
-          </section>
-        ))}
+              {section.parts.map((part) => (
+                <div key={part.part} className="flex flex-col gap-0.5">
+                  {withParts ? (
+                    <h3 className="truncate px-2.5 pt-1.5 pl-[38px] font-mono text-[11.5px] font-semibold text-fg-2">
+                      {part.part || t('envs.noPart')}
+                    </h3>
+                  ) : null}
+                  {part.envs.map((env) => (
+                    <EnvRow
+                      key={env.id}
+                      env={env}
+                      part={withParts ? part.part : ''}
+                      selected={env.id === selectedId}
+                      onSelect={() => onSelect(env.id)}
+                    />
+                  ))}
+                </div>
+              ))}
+            </section>
+          );
+        })}
       </div>
       {trash.length > 0 ? (
         <div className="border-t border-white/[0.06] p-2">
@@ -99,7 +120,7 @@ export function EnvList({ groups, trash, selectedId, query, onSelect }: EnvListP
                   key={env.id}
                   env={env}
                   selected={env.id === selectedId}
-                  showProject
+                  label={envLabel(env, names)}
                   onSelect={() => onSelect(env.id)}
                 />
               ))}
@@ -114,12 +135,14 @@ export function EnvList({ groups, trash, selectedId, query, onSelect }: EnvListP
 interface EnvRowProps {
   env: EnvSummary;
   selected: boolean;
-  /** In the recycle bin, rows from every project mix: name the project. */
-  showProject?: boolean;
+  /** In the recycle bin, rows from every project mix: say where it was. */
+  label?: string;
+  /** Its part, said to screen readers, when the list shows parts. */
+  part?: string;
   onSelect: () => void;
 }
 
-function EnvRow({ env, selected, showProject = false, onSelect }: EnvRowProps) {
+function EnvRow({ env, selected, label, part, onSelect }: EnvRowProps) {
   const { t } = useTranslation();
   const production = isProduction(env.name);
   return (
@@ -142,7 +165,8 @@ function EnvRow({ env, selected, showProject = false, onSelect }: EnvRowProps) {
       />
       <span className="flex min-w-0 flex-1 flex-col">
         <span className={cn('truncate text-[13px] font-medium', env.inTrash && 'text-muted')}>
-          {showProject ? `${env.project} / ${env.name}` : env.name}
+          {label ?? env.name}
+          {part ? <span className="sr-only">, {part}</span> : null}
           {production ? <span className="sr-only">, {t('envs.production')}</span> : null}
         </span>
         <span className="truncate text-[12px] leading-[17px] text-subtle">

@@ -53,7 +53,8 @@ impl Fixture {
 
 fn env(project: &str, name: &str) -> EnvInput {
     EnvInput {
-        project: project.into(),
+        project: None,
+        part: project.into(),
         name: name.into(),
         notes: String::new(),
     }
@@ -95,7 +96,8 @@ fn environments_round_trip_through_the_kdbx_file() {
     let id = fx
         .vault
         .add_environment(&EnvInput {
-            project: " shop-api ".into(),
+            project: None,
+            part: " shop-api ".into(),
             name: "prod".into(),
             notes: "Hetzner, eu-central".into(),
         })
@@ -124,7 +126,8 @@ fn environments_round_trip_through_the_kdbx_file() {
     fx.reopen();
 
     let detail = fx.vault.environment(&id).unwrap();
-    assert_eq!(detail.summary.project, "shop-api");
+    assert_eq!(detail.summary.part, "shop-api");
+    assert_eq!(detail.summary.project, None);
     assert_eq!(detail.summary.name, "prod");
     assert_eq!(detail.notes, "Hetzner, eu-central");
     assert_eq!(
@@ -267,7 +270,7 @@ fn names_are_checked_and_free() {
     ));
     // Another project may have one of that name.
     let other = vault.add_environment(&env("site", "dev")).unwrap();
-    for (project, name) in [("", "x"), ("a/b", "x"), ("app", " "), ("app", "a\tb")] {
+    for (project, name) in [("a/b", "x"), ("app", " "), ("app", "a\tb")] {
         assert!(vault.add_environment(&env(project, name)).is_err());
     }
     assert!(vault.add_environment(&env("app", &"x".repeat(65))).is_err());
@@ -281,7 +284,8 @@ fn names_are_checked_and_free() {
         .update_environment(
             &other,
             &EnvInput {
-                project: "app".into(),
+                project: None,
+                part: "app".into(),
                 name: "staging".into(),
                 notes: "moved".into(),
             },
@@ -290,7 +294,7 @@ fn names_are_checked_and_free() {
     let list = vault.environments();
     let shown: Vec<(&str, &str)> = list
         .iter()
-        .map(|e| (e.project.as_str(), e.name.as_str()))
+        .map(|e| (e.part.as_str(), e.name.as_str()))
         .collect();
     assert_eq!(shown, [("app", "dev"), ("app", "staging")]);
     assert_eq!(vault.environment(&other).unwrap().notes, "moved");
@@ -323,7 +327,7 @@ fn environments_sort_from_development_to_production() {
         .vault
         .environments()
         .into_iter()
-        .map(|e| format!("{}/{}", e.project, e.name))
+        .map(|e| format!("{}/{}", e.part, e.name))
         .collect();
     assert_eq!(
         shown,
@@ -350,7 +354,7 @@ fn trash_restore_and_delete() {
     vault.trash_environment(&id).unwrap();
     let trashed = vault.environment(&id).unwrap().summary;
     assert!(trashed.in_trash);
-    assert_eq!(trashed.project, "app");
+    assert_eq!(trashed.part, "app");
     assert!(
         vault
             .set_env_variable(&id, None, &input("B", Some("2"), false, ""))
@@ -371,7 +375,7 @@ fn trash_restore_and_delete() {
     vault.restore_environment(&id).unwrap();
     let restored = vault.environment(&id).unwrap().summary;
     assert!(!restored.in_trash);
-    assert_eq!(restored.project, "app");
+    assert_eq!(restored.part, "app");
 
     vault.delete_environment(&newer).unwrap();
     assert_eq!(vault.environments().len(), 1);

@@ -12,7 +12,7 @@ const t = ((key: string, values?: Record<string, unknown>) =>
 function status(path: string, state: FileState, envId = 'env-1'): EnvFileStatus {
   return {
     envId,
-    group: 'shop-api',
+    label: 'shop-api',
     envName: 'dev',
     file: { folder: '~/code/shop', path },
     location: `/code/shop/${path}`,

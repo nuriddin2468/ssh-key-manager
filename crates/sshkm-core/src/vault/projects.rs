@@ -4,12 +4,19 @@
 //! A project is a record in the database's custom data, as
 //! `sshkm.project.<id>`: its name, color and members by reference — hosts by
 //! their `Host` alias in `~/.ssh/config`, keys by their `SHA256:`
-//! fingerprint, logins by their entry id, environments by their group under
-//! `Environments` ([`super::envs`]), and folders. Nothing is written into
-//! `~/.ssh/config`. Membership is a label, so an item can be in several
-//! projects; one in none is *Personal*, which is nothing stored.
+//! fingerprint, logins and environments by their entry id ([`super::envs`]),
+//! and folders. Nothing is written into `~/.ssh/config`. Membership is a
+//! label, so an item can be in several projects, except an environment,
+//! which is in one: its files go to that project's folders. Of the records
+//! that hold one, the project that took it last has it. One in none is
+//! *Personal*, which is nothing stored.
 //!
-//! A project's logins also carry the KeePass tag `project/<name>`
+//! Before, a project held environments by their KeePass group under
+//! `Environments` (`env:<group>`): such members stay in the records for
+//! older versions, unread here, and the environments in those groups join
+//! the project that named the group first, once ([`Vault::adopt_environments`]).
+//!
+//! A project's logins and environments also carry the KeePass tag `project/<name>`
 //! ([`TAG_PREFIX`]), so KeePassXC shows and filters by them. The record is
 //! what counts: the tags are written from the records after every change
 //! and sync ([`Vault::sync_tags`]), so the user's own tags never make or
@@ -40,7 +47,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use time::OffsetDateTime;
 
-use super::envs::{self, check_label};
+use super::envs;
 use super::{Vault, in_group};
 use crate::{Error, Result, fsutil};
 
@@ -70,7 +77,13 @@ const MAX_REFERENCE: usize = 4096;
 /// is taken as this much ahead.
 const MAX_AHEAD_MS: i64 = 5 * 60 * 1000;
 /// The kinds of member this version knows, as records name them.
-const KINDS: &[&str] = &["host", "key", "login", "env", "folder", "hostsfile"];
+/// (`env:<group>`, from before environments were held by id, is kept as an
+/// unknown kind: passed on, not shown.)
+const KINDS: &[&str] = &["host", "key", "login", "envid", "folder", "hostsfile"];
+/// How records named an environments' group before ([`Vault::adopt_environments`]).
+const GROUP_KIND: &str = "env:";
+/// How records name an environment.
+const ENV_KIND: &str = "envid:";
 /// How long a removed project or member is remembered, in milliseconds: a
 /// device that syncs after longer than that may bring it back.
 pub const KEEP_REMOVED_MS: i64 = 400 * 24 * 60 * 60 * 1000;
@@ -160,8 +173,8 @@ pub struct Project {
     pub hosts: Vec<String>,
     /// Keys by their `SHA256:…` fingerprint.
     pub keys: Vec<String>,
-    /// Environments by their project's group under `Environments`: the
-    /// `project` of an [`envs::EnvSummary`].
+    /// Environments by entry id, in the order they were added, not counting
+    /// those in the recycle bin or gone, nor one another project took later.
     pub environments: Vec<String>,
     /// The vault's logins by entry id, not counting those in the recycle
     /// bin or gone. Empty in the copy kept for while the vault is locked.
@@ -196,8 +209,8 @@ pub enum ProjectMember {
     /// A login of the vault by its entry id; the entry gets the tag
     /// [`TAG_PREFIX`] and the project's name.
     Login { id: String },
-    /// The environments of one project group under `Environments`.
-    Environment { group: String },
+    /// An environment by its entry id: in one project at a time.
+    Environment { id: String },
     /// A folder as [`folder_text`] keeps it.
     Folder { path: String },
     /// The system hosts file's entries for a name, as [`hosts_file_name`]
@@ -459,7 +472,7 @@ fn member_key(member: &ProjectMember) -> String {
         ProjectMember::Host { alias } => format!("host:{alias}"),
         ProjectMember::Key { fingerprint } => format!("key:{fingerprint}"),
         ProjectMember::Login { id } => format!("login:{id}"),
-        ProjectMember::Environment { group } => format!("env:{group}"),
+        ProjectMember::Environment { id } => format!("{ENV_KIND}{id}"),
         ProjectMember::Folder { path } => format!("folder:{path}"),
         ProjectMember::HostsFile { name } => format!("hostsfile:{name}"),
     }
@@ -474,7 +487,7 @@ fn parse_member(key: &str) -> Option<ProjectMember> {
         "host" => ProjectMember::Host { alias: value },
         "key" => ProjectMember::Key { fingerprint: value },
         "login" => ProjectMember::Login { id: value },
-        "env" => ProjectMember::Environment { group: value },
+        "envid" => ProjectMember::Environment { id: value },
         "folder" => ProjectMember::Folder { path: value },
         "hostsfile" => ProjectMember::HostsFile { name: value },
         _ => return None,
@@ -483,9 +496,9 @@ fn parse_member(key: &str) -> Option<ProjectMember> {
 }
 
 /// Whether `member` is a reference a project takes, by its form alone: a
-/// host alias that isn't a pattern, a `SHA256:` fingerprint, an entry id,
-/// an environments' group name, a folder on one line, a hosts file name in
-/// lower case. Whether it exists is another question.
+/// host alias that isn't a pattern, a `SHA256:` fingerprint, an entry id
+/// (logins, environments), a folder on one line, a hosts file name in lower
+/// case. Whether it exists is another question.
 pub fn is_valid_member(member: &ProjectMember) -> bool {
     match member {
         ProjectMember::Host { alias } => check_alias(alias).is_ok_and(|a| a == *alias),
@@ -495,8 +508,8 @@ pub fn is_valid_member(member: &ProjectMember) -> bool {
         ProjectMember::Login { id } => {
             uuid::Uuid::parse_str(id).is_ok_and(|u| u.to_string() == *id)
         }
-        ProjectMember::Environment { group } => {
-            check_label(group, "a project").is_ok_and(|g| g == *group)
+        ProjectMember::Environment { id } => {
+            uuid::Uuid::parse_str(id).is_ok_and(|u| u.to_string() == *id)
         }
         ProjectMember::Folder { path } => check_folder_text(path).is_ok(),
         ProjectMember::HostsFile { name } => hosts_file_name(name).is_some_and(|n| n == *name),
@@ -562,7 +575,16 @@ fn tag(name: &str) -> String {
     format!("{TAG_PREFIX}{name}")
 }
 
-fn project_view(id: String, stored: &Stored, logins: &BTreeSet<String>) -> Project {
+/// What a project's view needs besides its record: the vault's logins and
+/// environments outside the recycle bin, and which project has each
+/// environment.
+struct Held {
+    logins: BTreeSet<String>,
+    envs: BTreeSet<String>,
+    owners: BTreeMap<String, String>,
+}
+
+fn project_view(id: String, stored: &Stored, held: &Held) -> Project {
     let modified = rfc3339_ms(stored.latest());
     let mut project = Project {
         id,
@@ -580,11 +602,16 @@ fn project_view(id: String, stored: &Stored, logins: &BTreeSet<String>) -> Proje
         match member {
             ProjectMember::Host { alias } => project.hosts.push(alias),
             ProjectMember::Key { fingerprint } => project.keys.push(fingerprint),
-            ProjectMember::Environment { group } => project.environments.push(group),
+            ProjectMember::Environment { id: env }
+                if held.envs.contains(&env) && held.owners.get(&env) == Some(&project.id) =>
+            {
+                project.environments.push(env);
+            }
             ProjectMember::Folder { path } => project.folders.push(path),
             ProjectMember::HostsFile { name } => project.hosts_file.push(name),
-            ProjectMember::Login { id } if logins.contains(&id) => project.logins.push(id),
-            ProjectMember::Login { .. } => {}
+            ProjectMember::Login { id } if held.logins.contains(&id) => project.logins.push(id),
+            // Gone, in the recycle bin, or (an environment) another's now.
+            ProjectMember::Environment { .. } | ProjectMember::Login { .. } => {}
         }
     }
     project
@@ -593,12 +620,12 @@ fn project_view(id: String, stored: &Stored, logins: &BTreeSet<String>) -> Proje
 impl Vault {
     /// The projects, by name.
     pub fn projects(&self) -> Vec<Project> {
-        let logins = self.login_ids();
+        let held = self.held();
         let mut projects: Vec<Project> = self
             .stored_projects()
             .into_iter()
             .filter(|(_, stored)| stored.is_live())
-            .map(|(id, stored)| project_view(id, &stored, &logins))
+            .map(|(id, stored)| project_view(id, &stored, &held))
             .collect();
         projects.sort_by_cached_key(|p| (p.name.to_lowercase(), p.id.clone()));
         projects
@@ -606,7 +633,73 @@ impl Vault {
 
     pub fn project(&self, id: &str) -> Result<Project> {
         let stored = self.live_project(id)?;
-        Ok(project_view(id.to_owned(), &stored, &self.login_ids()))
+        Ok(project_view(id.to_owned(), &stored, &self.held()))
+    }
+
+    fn held(&self) -> Held {
+        let (logins, envs) = self.entry_ids();
+        Held {
+            logins,
+            envs,
+            owners: self.environment_owners(),
+        }
+    }
+
+    /// Which live project has each environment, by entry id: of the records
+    /// that hold it, the one that took it last (at the same time, the one
+    /// with the smaller id), so every device agrees after a sync whatever
+    /// two of them did meanwhile.
+    pub(super) fn environment_owners(&self) -> BTreeMap<String, String> {
+        let mut best: BTreeMap<String, (i64, std::cmp::Reverse<String>)> = BTreeMap::new();
+        for (id, stored) in self.stored_projects() {
+            if !stored.is_live() {
+                continue;
+            }
+            for (key, presence) in &stored.members {
+                let Some(env) = key.strip_prefix(ENV_KIND) else {
+                    continue;
+                };
+                if !presence.present() {
+                    continue;
+                }
+                let rank = (presence.a, std::cmp::Reverse(id.clone()));
+                match best.get(env) {
+                    Some(current) if *current >= rank => {}
+                    _ => {
+                        best.insert(env.to_owned(), rank);
+                    }
+                }
+            }
+        }
+        best.into_iter()
+            .map(|(env, (_, std::cmp::Reverse(id)))| (env, id))
+            .collect()
+    }
+
+    /// Puts an environment into `project`, out of any other, or (`None`)
+    /// into Personal. Returns whether anything changed.
+    pub fn move_environment(&mut self, env: &str, project: Option<&str>) -> Result<bool> {
+        let member = ProjectMember::Environment { id: env.to_owned() };
+        if let Some(project) = project {
+            return self.set_project_member(project, &member, true);
+        }
+        let holders: Vec<String> = self
+            .stored_projects()
+            .into_iter()
+            .filter(|(_, stored)| {
+                stored.is_live()
+                    && stored
+                        .members
+                        .get(&member_key(&member))
+                        .is_some_and(|p| p.present())
+            })
+            .map(|(id, _)| id)
+            .collect();
+        let mut changed = false;
+        for holder in holders {
+            changed |= self.set_project_member(&holder, &member, false)?;
+        }
+        Ok(changed)
     }
 
     /// Adds a project and returns its id. Logins already tagged
@@ -686,25 +779,25 @@ impl Vault {
             return Err(match member {
                 ProjectMember::Host { alias } => check_alias(alias).err(),
                 ProjectMember::Key { fingerprint } => check_fingerprint(fingerprint).err(),
-                ProjectMember::Environment { group } => check_label(group, "a project").err(),
                 ProjectMember::Folder { path } => check_folder_text(path).err(),
                 ProjectMember::HostsFile { name } => Some(Error::invalid(format!(
                     "not a host name in lower case: {name}"
                 ))),
-                ProjectMember::Login { id } => {
+                ProjectMember::Environment { id } | ProjectMember::Login { id } => {
                     Some(Error::invalid(format!("not an entry id: {id}")))
                 }
             }
             .unwrap_or_else(|| Error::invalid("not something a project holds")));
         }
-        if let (true, ProjectMember::Login { id }) = (included, member)
-            && envs::is_environment(&self.find(id)?)
-        {
-            return Err(Error::invalid(
-                "an environment joins a project by its group",
-            ));
+        match (included, member) {
+            (true, ProjectMember::Login { id }) if envs::is_environment(&self.find(id)?) => {
+                Err(Error::invalid("an environment joins a project as one"))
+            }
+            (true, ProjectMember::Environment { id }) if !envs::is_environment(&self.find(id)?) => {
+                Err(Error::invalid("not an environment"))
+            }
+            _ => Ok(()),
         }
-        Ok(())
     }
 
     /// Whether the project holds `member` or held it and took it out: a
@@ -728,7 +821,11 @@ impl Vault {
         let mut stored = self.live_project(id)?;
         let key = member_key(member);
         let presence = stored.members.get(&key).copied();
-        if presence.is_some_and(Presence::present) == included {
+        // An environment another project took later is taken back.
+        let taken_back = included
+            && matches!(member, ProjectMember::Environment { id: env }
+                if self.environment_owners().get(env).is_some_and(|owner| owner != id));
+        if presence.is_some_and(Presence::present) == included && !taken_back {
             return Ok(false);
         }
         let kind = key.split(':').next().unwrap_or_default();
@@ -746,9 +843,35 @@ impl Vault {
         if presence.is_none() && stored.members.len() >= MAX_STORED_MEMBERS {
             return Err(Error::invalid("the project is too large"));
         }
-        stored.members.insert(key, next);
+        stored.members.insert(key.clone(), next);
         self.put_project(id, &stored)?;
-        if matches!(member, ProjectMember::Login { .. }) {
+        // An environment is in one project: going in here, it leaves the rest.
+        if included && matches!(member, ProjectMember::Environment { .. }) {
+            for (other, mut stored) in self.stored_projects() {
+                if other == id || !stored.is_live() {
+                    continue;
+                }
+                let Some(presence) = stored.members.get(&key).copied() else {
+                    continue;
+                };
+                if !presence.present() {
+                    continue;
+                }
+                let t = stored.tick();
+                stored.members.insert(
+                    key.clone(),
+                    Presence {
+                        a: presence.a,
+                        r: Some(t),
+                    },
+                );
+                self.put_project(&other, &stored)?;
+            }
+        }
+        if matches!(
+            member,
+            ProjectMember::Login { .. } | ProjectMember::Environment { .. }
+        ) {
             self.sync_tags();
         }
         Ok(true)
@@ -1014,9 +1137,94 @@ impl Vault {
     /// record knows is the user's and stays. Other tags stay as they are.
     /// First, logins tagged with a project in KeePassXC join it
     /// ([`Self::adopt_tagged_logins`]).
-    fn sync_tags(&mut self) {
+    fn sync_tags(&mut self) -> bool {
         self.adopt_tagged_logins();
-        self.write_tags();
+        let adopted = self.adopt_environments();
+        self.write_tags() || adopted
+    }
+
+    /// What every unlock and every sync of the vault's file is followed by:
+    /// environments in a group a project named before join it
+    /// ([`Self::adopt_environments`]), and the `project/` tags are written.
+    /// Returns whether anything changed, to save.
+    pub fn tidy_projects(&mut self) -> bool {
+        self.sync_tags()
+    }
+
+    /// Whether [`Self::tidy_projects`] has something to do, without doing
+    /// it: so the vault is saved only then.
+    pub fn projects_untidy(&self) -> bool {
+        !self.adoptions().is_empty() || !self.tag_changes().is_empty()
+    }
+
+    /// The step from groups to projects, safe to take again and on two
+    /// devices at once: an environment in a group a live project named
+    /// (`env:<group>`, as projects held environments before) joins the
+    /// project that named the group first (at the same time, the one with
+    /// the smaller id), unless a record already says where it is
+    /// (`envid:<id>`, in or taken out). So one an older device makes in such
+    /// a group joins too, and one the user took out never comes back. Only
+    /// records change. Returns whether any did.
+    fn adopt_environments(&mut self) -> bool {
+        let mut changed = false;
+        for (id, envs) in self.adoptions() {
+            let Some(mut stored) = self.stored_project(&id) else {
+                continue;
+            };
+            let t = stored.tick();
+            for env in envs {
+                if stored.count("envid") < MAX_MEMBERS && stored.members.len() < MAX_STORED_MEMBERS
+                {
+                    stored
+                        .members
+                        .entry(format!("{ENV_KIND}{env}"))
+                        .or_insert(Presence { a: t, r: None });
+                }
+            }
+            changed |= self.put_project(&id, &stored).is_ok();
+        }
+        changed
+    }
+
+    /// What [`Self::adopt_environments`] does: the environments that join
+    /// each project, by its id.
+    fn adoptions(&self) -> BTreeMap<String, Vec<String>> {
+        let all = self.stored_projects();
+        let mut named: BTreeMap<String, (i64, String)> = BTreeMap::new();
+        let mut decided: BTreeSet<String> = BTreeSet::new();
+        for (id, stored) in &all {
+            for (key, presence) in &stored.members {
+                if let Some(env) = key.strip_prefix(ENV_KIND) {
+                    decided.insert(env.to_owned());
+                }
+                let Some(group) = key.strip_prefix(GROUP_KIND) else {
+                    continue;
+                };
+                if !stored.is_live() || !presence.present() {
+                    continue;
+                }
+                let first = (presence.a, id.clone());
+                match named.get(group) {
+                    Some(current) if *current <= first => {}
+                    _ => {
+                        named.insert(group.to_owned(), first);
+                    }
+                }
+            }
+        }
+        let mut adopted: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        if named.is_empty() {
+            return adopted;
+        }
+        for env in self.environments() {
+            if decided.contains(&env.id) {
+                continue;
+            }
+            if let Some((_, project)) = named.get(&env.group) {
+                adopted.entry(project.clone()).or_default().push(env.id);
+            }
+        }
+        adopted
     }
 
     /// A login tagged (in KeePassXC) with a live project's name joins it:
@@ -1078,20 +1286,43 @@ impl Vault {
         }
     }
 
-    /// The tag writing half of [`Self::sync_tags`].
-    fn write_tags(&mut self) {
+    /// The tag writing half of [`Self::sync_tags`]: logins get one tag per
+    /// project they are in, environments the one of the project that has
+    /// them. Returns whether any entry changed.
+    fn write_tags(&mut self) -> bool {
+        let writes = self.tag_changes();
+        let changed = !writes.is_empty();
+        for (id, tags) in writes {
+            if let Some(mut entry) = self.db.entry_mut(id) {
+                entry.tags = tags;
+                entry.times.last_modification = Some(Times::now());
+            }
+        }
+        changed
+    }
+
+    /// What [`Self::write_tags`] writes: each entry whose tags change, with
+    /// its new ones.
+    fn tag_changes(&self) -> Vec<(EntryId, Vec<String>)> {
         let mut known: BTreeSet<String> = BTreeSet::new();
         let mut wanted: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        for (_, stored) in self.stored_projects() {
+        let mut names: BTreeMap<String, String> = BTreeMap::new();
+        for (id, stored) in self.stored_projects() {
             known.insert(stored.name.v.to_lowercase());
             known.extend(stored.aka.iter().map(|name| name.to_lowercase()));
             if !stored.is_live() {
                 continue;
             }
+            names.insert(id, stored.name.v.clone());
             for member in stored.present() {
                 if let ProjectMember::Login { id } = member {
                     wanted.entry(id).or_default().insert(tag(&stored.name.v));
                 }
+            }
+        }
+        for (env, project) in self.environment_owners() {
+            if let Some(name) = names.get(&project) {
+                wanted.entry(env).or_default().insert(tag(name));
             }
         }
         let ours = |t: &str| {
@@ -1099,10 +1330,8 @@ impl Vault {
                 .is_some_and(|name| known.contains(&name.to_lowercase()))
         };
         let none = BTreeSet::new();
-        let changes: Vec<(EntryId, Vec<String>)> = self
-            .db
+        self.db
             .iter_all_entries()
-            .filter(|entry| !envs::is_environment(entry))
             .filter_map(|entry| {
                 let want = wanted.get(&entry.id().uuid().to_string()).unwrap_or(&none);
                 let has: BTreeSet<String> = entry
@@ -1124,13 +1353,7 @@ impl Vault {
                 tags.extend(want.iter().cloned());
                 Some((entry.id(), tags))
             })
-            .collect();
-        for (id, tags) in changes {
-            if let Some(mut entry) = self.db.entry_mut(id) {
-                entry.tags = tags;
-                entry.times.last_modification = Some(Times::now());
-            }
-        }
+            .collect()
     }
 
     /// The vault's logins outside the recycle bin as suggestions see them:
@@ -1167,27 +1390,36 @@ impl Vault {
             .collect()
     }
 
-    /// The project groups of the environments outside the recycle bin.
-    pub fn environment_groups(&self) -> Vec<String> {
-        let groups: BTreeSet<String> = self
-            .environments()
+    /// Personal's environments outside the recycle bin, with a part: those
+    /// sharing one may make a project.
+    pub fn suggestion_environments(&self) -> Vec<suggest::EnvFacts> {
+        self.environments()
             .into_iter()
-            .filter(|env| !env.in_trash && !env.project.is_empty())
-            .map(|env| env.project)
-            .collect();
-        groups.into_iter().collect()
+            .filter(|env| !env.in_trash && env.project.is_none() && !env.part.is_empty())
+            .map(|env| suggest::EnvFacts {
+                id: env.id,
+                part: env.part,
+            })
+            .collect()
     }
 
-    /// The vault's logins outside the recycle bin, by id.
-    fn login_ids(&self) -> BTreeSet<String> {
+    /// The vault's logins and environments outside the recycle bin, by id.
+    fn entry_ids(&self) -> (BTreeSet<String>, BTreeSet<String>) {
         let bin = self.db.meta.recyclebin_uuid;
-        self.db
-            .iter_all_entries()
-            .filter(|entry| {
-                !envs::is_environment(entry) && !in_group(entry.parent().id(), bin, &self.db)
-            })
-            .map(|entry| entry.id().uuid().to_string())
-            .collect()
+        let mut logins = BTreeSet::new();
+        let mut envs = BTreeSet::new();
+        for entry in self.db.iter_all_entries() {
+            if in_group(entry.parent().id(), bin, &self.db) {
+                continue;
+            }
+            let id = entry.id().uuid().to_string();
+            if envs::is_environment(&entry) {
+                envs.insert(id);
+            } else {
+                logins.insert(id);
+            }
+        }
+        (logins, envs)
     }
 
     fn stored_projects(&self) -> Vec<(String, Stored)> {

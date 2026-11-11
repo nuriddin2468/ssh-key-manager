@@ -185,7 +185,7 @@ describe('a card', () => {
   it('counts its .env files that need attention among its problems', async () => {
     const status = {
       envId: 'env-1',
-      group: 'shop',
+      label: 'shop',
       envName: 'dev',
       file: { folder: '~/code/shop', path: '.env' },
       location: '/code/shop/.env',

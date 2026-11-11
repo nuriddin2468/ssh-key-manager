@@ -86,7 +86,8 @@ async function findings(): Promise<LeakFinding[]> {
   const envs = ((await envsHandlers.envs_list?.({})) ?? []) as EnvSummary[];
   const entries = ((await vaultHandlers.vault_entries?.({})) ?? []) as EntrySummary[];
   const variable = (project: string, environment: string, name: string): LeakSecret | null => {
-    const env = envs.find((e) => e.project === project && e.name === environment && !e.inTrash);
+    // `project` is the label, as the backend gives it: here the part.
+    const env = envs.find((e) => e.part === project && e.name === environment && !e.inTrash);
     return env ? { kind: 'variable', envId: env.id, project, environment, name } : null;
   };
   const password = (title: string): LeakSecret | null => {

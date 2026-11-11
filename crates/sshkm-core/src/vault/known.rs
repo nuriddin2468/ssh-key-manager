@@ -14,9 +14,10 @@ impl Vault {
     /// are left out; the scanner leaves out those too plain to find.
     pub fn known_secrets(&self) -> Vec<KnownSecret> {
         let mut out = Vec::new();
+        let owners = self.environment_owners();
         for entry in self.db.iter_all_entries() {
             if is_environment(&entry) {
-                let env = self.env_summary(&entry);
+                let env = self.env_summary(&entry, &owners);
                 if env.in_trash {
                     continue;
                 }
@@ -27,7 +28,7 @@ impl Vault {
                     out.push(KnownSecret {
                         secret: LeakSecret::Variable {
                             env_id: env.id.clone(),
-                            project: env.project.clone(),
+                            project: self.env_label(&env),
                             environment: env.name.clone(),
                             name: var.name,
                         },
@@ -88,8 +89,8 @@ impl Vault {
         }
         Some(KnownSecret {
             secret: LeakSecret::Variable {
+                project: self.env_label(&detail.summary),
                 env_id: detail.summary.id,
-                project: detail.summary.project,
                 environment: detail.summary.name,
                 name: name.to_owned(),
             },

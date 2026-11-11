@@ -40,14 +40,16 @@ import {
   kindOf,
   mockEnv,
   mockEnvDetail,
+  mockEnvOwner,
   mockEnvs,
   mockLooksSecret,
   mockVariable,
   parseMockDotenv,
+  partOf,
   touchMockEnv,
   type Variable,
 } from './envs';
-import { projectsHandlers } from './projects';
+import { mockProjectName, projectsHandlers } from './projects';
 import { isMockVaultUnlocked } from './vault';
 
 type Handler = (args: Record<string, unknown>) => unknown;
@@ -85,7 +87,7 @@ const disk = new Map<string, MockFile>();
 
 /** The sample environment `group / name`. */
 const sample = (group: string, name: string) =>
-  mockEnvs().find((item) => item.project === group && item.name === name);
+  mockEnvs().find((item) => item.group === group && item.name === name);
 
 let seeded = false;
 /** An edit made in an editor, which the next round takes to the vault. */
@@ -198,18 +200,30 @@ function checkFile(file: EnvFile): EnvFile | Promise<never> {
   return { folder: file.folder, path: parts.join('/') };
 }
 
-function holds(all: Project[], group: string, folder: string) {
-  return all.some((p) => p.environments.includes(group) && p.folders.includes(folder));
+/** The project that has the environment holds the folder. */
+function holds(all: Project[], env: string, folder: string) {
+  return all.some((p) => p.environments.includes(env) && p.folders.includes(folder));
+}
+
+/** Where an environment is, as the backend labels it: `Shop · backend`. */
+function labelOf(item: Env): string {
+  const owner = mockEnvOwner(item.id);
+  return [owner ? mockProjectName(owner) : undefined, partOf(item)].filter(Boolean).join(' · ');
 }
 
 async function statusOf(item: Env, file: EnvFile, all?: Project[]): Promise<EnvFileStatus> {
   seed();
-  const base = { envId: item.id, group: item.project, envName: item.name, file: { ...file } };
+  const base = {
+    envId: item.id,
+    label: labelOf(item),
+    envName: item.name,
+    file: { ...file },
+  };
   const inactive = item.inTrash
     ? 'inTrash'
     : kindOf(item) === 'remote'
       ? 'remote'
-      : holds(all ?? (await projects()), item.project, file.folder)
+      : holds(all ?? (await projects()), item.id, file.folder)
         ? null
         : 'notInProject';
   if (inactive) {
@@ -249,7 +263,7 @@ function takeFile(item: Env, file: EnvFile, vars: Record<string, string>): EnvFi
   undos.set(`${item.id}\n${after}`, before);
   return {
     envId: item.id,
-    group: item.project,
+    label: labelOf(item),
     envName: item.name,
     file: { ...file },
     added,
@@ -332,7 +346,7 @@ async function reports(project: unknown, all: Project[]): Promise<EnvFileReport[
   for (const status of await statuses()) {
     const ids = all
       .filter(
-        (p) => p.environments.includes(status.group) && p.folders.includes(status.file.folder),
+        (p) => p.environments.includes(status.envId) && p.folders.includes(status.file.folder),
       )
       .map((p) => p.id);
     if (!wanted(ids)) continue;
@@ -357,7 +371,7 @@ export const envFilesHandlers: Record<string, Handler> = {
     if (kindOf(item) === 'remote') {
       return fail('invalid_input', 'a remote environment has no files: make it local first');
     }
-    if (!holds(await projects(), item.project, checked.folder)) {
+    if (!holds(await projects(), item.id, checked.folder)) {
       return fail('invalid_input', "the folder isn't in a project that holds the environment");
     }
     if (item.files.some((x) => x.folder === checked.folder && x.path === checked.path)) {
@@ -400,7 +414,7 @@ export const envFilesHandlers: Record<string, Handler> = {
     if (kindOf(item) === 'remote') {
       return fail('invalid_input', 'a remote environment has no files: make it local first');
     }
-    if (!holds(await projects(), item.project, checked.folder)) {
+    if (!holds(await projects(), item.id, checked.folder)) {
       return fail('invalid_input', "the folder isn't in a project that holds the environment");
     }
     if (item.files.some((x) => x.folder === checked.folder && x.path === checked.path)) {
@@ -562,7 +576,7 @@ export const envFilesHandlers: Record<string, Handler> = {
     const to = target as ImportTarget;
     let item: Env;
     if (to.type === 'new') {
-      item = addMockEnv(to.project, to.name, []);
+      item = addMockEnv(String(project), to.part, to.name, []);
     } else {
       item = await findEnv(to.id);
       if (kindOf(item) === 'remote') {
@@ -581,10 +595,10 @@ export const envFilesHandlers: Record<string, Handler> = {
         added += 1;
       }
     }
-    // The project holds the environment's group from now on.
+    // The project has the environment from now on.
     await projectsHandlers.projects_set_member?.({
       id: project,
-      member: { type: 'environment', group: item.project },
+      member: { type: 'environment', id: item.id },
       included: true,
     });
     const bound = { folder: found.folder, path: found.path };

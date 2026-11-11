@@ -138,7 +138,7 @@ function receivedName(item: ItemSummary, peer: string): string {
         ? `${item.name}-${peer.replace(/[^A-Za-z0-9_.]+/g, '-')}`
         : item.name;
     case 'environment':
-      return `${item.project} / ${item.name}`;
+      return [item.project, item.name].filter(Boolean).join(' · ');
   }
 }
 

@@ -32,7 +32,7 @@ function member(kind: Kind, value: string): ProjectMember {
     case 'keys':
       return { type: 'key', fingerprint: value };
     case 'environments':
-      return { type: 'environment', group: value };
+      return { type: 'environment', id: value };
     case 'folders':
       return { type: 'folder', path: value };
     case 'logins':

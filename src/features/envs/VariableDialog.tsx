@@ -10,7 +10,8 @@ import { SwitchGroup, SwitchRow } from '@/components/ui/Switch';
 import { TextField } from '@/components/ui/TextField';
 import { Tile } from '@/components/ui/Tile';
 import { toastVaultError, useSecretCall, useVaultMutation } from '@/features/passwords/vault';
-import { envLabel, isVariableName, looksSecretName } from './model';
+import { isVariableName, looksSecretName } from './model';
+import { useEnvLabel } from './useProjectNames';
 
 interface VariableDialogProps {
   env: EnvDetail;
@@ -26,6 +27,7 @@ interface VariableDialogProps {
  */
 export function VariableDialog({ env, variable, onDone }: VariableDialogProps) {
   const { t } = useTranslation();
+  const envLabelOf = useEnvLabel();
   const valueId = useId();
   const [name, setName] = useState(variable?.name ?? '');
   // `null`: keep the current value.
@@ -101,7 +103,7 @@ export function VariableDialog({ env, variable, onDone }: VariableDialogProps) {
             </Tile>
           }
           title={variable ? t('envs.varForm.editTitle') : t('envs.varForm.newTitle')}
-          description={envLabel(env)}
+          description={envLabelOf(env)}
         />
         <DialogBody>
           <TextField

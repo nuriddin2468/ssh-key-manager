@@ -243,6 +243,7 @@ pub fn run() {
             commands::envs::envs_get,
             commands::envs::envs_create,
             commands::envs::envs_update,
+            commands::envs::envs_set_part,
             commands::envs::envs_set_var,
             commands::envs::envs_remove_var,
             commands::envs::envs_reveal,

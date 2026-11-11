@@ -18,8 +18,10 @@ import { Tile } from '@/components/ui/Tile';
 import { useVaultMutation } from '@/features/passwords/vault';
 import { useProjects } from '@/features/projects/queries';
 import { Problems } from '../ImportEnvDialog';
-import { envLabel, labelProblem, nameTaken } from '../model';
+import { labelProblem, nameTaken, partsOf, whereLabel } from '../model';
 import { useEnvs } from '../queries';
+import { useEnvLabel } from '../useProjectNames';
+import { partProblem, WhereFields } from '../WhereFields';
 import { bindRefusal, isEnvNameClash } from './errors';
 import { fileName } from './model';
 import { refreshFileReports } from './queries';
@@ -39,6 +41,7 @@ interface AdoptFileDialogProps {
  */
 export function AdoptFileDialog({ found, onDone }: AdoptFileDialogProps) {
   const { t } = useTranslation();
+  const envLabelOf = useEnvLabel();
   const envs = useEnvs();
   const projects = useProjects();
   const project = projects.data?.find((item) => item.id === found.project);
@@ -59,7 +62,7 @@ export function AdoptFileDialog({ found, onDone }: AdoptFileDialogProps) {
   });
   const [target, setTarget] = useState<Target>('new');
   const [intoId, setIntoId] = useState('');
-  const [group, setGroup] = useState<string | null>(null);
+  const [part, setPart] = useState<string | null>(null);
   const [name, setName] = useState<string | null>(null);
   const [secrets, setSecrets] = useState<Record<string, boolean>>({});
   const [touched, setTouched] = useState(false);
@@ -68,23 +71,30 @@ export function AdoptFileDialog({ found, onDone }: AdoptFileDialogProps) {
   const file = fileName(found.file);
 
   const data = preview.data;
-  // Until the user types: the project's environments' group, else the
-  // folder's name, and the file's suffix (`.env.local` → `local`), else `dev`.
-  const groupValue =
-    group ?? project?.environments[0] ?? data?.suggestedProject ?? project?.name ?? '';
+  // Until the user types: the project's part when it has one, the folder's
+  // name when it has several, else none; and the file's suffix
+  // (`.env.local` → `local`), else `dev`.
+  const parts = partsOf(envs.data ?? [], found.project);
+  const partValue =
+    part ??
+    (parts.length === 1
+      ? (parts[0] ?? '')
+      : parts.length > 1
+        ? (data?.suggestedProject ?? '')
+        : '');
   const nameValue = name ?? (data?.suggestedName || 'dev');
   const chosenInto = local.some((env) => env.id === intoId) ? intoId : (local[0]?.id ?? '');
   const choices: ImportChoice[] = (data?.variables ?? []).map((variable) => ({
     name: variable.name,
     secret: secrets[variable.name] ?? variable.secret,
   }));
-  const groupProblem = labelProblem(groupValue);
+  const groupProblem = partProblem(partValue);
   const nameProblem = labelProblem(nameValue);
   const taken =
     target === 'new' &&
     !groupProblem &&
     !nameProblem &&
-    (serverTaken || nameTaken(envs.data ?? [], groupValue, nameValue));
+    (serverTaken || nameTaken(envs.data ?? [], found.project, partValue, nameValue));
   const ready =
     data !== undefined &&
     (target === 'existing' ? chosenInto !== '' : !groupProblem && !nameProblem && !taken);
@@ -96,7 +106,7 @@ export function AdoptFileDialog({ found, onDone }: AdoptFileDialogProps) {
         found.file,
         target === 'existing'
           ? { type: 'existing', id: chosenInto }
-          : { type: 'new', project: groupValue.trim(), name: nameValue.trim() },
+          : { type: 'new', project: found.project, part: partValue.trim(), name: nameValue.trim() },
         choices,
       ),
     {
@@ -104,7 +114,9 @@ export function AdoptFileDialog({ found, onDone }: AdoptFileDialogProps) {
         const env = envs.data?.find((item) => item.id === result.id);
         return t('envs.adopt.done', {
           file,
-          env: env ? envLabel(env) : `${groupValue.trim()} / ${nameValue.trim()}`,
+          env: env
+            ? envLabelOf(env)
+            : whereLabel(whereLabel(project?.name, partValue.trim()), nameValue.trim()),
         });
       },
       onSuccess: () => {
@@ -190,14 +202,17 @@ export function AdoptFileDialog({ found, onDone }: AdoptFileDialogProps) {
               />
               {target === 'new' ? (
                 <div className="grid grid-cols-2 gap-3">
-                  <TextField
-                    label={t('envs.adopt.group')}
-                    value={groupValue}
-                    onChange={(event) => {
-                      setGroup(event.target.value);
+                  <WhereFields
+                    all={envs.data ?? []}
+                    project={found.project}
+                    part={partValue}
+                    onProject={() => {}}
+                    onPart={(next) => {
+                      setPart(next);
                       setServerTaken(false);
                     }}
-                    error={touched && groupProblem ? t(`envs.form.${groupProblem}`) : undefined}
+                    touched={touched}
+                    partOnly
                   />
                   <TextField
                     label={t('envs.adopt.name')}
@@ -212,7 +227,10 @@ export function AdoptFileDialog({ found, onDone }: AdoptFileDialogProps) {
                         ? nameProblem
                           ? t(`envs.form.${nameProblem}`)
                           : taken
-                            ? t('envs.form.taken', { project: groupValue.trim() })
+                            ? t('envs.form.taken', {
+                                where: whereLabel(project?.name, partValue.trim()),
+                                stage: nameValue.trim(),
+                              })
                             : undefined
                         : undefined
                     }
@@ -223,7 +241,7 @@ export function AdoptFileDialog({ found, onDone }: AdoptFileDialogProps) {
                   label={t('envs.adopt.into')}
                   value={chosenInto}
                   onValueChange={setIntoId}
-                  options={local.map((env) => ({ value: env.id, label: envLabel(env) }))}
+                  options={local.map((env) => ({ value: env.id, label: envLabelOf(env) }))}
                 />
               )}
               {data.variables.length === 0 ? (

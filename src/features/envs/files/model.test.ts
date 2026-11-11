@@ -21,7 +21,7 @@ const t = ((key: string, values?: Record<string, unknown>) =>
 function report(state: FileState, extra: Partial<EnvFileReport> = {}): EnvFileReport {
   return {
     envId: 'env-1',
-    group: 'shop-api',
+    label: 'shop-api',
     envName: 'dev',
     file: { folder: '~/code/shop', path: 'apps/web/.env.local' },
     location: '/Users/dev/code/shop/apps/web/.env.local',
@@ -98,7 +98,7 @@ describe('managed files model', () => {
   it('sums up an edit by names, a few at a time', () => {
     const change: EnvFileChange = {
       envId: 'env-1',
-      group: 'shop-api',
+      label: 'shop-api',
       envName: 'dev',
       file: { folder: '~/code/shop', path: '.env' },
       added: ['A', 'B', 'C', 'D', 'E'],

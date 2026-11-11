@@ -11,7 +11,13 @@ import type { ProjectInput } from '@/bindings/ProjectInput';
 import type { ProjectMember } from '@/bindings/ProjectMember';
 import type { ProjectSuggestion } from '@/bindings/ProjectSuggestion';
 import type { TerminalEvent } from '@/bindings/TerminalEvent';
-import { mockLocalEnvironment } from './envs';
+import {
+  mockEnvOwner,
+  mockEnvsInGroup,
+  mockLocalEnvironment,
+  mockOwnedEnvs,
+  setMockEnvOwner,
+} from './envs';
 import { findShell, openLocalShell } from './terminal';
 import { isMockEntry, isMockVaultUnlocked, mockEntryId } from './vault';
 
@@ -90,6 +96,18 @@ const projects: MockProject[] = [
 ];
 // `?projects=none` starts with no projects, as on the first run.
 if (new URLSearchParams(window.location.search).get('projects') === 'none') projects.length = 0;
+// The step from groups to projects: the environments in a group a project
+// named are its own, by id (as `tidy_projects` does on unlock).
+for (const p of projects) {
+  for (const group of p.environments) {
+    for (const id of mockEnvsInGroup(group)) setMockEnvOwner(id, p.id);
+  }
+  p.environments = [];
+}
+
+/** A project's name, for labels of its environments. */
+export const mockProjectName = (id: string): string | undefined =>
+  projects.find((p) => p.id === id)?.name;
 
 /** Resolves the sample logins' ids the first time the list is read. */
 function resolveLogins() {
@@ -108,7 +126,7 @@ const MISSING_FOLDERS = new Set(['~/code/shop-web']);
 
 function view(p: MockProject, unlocked: boolean): Project {
   const { loginTitles: _, heldFolders: _held, ...rest } = p;
-  return { ...rest, logins: unlocked ? [...p.logins] : [] };
+  return { ...rest, environments: mockOwnedEnvs(p.id), logins: unlocked ? [...p.logins] : [] };
 }
 
 /** Moves renamed hosts in the projects that hold them, as `save_host` does. */
@@ -174,10 +192,9 @@ function setMember(
       toggle(p.keys, member.fingerprint.trim());
       break;
     case 'environment':
-      if (!member.group.trim() || member.group.includes('/')) {
-        return fail('invalid_input', `not a project: ${member.group}`);
-      }
-      toggle(p.environments, member.group.trim());
+      // In one project: going in here, it leaves the one it was in.
+      if (included) setMockEnvOwner(member.id, p.id);
+      else if (mockEnvOwner(member.id) === p.id) setMockEnvOwner(member.id, null);
       break;
     case 'folder':
       toggle(p.folders, member.path);
@@ -230,7 +247,8 @@ const candidates: ProjectSuggestion[] = [
     {
       folders: ['~/code/billing-service'],
       keys: ['SHA256:u9Fh2KdL7pQ3zX8mV1bN6rT4wY0sGcJ5aE2iOkHjUyB'],
-      environments: ['billing'],
+      // Personal's environments with the part `billing`.
+      environments: mockEnvsInGroup('billing'),
     },
   ),
   suggestion(
@@ -267,7 +285,7 @@ function memberKey(m: ProjectMember): string {
     case 'login':
       return `login:${m.id}`;
     case 'environment':
-      return `env:${m.group}`;
+      return `envid:${m.id}`;
     case 'folder':
       return `folder:${m.path}`;
     case 'hostsFile':
@@ -279,7 +297,7 @@ function memberList(s: ProjectSuggestion): ProjectMember[] {
   return [
     ...s.hosts.map((alias): ProjectMember => ({ type: 'host', alias })),
     ...s.keys.map((fingerprint): ProjectMember => ({ type: 'key', fingerprint })),
-    ...s.environments.map((group): ProjectMember => ({ type: 'environment', group })),
+    ...s.environments.map((id): ProjectMember => ({ type: 'environment', id })),
     ...s.folders.map((path): ProjectMember => ({ type: 'folder', path })),
     ...s.logins.map((id): ProjectMember => ({ type: 'login', id })),
     ...s.hostsFile.map((name): ProjectMember => ({ type: 'hostsFile', name })),
@@ -326,7 +344,7 @@ function suggestions(): ProjectSuggestion[] {
         ...c,
         hosts: kept.flatMap((m) => (m.type === 'host' ? [m.alias] : [])),
         keys: kept.flatMap((m) => (m.type === 'key' ? [m.fingerprint] : [])),
-        environments: kept.flatMap((m) => (m.type === 'environment' ? [m.group] : [])),
+        environments: kept.flatMap((m) => (m.type === 'environment' ? [m.id] : [])),
         folders: kept.flatMap((m) => (m.type === 'folder' ? [m.path] : [])),
         logins: kept.flatMap((m) => (m.type === 'login' ? [m.id] : [])),
         hostsFile: kept.flatMap((m) => (m.type === 'hostsFile' ? [m.name] : [])),
@@ -463,9 +481,7 @@ export const projectsHandlers: Record<string, Handler> = {
     if (MISSING_FOLDERS.has(path)) return fail('not_found', `${path} on this computer`);
     const found = findShell(shell);
     if (!found) return fail('not_found', 'this shell isn’t on this computer anymore');
-    const local = isMockVaultUnlocked()
-      ? p.environments.map((group) => mockLocalEnvironment(group)).find(Boolean)
-      : undefined;
+    const local = isMockVaultUnlocked() ? mockLocalEnvironment(p.id) : undefined;
     return openLocalShell(
       `${p.name} · ${path.split('/').pop() ?? path}`,
       found,

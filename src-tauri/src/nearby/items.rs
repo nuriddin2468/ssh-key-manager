@@ -147,6 +147,8 @@ pub fn build(state: &AppState, app: &AppHandle, request: &SendRequest) -> AppRes
         }
         SendRequest::Environment { env_id } => state.vault.with(app, |vault| {
             let env = vault.environment(env_id)?;
+            // Where it is, for the other device: its project and part there.
+            let label = vault.env_label(&env.summary);
             let variables = vault
                 .env_variables(env_id)?
                 .into_iter()
@@ -158,7 +160,7 @@ pub fn build(state: &AppState, app: &AppHandle, request: &SendRequest) -> AppRes
                 })
                 .collect();
             Ok(Item::Environment {
-                project: env.summary.project,
+                project: label,
                 name: env.summary.name,
                 notes: env.notes,
                 variables,
@@ -286,7 +288,7 @@ pub fn store(
                     ErrorCode::VaultLocked => PairingFailure::VaultLocked,
                     _ => PairingFailure::NotSaved,
                 })?;
-            Ok((format!("{project} / {name}"), false))
+            Ok((envs::label(Some(project), &name), false))
         }
         Item::PublicKey { name, key } => {
             let name = save_key(

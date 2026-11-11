@@ -64,15 +64,12 @@ function choices(kind: MemberKind, project: Project, library: Library): Choice[]
       });
     }
   } else if (kind === 'environments') {
-    const groups = new Map<string, string[]>();
+    // Personal's environments: one in another project moves from there.
     for (const env of library.envs ?? []) {
-      if (env.inTrash || !env.project) continue;
-      groups.set(env.project, [...(groups.get(env.project) ?? []), env.name]);
-    }
-    for (const [group, names] of groups) {
-      const member: ProjectMember = { type: 'environment', group };
+      if (env.inTrash || env.project !== null) continue;
+      const member: ProjectMember = { type: 'environment', id: env.id };
       if (holds(project, member)) continue;
-      out.push({ member, title: group, subtitle: names.join(', '), mono: true });
+      out.push({ member, title: env.name, subtitle: env.part, mono: true });
     }
   } else if (kind === 'hostsFile') {
     // Names, not lines; block lists aren't offered, nor lines that list a

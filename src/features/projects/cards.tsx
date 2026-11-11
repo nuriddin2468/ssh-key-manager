@@ -863,9 +863,7 @@ function useFoldersCard(
     !locked &&
     (library.envs ?? []).some(
       (env) =>
-        !env.inTrash &&
-        env.name.toLowerCase() === 'local' &&
-        project.environments.includes(env.project),
+        !env.inTrash && env.name.toLowerCase() === 'local' && project.environments.includes(env.id),
     );
   return {
     id: 'folders',
@@ -932,44 +930,51 @@ function useFoldersCard(
 
 function useEnvironmentsCard(
   { project, back, made }: Origin,
-  groups: string[],
+  ids: string[],
   gone: Set<string>,
   library: Library,
 ): CardSpec | null {
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const terminals = useTerminals();
-  if (groups.length === 0) return null;
+  if (ids.length === 0) return null;
   const section = t('nav.envs');
-  const rows = groups.flatMap((group): CardRow[] => {
-    const member: ProjectMember = { type: 'environment', group };
+  const envs = ids.flatMap((id) => library.envs?.find((env) => env.id === id) ?? []);
+  // Parts show when the project has more than one.
+  const parts = new Set(envs.map((env) => env.part.toLowerCase()));
+  const withParts = parts.size > 1;
+  const firstOfPart = new Set(
+    [...parts].flatMap((part) => envs.find((env) => env.part.toLowerCase() === part)?.id ?? []),
+  );
+  const rows = ids.flatMap((id): CardRow[] => {
+    const member: ProjectMember = { type: 'environment', id };
     if (!library.envs) {
-      return [{ key: group, node: <Row mono title={group} subtitle={t('common.loading')} /> }];
+      return [{ key: id, node: <Row title="" subtitle={t('common.loading')} /> }];
     }
-    const envs = library.envs.filter((env) => !env.inTrash && env.project === group);
-    if (gone.has(group) || envs.length === 0) {
+    const env = envs.find((item) => item.id === id);
+    if (!env || gone.has(id)) {
       return [
         {
-          key: group,
+          key: id,
           problem: true,
           node: (
-            <Row mono title={group} subtitle={<Problem text={t('projects.groupGone')} />}>
-              {project ? <RemoveButton project={project} member={member} name={group} /> : null}
+            <Row mono title={id.slice(0, 8)} subtitle={<Problem text={t('projects.groupGone')} />}>
+              {project ? <RemoveButton project={project} member={member} name={id} /> : null}
             </Row>
           ),
         },
       ];
     }
-    return envs.map((env, index) => {
-      const label = `${group} · ${env.name}`;
-      const open = t('projects.openIn', { name: label, section });
-      return {
+    const label = [withParts ? env.part : '', env.name].filter(Boolean).join(' · ');
+    const open = t('projects.openIn', { name: label, section });
+    return [
+      {
         key: env.id,
         fresh: made.has(`envs:${env.id}`),
         node: (
           <Row
             leading={
-              // The environment's name is its link to the Environments section.
+              // The environment's stage is its link to the Environments section.
               <button
                 type="button"
                 title={open}
@@ -985,7 +990,7 @@ function useEnvironmentsCard(
                 <span className="truncate">{env.name}</span>
               </button>
             }
-            title={groups.length > 1 && index === 0 ? group : ''}
+            title={withParts && firstOfPart.has(env.id) ? env.part : ''}
             mono
             subtitle={
               env.secretCount
@@ -1004,7 +1009,7 @@ function useEnvironmentsCard(
               />
             }
           >
-            {project || index > 0 ? null : <AddToProjectButton member={member} name={group} />}
+            {project ? null : <AddToProjectButton member={member} name={label} />}
             <Button
               size="sm"
               icon={<Play className="size-3" strokeWidth={2.4} />}
@@ -1018,14 +1023,14 @@ function useEnvironmentsCard(
             </Button>
           </Row>
         ),
-      };
-    });
+      },
+    ];
   });
   return {
     id: 'environments',
     icon: <Variable className="size-3.5 text-[#D9F99D]" strokeWidth={2.2} />,
     title: t('projects.cards.environments'),
-    count: groups.length > 1 ? groups.length : groups[0],
+    count: ids.length,
     rows,
   };
 }

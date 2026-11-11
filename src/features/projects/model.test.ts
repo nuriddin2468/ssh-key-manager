@@ -60,8 +60,9 @@ const host = (id: number, patterns: string[], wildcard = false): HostEntry =>
 
 const key = (name: string, fingerprint: string | null) =>
   ({ id: name, name, fingerprint }) as unknown as KeyView;
-const env = (project: string, name: string, inTrash = false) =>
-  ({ id: `${project}/${name}`, project, name, inTrash }) as EnvSummary;
+/** An environment with its id `part/name`, in `project` (by id) or Personal. */
+const env = (part: string, name: string, inTrash = false, project: string | null = null) =>
+  ({ id: `${part}/${name}`, project, part, name, inTrash }) as EnvSummary;
 const entry = (id: string, kind: EntrySummary['kind'] = 'login', inTrash = false) =>
   ({ id, kind, inTrash }) as EntrySummary;
 
@@ -85,18 +86,24 @@ describe('project tiles', () => {
 describe('Personal', () => {
   it('holds what no project does', () => {
     const projects = [
-      project({ hosts: ['prod'], keys: ['SHA256:a'], environments: ['shop-api'], logins: ['l1'] }),
+      project({
+        hosts: ['prod'],
+        keys: ['SHA256:a'],
+        environments: ['shop-api/dev'],
+        logins: ['l1'],
+      }),
     ];
     const mine = personal(projects, {
       hosts: [host(0, ['prod', 'prod.example.com']), host(1, ['blog']), host(2, ['*'], true)],
       keys: [key('id_a', 'SHA256:a'), key('id_b', 'SHA256:b'), key('broken', null)],
-      envs: [env('shop-api', 'dev'), env('blog', 'dev'), env('old', 'dev', true)],
+      // The backend says which project has each environment.
+      envs: [env('shop-api', 'dev', false, 'p1'), env('blog', 'dev'), env('old', 'dev', true)],
       entries: [entry('l1'), entry('l2'), entry('h1', 'host'), entry('l3', 'login', true)],
     });
     expect(mine).toEqual({
       hosts: ['blog'],
       keys: ['SHA256:b'],
-      environments: ['blog'],
+      environments: ['blog/dev'],
       logins: ['l2'],
       folders: [],
       hostsFile: [],
@@ -120,7 +127,7 @@ describe('gone members', () => {
     const shop = project({
       hosts: ['prod', 'renamed'],
       keys: ['SHA256:a', 'SHA256:gone'],
-      environments: ['shop-api', 'emptied'],
+      environments: ['shop-api/dev', 'emptied/old'],
       folders: ['~/code/shop', '~/code/elsewhere'],
     });
     const loaded = missing(
@@ -134,7 +141,8 @@ describe('gone members', () => {
     );
     expect([...loaded.hosts]).toEqual(['renamed']);
     expect([...loaded.keys]).toEqual(['SHA256:gone']);
-    expect([...loaded.environments]).toEqual(['emptied']);
+    // One in the recycle bin is gone from the project too.
+    expect([...loaded.environments]).toEqual(['emptied/old']);
     expect([...loaded.folders]).toEqual(['~/code/elsewhere']);
 
     const unknown = missing(shop, {});
@@ -346,7 +354,7 @@ describe('a project’s card on All projects', () => {
       example: null,
       git,
       envId: 'env-1',
-      group: 'shop-api',
+      label: 'shop-api',
       envName: 'dev',
       file: { folder: '~/code/shop', path },
       location: null,

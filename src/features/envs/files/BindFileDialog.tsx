@@ -42,8 +42,8 @@ const risky = (check: EnvFileCheck) =>
   check.cloud !== null;
 
 /**
- * Writes an environment to a file in a folder of a project that holds its
- * group: the folder comes from the projects, the path in it is typed. The
+ * Writes an environment to a file in a folder of the project that has it:
+ * the folder comes from the project, the path in it is typed. The
  * backend checks the path first; where Git wouldn't ignore the file or a
  * cloud service copies its folder, the user says so before anything is
  * written, as an export asks. The backend checks the path again on binding
@@ -52,18 +52,10 @@ const risky = (check: EnvFileCheck) =>
 export function BindFileDialog({ env, bound, onDone }: BindFileDialogProps) {
   const { t } = useTranslation();
   const projects = useProjects();
+  const holder = (projects.data ?? []).find((project) => project.id === env.project);
   const folders = useMemo(
-    () =>
-      (projects.data ?? [])
-        .filter((project) => project.environments.includes(env.project))
-        .flatMap((project) => project.folders.map((folder) => ({ folder, project: project.name })))
-        .filter(
-          (item, index, all) => all.findIndex((other) => other.folder === item.folder) === index,
-        ),
-    [projects.data, env.project],
-  );
-  const holders = (projects.data ?? []).filter((project) =>
-    project.environments.includes(env.project),
+    () => (holder?.folders ?? []).map((folder) => ({ folder, project: holder?.name ?? '' })),
+    [holder],
   );
   const [folder, setFolder] = useState(folders[0]?.folder ?? '');
   const chosenFolder = folders.some((item) => item.folder === folder)
@@ -241,15 +233,15 @@ export function BindFileDialog({ env, bound, onDone }: BindFileDialogProps) {
         <DialogBody>
           {folders.length === 0 ? (
             <p role="status" className="text-[12.5px] leading-[19px] text-muted">
-              {holders.length === 0
-                ? t('envs.files.bind.noProjects', { group: env.project })
-                : t('envs.files.bind.noFolders', { group: env.project })}
+              {holder
+                ? t('envs.files.bind.noFolders', { project: holder.name })
+                : t('envs.files.bind.noProjects')}
             </p>
           ) : (
             <>
               <Select
                 label={t('envs.files.bind.folder')}
-                hint={t('envs.files.bind.folderHint', { group: env.project })}
+                hint={t('envs.files.bind.folderHint', { project: holder?.name ?? '' })}
                 value={chosenFolder}
                 onValueChange={setFolder}
                 mono

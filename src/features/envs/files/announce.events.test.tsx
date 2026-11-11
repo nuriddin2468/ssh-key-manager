@@ -23,7 +23,7 @@ const { useEnvFilesEvents } = await import('./announce');
 
 const written = {
   envId: 'env-1',
-  group: 'shop-api',
+  label: 'shop-api',
   envName: 'dev',
   file: { folder: '~/code/shop', path: 'apps/web/.env' },
   location: '/code/shop/apps/web/.env',

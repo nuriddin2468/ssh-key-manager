@@ -22,7 +22,10 @@ vi.mock('sonner', () => ({ toast }));
 
 const env = {
   id: 'env-1',
-  project: 'shop-api',
+  // In Shop: its folders are the ones offered.
+  project: 'p1',
+  part: '',
+  group: 'shop-api',
   name: 'dev',
   kind: 'local',
   variableCount: 2,
@@ -33,7 +36,7 @@ const shop = {
   id: 'p1',
   name: 'Shop',
   folders: ['~/code/shop-api'],
-  environments: ['shop-api'],
+  environments: ['env-1'],
 } as Project;
 // `apps/web` isn't made yet: Git was asked from the project's folder.
 const file = { folder: '~/code/shop-api', path: 'apps/web/.env.local' };
@@ -46,7 +49,7 @@ const check: EnvFileCheck = {
 };
 const waiting: EnvFileStatus = {
   envId: 'env-1',
-  group: 'shop-api',
+  label: 'shop-api',
   envName: 'dev',
   file,
   location: '/code/shop-api/apps/web/.env.local',

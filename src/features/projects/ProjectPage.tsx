@@ -315,10 +315,10 @@ export function ProjectPage({ id }: { id?: string }) {
               <EnvDialog
                 env={null}
                 all={envs.data ?? []}
-                defaultProject={project.environments[0] ?? project.name}
+                defaultProject={project.id}
                 onSaved={(saved) => {
+                  // Made in this project already: marked as new on its card.
                   remember(`envs:${saved.id}`);
-                  joinMade(project, saved.name, { type: 'environment', group: saved.project });
                 }}
                 onDone={() => setCreating(null)}
               />

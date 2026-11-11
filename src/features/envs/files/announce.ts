@@ -21,6 +21,7 @@ import type { EnvFileChange } from '@/bindings/EnvFileChange';
 import type { EnvFilesSynced } from '@/bindings/EnvFilesSynced';
 import { toastVaultError } from '@/features/passwords/vault';
 import { AppError } from '@/lib/ipc';
+import { whereLabel } from '../model';
 import { isFileConflict } from './errors';
 import { fileName } from './model';
 import { refreshFileReports } from './queries';
@@ -79,7 +80,7 @@ export function changeSummary(t: TFunction, change: EnvFileChange): string {
  * changed since, or the earlier version left its history: those say so.
  */
 export async function undoChange(t: TFunction, change: EnvFileChange): Promise<void> {
-  const env = `${change.group} / ${change.envName}`;
+  const env = whereLabel(change.label || null, change.envName);
   try {
     await api.envsFilesUndo(change.undo);
     await invalidateAll();
@@ -116,7 +117,7 @@ export function announceSynced(
     }
     toast.warning(t('envs.files.conflictToast', { file: fileName(status.file) }), {
       id: conflictToastId(status.envId, status.file),
-      description: `${status.group} / ${status.envName}`,
+      description: whereLabel(status.label || null, status.envName),
       duration: 10_000,
       action: {
         label: t('envs.files.show'),
@@ -135,7 +136,7 @@ export function announceSynced(
     toast.success(
       t('envs.files.saved', {
         file: fileName(change.file),
-        env: `${change.group} / ${change.envName}`,
+        env: whereLabel(change.label || null, change.envName),
       }),
       {
         id: `env-file-edit:${change.undo.after}`,

@@ -1,10 +1,15 @@
 //! Secret environments: the variables of a project's `.env` files (dev,
 //! staging, prod…), kept in the vault.
 //!
-//! Each environment is one KeePass entry in the group
-//! `Environments/<project>`, titled with the environment's name, with one
-//! custom string field per variable, so KeePassXC shows them as additional
-//! attributes. A secret variable's field is protected, as a password is. The
+//! Each environment is one KeePass entry under the group `Environments`,
+//! titled with its stage (`local`, `staging`, `prod`…), with one custom
+//! string field per variable, so KeePassXC shows them as additional
+//! attributes. It belongs to one project, or to none (Personal): the
+//! project's record holds it by entry id ([`super::projects`]). Within a
+//! project it may have a part (`backend`, `frontend`), kept on the entry as
+//! [`PART`]; an environment from before parts has its KeePass group's name
+//! as its part, so nothing had to move when groups gave way to projects. New
+//! ones are filed under `Environments/<project>/<part>` for KeePassXC. A secret variable's field is protected, as a password is. The
 //! entry's custom data `sshkm.env` marks it as an environment and keeps the
 //! variables' order and notes. A variable named like one of KeePass's own
 //! fields (`URL`, `Password`, …) is kept as `env.URL`.
@@ -48,10 +53,15 @@ pub const MAX_FILE_SIZE: u64 = 1024 * 1024;
 const MAX_LABEL: usize = 64;
 /// Longest variable name, in bytes.
 const MAX_NAME: usize = 255;
-/// The group under the root that holds one group per project.
+/// The group under the root that holds the environments.
 pub const GROUP: &str = "Environments";
 /// Custom data that marks an entry as an environment.
 const MARKER: &str = "sshkm.env";
+/// Custom data with an environment's part of its project; without it, the
+/// part is its KeePass group's name.
+pub const PART: &str = "sshkm.env.part";
+/// The group under `Environments` for Personal environments without a part.
+const PERSONAL: &str = "Personal";
 /// KeePass's own fields, which a variable can't be: such a variable is
 /// kept under [`ESCAPE`] and its name.
 const RESERVED: [&str; 6] = [
@@ -71,9 +81,15 @@ const ESCAPE: &str = "env.";
 pub struct EnvSummary {
     /// The KeePass entry UUID.
     pub id: String,
-    /// The project it belongs to: its group under `Environments`.
-    pub project: String,
-    /// `dev`, `staging`, `prod`…: the entry's title.
+    /// The project it belongs to, by id; `None` for Personal.
+    pub project: Option<String>,
+    /// Its part of the project (`backend`, `frontend`), or empty. A project
+    /// with one part shows none.
+    pub part: String,
+    /// The KeePass group it is in, which older versions take as its
+    /// project.
+    pub group: String,
+    /// Its stage, `local`, `dev`, `staging`, `prod`…: the entry's title.
     pub name: String,
     /// Local (it can have files) or remote.
     pub kind: EnvKind,
@@ -113,12 +129,18 @@ pub struct EnvDetail {
     pub files: Vec<EnvFile>,
 }
 
-/// A new environment, or the new names of one.
+/// A new environment, or where an environment is, its stage and notes.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
 pub struct EnvInput {
-    pub project: String,
+    /// The project, by id; `None` for Personal.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// Its part of the project, or empty.
+    #[serde(default)]
+    pub part: String,
+    /// Its stage.
     pub name: String,
     #[serde(default)]
     pub notes: String,
@@ -493,18 +515,20 @@ pub fn git_work_tree(folder: &Path) -> Option<PathBuf> {
 
 impl Vault {
     /// Every environment, including those in the recycle bin, by project
-    /// and then from development to production.
+    /// and part, then from development to production.
     pub fn environments(&self) -> Vec<EnvSummary> {
+        let owners = self.environment_owners();
         let mut list: Vec<EnvSummary> = self
             .db
             .iter_all_entries()
             .filter(is_environment)
-            .map(|entry| self.env_summary(&entry))
+            .map(|entry| self.env_summary(&entry, &owners))
             .collect();
         list.sort_by_cached_key(|env| {
             (
                 env.in_trash,
-                env.project.to_lowercase(),
+                env.project.clone(),
+                env.part.to_lowercase(),
                 stage(&env.name),
                 env.name.to_lowercase(),
             )
@@ -515,7 +539,7 @@ impl Vault {
     pub fn environment(&self, id: &str) -> Result<EnvDetail> {
         let entry = self.env_entry(id)?;
         Ok(EnvDetail {
-            summary: self.env_summary(&entry),
+            summary: self.env_summary(&entry, &self.environment_owners()),
             notes: entry.get(fields::NOTES).unwrap_or_default().to_owned(),
             variables: variables_of(&entry)
                 .into_iter()
@@ -546,74 +570,134 @@ impl Vault {
             .ok_or_else(|| Error::NotFound(format!("variable {name}")))
     }
 
-    /// Adds an empty environment and returns its id.
+    /// Adds an empty environment to a project (or Personal) and returns its
+    /// id. It is filed in KeePass under `Environments/<project>/<part>`.
     pub fn add_environment(&mut self, input: &EnvInput) -> Result<String> {
-        let project = check_label(&input.project, "a project")?;
+        let project = match &input.project {
+            Some(id) => Some(self.project(id)?),
+            None => None,
+        };
+        let part = check_part(&input.part)?;
         let name = check_label(&input.name, "an environment")?;
         check_field(&input.notes)?;
-        self.check_free(&project, &name, None)?;
-        let group = self.project_group(&project)?;
-        let mut group = self
-            .db
-            .group_mut(group)
-            .ok_or_else(|| Error::NotFound(GROUP.into()))?;
-        let mut entry = group.add_entry();
-        entry.set_unprotected(fields::TITLE, name);
-        entry.set_protected(fields::PASSWORD, "");
-        if !input.notes.trim().is_empty() {
-            entry.set_unprotected(fields::NOTES, input.notes.trim_end());
+        let owner = project.as_ref().map(|p| p.id.as_str());
+        self.check_free(owner, &part, &name, None)?;
+        let folder = match &project {
+            Some(project) => vec![project.name.clone()],
+            None => Vec::new(),
+        };
+        let group = self.env_group(&folder, &part)?;
+        let id = {
+            let mut group = self
+                .db
+                .group_mut(group)
+                .ok_or_else(|| Error::NotFound(GROUP.into()))?;
+            let mut entry = group.add_entry();
+            entry.set_unprotected(fields::TITLE, name);
+            entry.set_protected(fields::PASSWORD, "");
+            if !input.notes.trim().is_empty() {
+                entry.set_unprotected(fields::NOTES, input.notes.trim_end());
+            }
+            entry
+                .custom_data
+                .insert(MARKER.to_owned(), marker(&Stored::default()));
+            entry.custom_data.insert(PART.to_owned(), text_item(&part));
+            entry.id().uuid().to_string()
+        };
+        if let Some(project) = owner {
+            self.set_project_member(
+                project,
+                &super::projects::ProjectMember::Environment { id: id.clone() },
+                true,
+            )?;
         }
-        entry
-            .custom_data
-            .insert(MARKER.to_owned(), marker(&Stored::default()));
-        Ok(entry.id().uuid().to_string())
+        Ok(id)
     }
 
-    /// Renames an environment, moves it to another project, or changes its
-    /// notes, keeping the previous version in its history.
+    /// Changes an environment's stage or notes (keeping the previous version
+    /// in its history), its part, or the project it is in (or Personal).
+    /// Nothing moves in KeePass: its files stay bound, and are written only
+    /// while the project holding it has their folder.
     pub fn update_environment(&mut self, id: &str, input: &EnvInput) -> Result<()> {
-        let project = check_label(&input.project, "a project")?;
+        let part = check_part(&input.part)?;
         let name = check_label(&input.name, "an environment")?;
         check_field(&input.notes)?;
+        if let Some(project) = &input.project {
+            self.project(project)?;
+        }
         let current = self.environment(id)?;
         if current.summary.in_trash {
             return Err(Error::invalid("restore the environment first"));
         }
-        self.check_free(&project, &name, Some(id))?;
+        self.check_free(input.project.as_deref(), &part, &name, Some(id))?;
         let notes = input.notes.trim_end();
-        let target = if project == current.summary.project {
-            None
-        } else {
-            Some(self.project_group(&project)?)
-        };
-        if target.is_none() && name == current.summary.name && notes == current.notes {
-            return Ok(());
-        }
         let entry_id = parse_id(id)?;
-        {
-            let mut entry = self
-                .db
-                .entry_mut(entry_id)
-                .ok_or_else(|| Error::NotFound(format!("environment {id}")))?;
-            let mut tracked = entry.track_changes();
-            if name != current.summary.name {
-                tracked.set(fields::TITLE, Value::unprotected(name));
-            }
-            if notes != current.notes {
-                if notes.is_empty() {
-                    tracked.fields.remove(fields::NOTES);
-                } else {
-                    tracked.set(fields::NOTES, Value::unprotected(notes));
+        if name != current.summary.name || notes != current.notes {
+            {
+                let mut entry = self
+                    .db
+                    .entry_mut(entry_id)
+                    .ok_or_else(|| Error::NotFound(format!("environment {id}")))?;
+                let mut tracked = entry.track_changes();
+                if name != current.summary.name {
+                    tracked.set(fields::TITLE, Value::unprotected(name));
                 }
+                if notes != current.notes {
+                    if notes.is_empty() {
+                        tracked.fields.remove(fields::NOTES);
+                    } else {
+                        tracked.set(fields::NOTES, Value::unprotected(notes));
+                    }
+                }
+                tracked.times.last_modification = Some(Times::now());
             }
-            if let Some(group) = target {
-                tracked
-                    .move_to(group)
-                    .map_err(|_| Error::NotFound(GROUP.into()))?;
-            }
-            tracked.times.last_modification = Some(Times::now());
+            self.settle_history(entry_id, true);
         }
-        self.settle_history(entry_id, true);
+        if part != current.summary.part {
+            self.put_part(entry_id, &part)?;
+        }
+        if input.project != current.summary.project {
+            self.move_environment(id, input.project.as_deref())?;
+        }
+        Ok(())
+    }
+
+    /// Gives environments the part `part` (or none): for the ones a project
+    /// had before it got a second part, named then.
+    pub fn set_environment_part(&mut self, ids: &[String], part: &str) -> Result<()> {
+        let part = check_part(part)?;
+        let envs = self.environments();
+        for id in ids {
+            let env = envs
+                .iter()
+                .find(|env| env.id == *id)
+                .ok_or_else(|| Error::NotFound(format!("environment {id}")))?;
+            if env.part == part {
+                continue;
+            }
+            self.check_free(env.project.as_deref(), &part, &env.name, Some(id))?;
+            if envs.iter().any(|other| {
+                ids.contains(&other.id)
+                    && other.id != env.id
+                    && other.project == env.project
+                    && same(&other.name, &env.name)
+                    && !other.in_trash
+            }) {
+                return Err(Error::AlreadyExists(format!("{part} / {}", env.name)));
+            }
+            self.put_part(parse_id(id)?, &part)?;
+        }
+        Ok(())
+    }
+
+    /// Keeps `part` on the entry.
+    fn put_part(&mut self, entry_id: keepass::db::EntryId, part: &str) -> Result<()> {
+        let mut entry = self
+            .db
+            .entry_mut(entry_id)
+            .ok_or_else(|| Error::NotFound("environment".into()))?;
+        entry.custom_data.insert(PART.to_owned(), text_item(part));
+        entry.times.last_modification = Some(Times::now());
         Ok(())
     }
 
@@ -697,29 +781,31 @@ impl Vault {
         Ok(counts)
     }
 
-    /// Adds an environment another computer sent, as a new one: if the
-    /// project has one of that name, it gets a number (`dev 2`). Returns its
-    /// id and name.
+    /// Adds an environment another computer sent, as a new one in Personal,
+    /// its label (the project or part it had there) as its part: if that
+    /// part has one of that name, it gets a number (`dev 2`). Returns its id
+    /// and name.
     pub fn add_received_environment(
         &mut self,
-        project: &str,
+        label: &str,
         name: &str,
         notes: &str,
         vars: &[EnvVariable],
     ) -> Result<(String, String)> {
         check_variables(vars)?;
-        let project = check_label(project, "a project")?;
+        let part = check_part(label)?;
         let base = check_label(name, "an environment")?;
         let mut name = base.clone();
         let mut n = 2;
-        while self.check_free(&project, &name, None).is_err() {
+        while self.check_free(None, &part, &name, None).is_err() {
             let suffix = format!(" {n}");
             let room = MAX_LABEL - suffix.chars().count();
             name = format!("{}{suffix}", base.chars().take(room).collect::<String>());
             n += 1;
         }
         let id = self.add_environment(&EnvInput {
-            project,
+            project: None,
+            part,
             name: name.clone(),
             notes: notes.to_owned(),
         })?;
@@ -763,7 +849,12 @@ impl Vault {
         let target = checked_target(target, &self.paths, ssh_dir)?;
         let env = self.environment(id)?;
         let vars = self.env_variables(id)?;
-        let text = render(format, &env.summary.project, &env.summary.name, &vars)?;
+        let text = render(
+            format,
+            &self.env_label(&env.summary),
+            &env.summary.name,
+            &vars,
+        )?;
         write_private(&target, text.as_bytes())?;
         Ok(vars.len())
     }
@@ -774,15 +865,26 @@ impl Vault {
         self.trash_entry(id)
     }
 
-    /// Takes an environment out of the recycle bin, back into its project,
-    /// unless that project has one of its name now.
+    /// Takes an environment out of the recycle bin, back into its project
+    /// and part, unless that part has one of its stage now.
     pub fn restore_environment(&mut self, id: &str) -> Result<()> {
         let env = self.environment(id)?.summary;
         if !env.in_trash {
             return Ok(());
         }
-        self.check_free(&env.project, &env.name, Some(id))?;
+        self.check_free(env.project.as_deref(), &env.part, &env.name, Some(id))?;
         self.restore_entry(id)
+    }
+
+    /// Where an environment is, for people: `Shop · backend`, `Shop`, a
+    /// Personal one's part, or nothing.
+    pub fn env_label(&self, env: &EnvSummary) -> String {
+        let project = env
+            .project
+            .as_deref()
+            .and_then(|id| self.project(id).ok())
+            .map(|project| project.name);
+        label(project.as_deref(), &env.part)
     }
 
     /// Deletes an environment in the recycle bin for good.
@@ -799,7 +901,11 @@ impl Vault {
         Ok(entry)
     }
 
-    pub(super) fn env_summary(&self, entry: &EntryRef<'_>) -> EnvSummary {
+    pub(super) fn env_summary(
+        &self,
+        entry: &EntryRef<'_>,
+        owners: &std::collections::BTreeMap<String, String>,
+    ) -> EnvSummary {
         let bin = self.db.meta.recyclebin_uuid;
         let in_trash = in_group(entry.parent().id(), bin, &self.db);
         let group = if in_trash {
@@ -808,7 +914,7 @@ impl Vault {
             Some(entry.parent())
         };
         // The group holding it, unless that is the root or `Environments`.
-        let project = group
+        let group = group
             .filter(|group| {
                 group
                     .parent()
@@ -816,10 +922,22 @@ impl Vault {
             })
             .map(|group| group.name.clone())
             .unwrap_or_default();
+        // Kept on the entry; from before parts, its group's name.
+        let part = match entry
+            .custom_data
+            .get(PART)
+            .and_then(|item| item.value.as_ref())
+        {
+            Some(CustomDataValue::String(part)) => part.clone(),
+            _ => group.clone(),
+        };
         let vars = variables_of(entry);
+        let id = entry.id().uuid().to_string();
         EnvSummary {
-            id: entry.id().uuid().to_string(),
-            project,
+            project: owners.get(&id).cloned(),
+            id,
+            part,
+            group,
             name: entry.get(fields::TITLE).unwrap_or_default().to_owned(),
             kind: files::kind_of(entry),
             variable_count: count(vars.len()),
@@ -829,26 +947,46 @@ impl Vault {
         }
     }
 
-    /// Fails if `project` has an environment named `name` (ignoring case)
-    /// outside the recycle bin, other than `except`.
-    fn check_free(&self, project: &str, name: &str, except: Option<&str>) -> Result<()> {
+    /// Fails if `project` (or Personal) has an environment with the stage
+    /// `name` in `part` (ignoring case) outside the recycle bin, other than
+    /// `except`.
+    fn check_free(
+        &self,
+        project: Option<&str>,
+        part: &str,
+        name: &str,
+        except: Option<&str>,
+    ) -> Result<()> {
         let taken = self.environments().into_iter().any(|env| {
             !env.in_trash
                 && Some(env.id.as_str()) != except
-                && env.project == project
-                && env.name.to_lowercase() == name.to_lowercase()
+                && env.project.as_deref() == project
+                && same(&env.part, part)
+                && same(&env.name, name)
         });
         if taken {
-            return Err(Error::AlreadyExists(format!("{project} / {name}")));
+            return Err(Error::AlreadyExists(format!("{part} / {name}")));
         }
         Ok(())
     }
 
-    /// The group of `project` under `Environments`, made if needed.
-    fn project_group(&mut self, project: &str) -> Result<GroupId> {
+    /// The group a new environment is filed in, made if needed:
+    /// `Environments/<project>/<part>`; a Personal one without a part goes
+    /// into `Environments/Personal`.
+    fn env_group(&mut self, project: &[String], part: &str) -> Result<GroupId> {
         let root = self.db.root().id();
-        let envs = child_group(&mut self.db, root, GROUP)?;
-        child_group(&mut self.db, envs, project)
+        let mut group = child_group(&mut self.db, root, GROUP)?;
+        let mut path: Vec<&str> = project.iter().map(String::as_str).collect();
+        if !part.is_empty() {
+            path.push(part);
+        }
+        if path.is_empty() {
+            path.push(PERSONAL);
+        }
+        for name in path {
+            group = child_group(&mut self.db, group, name)?;
+        }
+        Ok(group)
     }
 
     /// Changes an environment's variables: `change` gets them in order with
@@ -992,6 +1130,34 @@ fn child_group(db: &mut Database, parent: GroupId, name: &str) -> Result<GroupId
     let mut group = parent.add_group();
     name.clone_into(&mut group.name);
     Ok(group.id())
+}
+
+/// `Shop · backend`, `Shop`, `backend`, or nothing.
+pub fn label(project: Option<&str>, part: &str) -> String {
+    [project.unwrap_or_default(), part]
+        .into_iter()
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// A part as an environment keeps it: none, or a label like a project's.
+pub fn check_part(part: &str) -> Result<String> {
+    if part.trim().is_empty() {
+        return Ok(String::new());
+    }
+    check_label(part, "a part")
+}
+
+fn same(a: &str, b: &str) -> bool {
+    a.to_lowercase() == b.to_lowercase()
+}
+
+fn text_item(text: &str) -> CustomDataItem {
+    CustomDataItem {
+        value: Some(CustomDataValue::String(text.to_owned())),
+        last_modification_time: Some(Times::now()),
+    }
 }
 
 fn marker(stored: &Stored) -> CustomDataItem {

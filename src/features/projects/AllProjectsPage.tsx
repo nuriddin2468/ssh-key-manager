@@ -445,7 +445,7 @@ function problemText(
     case 'folder':
       return { title: t('projects.folderGone'), about: member.path, mono: true };
     case 'environment':
-      return { title: t('projects.groupGone'), about: member.group };
+      return { title: t('projects.groupGone'), about: member.id.slice(0, 8) };
     case 'key':
       return {
         title: t('projects.keyGone'),

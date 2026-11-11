@@ -158,6 +158,7 @@ const COMMANDS: &[&str] = &[
     "envs_get",
     "envs_create",
     "envs_update",
+    "envs_set_part",
     "envs_set_var",
     "envs_remove_var",
     "envs_reveal",

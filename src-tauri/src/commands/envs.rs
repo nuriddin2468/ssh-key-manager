@@ -54,8 +54,15 @@ pub struct EnvImportPick {
 #[serde(tag = "type", rename_all = "camelCase")]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = crate::types::BINDINGS))]
 pub enum ImportTarget {
-    /// A new environment of that name.
-    New { project: String, name: String },
+    /// A new environment with that stage, in a project (by id; `None` for
+    /// Personal) and part.
+    New {
+        #[serde(default)]
+        project: Option<String>,
+        #[serde(default)]
+        part: String,
+        name: String,
+    },
     /// An existing one: values of names it has are replaced.
     Existing { id: String },
 }
@@ -142,6 +149,23 @@ pub async fn envs_update(
         state.vault.change(&app, &state.backup_dir, |vault| {
             vault.update_environment(&id, &input)?;
             Ok(vault.environment(&id)?)
+        })
+    })
+    .await
+}
+
+/// Gives environments a part (or none): the ones a project had before it
+/// got a second part, named then.
+#[tauri::command]
+pub async fn envs_set_part(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    ids: Vec<String>,
+    part: String,
+) -> AppResult<()> {
+    blocking(&state, move |state| {
+        state.vault.change(&app, &state.backup_dir, |vault| {
+            Ok(vault.set_environment_part(&ids, &part)?)
         })
     })
     .await
@@ -313,8 +337,13 @@ pub async fn envs_import(
         let vars = envs::chosen_variables(envs::read_file(&path)?, &choices);
         let imported = state.vault.change(&app, &state.backup_dir, |vault| {
             let id = match &target {
-                ImportTarget::New { project, name } => vault.add_environment(&EnvInput {
+                ImportTarget::New {
+                    project,
+                    part,
+                    name,
+                } => vault.add_environment(&EnvInput {
                     project: project.clone(),
+                    part: part.clone(),
                     name: name.clone(),
                     notes: String::new(),
                 })?,
@@ -341,10 +370,12 @@ pub async fn envs_export(
     format: EnvFormat,
 ) -> AppResult<Option<EnvExport>> {
     blocking(&state, move |state| {
-        let env = state
-            .vault
-            .with(&app, |vault| Ok(vault.environment(&id)?))?;
-        let Some(path) = pick_export_target(&app, format, &env.summary)? else {
+        let (env, label) = state.vault.with(&app, |vault| {
+            let env = vault.environment(&id)?;
+            let label = vault.env_label(&env.summary);
+            Ok((env, label))
+        })?;
+        let Some(path) = pick_export_target(&app, format, &label, &env.summary)? else {
             return Ok(None);
         };
         *pending_export() = None;
@@ -414,7 +445,7 @@ pub async fn envs_run(
                 .into_iter()
                 .map(|var| (var.name, var.value))
                 .collect();
-            Ok((format!("{} · {}", env.project, env.name), vars))
+            Ok((envs::label(Some(&vault.env_label(&env)), &env.name), vars))
         })?;
         let shell = shells::find(shell.as_deref())?;
         let sink: Arc<dyn Sink> = Arc::new(events);
@@ -474,20 +505,22 @@ fn pick_env_file(app: &AppHandle) -> AppResult<Option<PathBuf>> {
 fn pick_export_target(
     app: &AppHandle,
     format: EnvFormat,
+    label: &str,
     env: &EnvSummary,
 ) -> AppResult<Option<PathBuf>> {
+    let shown = envs::label(Some(label), &env.name);
     let mut dialog = app
         .dialog()
         .file()
         .set_title(
             Localized::new(
-                format!("Save {} / {}", env.project, env.name),
-                format!("Сохранить {} / {}", env.project, env.name),
-                format!("{} / {} ni saqlash", env.project, env.name),
+                format!("Save {shown}"),
+                format!("Сохранить {shown}"),
+                format!("{shown} ni saqlash"),
             )
             .pick(),
         )
-        .set_file_name(format.file_name(&env.project, &env.name))
+        .set_file_name(format.file_name(&env.part, &env.name))
         .add_filter(format!(".{}", format.extension()), &[format.extension()]);
     if let Some(window) = app.get_webview_window("main") {
         dialog = dialog.set_parent(&window);

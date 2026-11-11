@@ -45,6 +45,7 @@ pub const CHANGED_EVENT: &str = "projects-changed";
 pub async fn projects_list(app: AppHandle, state: State<'_, Shared>) -> AppResult<Vec<Project>> {
     blocking(&state, move |state| {
         apply_pending_renames(&app, state);
+        tidy_projects(&app, state);
         let projects = if state.vault.is_unlocked() {
             match state.vault.with_quietly(&app, |vault| Ok(vault.projects())) {
                 Err(error) if error.code() == ErrorCode::VaultLocked => state.vault.projects_copy(),
@@ -381,12 +382,12 @@ fn suggestions(app: &AppHandle, state: &AppState) -> AppResult<Vec<ProjectSugges
     let home = home_dir().map(|home| suggest::canonical(&home).unwrap_or(home));
     let found = state.vault.with_quietly(app, |vault| {
         let projects = vault.projects();
-        let groups = vault.environment_groups();
+        let environments = vault.suggestion_environments();
         let logins = vault.suggestion_logins();
         Ok(suggest::suggest(
             &suggest::Sources {
                 hosts: &hosts,
-                environment_groups: &groups,
+                environments: &environments,
                 logins: &logins,
                 repositories: &repositories,
                 projects: &projects,
@@ -613,19 +614,21 @@ fn terminal_folder(project: &Project, folder: &str, home: Option<&Path>) -> AppR
 }
 
 /// The project's local environment: a local one (its kind, not its name)
-/// outside the recycle bin, in the first of the project's environment groups,
-/// in the project's order, that has one; the one named `local` if there are
-/// several. A remote environment never goes into a shell on this computer.
+/// outside the recycle bin, the one named `local` if there are several, else
+/// the first the project took. A remote environment never goes into a shell
+/// on this computer.
 fn local_environment<'a>(project: &Project, envs: &'a [EnvSummary]) -> Option<&'a EnvSummary> {
-    project.environments.iter().find_map(|group| {
-        let mut local = envs
-            .iter()
-            .filter(|env| !env.in_trash && env.project == *group && env.kind == EnvKind::Local);
-        let first = local.clone().next();
-        local
-            .find(|env| env.name.eq_ignore_ascii_case("local"))
-            .or(first)
-    })
+    let local: Vec<&EnvSummary> = project
+        .environments
+        .iter()
+        .filter_map(|id| envs.iter().find(|env| env.id == *id))
+        .filter(|env| !env.in_trash && env.kind == EnvKind::Local)
+        .collect();
+    local
+        .iter()
+        .find(|env| env.name.eq_ignore_ascii_case("local"))
+        .or(local.first())
+        .copied()
 }
 
 /// The variables of the project's `local` environment ([`local_environment`]).
@@ -728,6 +731,28 @@ pub fn follow_host_renames(app: &AppHandle, state: &AppState, renames: Vec<Renam
 /// Makes the host renames that waited for the vault, in order, then takes
 /// them off the list; renames added meanwhile stay. Does nothing while the
 /// vault is locked.
+/// Takes the step from environment groups to projects and writes the
+/// `project/` tags ([`sshkm_core::vault::Vault::tidy_projects`]), saving the
+/// vault only when there is something to do: after an unlock, or a sync of
+/// the vault's file from a device with an older version.
+fn tidy_projects(app: &AppHandle, state: &AppState) {
+    if !state.vault.is_unlocked() {
+        return;
+    }
+    let untidy = state
+        .vault
+        .with_quietly(app, |vault| Ok(vault.projects_untidy()));
+    if !matches!(untidy, Ok(true)) {
+        return;
+    }
+    if let Err(error) = state.vault.change(app, &state.backup_dir, |vault| {
+        vault.tidy_projects();
+        Ok(())
+    }) {
+        log::warn!("projects: environments were not moved to projects yet: {error}");
+    }
+}
+
 pub fn apply_pending_renames(app: &AppHandle, state: &AppState) {
     let dir = state.vault.data_dir();
     let pending = {
@@ -815,7 +840,7 @@ fn save_pending(dir: &Path, pending: &[Rename]) -> AppResult<()> {
 mod tests {
     use super::*;
 
-    fn project(folders: &[&str], groups: &[&str]) -> Project {
+    fn project(folders: &[&str], envs: &[&str]) -> Project {
         Project {
             id: "p".into(),
             name: "Shop".into(),
@@ -823,17 +848,19 @@ mod tests {
             folders: folders.iter().map(|f| (*f).to_owned()).collect(),
             hosts: Vec::new(),
             keys: Vec::new(),
-            environments: groups.iter().map(|g| (*g).to_owned()).collect(),
+            environments: envs.iter().map(|e| (*e).to_owned()).collect(),
             logins: Vec::new(),
             hosts_file: Vec::new(),
             modified: String::new(),
         }
     }
 
-    fn env(id: &str, group: &str, name: &str, in_trash: bool) -> EnvSummary {
+    fn env(id: &str, part: &str, name: &str, in_trash: bool) -> EnvSummary {
         EnvSummary {
             id: id.into(),
-            project: group.into(),
+            project: Some("p".into()),
+            part: part.into(),
+            group: part.into(),
             name: name.into(),
             kind: EnvKind::from_name(name),
             variable_count: 0,
@@ -888,17 +915,19 @@ mod tests {
     }
 
     #[test]
-    fn the_local_environment_comes_from_the_projects_first_group_that_has_one() {
+    fn the_local_environment_is_the_one_named_local_else_the_first_the_project_took() {
         let envs = [
             env("a-local", "api", "LOCAL", false),
             env("w-local", "web", "local", false),
             env("w-old", "web", "local", true),
             env("w-dev", "web", "dev", false),
         ];
-        let shop = project(&[], &["web", "api"]);
+        let shop = project(&[], &["w-dev", "w-old", "w-local", "a-local"]);
         assert_eq!(local_environment(&shop, &envs).unwrap().id, "w-local");
-        let api_first = project(&[], &["api", "web"]);
+        let api_first = project(&[], &["a-local", "w-local"]);
         assert_eq!(local_environment(&api_first, &envs).unwrap().id, "a-local");
+        let no_local = project(&[], &["w-old", "w-dev"]);
+        assert_eq!(local_environment(&no_local, &envs).unwrap().id, "w-dev");
         assert!(local_environment(&project(&[], &["other"]), &envs).is_none());
     }
 
@@ -914,7 +943,7 @@ mod tests {
             env("w-dev", "web", "dev", false),
             env("w-prod", "web", "prod", false),
         ];
-        let shop = project(&[], &["web"]);
+        let shop = project(&[], &["w-local", "w-dev", "w-prod"]);
         assert_eq!(local_environment(&shop, &envs).unwrap().id, "w-dev");
         let only_remote = [env("w-prod", "web", "prod", false)];
         assert!(local_environment(&shop, &only_remote).is_none());

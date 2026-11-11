@@ -2,21 +2,29 @@ import { describe, expect, it } from 'vitest';
 import type { EnvSummary } from '@/bindings/EnvSummary';
 import {
   envLabel,
-  groupByProject,
   initialChoices,
   isProduction,
   isVariableName,
   labelProblem,
   looksSecretName,
   nameTaken,
-  projects,
+  partsOf,
+  sectionsOf,
   trashed,
 } from './model';
 
-function env(id: string, project: string, name: string, inTrash = false): EnvSummary {
+function env(
+  id: string,
+  project: string | null,
+  part: string,
+  name: string,
+  inTrash = false,
+): EnvSummary {
   return {
     id,
     project,
+    part,
+    group: part,
     name,
     kind: name === 'dev' ? 'local' : 'remote',
     variableCount: 2,
@@ -26,27 +34,41 @@ function env(id: string, project: string, name: string, inTrash = false): EnvSum
   };
 }
 
+const NAMES = new Map([
+  ['p-shop', 'Shop'],
+  ['p-blog', 'Blog'],
+]);
+
 const ALL = [
-  env('1', 'shop-api', 'dev'),
-  env('2', 'shop-api', 'prod'),
-  env('3', 'site', 'dev'),
-  env('4', 'shop-api', 'old', true),
+  env('1', 'p-shop', 'backend', 'dev'),
+  env('2', 'p-shop', 'backend', 'prod'),
+  env('5', 'p-shop', 'frontend', 'dev'),
+  env('3', 'p-blog', '', 'dev'),
+  env('6', null, 'scripts', 'local'),
+  env('4', 'p-shop', 'backend', 'old', true),
 ];
 
+const ids = (sections: ReturnType<typeof sectionsOf>) =>
+  sections.flatMap((s) => s.parts.flatMap((p) => p.envs.map((e) => e.id)));
+
 describe('envs model', () => {
-  it('groups environments by project, leaving the recycle bin out', () => {
-    expect(groupByProject(ALL).map((g) => [g.project, g.envs.map((e) => e.id)])).toEqual([
-      ['shop-api', ['1', '2']],
-      ['site', ['3']],
+  it('lists Personal first, then projects by name, each by part, leaving the recycle bin out', () => {
+    const sections = sectionsOf(ALL, NAMES);
+    expect(sections.map((s) => [s.project, s.parts.map((p) => p.part)])).toEqual([
+      [null, ['scripts']],
+      ['p-blog', ['']],
+      ['p-shop', ['backend', 'frontend']],
     ]);
+    expect(ids(sections)).toEqual(['6', '3', '1', '2', '5']);
     expect(trashed(ALL).map((e) => e.id)).toEqual(['4']);
-    expect(projects(ALL)).toEqual(['shop-api', 'site']);
+    expect(partsOf(ALL, 'p-shop')).toEqual(['backend', 'frontend']);
+    expect(partsOf(ALL, 'p-blog')).toEqual([]);
   });
 
-  it('searches projects and environments by every word', () => {
-    expect(groupByProject(ALL, 'SHOP prod').flatMap((g) => g.envs.map((e) => e.id))).toEqual(['2']);
-    expect(groupByProject(ALL, 'dev').flatMap((g) => g.envs.map((e) => e.id))).toEqual(['1', '3']);
-    expect(groupByProject(ALL, 'nothing')).toEqual([]);
+  it('searches projects, parts and stages by every word', () => {
+    expect(ids(sectionsOf(ALL, NAMES, 'SHOP back prod'))).toEqual(['2']);
+    expect(ids(sectionsOf(ALL, NAMES, 'dev'))).toEqual(['3', '1', '5']);
+    expect(sectionsOf(ALL, NAMES, 'nothing')).toEqual([]);
   });
 
   it('checks names as the backend does', () => {
@@ -56,11 +78,13 @@ describe('envs model', () => {
     expect(labelProblem('a/b')).toBe('slash');
     expect(labelProblem('x'.repeat(65))).toBe('long');
     expect(labelProblem(' dev ')).toBe(null);
-    expect(nameTaken(ALL, 'shop-api', ' DEV ')).toBe(true);
-    expect(nameTaken(ALL, 'shop-api', 'dev', '1')).toBe(false);
+    expect(nameTaken(ALL, 'p-shop', 'Backend', ' DEV ')).toBe(true);
+    expect(nameTaken(ALL, 'p-shop', 'backend', 'dev', '1')).toBe(false);
+    // Another part, project or Personal may have it.
+    expect(nameTaken(ALL, 'p-shop', 'web', 'dev')).toBe(false);
+    expect(nameTaken(ALL, null, 'backend', 'dev')).toBe(false);
     // One in the recycle bin doesn't hold its name.
-    expect(nameTaken(ALL, 'shop-api', 'old')).toBe(false);
-    expect(nameTaken(ALL, 'site', 'prod')).toBe(false);
+    expect(nameTaken(ALL, 'p-shop', 'backend', 'old')).toBe(false);
   });
 
   it('guesses secrets from names', () => {
@@ -73,7 +97,9 @@ describe('envs model', () => {
   });
 
   it('labels environments', () => {
-    expect(envLabel(ALL[1] as EnvSummary)).toBe('shop-api / prod');
+    expect(envLabel(ALL[1] as EnvSummary, NAMES)).toBe('Shop · backend · prod');
+    expect(envLabel(ALL[3] as EnvSummary, NAMES)).toBe('Blog · dev');
+    expect(envLabel(ALL[4] as EnvSummary, NAMES)).toBe('scripts · local');
     expect(isProduction(' Production ')).toBe(true);
     expect(isProduction('preprod')).toBe(false);
     expect(

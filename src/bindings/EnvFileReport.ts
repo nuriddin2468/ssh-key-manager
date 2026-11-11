@@ -26,9 +26,10 @@ example: ExampleCheck | null,
  */
 git: GitInfo | null, envId: string, 
 /**
- * The environment's group under `Environments`.
+ * Where the environment is, for people: `Shop · backend`, `Shop`, a
+ * Personal one's part, or nothing ([`super::label`]).
  */
-group: string, envName: string, file: EnvFile, 
+label: string, envName: string, file: EnvFile, 
 /**
  * The file on this computer, when its folder is a full path here.
  */

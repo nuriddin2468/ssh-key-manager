@@ -78,6 +78,7 @@ import type { NameLookup } from '@/bindings/NameLookup';
 import type { NearbyStatus } from '@/bindings/NearbyStatus';
 import type { OpenOptions } from '@/bindings/OpenOptions';
 import type { OtpCode } from '@/bindings/OtpCode';
+import type { PartRename } from '@/bindings/PartRename';
 import type { PermissionFix } from '@/bindings/PermissionFix';
 import type { PortCheck } from '@/bindings/PortCheck';
 import type { PortProbe } from '@/bindings/PortProbe';
@@ -481,8 +482,12 @@ export const api = {
   // come only from `envsReveal`; copying and running go without the page.
   envsList: () => call<EnvSummary[]>('envs_list'),
   envsGet: (id: string) => call<EnvDetail>('envs_get', { id }),
-  envsCreate: (input: EnvInput) => call<EnvDetail>('envs_create', { input }),
-  envsUpdate: (id: string, input: EnvInput) => call<EnvDetail>('envs_update', { id, input }),
+  // `rename` names the part a project had, when this gives it a second (in
+  // the same change).
+  envsCreate: (input: EnvInput, rename: PartRename | null = null) =>
+    call<EnvDetail>('envs_create', { input, rename }),
+  envsUpdate: (id: string, input: EnvInput, rename: PartRename | null = null) =>
+    call<EnvDetail>('envs_update', { id, input, rename }),
   /** Gives environments a part (or none): a project's first, named when it gets a second. */
   envsSetPart: (ids: string[], part: string) => call<void>('envs_set_part', { ids, part }),
   /** Adds a variable (`previous` null) or changes the one named `previous`. */
@@ -492,14 +497,15 @@ export const api = {
   envsReveal: (id: string, name: string) => call<string>('envs_reveal', { id, name }),
   envsCopy: (id: string, name: string) => call<CopyResult>('envs_copy', { id, name }),
   envsTrash: (id: string) => call<void>('envs_trash', { id }),
-  envsRestore: (id: string) => call<void>('envs_restore', { id }),
+  envsRestore: (id: string, rename: PartRename | null = null) =>
+    call<void>('envs_restore', { id, rename }),
   envsDelete: (id: string) => call<void>('envs_delete', { id }),
   envsCompare: (left: string, right: string) =>
     call<EnvComparison>('envs_compare', { left, right }),
   /** Opens a system file dialog; `null` when it was cancelled. */
   envsImportPick: () => call<EnvImportPick | null>('envs_import_pick'),
-  envsImport: (target: ImportTarget, choices: ImportChoice[]) =>
-    call<EnvImported>('envs_import', { target, choices }),
+  envsImport: (target: ImportTarget, choices: ImportChoice[], rename: PartRename | null = null) =>
+    call<EnvImported>('envs_import', { target, choices, rename }),
   /** Opens a save dialog; `null` when it was cancelled. Not written while `repository` is set. */
   envsExport: (id: string, format: EnvFormat) =>
     call<EnvExport | null>('envs_export', { id, format }),
@@ -563,8 +569,13 @@ export const api = {
   envsFilesAdoptPreview: (project: string, file: EnvFile) =>
     call<EnvImportPreview>('envs_files_adopt_preview', { project, file }),
   /** Imports every variable of the file into `target` and writes it from then on. */
-  envsFilesAdopt: (project: string, file: EnvFile, target: ImportTarget, choices: ImportChoice[]) =>
-    call<EnvImported>('envs_files_adopt', { project, file, target, choices }),
+  envsFilesAdopt: (
+    project: string,
+    file: EnvFile,
+    target: ImportTarget,
+    choices: ImportChoice[],
+    rename: PartRename | null = null,
+  ) => call<EnvImported>('envs_files_adopt', { project, file, target, choices, rename }),
 
   // Projects in the vault (src-tauri/src/commands/projects.rs). While the
   // vault is locked the list comes from a copy without secrets: its

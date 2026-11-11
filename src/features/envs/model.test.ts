@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EnvSummary } from '@/bindings/EnvSummary';
 import {
+  compareWith,
   envLabel,
   folderParts,
   initialChoices,
@@ -13,6 +14,7 @@ import {
   secondPart,
   sectionsOf,
   showsParts,
+  stagesTaken,
   trashed,
 } from './model';
 
@@ -119,21 +121,100 @@ describe('envs model', () => {
 describe('a project’s parts', () => {
   it('ask for a name when a project with one part gets a second', () => {
     // Blog has one part (none); Shop has two already.
-    expect(secondPart(ALL, 'p-blog', 'web')).toEqual({ part: '', ids: ['3'] });
-    expect(secondPart(ALL, 'p-blog', '')).toBeNull();
-    expect(secondPart(ALL, 'p-shop', 'admin')).toBeNull();
-    // Moving its only environment leaves nothing to name.
-    expect(secondPart(ALL, 'p-blog', 'web', '3')).toBeNull();
-    expect(secondPart(ALL, null, 'tools')).toEqual({ part: 'scripts', ids: ['6'] });
+    expect(secondPart(ALL, 'p-blog', ['web'])).toEqual({
+      part: '',
+      fromFolder: false,
+      ids: ['3'],
+      coming: ['web'],
+    });
+    expect(secondPart(ALL, 'p-blog', [''])).toBeNull();
+    expect(secondPart(ALL, 'p-shop', ['admin'])).toBeNull();
+    // Its only environment going elsewhere leaves nothing to name.
+    expect(secondPart(ALL, 'p-blog', ['web'], ['3'])).toBeNull();
+    // Personal's `scripts` is its KeePass folder's name.
+    expect(secondPart(ALL, null, ['tools'])).toEqual({
+      part: 'scripts',
+      fromFolder: true,
+      ids: ['6'],
+      coming: ['tools'],
+    });
   });
 
-  it('are offered from the project’s folders, without those it has', () => {
+  it('ask nothing when an edit leaves the project’s parts as they were', () => {
+    // Notes or stage only, in a project of one part or of two.
+    expect(secondPart(ALL, 'p-blog', [''], ['3'])).toBeNull();
+    expect(secondPart(ALL, 'p-shop', ['frontend'], ['5'])).toBeNull();
+    // Into the other part of a project that has two: still two.
+    expect(secondPart(ALL, 'p-shop', ['backend'], ['5'])).toBeNull();
+    // Its stage only: still one part. Into a new part: two.
+    const api = [env('a1', 'p-x', 'api', 'dev'), env('a2', 'p-x', 'api', 'prod')];
+    expect(secondPart(api, 'p-x', ['api'], ['a1'])).toBeNull();
+    expect(secondPart(api, 'p-x', ['web'], ['a1'])).toEqual({
+      part: 'api',
+      fromFolder: true,
+      ids: ['a2'],
+      coming: ['web'],
+    });
+  });
+
+  it('ask when one is moved in, and name the stages in the recycle bin too', () => {
+    // Personal's `scripts` into Blog as `tools`.
+    expect(secondPart(ALL, 'p-blog', ['tools'], ['6'])?.ids).toEqual(['3']);
+    const lone = [
+      { ...env('a1', 'p-x', 'api', 'dev'), group: 'shop-api' },
+      env('a2', 'p-x', 'api', 'prod', true),
+      env('a3', 'p-x', 'old', 'local', true),
+    ];
+    // Restoring `old`, or making a stage in `web`.
+    for (const parts of [['old'], ['web']]) {
+      expect(secondPart(lone, 'p-x', parts)).toEqual({
+        part: 'api',
+        // `a2` is in a folder named `api`: the hint is true for it.
+        fromFolder: true,
+        ids: ['a1', 'a2'],
+        coming: parts,
+      });
+    }
+    // Named since: not its folder's name.
+    expect(secondPart(lone.slice(0, 1), 'p-x', ['web'])?.fromFolder).toBe(false);
+    // Several coming at once, from the project page.
+    expect(secondPart(ALL, 'p-blog', ['web', 'Web', 'tools'], ['8', '9'])?.coming).toEqual([
+      'web',
+      'tools',
+    ]);
+  });
+
+  it('are offered from the folders that have a .env, without those it has', () => {
     expect(
       folderParts(
-        ['.env', 'backend/.env', 'frontend/.env.local', 'backend/api/.env', '.config/.env'],
+        [
+          '.env',
+          'backend/.env',
+          'frontend/.env.local',
+          'backend/api/.env',
+          '.config/.env',
+          'apps/web/.env',
+        ],
         ['Frontend'],
       ),
-    ).toEqual(['backend']);
+    ).toEqual(['backend', 'api', 'web']);
+  });
+
+  it('say which stages a rename would make two of', () => {
+    // Shop's `frontend` into `backend`: both have a dev.
+    expect(stagesTaken(ALL, 'p-shop', ['5'], 'Backend')).toEqual(['dev']);
+    // The binned `old` doesn't count.
+    expect(stagesTaken(ALL, 'p-shop', ['1', '2', '4'], 'frontend')).toEqual(['dev']);
+    expect(stagesTaken(ALL, 'p-shop', ['5'], 'admin')).toEqual([]);
+  });
+
+  it('compare a stage with the others of its project and part', () => {
+    const ids = (env: number) => compareWith(ALL, ALL[env] as EnvSummary).map((e) => e.id);
+    // Shop's backend dev with its prod, not the binned one nor frontend's.
+    expect(ids(0)).toEqual(['2']);
+    // Alone in its part: nothing.
+    expect(ids(2)).toEqual([]);
+    expect(ids(4)).toEqual([]);
   });
 
   it('show only when a project has more than one', () => {

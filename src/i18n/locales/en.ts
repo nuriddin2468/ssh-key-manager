@@ -3540,10 +3540,11 @@ const en = {
       title: '{{project}} gets a second part',
       text: 'Its environments so far share one part. Name it, so the two can be told apart.',
       label: 'Part of its other environments',
-      hint: 'The old group’s name, from before projects. Rename it to what it is, such as backend.',
+      hint: 'That’s the name of their folder in KeePassXC. Name the part for what it is, such as backend.',
       same: 'Use a name other than {{part}}.',
       back: 'Back',
       go: 'Name it and continue',
+      restore: 'Name it and restore',
     },
     move: {
       menu: 'Move to project…',
@@ -3552,7 +3553,6 @@ const en = {
       go: 'Move',
       done: '{{name}} moved to {{project}}',
     },
-    compareNone: '{{where}} has no other stage to compare with.',
     compareDisabled: 'No other stage here to compare with',
     renamePart: {
       menu: 'Rename part…',
@@ -3561,6 +3561,8 @@ const en = {
       label: 'Part',
       go: 'Rename',
       done: '{{part}} renamed to {{name}}',
+      joins: '{{part}} already exists: the two parts become one.',
+      taken: '{{where}} already has one of these stages. Choose another name.',
     },
     noPart: 'No part',
     form: {
@@ -3575,6 +3577,8 @@ const en = {
       partPlaceholder: 'backend',
       partHint:
         'Optional. Shown only when a project has more than one, such as backend and frontend.',
+      partsIn: 'In {{project}}:',
+      partsFromFolders: 'From folders:',
       name: 'Stage',
       namePlaceholder: 'local, dev, staging, prod…',
       taken: '{{where}} already has {{stage}}.',

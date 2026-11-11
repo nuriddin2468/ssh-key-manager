@@ -59,9 +59,17 @@ import { ExportEnvDialog } from './ExportEnvDialog';
 import { FilesSection } from './files/FilesSection';
 import { useMakeLocal } from './files/useMakeLocal';
 import { MoveEnvDialog } from './MoveEnvDialog';
-import { isProduction, showsParts, whereLabel } from './model';
+import {
+  compareWith,
+  type FirstPart,
+  isProduction,
+  secondPart,
+  showsParts,
+  whereLabel,
+} from './model';
 import { useEnv } from './queries';
 import { RenamePartDialog } from './RenamePartDialog';
+import { RestoreEnvDialog } from './RestoreEnvDialog';
 import { useEnvLabel, useProjectNames } from './useProjectNames';
 import { VariableDialog } from './VariableDialog';
 
@@ -71,7 +79,8 @@ type Open =
   | { kind: 'compare' }
   | { kind: 'send' }
   | { kind: 'move' }
-  | { kind: 'renamePart' };
+  | { kind: 'renamePart' }
+  | { kind: 'restore'; first: FirstPart };
 
 interface EnvPaneProps {
   summary: EnvSummary;
@@ -99,13 +108,7 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
   const detail = useEnv(summary.id);
   const [open, setOpen] = useState<Open | null>(null);
   const compareHintId = useId();
-  const siblings = all.filter(
-    (other) =>
-      !other.inTrash &&
-      other.id !== summary.id &&
-      other.project === summary.project &&
-      other.part.toLowerCase() === summary.part.toLowerCase(),
-  );
+  const siblings = compareWith(all, summary);
   const [removing, setRemoving] = useState<EnvVarInfo | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const env = detail.data;
@@ -116,10 +119,19 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
   const restore = useVaultMutation(() => api.envsRestore(summary.id), {
     success: () => t('envs.restored', { name: label }),
   });
+  // Back in its part, it may give its project a second: the first is named
+  // before, as when one is made there.
+  const startRestore = () => {
+    const first = secondPart(all, summary.project, [summary.part]);
+    if (first) setOpen({ kind: 'restore', first });
+    else restore.mutate(undefined);
+  };
   const trash = useVaultMutation(() => api.envsTrash(summary.id), {
     onSuccess: () => {
       const { id } = summary;
-      // The pane may be gone when Undo is clicked, so call the command directly.
+      // The pane may be gone when Undo is clicked, so call the command
+      // directly. It puts back the parts the project had a moment ago, so
+      // nothing is asked, unlike a restore from the recycle bin.
       const undo = async () => {
         try {
           await api.envsRestore(id);
@@ -212,10 +224,7 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
             <MenuContent align="end">
               {inTrash ? (
                 <>
-                  <MenuItem
-                    icon={<Undo2 className="size-4" />}
-                    onSelect={() => restore.mutate(undefined)}
-                  >
+                  <MenuItem icon={<Undo2 className="size-4" />} onSelect={startRestore}>
                     {t('envs.restore')}
                   </MenuItem>
                   <MenuItem
@@ -329,7 +338,7 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
               variant="primary"
               icon={<Undo2 className="size-3.5" strokeWidth={2} />}
               loading={restore.isPending}
-              onClick={() => restore.mutate(undefined)}
+              onClick={startRestore}
             >
               {t('envs.restore')}
             </Button>
@@ -361,21 +370,24 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
                 {t('envs.compare')}
               </Button>
             ) : (
-              // Focusable, so its reason reaches the keyboard and screen readers.
-              <Tooltip content={t('envs.compareDisabled')}>
-                <Button
-                  size="sm"
-                  icon={<ArrowLeftRight className="size-[15px]" strokeWidth={1.9} />}
-                  aria-disabled="true"
-                  aria-describedby={compareHintId}
-                  className="cursor-default opacity-50"
-                >
-                  {t('envs.compare')}
-                  <span id={compareHintId} className="sr-only">
-                    {t('envs.compareDisabled')}
-                  </span>
-                </Button>
-              </Tooltip>
+              // Focusable, so its reason reaches the keyboard and screen
+              // readers; the reason is outside, read once as its description.
+              <>
+                <Tooltip content={t('envs.compareDisabled')}>
+                  <Button
+                    size="sm"
+                    icon={<ArrowLeftRight className="size-[15px]" strokeWidth={1.9} />}
+                    aria-disabled="true"
+                    aria-describedby={compareHintId}
+                    className="cursor-default opacity-50"
+                  >
+                    {t('envs.compare')}
+                  </Button>
+                </Tooltip>
+                <span id={compareHintId} hidden>
+                  {t('envs.compareDisabled')}
+                </span>
+              </>
             )}
             {summary.modified ? (
               <span className="ml-auto text-[12px] text-subtle">
@@ -494,6 +506,9 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
         ) : null}
         {open?.kind === 'move' && env ? (
           <MoveEnvDialog env={env} all={all} onDone={() => setOpen(null)} />
+        ) : null}
+        {open?.kind === 'restore' ? (
+          <RestoreEnvDialog env={summary} first={open.first} onDone={() => setOpen(null)} />
         ) : null}
         {open?.kind === 'send' ? (
           <SendDialog

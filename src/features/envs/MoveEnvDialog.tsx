@@ -2,6 +2,7 @@ import { FolderInput } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
+import { errorMessage } from '@/api/useAppMutation';
 import type { EnvDetail } from '@/bindings/EnvDetail';
 import type { EnvSummary } from '@/bindings/EnvSummary';
 import { Button } from '@/components/ui/Button';
@@ -34,57 +35,77 @@ export function MoveEnvDialog({
   const projectId = projectOf(project);
   const [part, setPart] = useState(env.part);
   const [touched, setTouched] = useState(false);
+  const [serverTaken, setServerTaken] = useState(false);
   const firstPart = useFirstPart();
   const naming = firstPart.naming;
-  const first = secondPart(all, projectId, part, env.id);
+  const first = secondPart(all, projectId, [part], [env.id]);
   const projectName = projectId ? names.get(projectId) : t('projects.personal');
 
   const move = useVaultMutation(
-    async () => {
-      if (naming) await api.envsSetPart(naming.ids, firstPart.name.trim());
-      return api.envsUpdate(env.id, {
-        project: projectId,
-        part: part.trim(),
-        name: env.name,
-        notes: env.notes,
-      });
-    },
+    () =>
+      api.envsUpdate(
+        env.id,
+        { project: projectId, part: part.trim(), name: env.name, notes: env.notes },
+        firstPart.rename,
+      ),
     {
       success: () => t('envs.move.done', { name: env.name, project: projectName ?? '' }),
       onSuccess: () => onDone(),
       onError: (error) => {
-        if (error.code !== 'already_exists') return false;
-        setTouched(true);
-        return true;
+        if (error.code === 'already_exists') {
+          firstPart.back();
+          setTouched(true);
+          setServerTaken(true);
+          return true;
+        }
+        if (naming && error.code === 'invalid_input') {
+          firstPart.refuse(errorMessage(t, error));
+          return true;
+        }
+        return false;
       },
     },
   );
 
   const unchanged = projectId === env.project && part.trim() === env.part;
   const placeProblem = partProblem(part);
-  const taken = !placeProblem && nameTaken(all, projectId, part, env.name, env.id);
-  const namingProblem = naming ? firstPart.problem(part) : null;
-  // With one part there, it goes into it.
+  const taken = !placeProblem && (serverTaken || nameTaken(all, projectId, part, env.name, env.id));
+  // Back in its own project, it is in its own part again; elsewhere it goes
+  // into the project's only part.
   const chooseProject = (next: string) => {
     setProject(next);
-    const there = partsOf(all, projectOf(next));
+    setServerTaken(false);
+    const nextId = projectOf(next);
+    if (nextId === env.project) {
+      setPart(env.part);
+      return;
+    }
+    const there = partsOf(all, nextId);
     setPart(there.length === 1 ? (there[0] ?? '') : '');
   };
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    if (move.isPending) return;
+    if (naming) {
+      if (firstPart.confirm()) move.mutate(undefined);
+      return;
+    }
     setTouched(true);
-    if (unchanged || placeProblem || taken || move.isPending) return;
-    if (first && !naming) {
+    if (unchanged || placeProblem || taken) return;
+    if (first) {
       firstPart.ask(first);
       return;
     }
-    if (namingProblem) return;
     move.mutate(undefined);
   };
 
   return (
-    <DialogContent section="envs" className="max-w-[480px]">
+    <DialogContent
+      section="envs"
+      className="max-w-[480px]"
+      onBack={naming ? firstPart.back : undefined}
+    >
       <form onSubmit={submit} className="flex min-h-0 flex-col">
         <DialogHeader
           icon={
@@ -101,13 +122,7 @@ export function MoveEnvDialog({
         />
         <DialogBody>
           {naming ? (
-            <FirstPartField
-              value={firstPart.name}
-              onChange={firstPart.setName}
-              part={part}
-              problem={namingProblem}
-              touched={touched}
-            />
+            <FirstPartField state={firstPart} />
           ) : (
             <>
               <WhereFields
@@ -115,7 +130,10 @@ export function MoveEnvDialog({
                 project={project}
                 part={part}
                 onProject={chooseProject}
-                onPart={setPart}
+                onPart={(next) => {
+                  setPart(next);
+                  setServerTaken(false);
+                }}
                 touched={touched}
               />
               {touched && taken ? (

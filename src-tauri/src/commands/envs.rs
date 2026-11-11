@@ -17,7 +17,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use sshkm_core::vault::envs::{
     self, EnvComparison, EnvDetail, EnvFormat, EnvImportPreview, EnvInput, EnvSummary, EnvVarInput,
-    ImportChoice, ImportCounts,
+    ImportChoice, ImportCounts, PartRename,
 };
 use sshkm_core::{ExposeSecret, SecretString};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -122,14 +122,18 @@ pub async fn envs_get(
     .await
 }
 
+/// Adds an environment; `rename` names the part its project had, when this
+/// gives it a second (in the same change, as do the commands below).
 #[tauri::command]
 pub async fn envs_create(
     app: AppHandle,
     state: State<'_, Shared>,
     input: EnvInput,
+    rename: Option<PartRename>,
 ) -> AppResult<EnvDetail> {
     blocking(&state, move |state| {
         state.vault.change(&app, &state.backup_dir, |vault| {
+            vault.name_first_part(rename.as_ref())?;
             let id = vault.add_environment(&input)?;
             Ok(vault.environment(&id)?)
         })
@@ -144,9 +148,11 @@ pub async fn envs_update(
     state: State<'_, Shared>,
     id: String,
     input: EnvInput,
+    rename: Option<PartRename>,
 ) -> AppResult<EnvDetail> {
     blocking(&state, move |state| {
         state.vault.change(&app, &state.backup_dir, |vault| {
+            vault.name_first_part(rename.as_ref())?;
             vault.update_environment(&id, &input)?;
             Ok(vault.environment(&id)?)
         })
@@ -154,8 +160,8 @@ pub async fn envs_update(
     .await
 }
 
-/// Gives environments a part (or none): the ones a project had before it
-/// got a second part, named then.
+/// Gives environments a part (or none): a part renamed, all its stages
+/// (those in the recycle bin too).
 #[tauri::command]
 pub async fn envs_set_part(
     app: AppHandle,
@@ -260,9 +266,15 @@ pub async fn envs_trash(app: AppHandle, state: State<'_, Shared>, id: String) ->
 }
 
 #[tauri::command]
-pub async fn envs_restore(app: AppHandle, state: State<'_, Shared>, id: String) -> AppResult<()> {
+pub async fn envs_restore(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    id: String,
+    rename: Option<PartRename>,
+) -> AppResult<()> {
     blocking(&state, move |state| {
         state.vault.change(&app, &state.backup_dir, |vault| {
+            vault.name_first_part(rename.as_ref())?;
             Ok(vault.restore_environment(&id)?)
         })
     })
@@ -326,6 +338,7 @@ pub async fn envs_import(
     state: State<'_, Shared>,
     target: ImportTarget,
     choices: Vec<ImportChoice>,
+    rename: Option<PartRename>,
 ) -> AppResult<EnvImported> {
     if choices.is_empty() {
         return Err(AppError::invalid("choose at least one variable to import"));
@@ -336,6 +349,7 @@ pub async fn envs_import(
             .ok_or_else(|| AppError::invalid("choose the file to import again"))?;
         let vars = envs::chosen_variables(envs::read_file(&path)?, &choices);
         let imported = state.vault.change(&app, &state.backup_dir, |vault| {
+            vault.name_first_part(rename.as_ref())?;
             let id = match &target {
                 ImportTarget::New {
                     project,

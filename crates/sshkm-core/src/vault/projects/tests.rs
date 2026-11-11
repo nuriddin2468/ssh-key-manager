@@ -1207,6 +1207,44 @@ fn a_stage_is_unique_within_a_project_and_its_part() {
 }
 
 #[test]
+fn a_part_is_renamed_with_its_stages_in_the_bin_and_all_or_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "laptop");
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    let local = new_env(&mut vault, Some(&shop), "shop-api", "local").unwrap();
+    let dev = new_env(&mut vault, Some(&shop), "shop-api", "dev").unwrap();
+    let binned = new_env(&mut vault, Some(&shop), "shop-api", "prod").unwrap();
+    vault.trash_environment(&binned).unwrap();
+    // `backend` has a prod outside the bin: the binned prod still takes the
+    // name, checked when it is restored.
+    new_env(&mut vault, Some(&shop), "backend", "prod").unwrap();
+    let web_dev = new_env(&mut vault, Some(&shop), "web", "dev").unwrap();
+
+    // `web` has a dev: refused, and nothing changed, not even `local`.
+    let refused = vault.set_environment_part(&[local.clone(), dev.clone()], "web");
+    assert!(matches!(refused, Err(Error::AlreadyExists(_))));
+    let envs = vault.environments();
+    assert_eq!(env_in(&envs, &local).part, "shop-api");
+    assert_eq!(env_in(&envs, &dev).part, "shop-api");
+
+    // Two of one stage can't come to share a part either.
+    let both = vault.set_environment_part(&[dev.clone(), web_dev.clone()], "front");
+    assert!(matches!(both, Err(Error::AlreadyExists(_))));
+
+    vault
+        .set_environment_part(&[local.clone(), dev.clone(), binned.clone()], "backend")
+        .unwrap();
+    let envs = vault.environments();
+    assert_eq!(env_in(&envs, &binned).part, "backend");
+    assert_eq!(env_in(&envs, &dev).part, "backend");
+    // Restored, it would be a second prod in `backend`.
+    assert!(matches!(
+        vault.restore_environment(&binned),
+        Err(Error::AlreadyExists(_))
+    ));
+}
+
+#[test]
 fn the_parts_a_project_had_as_groups_can_be_named() {
     let dir = tempfile::tempdir().unwrap();
     let mut vault = vault(&dir, "laptop");

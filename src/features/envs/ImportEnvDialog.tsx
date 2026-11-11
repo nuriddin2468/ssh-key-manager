@@ -3,7 +3,7 @@ import { FileUp, FolderPlus, Layers, TriangleAlert } from 'lucide-react';
 import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
-import { toastError } from '@/api/useAppMutation';
+import { errorMessage, toastError } from '@/api/useAppMutation';
 import type { EnvImportPreview } from '@/bindings/EnvImportPreview';
 import type { EnvSummary } from '@/bindings/EnvSummary';
 import type { ImportChoice } from '@/bindings/ImportChoice';
@@ -22,7 +22,8 @@ import { baseName } from '@/features/passwords/files/pickers';
 import { useVaultMutation } from '@/features/passwords/vault';
 import { cn } from '@/lib/cn';
 import { AppError } from '@/lib/ipc';
-import { initialChoices, labelProblem, nameTaken, whereLabel } from './model';
+import { FirstPartField, useFirstPart } from './FirstPart';
+import { initialChoices, labelProblem, nameTaken, secondPart, whereLabel } from './model';
 import { useEnvLabel, useProjectNames } from './useProjectNames';
 import { PERSONAL, partProblem, projectOf, WhereFields } from './WhereFields';
 
@@ -62,6 +63,8 @@ export function ImportEnvDialog({ all, into, onDone }: ImportEnvDialogProps) {
   const [part, setPart] = useState('');
   const [name, setName] = useState('');
   const [touched, setTouched] = useState(false);
+  const firstPart = useFirstPart();
+  const naming = firstPart.naming;
   const review = useRef<HTMLDivElement>(null);
   const hasPreview = picked !== null;
   // "Choose file…" is gone with the first step: start the review instead.
@@ -115,6 +118,7 @@ export function ImportEnvDialog({ all, into, onDone }: ImportEnvDialogProps) {
           ? { type: 'existing', id: intoId }
           : { type: 'new', project: projectOf(project), part: part.trim(), name: name.trim() },
         choices,
+        target === 'new' ? firstPart.rename : null,
       ),
     {
       success: (result) =>
@@ -131,9 +135,16 @@ export function ImportEnvDialog({ all, into, onDone }: ImportEnvDialogProps) {
           setError(t('envs.import.pickAgain'));
           return true;
         }
-        if (appError.code !== 'already_exists') return false;
-        setTouched(true);
-        return true;
+        if (appError.code === 'already_exists') {
+          firstPart.back();
+          setTouched(true);
+          return true;
+        }
+        if (naming && appError.code === 'invalid_input') {
+          firstPart.refuse(errorMessage(t, appError));
+          return true;
+        }
+        return false;
       },
     },
   );
@@ -150,14 +161,32 @@ export function ImportEnvDialog({ all, into, onDone }: ImportEnvDialogProps) {
     chosen.length > 0 &&
     (target === 'existing' ? intoId !== '' : !projectProblem && !nameProblem && !taken);
 
+  // A new one may give its project a second part: the first is named before.
+  const first = target === 'new' ? secondPart(all, projectOf(project), [part]) : null;
+  const projectName = names.get(projectOf(project) ?? '') ?? t('projects.personal');
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    if (run.isPending) return;
+    if (naming) {
+      if (firstPart.confirm()) run.mutate(chosen);
+      return;
+    }
     setTouched(true);
-    if (ready && !run.isPending) run.mutate(chosen);
+    if (!ready) return;
+    if (first) {
+      firstPart.ask(first);
+      return;
+    }
+    run.mutate(chosen);
   };
 
   return (
-    <DialogContent section="envs" className="max-w-[720px]">
+    <DialogContent
+      section="envs"
+      className="max-w-[720px]"
+      onBack={naming ? firstPart.back : undefined}
+    >
       <form onSubmit={submit} className="flex min-h-0 flex-col">
         <DialogHeader
           icon={
@@ -165,10 +194,22 @@ export function ImportEnvDialog({ all, into, onDone }: ImportEnvDialogProps) {
               <FileUp className="size-[22px]" strokeWidth={2} />
             </Tile>
           }
-          title={t('envs.import.title')}
-          description={picked ? baseName(picked.path) : t('envs.import.description')}
+          title={
+            naming ? t('envs.firstPart.title', { project: projectName }) : t('envs.import.title')
+          }
+          description={
+            naming
+              ? t('envs.firstPart.text')
+              : picked
+                ? baseName(picked.path)
+                : t('envs.import.description')
+          }
         />
-        {picked ? (
+        {naming ? (
+          <DialogBody>
+            <FirstPartField state={firstPart} />
+          </DialogBody>
+        ) : picked ? (
           <DialogBody>
             <div
               ref={review}
@@ -221,10 +262,7 @@ export function ImportEnvDialog({ all, into, onDone }: ImportEnvDialogProps) {
                         ? t(`envs.form.${nameProblem}`)
                         : taken
                           ? t('envs.form.taken', {
-                              where: whereLabel(
-                                names.get(projectOf(project) ?? '') ?? t('projects.personal'),
-                                part.trim(),
-                              ),
+                              where: whereLabel(projectName, part.trim()),
                               stage: name.trim(),
                             })
                           : undefined
@@ -263,10 +301,20 @@ export function ImportEnvDialog({ all, into, onDone }: ImportEnvDialogProps) {
           </DialogBody>
         )}
         <DialogFooter>
-          <Button size="lg" onClick={() => onDone()}>
-            {t('common.cancel')}
-          </Button>
-          {picked ? (
+          {naming ? (
+            <Button size="lg" onClick={firstPart.back}>
+              {t('envs.firstPart.back')}
+            </Button>
+          ) : (
+            <Button size="lg" onClick={() => onDone()}>
+              {t('common.cancel')}
+            </Button>
+          )}
+          {naming ? (
+            <Button type="submit" variant="primary" size="lg" loading={run.isPending}>
+              {t('envs.firstPart.go')}
+            </Button>
+          ) : picked ? (
             <Button
               type="submit"
               variant="primary"

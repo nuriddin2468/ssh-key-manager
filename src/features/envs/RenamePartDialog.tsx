@@ -8,11 +8,13 @@ import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/compone
 import { TextField } from '@/components/ui/TextField';
 import { Tile } from '@/components/ui/Tile';
 import { useVaultMutation } from '@/features/passwords/vault';
-import { labelProblem } from './model';
+import { labelProblem, partsOf, stagesTaken, whereLabel } from './model';
+import { useProjectNames } from './useProjectNames';
 
 /**
- * Renames a part: every stage in it takes the new name. For a project whose
- * parts are old groups' names (it had two before projects).
+ * Renames a part: every stage in it takes the new name, those in the
+ * recycle bin too. A name the project has for another part joins the two,
+ * unless both have a stage of one name.
  */
 export function RenamePartDialog({
   env,
@@ -24,27 +26,51 @@ export function RenamePartDialog({
   onDone: () => void;
 }) {
   const { t } = useTranslation();
+  const names = useProjectNames();
   const [name, setName] = useState(env.part);
   const [touched, setTouched] = useState(false);
+  // The backend found a stage there, perhaps since the list was fetched.
+  const [serverTaken, setServerTaken] = useState(false);
   const ids = all
     .filter(
       (other) =>
-        !other.inTrash &&
-        other.project === env.project &&
-        other.part.toLowerCase() === env.part.toLowerCase(),
+        other.project === env.project && other.part.toLowerCase() === env.part.toLowerCase(),
     )
     .map((other) => other.id);
   const rename = useVaultMutation(() => api.envsSetPart(ids, name.trim()), {
     success: () => t('envs.renamePart.done', { part: env.part, name: name.trim() }),
     onSuccess: () => onDone(),
+    onError: (error) => {
+      if (error.code !== 'already_exists') return false;
+      setTouched(true);
+      setServerTaken(true);
+      return true;
+    },
   });
   const problem = labelProblem(name);
   const unchanged = name.trim() === env.part;
+  const project = env.project ? (names.get(env.project) ?? '') : t('projects.personal');
+  const where = whereLabel(project, name.trim());
+  const taken = problem ? [] : stagesTaken(all, env.project, ids, name);
+  // Another part of the project has this name: the two become one.
+  const joins =
+    !problem &&
+    name.trim().toLowerCase() !== env.part.toLowerCase() &&
+    partsOf(all, env.project).some((part) => part.toLowerCase() === name.trim().toLowerCase());
+  const error = !touched
+    ? undefined
+    : problem
+      ? t(`envs.form.${problem}`)
+      : taken[0] !== undefined
+        ? t('envs.form.taken', { where, stage: taken[0] })
+        : serverTaken
+          ? t('envs.renamePart.taken', { where })
+          : undefined;
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     setTouched(true);
-    if (problem || unchanged || rename.isPending) return;
+    if (problem || unchanged || taken.length > 0 || rename.isPending) return;
     rename.mutate(undefined);
   };
 
@@ -64,10 +90,18 @@ export function RenamePartDialog({
           <TextField
             label={t('envs.renamePart.label')}
             value={name}
-            onChange={(event) => setName(event.target.value)}
-            error={touched && problem ? t(`envs.form.${problem}`) : undefined}
+            onChange={(event) => {
+              setName(event.target.value);
+              setServerTaken(false);
+            }}
+            hint={joins ? t('envs.renamePart.joins', { part: name.trim() }) : undefined}
+            error={error}
             autoFocus
           />
+          {/* Said when it appears: the focus is on the button pressed. */}
+          <p role="alert" className="sr-only">
+            {error}
+          </p>
         </DialogBody>
         <DialogFooter>
           <Button size="lg" onClick={onDone}>

@@ -21,6 +21,7 @@ import type { ImportChoice } from '@/bindings/ImportChoice';
 import type { ImportTarget } from '@/bindings/ImportTarget';
 import type { ItemSummary } from '@/bindings/ItemSummary';
 import type { ParseProblem } from '@/bindings/ParseProblem';
+import type { PartRename } from '@/bindings/PartRename';
 import type { TerminalEvent } from '@/bindings/TerminalEvent';
 import type { VaultStatus } from '@/bindings/VaultStatus';
 import { isVariableName, looksSecretName } from '@/features/envs/model';
@@ -167,6 +168,8 @@ const envs: Env[] = [
     v('NEXT_PUBLIC_API_URL', 'https://api.shop.example'),
     v('STRIPE_PUBLISHABLE_KEY', 'pk_live_51Hq', true),
   ]),
+  // Shop's jobs: a part with one stage, which has nothing to compare with.
+  env('shop-jobs', 'local', [v('QUEUE_URL', 'amqp://localhost:5672')]),
   // In no project: Personal's, its old group the part.
   env('scripts', 'local', [v('DEPLOY_TOKEN', 'example-deploy-token', true)]),
 ];
@@ -323,6 +326,56 @@ function touch(item: Env) {
   item.modified = new Date().toISOString();
 }
 
+/**
+ * Gives environments a part, as `set_environment_part` does: those in the
+ * recycle bin too, unchecked; all are checked before any changes.
+ */
+function setPart(ids: readonly string[], part: string): Promise<never> | undefined {
+  const name = part.trim();
+  if (name.includes('/')) return fail('invalid_input', 'a part can’t have /');
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  const changing: Env[] = [];
+  for (const id of ids) {
+    const item = find(id);
+    if (!item) return fail('not_found', `environment ${id}`);
+    if (partOf(item) === name) continue;
+    const taken =
+      !item.inTrash &&
+      envs.some(
+        (other) =>
+          !other.inTrash &&
+          other.id !== item.id &&
+          mockEnvOwner(other.id) === mockEnvOwner(item.id) &&
+          same(other.name, item.name) &&
+          (same(partOf(other), name) || ids.includes(other.id)),
+      );
+    if (taken) return fail('already_exists', `${name} / ${item.name}`);
+    changing.push(item);
+  }
+  for (const item of changing) item.part = name;
+  return undefined;
+}
+
+/**
+ * Names a project's first part (`rename`) and runs `change`, in one
+ * change: a failure puts the parts back.
+ */
+async function withRename<T>(rename: unknown, change: () => Promise<T>): Promise<T> {
+  if (!rename) return change();
+  const { ids, part } = rename as PartRename;
+  const before = ids.map((id) => [find(id), find(id)?.part ?? null] as const);
+  await setPart(ids, part);
+  try {
+    return await change();
+  } catch (error) {
+    for (const [item, kept] of before) if (item) item.part = kept;
+    throw error;
+  }
+}
+
+/** For envFiles.ts: [`withRename`]. */
+export const withMockRename = withRename;
+
 /** A small `.env` reader: enough for the sample, not the backend's rules. */
 function parse(text: string) {
   const vars: { name: string; value: string; line: number }[] = [];
@@ -414,39 +467,38 @@ export const envsHandlers: Record<string, Handler> = {
     if (!item) return fail('not_found', `environment ${id}`);
     return detail(item);
   },
-  envs_create: async ({ input }): Promise<EnvDetail> => {
+  envs_create: async ({ input, rename }): Promise<EnvDetail> => {
     await requireUnlocked();
-    const { project, part, name, notes } = input as EnvInput;
-    await checkName(project, part, name);
-    const item = env(part.trim() || 'Personal', name.trim(), [], {
-      part: part.trim(),
-      notes,
-      modified: new Date().toISOString(),
+    return withRename(rename, async () => {
+      const { project, part, name, notes } = input as EnvInput;
+      await checkName(project, part, name);
+      const item = env(part.trim() || 'Personal', name.trim(), [], {
+        part: part.trim(),
+        notes,
+        modified: new Date().toISOString(),
+      });
+      envs.push(item);
+      setMockEnvOwner(item.id, project);
+      return detail(item);
     });
-    envs.push(item);
-    setMockEnvOwner(item.id, project);
-    return detail(item);
   },
-  envs_update: async ({ id, input }): Promise<EnvDetail> => {
+  envs_update: async ({ id, input, rename }): Promise<EnvDetail> => {
     await requireUnlocked();
     const item = find(id);
     if (!item) return fail('not_found', `environment ${id}`);
-    const { project, part, name, notes } = input as EnvInput;
-    await checkName(project, part, name, item.id);
-    Object.assign(item, { part: part.trim(), name: name.trim(), notes: notes.trimEnd() });
-    // Into another project, or Personal: the project's record says so.
-    if (project !== mockEnvOwner(item.id)) setMockEnvOwner(item.id, project);
-    touch(item);
-    return detail(item);
+    return withRename(rename, async () => {
+      const { project, part, name, notes } = input as EnvInput;
+      await checkName(project, part, name, item.id);
+      Object.assign(item, { part: part.trim(), name: name.trim(), notes: notes.trimEnd() });
+      // Into another project, or Personal: the project's record says so.
+      if (project !== mockEnvOwner(item.id)) setMockEnvOwner(item.id, project);
+      touch(item);
+      return detail(item);
+    });
   },
   envs_set_part: async ({ ids, part }) => {
     await requireUnlocked();
-    for (const id of ids as string[]) {
-      const item = find(id);
-      if (!item) return fail('not_found', `environment ${id}`);
-      await checkName(mockEnvOwner(item.id), String(part), item.name, item.id);
-      item.part = String(part).trim();
-    }
+    await setPart(ids as string[], String(part));
   },
   envs_set_var: async ({ id, previous, input }): Promise<EnvDetail> => {
     await requireUnlocked();
@@ -502,12 +554,14 @@ export const envsHandlers: Record<string, Handler> = {
     const item = find(id);
     if (item) item.inTrash = true;
   },
-  envs_restore: async ({ id }) => {
+  envs_restore: async ({ id, rename }) => {
     await requireUnlocked();
     const item = find(id);
     if (!item) return fail('not_found', `environment ${id}`);
-    await checkName(mockEnvOwner(item.id), partOf(item), item.name, item.id);
-    item.inTrash = false;
+    await withRename(rename, async () => {
+      await checkName(mockEnvOwner(item.id), partOf(item), item.name, item.id);
+      item.inTrash = false;
+    });
   },
   envs_delete: async ({ id }) => {
     await requireUnlocked();
@@ -549,13 +603,13 @@ export const envsHandlers: Record<string, Handler> = {
       },
     };
   },
-  envs_import: async ({ target, choices }): Promise<EnvImported> => {
+  envs_import: async ({ target, choices, rename }): Promise<EnvImported> => {
     await requireUnlocked();
     if (!picked) return fail('invalid_input', 'choose the file to import again');
     const to = target as ImportTarget;
     let item: Env | undefined;
     if (to.type === 'new') {
-      await checkName(to.project, to.part, to.name);
+      await withRename(rename, async () => checkName(to.project, to.part, to.name));
       item = env(to.part || 'Personal', to.name, [], {
         part: to.part,
         modified: new Date().toISOString(),

@@ -119,6 +119,8 @@ const en = {
     hostsFileTurnOn_other: 'Turns on {{count}} entries of {{name}}.',
     hostsFileTurnOff_one: 'Turns off {{count}} entry of {{name}}.',
     hostsFileTurnOff_other: 'Turns off {{count}} entries of {{name}}.',
+    hostsFileSharedNote:
+      'Other projects use these names too: {{list}}. The change applies to them as well.',
     hostsFileOthersNote: 'The same lines also list {{list}}: they change too.',
     hostsFileSystemLine: 'Shares its line with {{names}}, which the system needs',
     hostsFileKeptNote: 'Left as they are, as they also list a system name: {{lines}}.',

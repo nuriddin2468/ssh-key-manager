@@ -246,7 +246,21 @@ describe('switching a project’s hosts file entries', () => {
       { name: 'docs.test', projects: ['Blog'] },
       { name: 'unrelated.test', projects: [] },
     ]);
+    expect(planHostsFileSwitch(shop, [shop], file, false).shared).toEqual([]);
     expect(planHostsFileSwitch(shop, [shop, blog], file, false, 4).others).toHaveLength(2);
+  });
+
+  it('names its own names that other projects hold too', () => {
+    // api.test is Shop's and Blog's: turning off line 4 turns it off for Blog.
+    const off = planHostsFileSwitch(shop, [shop, blog], file, false);
+    expect(off.shared).toEqual([{ name: 'api.test', projects: ['Blog'] }]);
+    expect(planHostsFileSwitch(shop, [shop, blog], file, false, 4).shared).toEqual([
+      { name: 'api.test', projects: ['Blog'] },
+    ]);
+    // Turning on lines 3, 5 and 6: app.test is Shop's alone; api.test is Blog's too.
+    expect(planHostsFileSwitch(shop, [shop, blog], file, true).shared).toEqual([
+      { name: 'api.test', projects: ['Blog'] },
+    ]);
   });
 
   it('warns when a name ends up with several entries on in one address family', () => {

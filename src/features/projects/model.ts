@@ -412,6 +412,8 @@ export interface HostsFilePlan {
    * with the other projects that hold them.
    */
   others: { name: string; projects: string[] }[];
+  /** The project's names on a changing line that other projects hold too, with those. */
+  shared: { name: string; projects: string[] }[];
   /** Names that will have more than one entry on in an address family: the first wins. */
   several: string[];
 }
@@ -437,15 +439,16 @@ export function planHostsFileSwitch(
   );
   const held = new Set(project.hostsFile);
   const others = new Map<string, string[]>();
+  const shared = new Map<string, string[]>();
   for (const changing of lines) {
     for (const name of changing.names.map(normalizeName)) {
-      if (held.has(name) || others.has(name)) continue;
-      others.set(
-        name,
-        projects
-          .filter((other) => other.id !== project.id && other.hostsFile.includes(name))
-          .map((other) => other.name),
-      );
+      if (others.has(name) || shared.has(name)) continue;
+      const holders = projects
+        .filter((other) => other.id !== project.id && other.hostsFile.includes(name))
+        .map((other) => other.name);
+      // The project's own names are named only when another project holds them too.
+      if (!held.has(name)) others.set(name, holders);
+      else if (holders.length > 0) shared.set(name, holders);
     }
   }
   // Resolvers use the first entry on for a name in each family, IPv4 and IPv6.
@@ -469,6 +472,7 @@ export function planHostsFileSwitch(
     kept,
     lines,
     others: [...others].map(([name, holders]) => ({ name, projects: holders })),
+    shared: [...shared].map(([name, holders]) => ({ name, projects: holders })),
     several,
   };
 }

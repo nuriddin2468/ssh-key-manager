@@ -121,6 +121,8 @@ const uz = {
     hostsFileTurnOn_other: '«{{name}}» loyihasining {{count}} ta yozuvi yoqiladi.',
     hostsFileTurnOff_one: '«{{name}}» loyihasining {{count}} ta yozuvi oʻchiriladi.',
     hostsFileTurnOff_other: '«{{name}}» loyihasining {{count}} ta yozuvi oʻchiriladi.',
+    hostsFileSharedNote:
+      'Bu nomlar boshqa loyihalarda ham bor: {{list}}. Oʻzgarish ularga ham taʼsir qiladi.',
     hostsFileOthersNote: 'Shu qatorlarda {{list}} ham bor: ular ham oʻzgaradi.',
     hostsFileSystemLine: 'Qatorida tizimga kerakli {{names}} ham bor',
     hostsFileKeptNote: 'Tizim nomi ham borligi uchun oʻzgarmaydi: {{lines}}.',

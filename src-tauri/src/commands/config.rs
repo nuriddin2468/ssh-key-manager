@@ -54,6 +54,10 @@ pub async fn save_host(
             load_at(state, &revision)?;
         }
         config.save(&state.paths.config, &state.backup_dir)?;
+        // A renamed host moves in the projects that hold it.
+        if let Some(old) = edit.id.and_then(|id| before.host(id)) {
+            super::projects::follow_host_renames(&app, state, &old.patterns, &edit.patterns);
+        }
         Ok(SavedHost {
             file: config_file(state)?,
             id,

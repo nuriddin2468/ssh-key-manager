@@ -41,6 +41,7 @@ fn project(name: &str, hosts: &[&str]) -> Project {
         keys: Vec::new(),
         environments: Vec::new(),
         logins: Vec::new(),
+        missing_folders: Vec::new(),
         modified: "2026-11-10T10:00:00Z".into(),
     }
 }

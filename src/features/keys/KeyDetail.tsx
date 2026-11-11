@@ -27,6 +27,7 @@ import { useRouter } from '@/app/router';
 import type { Finding } from '@/bindings/Finding';
 import type { HostEntry } from '@/bindings/HostEntry';
 import type { KeyView } from '@/bindings/KeyView';
+import type { ProjectMember } from '@/bindings/ProjectMember';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Dialog } from '@/components/ui/Dialog';
@@ -39,6 +40,7 @@ import { fixLabelKey, rotates, useFix } from '@/features/audit/useFix';
 import { HostPreview } from '@/features/hosts/HostPreview';
 import { SendDialog } from '@/features/nearby/SendDialog';
 import { SavedSecret } from '@/features/passwords/SavedSecret';
+import { ProjectChips, useProjectMenu } from '@/features/projects/ProjectMenu';
 import { copyText } from '@/lib/clipboard';
 import { cn } from '@/lib/cn';
 import { displayPath } from '@/lib/format';
@@ -65,6 +67,10 @@ const SEVERITY_STYLE = {
 
 export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findings: Finding[] }) {
   const { t } = useTranslation();
+  const projectMember: ProjectMember | null = key.fingerprint
+    ? { type: 'key', fingerprint: key.fingerprint }
+    : null;
+  const projectMenu = useProjectMenu(projectMember);
   const { navigate } = useRouter();
   const dialogs = useDialogs();
   const environment = useEnvironment();
@@ -154,6 +160,7 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
               {key.name}
             </h2>
             <p className="truncate text-[12.5px] text-muted">{key.comment || '—'}</p>
+            <ProjectChips member={projectMember} className="mt-1.5" />
           </div>
           <Menu>
             <MenuTrigger asChild>
@@ -203,6 +210,7 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
                   {rotation ? t('rotation.resume') : `${t('rotation.action')}…`}
                 </MenuItem>
               ) : null}
+              {projectMenu.sub}
               <MenuSeparator />
               <MenuItem
                 destructive
@@ -213,6 +221,7 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
               </MenuItem>
             </MenuContent>
           </Menu>
+          {projectMenu.dialog}
         </div>
         <div className="flex flex-wrap gap-2">
           {key.publicKey ? (

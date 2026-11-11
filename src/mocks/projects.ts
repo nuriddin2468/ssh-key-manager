@@ -10,6 +10,9 @@ import type { ProjectColor } from '@/bindings/ProjectColor';
 import type { ProjectInput } from '@/bindings/ProjectInput';
 import type { ProjectMember } from '@/bindings/ProjectMember';
 import type { ProjectSuggestion } from '@/bindings/ProjectSuggestion';
+import type { TerminalEvent } from '@/bindings/TerminalEvent';
+import { mockEnvironment } from './envs';
+import { findShell, openLocalShell } from './terminal';
 import { isMockEntry, isMockVaultUnlocked, mockEntryId } from './vault';
 
 type Handler = (args: Record<string, unknown>) => unknown;
@@ -19,7 +22,7 @@ const now = () => `${new Date().toISOString().slice(0, 19)}Z`;
 const NAME_CHARS = /[\p{Cc};,:]/u;
 
 /** Logins by entry title, resolved once the mock vault has its ids. */
-interface MockProject extends Omit<Project, 'logins'> {
+interface MockProject extends Omit<Project, 'logins' | 'missingFolders'> {
   loginTitles: string[];
   logins: string[];
 }
@@ -92,9 +95,32 @@ function resolveLogins() {
   }
 }
 
+/** Folders the preview pretends aren't on this computer. */
+const MISSING_FOLDERS = new Set(['~/code/shop-web']);
+
 function view(p: MockProject, unlocked: boolean): Project {
   const { loginTitles: _, ...rest } = p;
-  return { ...rest, logins: unlocked ? [...p.logins] : [] };
+  return {
+    ...rest,
+    logins: unlocked ? [...p.logins] : [],
+    missingFolders: p.folders.filter((folder) => MISSING_FOLDERS.has(folder)),
+  };
+}
+
+/** Moves renamed hosts in the projects that hold them, as `save_host` does. */
+export function followHostRenames(before: string[], after: string[]) {
+  if (!isMockVaultUnlocked()) return;
+  before.forEach((old, index) => {
+    const next = after[index];
+    if (!next || next === old || after.includes(old) || before.includes(next)) return;
+    for (const p of projects) {
+      const at = p.hosts.indexOf(old);
+      if (at < 0) continue;
+      p.hosts.splice(at, 1);
+      if (!p.hosts.includes(next)) p.hosts.push(next);
+      p.modified = now();
+    }
+  });
 }
 
 function checkName(text: unknown): string | Promise<never> {
@@ -411,6 +437,24 @@ export const projectsHandlers: Record<string, Handler> = {
     if (!isMockVaultUnlocked()) return fail('vault_locked', 'the vault is locked');
     if (!candidates.includes(inPickedFolder)) candidates.push(inPickedFolder);
     return suggestions();
+  },
+  projects_open_terminal: ({ id, folder, shell, events }) => {
+    const p = projects.find((x) => x.id === id);
+    if (!p) return fail('not_found', `project ${id}`);
+    const path = String(folder);
+    if (!p.folders.includes(path)) return fail('invalid_input', 'not one of the project’s folders');
+    if (MISSING_FOLDERS.has(path)) return fail('not_found', `${path} on this computer`);
+    const found = findShell(shell);
+    if (!found) return fail('not_found', 'this shell isn’t on this computer anymore');
+    const local = isMockVaultUnlocked()
+      ? p.environments.map((group) => mockEnvironment(group, 'local')).find(Boolean)
+      : undefined;
+    return openLocalShell(
+      `${p.name} · ${path.split('/').pop() ?? path}`,
+      found,
+      local ?? [],
+      events as (message: ArrayBuffer | TerminalEvent) => void,
+    );
   },
   // Stands in for the system folder dialog: picks a new folder under ~/code.
   projects_add_folder: ({ id }) => {

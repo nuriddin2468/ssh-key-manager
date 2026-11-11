@@ -25,6 +25,7 @@ import { useRouter } from '@/app/router';
 import type { EnvDetail } from '@/bindings/EnvDetail';
 import type { EnvSummary } from '@/bindings/EnvSummary';
 import type { EnvVarInfo } from '@/bindings/EnvVarInfo';
+import type { ProjectMember } from '@/bindings/ProjectMember';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
@@ -43,6 +44,7 @@ import { Tile } from '@/components/ui/Tile';
 import { SendDialog } from '@/features/nearby/SendDialog';
 import { MASK, REVEAL_MS } from '@/features/passwords/SavedSecret';
 import { toastVaultError, useSecretCall, useVaultMutation } from '@/features/passwords/vault';
+import { ProjectChips, useProjectMenu } from '@/features/projects/ProjectMenu';
 import { defaultShell, shellName, useShells } from '@/features/terminal/shells';
 import { useTerminals } from '@/features/terminal/TerminalProvider';
 import { cn } from '@/lib/cn';
@@ -77,6 +79,9 @@ interface EnvPaneProps {
  */
 export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps) {
   const { t, i18n } = useTranslation();
+  const projectMember: ProjectMember | null =
+    summary.inTrash || !summary.project ? null : { type: 'environment', group: summary.project };
+  const projectMenu = useProjectMenu(projectMember);
   const { navigate } = useRouter();
   const terminals = useTerminals();
   const shells = useShells().data ?? [];
@@ -221,6 +226,7 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
                   >
                     {t('envs.send')}
                   </MenuItem>
+                  {projectMenu.sub}
                   <MenuSeparator />
                   <MenuItem
                     destructive
@@ -233,7 +239,9 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
               )}
             </MenuContent>
           </Menu>
+          {projectMenu.dialog}
         </div>
+        <ProjectChips member={projectMember} />
         {env?.notes ? (
           <p className="selectable text-[12.5px] leading-[19px] whitespace-pre-wrap text-fg-2">
             {env.notes}

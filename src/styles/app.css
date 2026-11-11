@@ -149,7 +149,10 @@
  * rings and the background glow.
  */
 :root,
-[data-section="overview"] {
+[data-section="overview"],
+[data-section="project"],
+[data-section="personal"],
+[data-section="suggestions"] {
   --accent-1: #5eead4;
   --accent-2: #a78bfa;
   --accent-ink: #06201e;

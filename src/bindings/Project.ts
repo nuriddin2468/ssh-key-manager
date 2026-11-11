@@ -29,6 +29,11 @@ environments: Array<string>,
  */
 logins: Array<string>, 
 /**
+ * Of `folders`, those not found on this computer: filled in by the app
+ * as it lists projects, empty here.
+ */
+missingFolders: Array<string>, 
+/**
  * RFC 3339, UTC.
  */
 modified: string, };

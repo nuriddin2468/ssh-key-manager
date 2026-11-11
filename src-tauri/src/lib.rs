@@ -266,6 +266,7 @@ pub fn run() {
             commands::projects::projects_dismiss_suggestion,
             commands::projects::projects_restore_suggestions,
             commands::projects::projects_suggest_in_folder,
+            commands::projects::projects_open_terminal,
             commands::terminal::terminal_open,
             commands::terminal::terminal_write,
             commands::terminal::terminal_resize,

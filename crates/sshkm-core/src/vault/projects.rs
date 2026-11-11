@@ -164,6 +164,10 @@ pub struct Project {
     /// The vault's logins by entry id, not counting those in the recycle
     /// bin or gone. Empty in the copy kept for while the vault is locked.
     pub logins: Vec<String>,
+    /// Of `folders`, those not found on this computer: filled in by the app
+    /// as it lists projects, empty here.
+    #[serde(default)]
+    pub missing_folders: Vec<String>,
     /// RFC 3339, UTC.
     pub modified: String,
 }
@@ -549,6 +553,7 @@ fn project_view(id: String, stored: &Stored, logins: &BTreeSet<String>) -> Proje
         keys: Vec::new(),
         environments: Vec::new(),
         logins: Vec::new(),
+        missing_folders: Vec::new(),
         modified,
     };
     for member in stored.present() {
@@ -714,6 +719,45 @@ impl Vault {
             self.sync_tags();
         }
         Ok(true)
+    }
+
+    /// Moves the host `old` to `new` in every live project that holds it:
+    /// for a host renamed in `~/.ssh/config`. Returns whether any changed.
+    pub fn rename_host_in_projects(&mut self, old: &str, new: &str) -> Result<bool> {
+        let old = ProjectMember::Host {
+            alias: old.to_owned(),
+        };
+        let new = ProjectMember::Host {
+            alias: new.to_owned(),
+        };
+        if !is_valid_member(&old) || !is_valid_member(&new) || old == new {
+            return Ok(false);
+        }
+        let (old_key, new_key) = (member_key(&old), member_key(&new));
+        let mut changed = false;
+        for (id, stored) in self.stored_projects() {
+            if !stored.is_live() || !stored.members.get(&old_key).is_some_and(|p| p.present()) {
+                continue;
+            }
+            let mut stored = self.live_project(&id)?;
+            let t = stored.tick();
+            if let Some(presence) = stored.members.get_mut(&old_key) {
+                presence.r = Some(t);
+            }
+            let room = stored.members.len() < MAX_STORED_MEMBERS;
+            match stored.members.get_mut(&new_key) {
+                Some(presence) if !presence.present() => presence.a = t,
+                None if room => {
+                    stored
+                        .members
+                        .insert(new_key.clone(), Presence { a: t, r: None });
+                }
+                Some(_) | None => {}
+            }
+            self.put_project(&id, &stored)?;
+            changed = true;
+        }
+        Ok(changed)
     }
 
     /// Makes `suggestion` a project named and colored as `input`, or adds

@@ -12,14 +12,15 @@
 //! themselves: the user accepts or dismisses each one.
 
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use serde::{Deserialize, Serialize};
 use sshkm_core::config::{HostKind, SshConfig};
 use sshkm_core::paths::home_dir;
 use sshkm_core::vault::projects::suggest::{self, Declined, HostFacts, ProjectSuggestion};
 use sshkm_core::vault::projects::{self, Project, ProjectInput, ProjectMember};
-use sshkm_core::{ErrorCode, fsutil, keys};
+use sshkm_core::{ErrorCode, SecretString, fsutil, keys};
+use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
@@ -27,23 +28,39 @@ use super::{Shared, blocking};
 use crate::confirm::Localized;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
+use crate::terminal::Sink;
+use crate::terminal::shells;
+use crate::terminal::types::TerminalInfo;
 
 /// Emitted when a sync with one of the user's devices changed the projects.
 pub const CHANGED_EVENT: &str = "projects-changed";
 
 /// The projects, by name: from the vault, or while it is locked from the
-/// copy kept for then, whose projects have no logins. Quiet: the UI
-/// refetches the list by itself.
+/// copy kept for then, whose projects have no logins; with the folders not
+/// found on this computer. Quiet: the UI refetches the list by itself.
 #[tauri::command]
 pub async fn projects_list(app: AppHandle, state: State<'_, Shared>) -> AppResult<Vec<Project>> {
     blocking(&state, move |state| {
-        if !state.vault.is_unlocked() {
-            return Ok(state.vault.projects_copy());
+        let mut projects = if state.vault.is_unlocked() {
+            match state.vault.with_quietly(&app, |vault| Ok(vault.projects())) {
+                Err(error) if error.code() == ErrorCode::VaultLocked => state.vault.projects_copy(),
+                other => other?,
+            }
+        } else {
+            state.vault.projects_copy()
+        };
+        let home = home_dir();
+        for project in &mut projects {
+            project.missing_folders = project
+                .folders
+                .iter()
+                .filter(|folder| {
+                    !projects::folder_path(folder, home.as_deref()).is_some_and(|p| p.is_dir())
+                })
+                .cloned()
+                .collect();
         }
-        match state.vault.with_quietly(&app, |vault| Ok(vault.projects())) {
-            Err(error) if error.code() == ErrorCode::VaultLocked => Ok(state.vault.projects_copy()),
-            other => other,
-        }
+        Ok(projects)
     })
     .await
 }
@@ -411,4 +428,121 @@ pub async fn projects_suggest_in_folder(
         suggestions(&app, state).map(Some)
     })
     .await
+}
+
+/// Starts a shell in one of a project's folders, as `terminal_open_local`
+/// does: `shell` or the default one, in a `cols`×`rows` terminal. `folder`
+/// is the folder as the project keeps it; nothing outside the project's
+/// folders opens. While the vault is unlocked, the shell gets the variables
+/// of the project's `local` environment, if it has one; while it is locked
+/// the project comes from the copy kept for then, and the shell gets none.
+#[tauri::command]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Tauri passes command arguments one by one"
+)]
+pub async fn projects_open_terminal(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    id: String,
+    folder: String,
+    shell: Option<String>,
+    cols: u16,
+    rows: u16,
+    events: Channel<InvokeResponseBody>,
+) -> AppResult<TerminalInfo> {
+    let shared = Arc::clone(&state);
+    blocking(&state, move |state| {
+        let opened = state.vault.with(&app, |vault| {
+            let project = vault.project(&id)?;
+            let vars = local_variables(vault, &project)?;
+            Ok((project, vars))
+        });
+        let (project, vars) = match opened {
+            Ok(found) => found,
+            Err(error) if error.code() == ErrorCode::VaultLocked => {
+                let project = state
+                    .vault
+                    .projects_copy()
+                    .into_iter()
+                    .find(|p| p.id == id)
+                    .ok_or_else(|| AppError::not_found(format!("project {id}")))?;
+                (project, Vec::new())
+            }
+            Err(error) => return Err(error),
+        };
+        if !project.folders.contains(&folder) {
+            return Err(AppError::invalid("not one of the project's folders"));
+        }
+        let path = projects::folder_path(&folder, home_dir().as_deref())
+            .filter(|path| path.is_dir())
+            .ok_or_else(|| AppError::not_found(format!("{folder} on this computer")))?;
+        let name = path
+            .file_name()
+            .map_or_else(|| folder.clone(), |n| n.to_string_lossy().into_owned());
+        let shell = shells::find(shell.as_deref())?;
+        let sink: Arc<dyn Sink> = Arc::new(events);
+        shared.terminals.open_local(
+            &format!("{} · {name}", project.name),
+            &shell,
+            &vars,
+            &path,
+            (cols, rows),
+            sink,
+        )
+    })
+    .await
+}
+
+/// The variables of the project's `local` environment: the first of its
+/// environments' groups that has one outside the recycle bin.
+fn local_variables(
+    vault: &mut sshkm_core::vault::Vault,
+    project: &Project,
+) -> AppResult<Vec<(String, SecretString)>> {
+    let local = vault.environments().into_iter().find(|env| {
+        !env.in_trash
+            && env.name.eq_ignore_ascii_case("local")
+            && project.environments.contains(&env.project)
+    });
+    let Some(local) = local else {
+        return Ok(Vec::new());
+    };
+    Ok(vault
+        .env_variables(&local.id)?
+        .into_iter()
+        .map(|var| (var.name, var.value))
+        .collect())
+}
+
+/// Moves renamed hosts in the projects that hold them, after `~/.ssh/config`
+/// was saved: `before` and `after` are a block's aliases. Only while the
+/// vault is unlocked; a failure here never undoes the host's save.
+pub fn follow_host_renames(app: &AppHandle, state: &AppState, before: &[String], after: &[String]) {
+    let renames: Vec<(&String, &String)> = before
+        .iter()
+        .zip(after)
+        .filter(|(old, new)| old != new && !after.contains(old) && !before.contains(new))
+        .collect();
+    if renames.is_empty() || !state.vault.is_unlocked() {
+        return;
+    }
+    let holds = state.vault.with_quietly(app, |vault| {
+        Ok(vault
+            .projects()
+            .iter()
+            .any(|project| renames.iter().any(|(old, _)| project.hosts.contains(old))))
+    });
+    if !holds.unwrap_or(false) {
+        return;
+    }
+    let moved = state.vault.change(app, &state.backup_dir, |vault| {
+        for (old, new) in &renames {
+            vault.rename_host_in_projects(old, new)?;
+        }
+        Ok(())
+    });
+    if let Err(error) = moved {
+        log::warn!("projects: a renamed host was not moved: {error}");
+    }
 }

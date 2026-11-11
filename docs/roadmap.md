@@ -44,14 +44,14 @@ ticks it here, with its link.
 
 ## Steps
 
-### 1. Choose the shell — in review
+### 1. Choose the shell — done ([#33](https://github.com/nuriddin2468/ssh-key-manager/pull/33))
 
 Local shells in the Terminal (Local shell, New session → This computer) and for
 Environments' Run in terminal: PowerShell 7, Windows PowerShell, Command Prompt, Git Bash
 and WSL distributions on Windows; the user's shell, `/etc/shells` and Homebrew's on macOS
 and Linux. Settings → Terminal → Default shell. `src-tauri/src/terminal/shells.rs`.
 
-### 2. Projects — in progress
+### 2. Projects — in review
 
 The foundation for everything below.
 
@@ -60,10 +60,10 @@ The foundation for everything below.
    tag, environments by their existing `Environments/<project>` group. Kept in the vault,
    so it syncs to the user's devices with it; a copy without secrets (names and
    references) shows projects while the vault is locked, as the SSH sections work then.
-   Nothing is written into `~/.ssh/config` for membership. In review:
+   Nothing is written into `~/.ssh/config` for membership. Done:
    [#34](https://github.com/nuriddin2468/ssh-key-manager/pull/34).
 2. **Suggestions**: the app proposes projects from what it finds (see Decisions); the user
-   confirms each. In review:
+   confirms each. Done:
    [#35](https://github.com/nuriddin2468/ssh-key-manager/pull/35).
 3. **Navigation and the project page**: projects (Personal first) at the top of the
    sidebar, the library below, system sections last. The project page: hosts (connect),
@@ -91,7 +91,7 @@ Environments get files, inside projects.
 
 ### 4. Protection
 
-1. **Leak scanner — in review** ([#36](https://github.com/nuriddin2468/ssh-key-manager/pull/36)): the vault knows the exact values, so it
+1. **Leak scanner — done** ([#36](https://github.com/nuriddin2468/ssh-key-manager/pull/36)): the vault knows the exact values, so it
    finds them without false positives — secret variables and entry passwords, as they are,
    escaped in JSON, percent-encoded or in base64, a private key by its lines; values too
    short or plain to mean anything are skipped. In AI tools' session history (Claude Code,

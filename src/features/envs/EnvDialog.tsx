@@ -23,10 +23,12 @@ interface EnvDialogProps {
   defaultProject?: string;
   /** Closes the dialog, with the environment's id when it was saved. */
   onDone: (id?: string) => void;
+  /** Called with the environment once it is saved, before `onDone`. */
+  onSaved?: (saved: EnvDetail) => void;
 }
 
 /** A new environment, or a new name, project or notes for one. */
-export function EnvDialog({ env, all, defaultProject, onDone }: EnvDialogProps) {
+export function EnvDialog({ env, all, defaultProject, onDone, onSaved }: EnvDialogProps) {
   const { t } = useTranslation();
   const listId = useId();
   const notesId = useId();
@@ -43,7 +45,10 @@ export function EnvDialog({ env, all, defaultProject, onDone }: EnvDialogProps) 
     {
       success: (saved) =>
         env ? t('envs.saved', { name: saved.name }) : t('envs.created', { name: saved.name }),
-      onSuccess: (saved) => onDone(saved.id),
+      onSuccess: (saved) => {
+        onSaved?.(saved);
+        onDone(saved.id);
+      },
       onError: (error) => {
         if (error.code !== 'already_exists') return false;
         setTouched(true);

@@ -21,15 +21,19 @@ export type Route =
   | { page: 'personal' }
   /** Projects the app proposes, to accept or dismiss. */
   | { page: 'suggestions' }
-  | { page: 'keys'; keyId?: string }
-  | { page: 'hosts'; hostId?: number }
+  /**
+   * `back` (on the Library's sections): the project an item was
+   * opened from, an id or `personal`, for a way back to it.
+   */
+  | { page: 'keys'; keyId?: string; back?: string }
+  | { page: 'hosts'; hostId?: number; back?: string }
   | { page: 'agent' }
   | { page: 'known' }
   /** `received` shows the hosts file group that came with that pairing as a change. */
   | { page: 'hostsFile'; line?: number; received?: number }
   | { page: 'audit' }
-  | { page: 'passwords'; entryId?: string }
-  | { page: 'envs'; envId?: string }
+  | { page: 'passwords'; entryId?: string; back?: string }
+  | { page: 'envs'; envId?: string; back?: string }
   /** `connect` starts a session to that alias; `nonce` makes each request a new one. */
   | { page: 'terminal'; connect?: string; nonce?: number }
   | { page: 'nearby' }
@@ -83,6 +87,21 @@ function devRoute(): Route | undefined {
   return undefined;
 }
 
+/**
+ * `next`, keeping the way back to a project while the user picks other
+ * items in the section it opened (another host keeps "‹ Shop"). Opening the
+ * section itself, from the sidebar or a shortcut, starts without it.
+ */
+export function withBack(current: Route, next: Route): Route {
+  if (next.page !== current.page || 'back' in next || !('back' in current) || !current.back) {
+    return next;
+  }
+  const item = Object.entries(next).some(
+    ([field, value]) => field !== 'page' && value !== undefined,
+  );
+  return item ? ({ ...next, back: current.back } as Route) : next;
+}
+
 /** Where the app opens: the project used last, Personal the first time. */
 export function homeRoute(): Route {
   const last = currentSettings().lastProject;
@@ -94,7 +113,7 @@ export function RouterProvider({ initial, children }: { initial?: Route; childre
   const blocker = useRef<Blocker | null>(null);
   const navigate = useCallback((next: Route, options?: { force?: boolean }) => {
     if (!options?.force && blocker.current?.(next)) return;
-    setRoute(next);
+    setRoute((current) => withBack(current, next));
   }, []);
   const setBlocker = useCallback((next: Blocker | null) => {
     blocker.current = next;

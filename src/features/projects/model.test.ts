@@ -4,7 +4,16 @@ import type { EnvSummary } from '@/bindings/EnvSummary';
 import type { HostEntry } from '@/bindings/HostEntry';
 import type { KeyView } from '@/bindings/KeyView';
 import type { Project } from '@/bindings/Project';
-import { hostAliases, initials, missing, nextColor, personal, projectTone } from './model';
+import {
+  cardColumns,
+  hostAliases,
+  initials,
+  missing,
+  nextColor,
+  personal,
+  problemsFirst,
+  projectTone,
+} from './model';
 
 const project = (patch: Partial<Project>): Project => ({
   id: 'p1',
@@ -126,5 +135,30 @@ describe('gone members', () => {
       host(1, ['*'], true),
     ]);
     expect([...aliases]).toEqual(['prod', 'prod.example.com']);
+  });
+});
+
+describe('cards', () => {
+  it('put rows with a problem first, then new ones, and keep the order otherwise', () => {
+    const rows = [
+      { key: 'a' },
+      { key: 'b', problem: true },
+      { key: 'c' },
+      { key: 'd', problem: true },
+      { key: 'e', fresh: true },
+    ];
+    expect(problemsFirst(rows).map((row) => row.key)).toEqual(['b', 'd', 'e', 'a', 'c']);
+  });
+
+  it('go to the shorter column, measured folded', () => {
+    // Hosts (23 rows, folded to 5), folders, environments, logins, keys.
+    expect(cardColumns([23, 2, 3, 1, 2])).toEqual([
+      [0, 3],
+      [1, 2, 4],
+    ]);
+    expect(cardColumns([1])).toEqual([[0], []]);
+    expect(cardColumns([])).toEqual([[], []]);
+    // A long card counts as five rows: the next two still fit beside it.
+    expect(cardColumns([40, 2, 2])).toEqual([[0], [1, 2]]);
   });
 });

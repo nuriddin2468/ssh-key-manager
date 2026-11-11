@@ -20,10 +20,13 @@ import { EMPTY_FORM, editFromForm, type HostForm, previewLines } from './model';
  */
 export function AddHostDialog({
   onDone,
+  onSaved,
   initial,
   description,
 }: {
   onDone: () => void;
+  /** Called with the new host's name instead of opening it in Hosts. */
+  onSaved?: (alias: string) => void;
   initial?: HostForm;
   description?: string;
 }) {
@@ -46,8 +49,10 @@ export function AddHostDialog({
 
   const add = useAppMutation((next: HostEdit) => api.saveHost(next, revision), {
     success: () => t('hosts.added', { name: edit.patterns.join(' ') }),
-    onSuccess: (saved) => {
-      navigate({ page: 'hosts', hostId: saved.id });
+    onSuccess: (saved, next) => {
+      const alias = next.patterns.find((pattern) => !pattern.startsWith('!'));
+      if (onSaved && alias) onSaved(alias);
+      else navigate({ page: 'hosts', hostId: saved.id });
       onDone();
     },
     onError: (error) => configChangeError(t, error),

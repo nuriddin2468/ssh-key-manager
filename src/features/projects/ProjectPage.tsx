@@ -1,37 +1,25 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import type { TFunction } from 'i18next';
 import {
-  ArrowLeftRight,
-  Copy,
   FolderKanban,
-  FolderOpen,
   FolderPlus,
   KeyRound,
-  LockKeyhole,
   MoreHorizontal,
   Pencil,
-  Play,
   Plus,
   RectangleEllipsis,
   Server,
-  ShieldCheck,
-  SquareTerminal,
   Trash2,
-  User,
   Variable,
 } from 'lucide-react';
-import { type ReactNode, useEffect, useId, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { toast } from 'sonner';
 import { api } from '@/api/commands';
-import { useAudit, useConfig, useKeys, useVaultEntries, useVaultStatus } from '@/api/queries';
+import { useConfig, useKeys, useVaultEntries, useVaultStatus } from '@/api/queries';
 import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
-import type { CopyField } from '@/bindings/CopyField';
-import type { HostEntry } from '@/bindings/HostEntry';
 import type { Project } from '@/bindings/Project';
 import type { ProjectMember } from '@/bindings/ProjectMember';
-import type { Severity } from '@/bindings/Severity';
 import { PageBody, Toolbar } from '@/components/layout/Toolbar';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
@@ -40,34 +28,20 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { IconButton } from '@/components/ui/IconButton';
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '@/components/ui/Menu';
 import { Spinner } from '@/components/ui/Spinner';
-import { Switch } from '@/components/ui/Switch';
-import { findingTitle } from '@/features/audit/model';
-import { vaultFindingTitle } from '@/features/audit/vaultModel';
+import { EnvDialog } from '@/features/envs/EnvDialog';
 import { useEnvs } from '@/features/envs/queries';
-import { toastVaultError, useVaultMutation } from '@/features/passwords/vault';
-import { useTerminals } from '@/features/terminal/TerminalProvider';
-import { cn } from '@/lib/cn';
-import { updateSettings, useSettings } from '@/lib/settings';
+import { EntryEditor } from '@/features/passwords/EntryEditor';
+import { useVaultMutation } from '@/features/passwords/vault';
+import { updateSettings } from '@/lib/settings';
 import { AddMembersDialog, type MemberKind } from './AddMembersDialog';
-import { useSetMember } from './actions';
-import { type Library, type Members, missing, personal } from './model';
+import { Cards } from './cards';
+import { holds, type Library, type Members, memberKey, personal } from './model';
 import { ProjectDialog } from './ProjectDialog';
-import { AddToProjectButton } from './ProjectMenu';
 import { PersonalTile, ProjectTile } from './ProjectTile';
 import { projectKeys, refreshSuggestions, useProjects } from './queries';
 
-const COPIED = {
-  username: 'passwords.copiedUsername',
-  password: 'passwords.copiedPassword',
-  url: 'passwords.copiedUrl',
-  otp: 'passwords.copiedOtp',
-} as const;
-
-const SEVERITY_DOT: Record<Severity, string> = {
-  critical: 'bg-critical-solid',
-  warning: 'bg-warning-solid',
-  info: 'bg-info-solid',
-};
+/** What the Add menu creates, in the dialogs the Library uses. */
+type NewKind = 'host' | 'key' | 'login' | 'environment';
 
 /**
  * A project's page, where its things are used: connect to its hosts, open a
@@ -87,6 +61,11 @@ export function ProjectPage({ id }: { id?: string }) {
   const project = id ? projects.data?.find((p) => p.id === id) : undefined;
   const dialogs = useDialogs();
   const [adding, setAdding] = useState<MemberKind | null>(null);
+  const [creating, setCreating] = useState<'login' | 'environment' | null>(null);
+  // What the Add menu made here, listed first on its card.
+  const [made, setMade] = useState<Set<string>>(new Set());
+  // biome-ignore lint/correctness/useExhaustiveDependencies: forgotten on another project
+  useEffect(() => setMade(new Set()), [id]);
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -132,6 +111,17 @@ export function ProjectPage({ id }: { id?: string }) {
     success: (saved) => (saved ? t('projects.folderAdded') : undefined),
     onSuccess: () => void refreshSuggestions(),
   });
+  // What was just made joins the project; the dialog's own toast says it.
+  const join = useVaultMutation(
+    (member: ProjectMember) => api.projectsSetMember(id ?? '', member, true),
+    { onSuccess: () => void refreshSuggestions() },
+  );
+  // Marks what was made (`memberKey`, or `envs:<id>`) and puts it in the project.
+  const remember = (made: string) => setMade((current) => new Set(current).add(made));
+  const joinMade = (into: Project, member: ProjectMember) => {
+    remember(memberKey(member));
+    if (!holds(into, member)) join.mutate(member);
+  };
 
   if (id && !projects.data) {
     // Loading, or between the locked and the unlocked list: not Personal.
@@ -185,6 +175,25 @@ export function ProjectPage({ id }: { id?: string }) {
     else setAdding(kind);
   };
 
+  const openNew = (kind: NewKind, into: Project) => {
+    if (kind === 'host') dialogs.addHostFor((alias) => joinMade(into, { type: 'host', alias }));
+    else if (kind === 'key') {
+      dialogs.generateKeyFor((key) => {
+        if (key.fingerprint) joinMade(into, { type: 'key', fingerprint: key.fingerprint });
+      });
+    } else setCreating(kind);
+  };
+  // Made things join the project, which lives in the vault: unlocked first.
+  const startNew = (kind: NewKind) => {
+    if (!project) return;
+    if (locked) {
+      dialogs.unlockVault({
+        description: t('projects.unlockToChange'),
+        onUnlocked: () => openNew(kind, project),
+      });
+    } else openNew(kind, project);
+  };
+
   return (
     <>
       <Toolbar
@@ -198,7 +207,7 @@ export function ProjectPage({ id }: { id?: string }) {
       >
         {project ? (
           <>
-            <AddMenu onAdd={startAdding} />
+            <AddMenu onAdd={startAdding} onNew={startNew} />
             <Menu>
               <MenuTrigger asChild>
                 <IconButton
@@ -243,7 +252,7 @@ export function ProjectPage({ id }: { id?: string }) {
             icon={<ProjectTile project={project} size={44} />}
             title={t('projects.emptyTitle', { name: project.name })}
             description={t('projects.emptyText')}
-            action={<AddMenu onAdd={startAdding} primary />}
+            action={<AddMenu onAdd={startAdding} onNew={startNew} primary />}
           />
         ) : empty && !project && !locked && (projects.data ?? []).length === 0 ? (
           <EmptyState
@@ -269,11 +278,13 @@ export function ProjectPage({ id }: { id?: string }) {
           />
         ) : (
           <Cards
+            key={project?.id ?? 'personal'}
             project={project}
             members={members}
             library={library}
             goneFolders={goneFolders.data ?? []}
             locked={locked}
+            made={made}
             onAdd={startAdding}
           />
         )}
@@ -287,6 +298,29 @@ export function ProjectPage({ id }: { id?: string }) {
                 kind={adding}
                 library={library}
                 onDone={() => setAdding(null)}
+              />
+            ) : null}
+          </Dialog>
+          <Dialog open={creating !== null} onOpenChange={(open) => !open && setCreating(null)}>
+            {creating === 'login' ? (
+              <EntryEditor
+                entry={null}
+                onDone={(savedId) => {
+                  setCreating(null);
+                  if (savedId) joinMade(project, { type: 'login', id: savedId });
+                }}
+              />
+            ) : null}
+            {creating === 'environment' ? (
+              <EnvDialog
+                env={null}
+                all={envs.data ?? []}
+                defaultProject={project.environments[0] ?? project.name}
+                onSaved={(saved) => {
+                  remember(`envs:${saved.id}`);
+                  joinMade(project, { type: 'environment', group: saved.project });
+                }}
+                onDone={() => setCreating(null)}
               />
             ) : null}
           </Dialog>
@@ -332,9 +366,25 @@ function summary(t: TFunction, members: Members, locked: boolean) {
   return parts.filter(Boolean).join(' · ');
 }
 
-function AddMenu({ onAdd, primary }: { onAdd: (kind: MemberKind) => void; primary?: boolean }) {
+/**
+ * Add: items the user has (from the library, or a folder on disk) or new
+ * ones, made in the dialogs the Library uses; a new one joins the project.
+ */
+function AddMenu({
+  onAdd,
+  onNew,
+  primary,
+}: {
+  onAdd: (kind: MemberKind) => void;
+  onNew: (kind: NewKind) => void;
+  primary?: boolean;
+}) {
   const { t } = useTranslation();
   const icon = (node: ReactNode) => <span className="text-subtle">{node}</span>;
+  const server = icon(<Server className="size-[15px]" strokeWidth={1.9} />);
+  const key = icon(<KeyRound className="size-[15px]" strokeWidth={1.9} />);
+  const login = icon(<RectangleEllipsis className="size-[15px]" strokeWidth={1.9} />);
+  const env = icon(<Variable className="size-[15px]" strokeWidth={1.9} />);
   return (
     <Menu>
       <MenuTrigger asChild>
@@ -347,36 +397,36 @@ function AddMenu({ onAdd, primary }: { onAdd: (kind: MemberKind) => void; primar
         </Button>
       </MenuTrigger>
       <MenuContent align={primary ? 'start' : 'end'}>
-        <MenuItem
-          icon={icon(<Server className="size-[15px]" strokeWidth={1.9} />)}
-          onSelect={() => onAdd('hosts')}
-        >
+        <MenuItem icon={server} onSelect={() => onAdd('hosts')}>
           {t('projects.addHosts')}
         </MenuItem>
-        <MenuItem
-          icon={icon(<KeyRound className="size-[15px]" strokeWidth={1.9} />)}
-          onSelect={() => onAdd('keys')}
-        >
+        <MenuItem icon={key} onSelect={() => onAdd('keys')}>
           {t('projects.addKeys')}
         </MenuItem>
-        <MenuItem
-          icon={icon(<RectangleEllipsis className="size-[15px]" strokeWidth={1.9} />)}
-          onSelect={() => onAdd('logins')}
-        >
+        <MenuItem icon={login} onSelect={() => onAdd('logins')}>
           {t('projects.addLogins')}
         </MenuItem>
-        <MenuItem
-          icon={icon(<Variable className="size-[15px]" strokeWidth={1.9} />)}
-          onSelect={() => onAdd('environments')}
-        >
+        <MenuItem icon={env} onSelect={() => onAdd('environments')}>
           {t('projects.addEnvironments')}
         </MenuItem>
-        <MenuSeparator />
         <MenuItem
           icon={icon(<FolderPlus className="size-[15px]" strokeWidth={1.9} />)}
           onSelect={() => onAdd('folder')}
         >
           {t('projects.addFolder')}
+        </MenuItem>
+        <MenuSeparator />
+        <MenuItem icon={server} onSelect={() => onNew('host')}>
+          {t('projects.newHost')}
+        </MenuItem>
+        <MenuItem icon={key} onSelect={() => onNew('key')}>
+          {t('projects.newKey')}
+        </MenuItem>
+        <MenuItem icon={login} onSelect={() => onNew('login')}>
+          {t('projects.newLogin')}
+        </MenuItem>
+        <MenuItem icon={env} onSelect={() => onNew('environment')}>
+          {t('projects.newEnvironment')}
         </MenuItem>
       </MenuContent>
     </Menu>
@@ -412,722 +462,5 @@ function Notice({ icon, text, action }: { icon: ReactNode; text: string; action?
       <span className="min-w-[200px] flex-1">{text}</span>
       {action}
     </div>
-  );
-}
-
-interface CardsProps {
-  project: Project | undefined;
-  members: Members;
-  library: Library;
-  /** The project's folders not found on this computer. */
-  goneFolders: string[];
-  locked: boolean;
-  onAdd: (kind: MemberKind) => void;
-}
-
-/** The project's cards, only for the kinds it has. */
-function Cards({ project, members, library, goneFolders, locked, onAdd }: CardsProps) {
-  const { t } = useTranslation();
-  const dialogs = useDialogs();
-  const gone = project
-    ? missing(project, library, goneFolders)
-    : {
-        hosts: new Set<string>(),
-        keys: new Set<string>(),
-        environments: new Set<string>(),
-        folders: new Set<string>(),
-      };
-  const lockedNotice =
-    locked && (!project || project.environments.length > 0 || project.logins.length === 0);
-  return (
-    <div className="grid items-start gap-3 xl:grid-cols-2">
-      {members.hosts.length ? (
-        <HostsCard project={project} hosts={members.hosts} gone={gone.hosts} />
-      ) : null}
-      {members.folders.length && project ? (
-        <FoldersCard
-          project={project}
-          folders={members.folders}
-          gone={gone.folders}
-          locked={locked}
-          library={library}
-        />
-      ) : null}
-      {lockedNotice ? (
-        <Card
-          icon={<LockKeyhole className="size-3.5 text-subtle" strokeWidth={2.2} />}
-          title={t('projects.lockedTitle')}
-        >
-          <li className="flex flex-wrap items-center gap-3 px-1 py-2 text-[13px] text-fg-2">
-            <span className="min-w-[220px] flex-1">
-              {project ? t('projects.lockedText') : t('projects.lockedTextPersonal')}
-            </span>
-            <Button size="sm" variant="primary" onClick={() => dialogs.unlockVault()}>
-              {t('projects.unlock')}
-            </Button>
-          </li>
-        </Card>
-      ) : null}
-      {!locked && members.environments.length ? (
-        <EnvironmentsCard
-          project={project}
-          groups={members.environments}
-          gone={gone.environments}
-          library={library}
-        />
-      ) : null}
-      {!locked && members.logins.length ? (
-        <LoginsCard project={project} logins={members.logins} library={library} />
-      ) : null}
-      {members.keys.length ? (
-        <KeysCard project={project} keys={members.keys} gone={gone.keys} library={library} />
-      ) : null}
-      <TunnelsCard hosts={members.hosts} />
-      <FindingsCard members={members} library={library} />
-      {project && members.hosts.length === 0 && members.folders.length === 0 ? (
-        <div className="flex flex-wrap gap-2 xl:col-span-2">
-          <Button
-            size="sm"
-            variant="ghost"
-            icon={<Plus className="size-4" strokeWidth={2} />}
-            onClick={() => onAdd('hosts')}
-          >
-            {t('projects.addHosts')}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            icon={<FolderPlus className="size-4" strokeWidth={2} />}
-            onClick={() => onAdd('folder')}
-          >
-            {t('projects.addFolder')}
-          </Button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function Card({
-  icon,
-  title,
-  count,
-  action,
-  children,
-}: {
-  icon: ReactNode;
-  title: string;
-  count?: string | number;
-  action?: ReactNode;
-  children: ReactNode;
-}) {
-  const headingId = useId();
-  return (
-    <section
-      aria-labelledby={headingId}
-      className="glass flex min-w-0 flex-col rounded-2xl px-3 pt-2.5 pb-1.5"
-    >
-      <header className="flex min-h-7 items-center gap-2 px-1 pb-1">
-        {icon}
-        <h2 id={headingId} className="text-[13px] font-semibold">
-          {title}
-        </h2>
-        {count !== undefined ? <span className="text-[12px] text-subtle">{count}</span> : null}
-        <span className="flex-1" />
-        {action}
-      </header>
-      <ul className="flex flex-col">{children}</ul>
-    </section>
-  );
-}
-
-function Row({
-  leading,
-  title,
-  subtitle,
-  mono,
-  children,
-}: {
-  leading?: ReactNode;
-  title: ReactNode;
-  subtitle?: ReactNode;
-  mono?: boolean;
-  children?: ReactNode;
-}) {
-  return (
-    <li className="flex min-h-11 items-center gap-2.5 border-t border-white/[0.045] px-1 py-1.5 first:border-t-0">
-      {leading}
-      <div className="min-w-0 flex-1">
-        <div className={cn('truncate font-medium', mono && 'font-mono text-[12.5px]')}>{title}</div>
-        {subtitle ? <div className="truncate text-[11.5px] text-subtle">{subtitle}</div> : null}
-      </div>
-      <div className="flex shrink-0 items-center gap-1.5">{children}</div>
-    </li>
-  );
-}
-
-/** "Not in ~/.ssh/config" with its warning dot. */
-function Problem({ text }: { text: string }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 text-warning">
-      <span aria-hidden="true" className="size-1.5 rounded-full bg-warning-solid" />
-      {text}
-    </span>
-  );
-}
-
-function Monogram({ text, className }: { text: string; className?: string }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        'grid size-7 shrink-0 place-items-center rounded-lg bg-white/[0.07] text-[10px] font-bold text-fg-2',
-        className,
-      )}
-    >
-      {text.slice(0, 2).toUpperCase()}
-    </span>
-  );
-}
-
-/** "Remove" for a member that is gone, or "Add to project…" on Personal. */
-/**
- * "Remove" for a member missing on this computer. It may be fine on the
- * user's other devices, and the project is the same everywhere, so it asks
- * first; the toast can undo it.
- */
-function RemoveButton({
-  project,
-  member,
-  name,
-}: {
-  project: Project;
-  member: ProjectMember;
-  name: string;
-}) {
-  const { t } = useTranslation();
-  const setMember = useSetMember();
-  const [asking, setAsking] = useState(false);
-  return (
-    <>
-      <Button
-        size="sm"
-        variant="ghost"
-        aria-label={t('projects.removeNamed', { name, project: project.name })}
-        onClick={() => setAsking(true)}
-      >
-        {t('projects.remove')}
-      </Button>
-      <ConfirmDialog
-        open={asking}
-        onOpenChange={setAsking}
-        title={t('projects.removeGoneTitle', { name, project: project.name })}
-        description={t('projects.removeGoneText', { project: project.name })}
-        confirmLabel={t('projects.removeGoneConfirm')}
-        cancelLabel={t('projects.removeGoneCancel')}
-        destructive
-        busy={setMember.isPending}
-        onConfirm={() =>
-          setMember.mutate(
-            { project, member, included: false },
-            { onSettled: () => setAsking(false) },
-          )
-        }
-      />
-    </>
-  );
-}
-
-function hostLine(host: HostEntry | undefined, alias: string, t: TFunction) {
-  if (!host) return '';
-  const target = `${host.user ? `${host.user}@` : ''}${host.hostName ?? alias}${host.port && host.port !== 22 ? `:${host.port}` : ''}`;
-  return host.proxyJump ? t('projects.via', { target, jump: host.proxyJump }) : target;
-}
-
-function HostsCard({
-  project,
-  hosts,
-  gone,
-}: {
-  project?: Project;
-  hosts: string[];
-  gone: Set<string>;
-}) {
-  const { t } = useTranslation();
-  const { navigate } = useRouter();
-  const terminals = useTerminals();
-  const config = useConfig();
-  const byAlias = useMemo(() => {
-    const map = new Map<string, HostEntry>();
-    for (const host of config.data?.view.hosts ?? [])
-      for (const p of host.patterns) map.set(p, host);
-    return map;
-  }, [config.data]);
-  return (
-    <Card
-      icon={<Server className="size-3.5 text-[#7DD3FC]" strokeWidth={2.2} />}
-      title={t('projects.cards.hosts')}
-      count={hosts.length}
-    >
-      {hosts.map((alias) => {
-        const member: ProjectMember = { type: 'host', alias };
-        return (
-          <Row
-            key={alias}
-            mono
-            leading={<Monogram text={alias} />}
-            title={alias}
-            subtitle={
-              gone.has(alias) ? (
-                <Problem text={t('projects.hostGone')} />
-              ) : (
-                hostLine(byAlias.get(alias), alias, t)
-              )
-            }
-          >
-            {gone.has(alias) && project ? (
-              <RemoveButton project={project} member={member} name={alias} />
-            ) : (
-              <>
-                {project ? null : <AddToProjectButton member={member} name={alias} />}
-                <Button
-                  size="sm"
-                  icon={<SquareTerminal className="size-3.5" strokeWidth={2} />}
-                  aria-label={t('projects.connectTo', { name: alias })}
-                  onClick={() => {
-                    terminals.open(alias);
-                    navigate({ page: 'terminal' });
-                  }}
-                >
-                  {t('projects.connect')}
-                </Button>
-              </>
-            )}
-          </Row>
-        );
-      })}
-    </Card>
-  );
-}
-
-function FoldersCard({
-  project,
-  folders,
-  gone,
-  locked,
-  library,
-}: {
-  project: Project;
-  folders: string[];
-  gone: Set<string>;
-  locked: boolean;
-  library: Library;
-}) {
-  const { t } = useTranslation();
-  const { navigate } = useRouter();
-  const terminals = useTerminals();
-  const hasLocal =
-    !locked &&
-    (library.envs ?? []).some(
-      (env) =>
-        !env.inTrash &&
-        env.name.toLowerCase() === 'local' &&
-        project.environments.includes(env.project),
-    );
-  return (
-    <Card
-      icon={<FolderOpen className="size-3.5 text-[#86EFAC]" strokeWidth={2.2} />}
-      title={t('projects.cards.folders')}
-      count={folders.length}
-    >
-      {folders.map((path) => {
-        const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-        return (
-          <Row
-            key={path}
-            mono
-            leading={
-              <FolderOpen
-                aria-hidden="true"
-                className="size-4 shrink-0 text-subtle"
-                strokeWidth={1.9}
-              />
-            }
-            title={path}
-            subtitle={
-              gone.has(path) ? (
-                <Problem text={t('projects.folderGone')} />
-              ) : hasLocal ? (
-                t('projects.withLocal')
-              ) : undefined
-            }
-          >
-            {gone.has(path) ? (
-              <RemoveButton project={project} member={{ type: 'folder', path }} name={path} />
-            ) : (
-              <Button
-                size="sm"
-                icon={<SquareTerminal className="size-3.5" strokeWidth={2} />}
-                aria-label={t('projects.openTerminalIn', { name: path })}
-                onClick={() => {
-                  terminals.openLocal({
-                    folder: { project: project.id, path, label: `${project.name} · ${name}` },
-                  });
-                  navigate({ page: 'terminal' });
-                }}
-              >
-                {t('projects.openTerminal')}
-              </Button>
-            )}
-          </Row>
-        );
-      })}
-    </Card>
-  );
-}
-
-function EnvironmentsCard({
-  project,
-  groups,
-  gone,
-  library,
-}: {
-  project?: Project;
-  groups: string[];
-  gone: Set<string>;
-  library: Library;
-}) {
-  const { t } = useTranslation();
-  const { navigate } = useRouter();
-  const terminals = useTerminals();
-  return (
-    <Card
-      icon={<Variable className="size-3.5 text-[#D9F99D]" strokeWidth={2.2} />}
-      title={t('projects.cards.environments')}
-      count={groups.length > 1 ? groups.length : groups[0]}
-    >
-      {groups.map((group) => {
-        const member: ProjectMember = { type: 'environment', group };
-        if (!library.envs) {
-          return <Row key={group} mono title={group} subtitle={t('common.loading')} />;
-        }
-        const envs = library.envs.filter((env) => !env.inTrash && env.project === group);
-        if (gone.has(group) || envs.length === 0) {
-          return (
-            <Row
-              key={group}
-              mono
-              title={group}
-              subtitle={<Problem text={t('projects.groupGone')} />}
-            >
-              {project ? <RemoveButton project={project} member={member} name={group} /> : null}
-            </Row>
-          );
-        }
-        return envs.map((env, index) => (
-          <Row
-            key={env.id}
-            leading={
-              <span
-                className={cn(
-                  'inline-flex h-[22px] min-w-12 items-center justify-center rounded-full px-2 font-mono text-[11.5px]',
-                  ['prod', 'production', 'live'].includes(env.name.toLowerCase())
-                    ? 'bg-[rgb(225_29_72/0.18)] text-[#fecdd3]'
-                    : 'bg-white/[0.06] text-fg-2',
-                )}
-              >
-                {env.name}
-              </span>
-            }
-            title={groups.length > 1 && index === 0 ? group : ''}
-            subtitle={
-              env.secretCount
-                ? t('envs.countsWithSecrets', {
-                    count: env.variableCount,
-                    secrets: env.secretCount,
-                  })
-                : t('envs.counts', { count: env.variableCount })
-            }
-          >
-            {project || index > 0 ? null : <AddToProjectButton member={member} name={group} />}
-            <Button
-              size="sm"
-              icon={<Play className="size-3" strokeWidth={2.4} />}
-              aria-label={t('projects.runIn', { name: `${group} · ${env.name}` })}
-              onClick={() => {
-                terminals.openLocal({ env: { id: env.id, label: `${group} · ${env.name}` } });
-                navigate({ page: 'terminal' });
-              }}
-            >
-              {t('projects.run')}
-            </Button>
-          </Row>
-        ));
-      })}
-    </Card>
-  );
-}
-
-function LoginsCard({
-  project,
-  logins,
-  library,
-}: {
-  project?: Project;
-  logins: string[];
-  library: Library;
-}) {
-  const { t } = useTranslation();
-  const byId = new Map((library.entries ?? []).map((entry) => [entry.id, entry]));
-  const copy = useMutation({
-    mutationFn: ({ id, field }: { id: string; field: CopyField }) => api.vaultCopy(id, field),
-    onSuccess: (result, { field }) => {
-      toast.success(t(COPIED[field]), {
-        id: 'vault-copy',
-        description:
-          result.clearsInSecs !== null
-            ? t('passwords.clearsIn', { seconds: result.clearsInSecs })
-            : undefined,
-      });
-    },
-    onError: (error) => toastVaultError(t, error),
-  });
-  const shown = logins.map((id) => byId.get(id)).filter((entry) => entry !== undefined);
-  if (shown.length === 0) return null;
-  return (
-    <Card
-      icon={<RectangleEllipsis className="size-3.5 text-[#F9A8D4]" strokeWidth={2.2} />}
-      title={t('projects.cards.logins')}
-      count={shown.length}
-    >
-      {shown.map((entry) => {
-        const site = entry.url.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-        return (
-          <Row
-            key={entry.id}
-            leading={<Monogram text={entry.title} />}
-            title={entry.title}
-            subtitle={[entry.username, site].filter(Boolean).join(' · ')}
-          >
-            {project ? null : (
-              <AddToProjectButton member={{ type: 'login', id: entry.id }} name={entry.title} />
-            )}
-            {entry.username ? (
-              <IconButton
-                label={t('projects.copyUsername', { name: entry.title })}
-                variant="ghost"
-                icon={<User className="size-4" strokeWidth={1.9} />}
-                onClick={() => copy.mutate({ id: entry.id, field: 'username' })}
-              />
-            ) : null}
-            {entry.hasPassword ? (
-              <Button
-                size="sm"
-                icon={<Copy className="size-3.5" strokeWidth={2} />}
-                aria-label={t('projects.copyPasswordOf', { name: entry.title })}
-                onClick={() => copy.mutate({ id: entry.id, field: 'password' })}
-              >
-                {t('projects.copyPassword')}
-              </Button>
-            ) : null}
-          </Row>
-        );
-      })}
-    </Card>
-  );
-}
-
-function KeysCard({
-  project,
-  keys,
-  gone,
-  library,
-}: {
-  project?: Project;
-  keys: string[];
-  gone: Set<string>;
-  library: Library;
-}) {
-  const { t } = useTranslation();
-  const dialogs = useDialogs();
-  const byFingerprint = new Map((library.keys ?? []).map((key) => [key.fingerprint, key]));
-  return (
-    <Card
-      icon={<KeyRound className="size-3.5 text-[#5EEAD4]" strokeWidth={2.2} />}
-      title={t('projects.cards.keys')}
-      count={keys.length}
-    >
-      {keys.map((fingerprint) => {
-        const key = byFingerprint.get(fingerprint);
-        const member: ProjectMember = { type: 'key', fingerprint };
-        const short = `${fingerprint.slice(0, 15)}…${fingerprint.slice(-4)}`;
-        return (
-          <Row
-            key={fingerprint}
-            mono
-            leading={
-              <KeyRound
-                aria-hidden="true"
-                className="size-4 shrink-0 text-subtle"
-                strokeWidth={1.9}
-              />
-            }
-            title={key?.name ?? short}
-            subtitle={
-              gone.has(fingerprint) ? (
-                <Problem text={t('projects.keyGone')} />
-              ) : (
-                <span className="font-mono">{short}</span>
-              )
-            }
-          >
-            {gone.has(fingerprint) && project ? (
-              <RemoveButton project={project} member={member} name={key?.name ?? short} />
-            ) : key ? (
-              <>
-                {project ? null : <AddToProjectButton member={member} name={key.name} />}
-                {key.inAgent ? (
-                  <span className="inline-flex h-[22px] items-center gap-1.5 rounded-full bg-[rgb(94_234_212/0.1)] px-2 text-[11.5px] text-ok">
-                    <span aria-hidden="true" className="size-1.5 rounded-full bg-ok" />
-                    {t('projects.inAgent')}
-                  </span>
-                ) : (
-                  <Button
-                    size="sm"
-                    aria-label={t('projects.addToAgentNamed', { name: key.name })}
-                    onClick={() => dialogs.unlockKey(key)}
-                  >
-                    {t('projects.addToAgent')}
-                  </Button>
-                )}
-              </>
-            ) : null}
-          </Row>
-        );
-      })}
-    </Card>
-  );
-}
-
-function TunnelsCard({ hosts }: { hosts: string[] }) {
-  const { t } = useTranslation();
-  const tunnels = useQuery({ queryKey: ['tunnels'], queryFn: api.tunnelList });
-  const toggle = useMutation({
-    mutationFn: ({ id, on }: { id: string; on: boolean }) => api.tunnelSetOn(id, on),
-    onSettled: () => void tunnels.refetch(),
-    onError: (error) => toastVaultError(t, error),
-  });
-  const mine = (tunnels.data ?? []).filter((view) => hosts.includes(view.tunnel.alias));
-  if (mine.length === 0) return null;
-  return (
-    <Card
-      icon={<ArrowLeftRight className="size-3.5 text-[#67E8F9]" strokeWidth={2.2} />}
-      title={t('projects.cards.tunnels')}
-      count={mine.length}
-    >
-      {mine.map(({ tunnel, state }) => {
-        const route =
-          tunnel.kind === 'dynamic'
-            ? t('projects.tunnelSocks', { port: tunnel.listenPort })
-            : `${tunnel.listenPort} → ${tunnel.targetHost ?? ''}:${tunnel.targetPort ?? ''}`;
-        const on = state.state !== 'off' && state.state !== 'failed';
-        const label = tunnel.name || route;
-        return (
-          <Row
-            key={tunnel.id}
-            mono={!tunnel.name}
-            title={label}
-            subtitle={t('projects.through', { alias: tunnel.alias })}
-          >
-            <Switch
-              checked={on}
-              aria-label={t('projects.tunnelSwitch', { name: label })}
-              onCheckedChange={(checked) => toggle.mutate({ id: tunnel.id, on: checked })}
-            />
-          </Row>
-        );
-      })}
-    </Card>
-  );
-}
-
-function FindingsCard({ members, library }: { members: Members; library: Library }) {
-  const { t } = useTranslation();
-  const { navigate } = useRouter();
-  const audit = useAudit();
-  const vaultState = useVaultStatus().data?.state;
-  const vaultAudit = useQuery({
-    queryKey: ['vault', 'audit', vaultState],
-    queryFn: api.vaultAudit,
-    enabled: vaultState !== undefined,
-  });
-  const ignored = new Set(useSettings().ignoredFindings);
-  const hostIds = new Set(
-    (library.hosts ?? [])
-      .filter((h) => h.patterns.some((p) => members.hosts.includes(p)))
-      .map((h) => h.id),
-  );
-  const keyIds = new Set(
-    (library.keys ?? [])
-      .filter((k) => k.fingerprint !== null && members.keys.includes(k.fingerprint))
-      .map((k) => k.id),
-  );
-  const logins = new Set(members.logins);
-  const keyNames = new Map((library.keys ?? []).map((k) => [k.id, k.name]));
-  const hostNames = new Map((library.hosts ?? []).map((h) => [h.id, h.patterns.join(' ')]));
-  const entryNames = new Map((library.entries ?? []).map((e) => [e.id, e.title]));
-  const found = [
-    ...(audit.data?.findings ?? [])
-      .filter((f) => !ignored.has(f.id))
-      .filter(
-        (f) =>
-          (f.subject.hostId !== null && hostIds.has(f.subject.hostId)) ||
-          (f.subject.keyId !== null && keyIds.has(f.subject.keyId)),
-      )
-      .map((f) => ({
-        id: f.id,
-        severity: f.severity,
-        title: findingTitle(t, f),
-        about:
-          (f.subject.keyId !== null ? keyNames.get(f.subject.keyId) : undefined) ??
-          (f.subject.hostId !== null ? hostNames.get(f.subject.hostId) : undefined),
-      })),
-    ...(vaultAudit.data?.findings ?? [])
-      .filter((f) => !ignored.has(f.id) && logins.has(f.entryId))
-      .map((f) => ({
-        id: f.id,
-        severity: f.severity,
-        title: vaultFindingTitle(t, f),
-        about: entryNames.get(f.entryId),
-      })),
-  ];
-  if (found.length === 0) return null;
-  return (
-    <Card
-      icon={<ShieldCheck className="size-3.5 text-[#FDA4AF]" strokeWidth={2.2} />}
-      title={t('projects.cards.findings')}
-      count={found.length}
-      action={
-        <Button size="sm" variant="ghost" onClick={() => navigate({ page: 'audit' })}>
-          {t('projects.openAudit')}
-        </Button>
-      }
-    >
-      {found.slice(0, 6).map((finding) => (
-        <Row
-          key={finding.id}
-          leading={
-            <span
-              aria-hidden="true"
-              className={cn('size-2 shrink-0 rounded-full', SEVERITY_DOT[finding.severity])}
-            />
-          }
-          title={finding.title}
-          subtitle={[t(`projects.severity.${finding.severity}`), finding.about]
-            .filter(Boolean)
-            .join(' · ')}
-        />
-      ))}
-    </Card>
   );
 }

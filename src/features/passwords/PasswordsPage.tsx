@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
+import { BackToProject } from '@/features/projects/BackToProject';
 import { CreateVault, RecoveryKeyScreen } from './CreateVault';
 import { UnlockVault } from './UnlockVault';
 import { VaultBrowser } from './VaultBrowser';
@@ -26,7 +27,7 @@ export function PasswordsPage({ entryId }: { entryId?: string }) {
 
   return (
     <>
-      <Toolbar title={t('passwords.title')} />
+      <Toolbar leading={<BackToProject />} title={t('passwords.title')} />
       <PageBody>
         {recoveryKey ? (
           <RecoveryKeyScreen recoveryKey={recoveryKey} />

@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use serde::{Deserialize, Serialize};
-use sshkm_core::config::{HostKind, SshConfig};
+use sshkm_core::config::{HostEntry, HostKind, SshConfig};
 use sshkm_core::paths::home_dir;
 use sshkm_core::vault::envs::EnvSummary;
 use sshkm_core::vault::projects::suggest::{self, Declined, HostFacts, ProjectSuggestion};
@@ -586,10 +586,15 @@ fn local_variables(
 const PENDING_RENAMES: &str = "project-host-renames.json";
 /// Most renames kept waiting; past it the oldest go.
 const MAX_PENDING_RENAMES: usize = 200;
+/// Held while the file of waiting renames is read and written, so a rename
+/// saved meanwhile is never lost.
+static PENDING_LOCK: Mutex<()> = Mutex::new(());
+
+type Rename = (String, String);
 
 /// The renames between a block's aliases `before` and `after`, pair by
 /// pair: an alias that went and the one in its place that is new.
-pub fn renamed_aliases(before: &[String], after: &[String]) -> Vec<(String, String)> {
+pub fn renamed_aliases(before: &[String], after: &[String]) -> Vec<Rename> {
     before
         .iter()
         .zip(after)
@@ -598,20 +603,57 @@ pub fn renamed_aliases(before: &[String], after: &[String]) -> Vec<(String, Stri
         .collect()
 }
 
+/// Every name the `Host` blocks of a file answer to.
+fn file_aliases(hosts: &[HostEntry]) -> BTreeSet<&str> {
+    hosts
+        .iter()
+        .filter(|host| host.kind == HostKind::Host)
+        .flat_map(|host| host.patterns.iter().map(String::as_str))
+        .collect()
+}
+
+/// The renames of block `old` (of the file `before`) into block `new` (of
+/// the file `after`): only an alias that is in no block of the new file,
+/// replaced by one that was in no block of the old file. A name that moved
+/// to another block, or one that was there already, is no rename.
+pub fn block_renames(
+    before: &[HostEntry],
+    after: &[HostEntry],
+    old: &HostEntry,
+    new: &HostEntry,
+) -> Vec<Rename> {
+    let (was, now) = (file_aliases(before), file_aliases(after));
+    renamed_aliases(&old.patterns, &new.patterns)
+        .into_iter()
+        .filter(|(from, to)| !now.contains(from.as_str()) && !was.contains(to.as_str()))
+        .collect()
+}
+
+/// The renames a whole new text of `~/.ssh/config` makes, as far as it can
+/// tell: the blocks line up one for one, and a block whose options stayed
+/// the same got new names ([`block_renames`]). Reordered, added or removed
+/// blocks are no renames.
+pub fn file_renames(before: &[HostEntry], after: &[HostEntry]) -> Vec<Rename> {
+    if before.len() != after.len() {
+        return Vec::new();
+    }
+    before
+        .iter()
+        .zip(after)
+        .filter(|(old, new)| old.kind == new.kind && old.options == new.options)
+        .flat_map(|(old, new)| block_renames(before, after, old, new))
+        .collect()
+}
+
 /// Moves renamed hosts in the projects that hold them, after `~/.ssh/config`
-/// was saved: `before` and `after` are a block's aliases. While the vault is
+/// was saved ([`block_renames`], [`file_renames`]). While the vault is
 /// locked the renames wait beside it and are made once it is open
 /// ([`apply_pending_renames`]). A failure here never undoes the host's save.
-pub fn follow_host_renames(app: &AppHandle, state: &AppState, before: &[String], after: &[String]) {
-    let renames = renamed_aliases(before, after);
+pub fn follow_host_renames(app: &AppHandle, state: &AppState, renames: Vec<Rename>) {
     if renames.is_empty() {
         return;
     }
-    let mut pending = load_pending(state);
-    pending.extend(renames);
-    let excess = pending.len().saturating_sub(MAX_PENDING_RENAMES);
-    pending.drain(..excess);
-    if let Err(error) = save_pending(state, &pending) {
+    if let Err(error) = queue_renames(state.vault.data_dir(), renames) {
         log::warn!("projects: a renamed host was not kept for later: {error}");
         return;
     }
@@ -620,10 +662,15 @@ pub fn follow_host_renames(app: &AppHandle, state: &AppState, before: &[String],
     }
 }
 
-/// Makes the host renames that waited for the vault, in order, then
-/// forgets them. Does nothing while the vault is locked.
+/// Makes the host renames that waited for the vault, in order, then takes
+/// them off the list; renames added meanwhile stay. Does nothing while the
+/// vault is locked.
 pub fn apply_pending_renames(app: &AppHandle, state: &AppState) {
-    let pending = load_pending(state);
+    let dir = state.vault.data_dir();
+    let pending = {
+        let _guard = pending_lock();
+        load_pending(dir)
+    };
     if pending.is_empty() || !state.vault.is_unlocked() {
         return;
     }
@@ -647,29 +694,58 @@ pub fn apply_pending_renames(app: &AppHandle, state: &AppState) {
         }),
         Err(error) => Err(error),
     };
-    match moved {
-        Ok(()) => {
-            let _ = std::fs::remove_file(state.vault.data_dir().join(PENDING_RENAMES));
-        }
+    match moved.and_then(|()| forget_renames(dir, &pending)) {
+        Ok(()) => {}
         Err(error) => log::warn!("projects: renamed hosts were not moved yet: {error}"),
     }
 }
 
-fn load_pending(state: &AppState) -> Vec<(String, String)> {
-    std::fs::read(state.vault.data_dir().join(PENDING_RENAMES))
+fn pending_lock() -> MutexGuard<'static, ()> {
+    PENDING_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Adds `renames` to the waiting ones in `dir`, keeping the latest
+/// [`MAX_PENDING_RENAMES`].
+fn queue_renames(dir: &Path, renames: Vec<Rename>) -> AppResult<()> {
+    let _guard = pending_lock();
+    let mut pending = load_pending(dir);
+    pending.extend(renames);
+    let excess = pending.len().saturating_sub(MAX_PENDING_RENAMES);
+    pending.drain(..excess);
+    save_pending(dir, &pending)
+}
+
+/// Takes `applied` off the waiting renames in `dir`, each once and in
+/// order; what was added since stays.
+fn forget_renames(dir: &Path, applied: &[Rename]) -> AppResult<()> {
+    let _guard = pending_lock();
+    let mut pending = load_pending(dir);
+    for rename in applied {
+        if let Some(index) = pending.iter().position(|p| p == rename) {
+            pending.remove(index);
+        }
+    }
+    save_pending(dir, &pending)
+}
+
+fn load_pending(dir: &Path) -> Vec<Rename> {
+    std::fs::read(dir.join(PENDING_RENAMES))
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default()
 }
 
-fn save_pending(state: &AppState, pending: &[(String, String)]) -> AppResult<()> {
+fn save_pending(dir: &Path, pending: &[Rename]) -> AppResult<()> {
+    let path = dir.join(PENDING_RENAMES);
+    if pending.is_empty() {
+        return match std::fs::remove_file(&path) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+            _ => Ok(()),
+        };
+    }
     let json = serde_json::to_vec(pending)
         .map_err(|e| AppError::invalid(format!("renamed hosts: {e}")))?;
-    Ok(fsutil::atomic_write(
-        &state.vault.data_dir().join(PENDING_RENAMES),
-        &json,
-        0o600,
-    )?)
+    Ok(fsutil::atomic_write(&path, &json, 0o600)?)
 }
 
 #[cfg(test)]
@@ -748,6 +824,75 @@ mod tests {
         let api_first = project(&[], &["api", "web"]);
         assert_eq!(local_environment(&api_first, &envs).unwrap().id, "a-local");
         assert!(local_environment(&project(&[], &["other"]), &envs).is_none());
+    }
+
+    fn hosts(text: &str) -> Vec<HostEntry> {
+        SshConfig::parse(text).hosts()
+    }
+
+    fn rename(old: &str, new: &str) -> Rename {
+        (old.to_owned(), new.to_owned())
+    }
+
+    #[test]
+    fn the_raw_editor_follows_only_real_renames() {
+        let before = "Host web\n    HostName 10.0.0.1\n\nHost db\n    HostName 10.0.0.2\n";
+        // Reordered blocks: nothing was renamed.
+        let reordered = "Host db\n    HostName 10.0.0.2\n\nHost web\n    HostName 10.0.0.1\n";
+        assert_eq!(file_renames(&hosts(before), &hosts(reordered)), []);
+        // One removed, one added: no rename either.
+        let swapped_out = "Host db\n    HostName 10.0.0.2\n\nHost new\n    HostName 10.0.0.9\n";
+        assert_eq!(file_renames(&hosts(before), &hosts(swapped_out)), []);
+        // Two blocks swapping names, options staying.
+        let names_swapped = "Host db\n    HostName 10.0.0.1\n\nHost web\n    HostName 10.0.0.2\n";
+        assert_eq!(file_renames(&hosts(before), &hosts(names_swapped)), []);
+        // A real rename among unchanged blocks.
+        let renamed = "Host prod\n    HostName 10.0.0.1\n\nHost db\n    HostName 10.0.0.2\n";
+        assert_eq!(
+            file_renames(&hosts(before), &hosts(renamed)),
+            [rename("web", "prod")]
+        );
+        // Renamed and changed at once: the raw editor can't tell.
+        let changed = "Host prod\n    HostName 10.9.9.9\n\nHost db\n    HostName 10.0.0.2\n";
+        assert_eq!(file_renames(&hosts(before), &hosts(changed)), []);
+    }
+
+    #[test]
+    fn the_host_editor_follows_a_rename_to_a_name_no_other_block_has() {
+        let before = hosts("Host web\n    User a\n\nHost db\n    User b\n");
+        let to_new = hosts("Host prod\n    User a\n\nHost db\n    User b\n");
+        assert_eq!(
+            block_renames(&before, &to_new, &before[0], &to_new[0]),
+            [rename("web", "prod")]
+        );
+        // Renamed to a name another block has: that host is still there.
+        let to_db = hosts("Host db\n    User a\n\nHost db\n    User b\n");
+        assert_eq!(block_renames(&before, &to_db, &before[0], &to_db[0]), []);
+    }
+
+    #[test]
+    fn renames_wait_in_a_file_and_leave_it_only_once_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        assert_eq!(load_pending(path), Vec::<Rename>::new());
+        queue_renames(path, vec![rename("web", "prod")]).unwrap();
+        queue_renames(path, vec![rename("prod", "api")]).unwrap();
+        let loaded = load_pending(path);
+        assert_eq!(loaded, [rename("web", "prod"), rename("prod", "api")]);
+        // Saved while the first two were being made: it stays.
+        queue_renames(path, vec![rename("db", "pg")]).unwrap();
+        forget_renames(path, &loaded).unwrap();
+        assert_eq!(load_pending(path), [rename("db", "pg")]);
+        forget_renames(path, &[rename("db", "pg")]).unwrap();
+        assert!(!path.join(PENDING_RENAMES).exists());
+        // Only the latest are kept.
+        let many: Vec<Rename> = (0..MAX_PENDING_RENAMES + 5)
+            .map(|n| rename(&format!("h{n}"), &format!("n{n}")))
+            .collect();
+        queue_renames(path, many).unwrap();
+        let kept = load_pending(path);
+        assert_eq!(kept.len(), MAX_PENDING_RENAMES);
+        assert_eq!(kept[0], rename("h5", "n5"));
     }
 
     #[test]

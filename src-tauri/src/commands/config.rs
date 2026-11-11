@@ -55,8 +55,10 @@ pub async fn save_host(
         }
         config.save(&state.paths.config, &state.backup_dir)?;
         // A renamed host moves in the projects that hold it.
-        if let Some(old) = edit.id.and_then(|id| before.host(id)) {
-            super::projects::follow_host_renames(&app, state, &old.patterns, &edit.patterns);
+        if let (Some(old), Some(new)) = (edit.id.and_then(|id| before.host(id)), config.host(id)) {
+            let renames =
+                super::projects::block_renames(&before.hosts(), &config.hosts(), &old, &new);
+            super::projects::follow_host_renames(&app, state, renames);
         }
         Ok(SavedHost {
             file: config_file(state)?,
@@ -134,14 +136,11 @@ pub async fn write_config_raw(
         }
         fsutil::backup(&state.paths.config, &state.backup_dir)?;
         fsutil::atomic_write(&state.paths.config, text.as_bytes(), 0o600)?;
-        // Renamed hosts move in the projects that hold them when the blocks
-        // still line up one for one; otherwise nothing can say which is which.
-        let (old, new) = (before.hosts(), SshConfig::parse(&text).hosts());
-        if old.len() == new.len() {
-            for (a, b) in old.iter().zip(&new) {
-                super::projects::follow_host_renames(&app, state, &a.patterns, &b.patterns);
-            }
-        }
+        // Renamed hosts move in the projects that hold them, as far as the
+        // two texts tell (see `file_renames`).
+        let renames =
+            super::projects::file_renames(&before.hosts(), &SshConfig::parse(&text).hosts());
+        super::projects::follow_host_renames(&app, state, renames);
         config_file(state)
     })
     .await

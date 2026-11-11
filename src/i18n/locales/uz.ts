@@ -3752,6 +3752,10 @@ const uz = {
           'Bu fayl {{repository}}da Gitga commit qilingan. Unga yozilgan qiymatlar, git rm --cached bilan olib tashlanmasa, keyingi commitga tushadi.',
         cloud: '{{service}} bu papkani qiymatlari bilan birga oʻz serverlariga koʻchiradi.',
         cloudOther: 'Bulut xizmati bu papkani qiymatlari bilan birga oʻz serverlariga koʻchiradi.',
+        gitUnknownTitle: 'Gitni hozircha tekshirib boʻlmaydi',
+        gitUnknown:
+          'Bu papka kompyuterda yoʻq, shuning uchun ilova Git faylni eʼtiborsiz qoldirishini tekshira olmaydi. U yerda commit qilishdan oldin Git uni eʼtiborsiz qoldirishiga ishonch hosil qiling.',
+        notYet: 'Uning papkasi hali yoʻq — papka paydo boʻlgach, fayl yoziladi.',
         ignoreAndWrite: '.gitignore ga qoʻshib yozish',
         writeAnyway: 'Baribir yozish',
         back: 'Boshqa fayl tanlash',

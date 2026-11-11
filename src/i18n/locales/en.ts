@@ -3691,6 +3691,10 @@ const en = {
           'This file is committed to Git in {{repository}}. Values written into it go into the next commit unless it’s removed with git rm --cached.',
         cloud: '{{service}} copies this folder to its servers, values included.',
         cloudOther: 'A cloud service copies this folder to its servers, values included.',
+        gitUnknownTitle: 'Git can’t be checked yet',
+        gitUnknown:
+          'This folder isn’t on this computer, so the app can’t check whether Git ignores the file. Make sure Git ignores it before you commit there.',
+        notYet: 'Its folder isn’t here yet, so the file is written once that folder exists.',
         ignoreAndWrite: 'Add to .gitignore and write',
         writeAnyway: 'Write anyway',
         back: 'Choose another file',

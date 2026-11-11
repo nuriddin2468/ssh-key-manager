@@ -7,7 +7,8 @@
 // marketing-site / dev to `.env.local`, which Git doesn't ignore and which
 // lacks a name its `.env.example` has, and to `apps/blog/.env`, which was
 // deleted (Write again). Binding a file under shop-api finds a working tree
-// that doesn't ignore it, to show the warning first. A few `.env` files in the projects'
+// that doesn't ignore it, to show the warning first; under shop-web, a
+// folder that isn't on this computer, where Git can't be asked. A few `.env` files in the projects'
 // folders are unmanaged, to take under management. Files exist only here:
 // their variables are kept with each binding.
 
@@ -360,17 +361,21 @@ export const envFilesHandlers: Record<string, Handler> = {
     if (item.files.some((x) => x.folder === checked.folder && x.path === checked.path)) {
       return fail('already_exists', checked.path);
     }
-    const here = !checked.path.includes('/');
+    // `~/code/shop-web` stands for a folder that isn't on this computer:
+    // Git can't be asked there. Elsewhere a missing subfolder is asked from
+    // the project's folder.
+    const away = checked.folder === '~/code/shop-web';
     return {
       file: checked,
-      location: here ? locate(checked) : null,
+      location: away ? null : locate(checked),
+      folderHere: !away && !checked.path.includes('/'),
       // shop-api's working tree doesn't ignore new files yet.
-      git: here
-        ? {
+      git: away
+        ? null
+        : {
             state: checked.folder.includes('shop-api') ? 'untracked' : 'ignored',
             repository: expand(checked.folder),
-          }
-        : null,
+          },
       cloud: null,
     };
   },

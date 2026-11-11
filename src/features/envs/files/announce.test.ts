@@ -13,8 +13,8 @@ vi.mock('@/api/queries', () => ({
   queryClient: { invalidateQueries: vi.fn() },
 }));
 
-const { announceSynced, markConflictTold, undoChange } = await import('./announce');
-const { bindRefusal, isFileConflict, isVaultConflict } = await import('./errors');
+const { announceSynced, markConflictTold, SAME_ROUND_MS, undoChange } = await import('./announce');
+const { bindRefusal, isEnvNameClash, isFileConflict, isVaultConflict } = await import('./errors');
 
 const t = ((key: string, values?: Record<string, unknown>) =>
   values ? `${key} ${JSON.stringify(values)}` : key) as unknown as TFunction;
@@ -65,6 +65,24 @@ describe('announcing rounds', () => {
     expect(options.id).toBe('env-file-edit:rev-a');
     announceSynced(t, round([change('rev-b')]), navigate);
     expect(toast.success).toHaveBeenCalledTimes(2);
+  });
+
+  it('tells again of a later edit that lands on the same values', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-11-11T10:00:00Z'));
+      const synced = round([change('rev-same')]);
+      announceSynced(t, synced, navigate);
+      vi.setSystemTime(new Date(Date.now() + SAME_ROUND_MS / 2));
+      announceSynced(t, synced, navigate);
+      expect(toast.success).toHaveBeenCalledTimes(1);
+      // Minutes later the user changed it back and forth: a new edit.
+      vi.setSystemTime(new Date(Date.now() + 3 * SAME_ROUND_MS));
+      announceSynced(t, synced, navigate);
+      expect(toast.success).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('tells of a conflict once while it lasts, and not after a dialog did', () => {
@@ -143,5 +161,16 @@ describe('telling file errors from the vault’s', () => {
     ).toBe('envs.files.errors.otherEnv');
     expect(refusal('already_exists', '.env')).toBe('envs.files.bind.taken');
     expect(refusal('io', 'disk full')).toBe(null);
+  });
+
+  it('tells a name taken in the group from a file taken', () => {
+    expect(isEnvNameClash({ code: 'already_exists', message: 'shop-api / dev' })).toBe(true);
+    expect(isEnvNameClash({ code: 'already_exists', message: '.env' })).toBe(false);
+    expect(
+      isEnvNameClash({
+        code: 'already_exists',
+        message: "/code/shop / web/.env is written by another environment's file",
+      }),
+    ).toBe(false);
   });
 });

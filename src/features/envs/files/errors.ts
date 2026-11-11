@@ -49,3 +49,14 @@ export function bindRefusal(t: TFunction, error: unknown): string | null {
   if (/isn.t in a project that holds/.test(message)) return t('envs.files.errors.notInProject');
   return null;
 }
+
+/**
+ * The backend found an environment of the chosen name in the group
+ * (`group / name`), not a file another binding names.
+ */
+export function isEnvNameClash(error: unknown): boolean {
+  const { code, message } = AppError.from(error);
+  return (
+    code === 'already_exists' && !/another environment/.test(message) && message.includes(' / ')
+  );
+}

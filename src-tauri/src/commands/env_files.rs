@@ -24,7 +24,7 @@ use sshkm_core::vault::envs::files::{
 use sshkm_core::vault::envs::{
     self, EnvDetail, EnvImportPreview, EnvInput, ImportChoice, looks_secret,
 };
-use sshkm_core::vault::projects::ProjectMember;
+use sshkm_core::vault::projects::{self, ProjectMember};
 use tauri::{AppHandle, State};
 
 use super::envs::{EnvImported, ImportTarget, unignored_in_git};
@@ -42,9 +42,15 @@ type Files<'a> = State<'a, Arc<EnvFiles>>;
 pub struct EnvFileCheck {
     /// The binding as it would be kept.
     pub file: EnvFile,
-    /// The file on this computer, if its folder is here.
+    /// Where the file would be on this computer, when the project's folder
+    /// is here.
     pub location: Option<PathBuf>,
-    /// What Git makes of it there; `None` without a folder here.
+    /// The file's own folder is here, so it is written at once; otherwise
+    /// once that folder is made.
+    pub folder_here: bool,
+    /// What Git makes of it there, asked from the nearest folder on the way
+    /// that is here; `None` when the project's folder isn't on this
+    /// computer, so Git can't be asked.
     pub git: Option<GitInfo>,
     /// The cloud service that copies its folder, if one does.
     pub cloud: Option<CloudService>,
@@ -316,13 +322,29 @@ pub async fn envs_files_check(
 ) -> AppResult<EnvFileCheck> {
     blocking(&state, move |state| {
         let ctx = context(state);
-        let (file, location) = state.vault.with(&app, |vault| {
+        let (file, located) = state.vault.with(&app, |vault| {
             Ok(vault.check_env_file_binding(&id, &file, &ctx)?)
         })?;
         let cloud = CloudRoots::detect(home_dir().as_deref());
+        let folder_here = located.is_some();
+        // A folder on the way that isn't made yet: Git is asked from the
+        // nearest one that is, inside the project's folder.
+        let project = projects::folder_path(&file.folder, ctx.home.as_deref())
+            .filter(|folder| folder.is_dir());
+        let location = located.or_else(|| {
+            let mut path = project.clone()?;
+            path.extend(file.path.split('/'));
+            Some(path)
+        });
+        let git = match (&location, folder_here) {
+            (Some(path), true) => Some(git_state(path)),
+            (Some(path), false) => project.as_deref().map(|root| planned_git_state(root, path)),
+            (None, _) => None,
+        };
         Ok(EnvFileCheck {
             cloud: location.as_deref().and_then(|path| cloud.service(path)),
-            git: location.as_deref().map(git_state),
+            git,
+            folder_here,
             location,
             file,
         })
@@ -492,6 +514,46 @@ pub(crate) fn git_state(path: &Path) -> GitInfo {
     }
 }
 
+/// What Git would make of `path`, a file whose folder isn't made yet,
+/// inside the project folder `root`: asked from the nearest folder on the
+/// way that exists. A file not there yet can't be committed already.
+pub(crate) fn planned_git_state(root: &Path, path: &Path) -> GitInfo {
+    let outside = GitInfo {
+        state: GitState::Outside,
+        repository: None,
+    };
+    let Some(nearest) = path
+        .ancestors()
+        .skip(1)
+        .take_while(|folder| folder.starts_with(root))
+        .find(|folder| folder.is_dir())
+    else {
+        return outside;
+    };
+    let Some(repository) = envs::git_work_tree(nearest) else {
+        return outside;
+    };
+    let Ok(rest) = path.strip_prefix(nearest) else {
+        return outside;
+    };
+    let mut command = process::command("git");
+    command
+        .args(["-c", "core.fsmonitor=false", "-C"])
+        .arg(nearest)
+        .args(["check-ignore", "-q", "--"])
+        .arg(rest);
+    let ignored = process::run_command(&mut command, None, Duration::from_secs(5))
+        .is_ok_and(|output| output.code == Some(0));
+    GitInfo {
+        state: if ignored {
+            GitState::Ignored
+        } else {
+            GitState::Untracked
+        },
+        repository: Some(repository),
+    }
+}
+
 /// Whether Git has the file committed (in its index).
 fn tracked(path: &Path) -> bool {
     let (Some(folder), Some(name)) = (path.parent(), path.file_name()) else {
@@ -546,5 +608,23 @@ mod tests {
         std::fs::write(repo.join(".env.local"), "A=1\n").unwrap();
         git(&["add", "-f", ".env.local"]);
         assert_eq!(git_state(&repo.join(".env.local")).state, GitState::Tracked);
+
+        // A file whose folders aren't made yet is asked from the nearest one.
+        let planned = repo.join("apps").join("web").join(".env");
+        assert_eq!(
+            planned_git_state(&repo, &planned),
+            GitInfo {
+                state: GitState::Untracked,
+                repository: Some(repo.clone()),
+            }
+        );
+        std::fs::write(repo.join(".gitignore"), "/.env\n.env\n").unwrap();
+        assert_eq!(planned_git_state(&repo, &planned).state, GitState::Ignored);
+        let elsewhere = dir.path().join("plain");
+        std::fs::create_dir(&elsewhere).unwrap();
+        assert_eq!(
+            planned_git_state(&elsewhere, &elsewhere.join("a").join(".env")).state,
+            GitState::Outside
+        );
     }
 }

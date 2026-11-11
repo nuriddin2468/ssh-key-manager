@@ -23,6 +23,7 @@ import { toastVaultError } from '@/features/passwords/vault';
 import { AppError } from '@/lib/ipc';
 import { isFileConflict } from './errors';
 import { fileName } from './model';
+import { refreshFileReports } from './queries';
 
 const EVENT = 'env-files-changed';
 /** Names a toast lists before "…". */
@@ -38,10 +39,14 @@ export const TOAST_ACTION_CLASSES = {
 let toldConflicts = new Set<string>();
 
 const conflictKey = (envId: string, folder: string, path: string) => `${envId}\n${folder}\n${path}`;
-/** Edits already told of, by the revision they led to. */
-const toldEdits: string[] = [];
-/** Edits remembered; older ones are long gone from the screen. */
-const MAX_TOLD = 200;
+/**
+ * Edits told of in the last moments, by the revision they led to, with
+ * when: the event and the command's result for one round arrive within
+ * that time. A later edit that lands on the same values is told again.
+ */
+const toldEdits = new Map<string, number>();
+/** How long one round's two tellings may lie apart, in milliseconds. */
+export const SAME_ROUND_MS = 5_000;
 
 /** The toast of a file's conflict: one per file, whoever tells it. */
 export function conflictToastId(envId: string, file: EnvFile): string {
@@ -121,9 +126,12 @@ export function announceSynced(
     });
   }
   for (const change of synced.changes) {
-    if (toldEdits.includes(change.undo.after)) continue;
-    toldEdits.push(change.undo.after);
-    if (toldEdits.length > MAX_TOLD) toldEdits.shift();
+    const now = Date.now();
+    for (const [revision, at] of toldEdits) {
+      if (now - at > SAME_ROUND_MS) toldEdits.delete(revision);
+    }
+    if (toldEdits.has(change.undo.after)) continue;
+    toldEdits.set(change.undo.after, now);
     toast.success(
       t('envs.files.saved', {
         file: fileName(change.file),
@@ -149,6 +157,8 @@ export function useEnvFilesEvents(): void {
     if (!isTauri()) return;
     const stop = listen<EnvFilesSynced>(EVENT, (event) => {
       void queryClient.invalidateQueries({ queryKey: ['vault', 'envs'] });
+      // A file written where none was: Git and cloud folders are asked again.
+      if (event.payload.written.length > 0) void refreshFileReports();
       announceSynced(t, event.payload, navigate);
     });
     return () => void stop.then((unlisten) => unlisten());

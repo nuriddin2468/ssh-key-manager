@@ -14,7 +14,9 @@ vi.mock('@/api/queries', () => ({
 }));
 
 const { announceSynced, markConflictTold, SAME_ROUND_MS, undoChange } = await import('./announce');
-const { bindRefusal, isEnvNameClash, isFileConflict, isVaultConflict } = await import('./errors');
+const { bindRefusal, ignoreFailed, isEnvNameClash, isFileConflict, isVaultConflict } = await import(
+  './errors'
+);
 
 const t = ((key: string, values?: Record<string, unknown>) =>
   values ? `${key} ${JSON.stringify(values)}` : key) as unknown as TFunction;
@@ -161,6 +163,16 @@ describe('telling file errors from the vault’s', () => {
     ).toBe('envs.files.errors.otherEnv');
     expect(refusal('already_exists', '.env')).toBe('envs.files.bind.taken');
     expect(refusal('io', 'disk full')).toBe(null);
+  });
+
+  it('says a line couldn’t be added to .gitignore, and leaves the vault’s failures to it', () => {
+    const file = { folder: '~/code/shop', path: 'apps/web/.env.local' };
+    expect(ignoreFailed(t, { code: 'not_found', message: '/code/shop/apps/web' }, file)).toBe(true);
+    expect(toast.error).toHaveBeenCalledWith('envs.center.ignoreFailed {"file":".env.local"}');
+    expect(ignoreFailed(t, { code: 'vault_locked', message: 'the vault is locked' }, file)).toBe(
+      false,
+    );
+    expect(toast.error).toHaveBeenCalledTimes(1);
   });
 
   it('tells a name taken in the group from a file taken', () => {

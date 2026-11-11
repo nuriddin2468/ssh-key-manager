@@ -27,7 +27,7 @@ import { cn } from '@/lib/cn';
 import { envLabel } from '../model';
 import { announceSynced } from './announce';
 import { BindFileDialog } from './BindFileDialog';
-import { isFileConflict } from './errors';
+import { ignoreFailed, isFileConflict } from './errors';
 import { FileCompareDialog } from './FileCompareDialog';
 import {
   bindingPath,
@@ -74,6 +74,7 @@ export function FilesSection({ env, files }: FilesSectionProps) {
       setIgnoring(null);
       void refreshFileReports();
     },
+    onError: (error, file) => ignoreFailed(t, error, file),
   });
   const statusOf = (file: EnvFile): EnvFileStatus | undefined =>
     statuses.data?.find((status) => status.envId === env.id && sameFile(status.file, file));

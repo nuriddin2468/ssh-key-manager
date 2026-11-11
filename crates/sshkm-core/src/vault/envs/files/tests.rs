@@ -919,6 +919,35 @@ fn ignore_lines_are_added_once_and_keep_the_file() {
 }
 
 #[test]
+fn ignore_lines_are_added_for_a_folder_not_made_yet() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    fs::create_dir_all(repo.join("apps")).unwrap();
+    // `apps/web` comes later: the binding waits for it, Git ignores it first.
+    let file = repo.join("apps").join("web").join(".env.local");
+    ignore_in_git(&repo, &file).unwrap();
+    assert_eq!(read(&repo.join(".gitignore")), "/apps/web/.env.local\n");
+    let deeper = repo.join("services").join("api").join(".env");
+    ignore_in_git(&repo, &deeper).unwrap();
+    assert_eq!(
+        read(&repo.join(".gitignore")),
+        "/apps/web/.env.local\n/services/api/.env\n"
+    );
+    // Not past the working tree, and only plain names on the way.
+    let outside = dir.path().join("elsewhere").join(".env");
+    assert!(ignore_in_git(&repo, &outside).is_err());
+    let back = repo.join("gone").join("..").join("..").join(".env");
+    assert!(ignore_in_git(&repo, &back).is_err());
+    // A file where a folder should be.
+    fs::write(repo.join("notes"), "").unwrap();
+    assert!(ignore_in_git(&repo, &repo.join("notes").join("x").join(".env")).is_err());
+    assert_eq!(
+        read(&repo.join(".gitignore")),
+        "/apps/web/.env.local\n/services/api/.env\n"
+    );
+}
+
+#[test]
 fn nothing_shows_a_value() {
     let mut f = Fixture::new();
     f.bind(".env");

@@ -3820,6 +3820,9 @@ const en = {
         submit: 'Add file',
         taken: 'This environment is written to this file already.',
         done: '{{file}} is written now',
+        later: '{{file}} is added. It’s written once its folder exists.',
+        notIgnored:
+          '{{file}} is added, but .gitignore couldn’t be changed. Add the file to it yourself before you commit.',
         differs: '{{file}} already holds other values. Compare them to choose which to keep.',
       },
       unbind: {
@@ -3887,6 +3890,7 @@ const en = {
         'Adds a line for this file to .gitignore in {{repository}}. Commit that change so everyone working there gets it.',
       ignoreConfirm: 'Add the line',
       ignored: 'Git ignores {{file}} now',
+      ignoreFailed: 'Couldn’t add {{file}} to .gitignore. Add it yourself before you commit.',
       cloudBadge: 'In {{service}}',
       cloudText: '{{service}} copies this folder to its servers, values included.',
       cloudBadgeOther: 'In a cloud folder',

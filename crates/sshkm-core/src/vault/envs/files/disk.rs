@@ -13,7 +13,7 @@
 
 use std::fs;
 use std::io::{self, Read as _};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use zeroize::Zeroizing;
 
@@ -389,24 +389,29 @@ pub(super) fn example_names(dir: &Path) -> Option<(String, Vec<String>)> {
 /// from there, starting with `/`, so it ignores that one file. A line that
 /// says so already is left alone. The `.gitignore` is kept as it is
 /// otherwise, and is never written through a link.
+///
+/// The file's folder may not be made yet (a binding waits for it): the
+/// nearest folder on the way that exists, inside `repository`, places it,
+/// and the folders still to come follow by name.
 pub fn ignore_in_git(repository: &Path, file: &Path) -> Result<()> {
     let root = fs::canonicalize(repository).map_err(|e| Error::io(e, repository))?;
     let folder = file
         .parent()
         .ok_or_else(|| Error::invalid("not a file in a folder"))?;
-    let folder = fs::canonicalize(folder).map_err(|e| Error::io(e, folder))?;
     let name = file
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| Error::invalid("not a file name"))?;
+    let (folder, to_come) = nearest_folder(folder, repository)?;
     let rest = folder
         .strip_prefix(&root)
         .map_err(|_| Error::invalid("the file isn't in that working tree"))?;
     let mut parts: Vec<String> = rest
         .components()
+        .map(Component::as_os_str)
+        .chain(to_come)
         .map(|part| {
-            part.as_os_str()
-                .to_str()
+            part.to_str()
                 .map(str::to_owned)
                 .ok_or_else(|| Error::invalid("not a path in Unicode"))
         })
@@ -434,6 +439,33 @@ pub fn ignore_in_git(repository: &Path, file: &Path) -> Result<()> {
     out.push_str(&line);
     out.push_str(eol);
     fsutil::atomic_write(&gitignore, out.as_bytes(), 0o644)
+}
+
+/// `folder` resolved, or the nearest folder on its way that exists, no
+/// higher than `top`, with the names of the folders under it still to
+/// come, outermost first. Only plain names are taken on faith: not `..`.
+fn nearest_folder<'a>(folder: &'a Path, top: &Path) -> Result<(PathBuf, Vec<&'a std::ffi::OsStr>)> {
+    let mut to_come = Vec::new();
+    let mut at = folder;
+    loop {
+        match fs::canonicalize(at) {
+            Ok(found) if found.is_dir() => {
+                to_come.reverse();
+                return Ok((found, to_come));
+            }
+            Ok(_) => return Err(Error::invalid("a folder on the way is a file")),
+            Err(e) if e.kind() == io::ErrorKind::NotFound && at != top && at.starts_with(top) => {
+                let (Some(parent), Some(Component::Normal(part))) =
+                    (at.parent(), at.components().next_back())
+                else {
+                    return Err(Error::invalid("not a plain path to a folder"));
+                };
+                to_come.push(part);
+                at = parent;
+            }
+            Err(e) => return Err(Error::io(e, at)),
+        }
+    }
 }
 
 /// A path as a `.gitignore` pattern for that path alone: wildcards and

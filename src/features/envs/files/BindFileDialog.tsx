@@ -12,7 +12,7 @@ import { Select } from '@/components/ui/Select';
 import { TextField } from '@/components/ui/TextField';
 import { Tile } from '@/components/ui/Tile';
 import { Callout } from '@/features/passwords/files/Callout';
-import { toastVaultError, useVaultMutation } from '@/features/passwords/vault';
+import { useVaultMutation } from '@/features/passwords/vault';
 import { useProjects } from '@/features/projects/queries';
 import { cn } from '@/lib/cn';
 import { conflictToastId, markConflictTold } from './announce';
@@ -112,17 +112,25 @@ export function BindFileDialog({ env, bound, onDone }: BindFileDialogProps) {
     {
       onSuccess: ({ status, ignoreError }) => {
         void refreshFileReports();
-        if (ignoreError) toastVaultError(t, ignoreError);
+        const file = fileName(status.file);
+        // Bound, but Git would take it along: said as such, not as the error itself.
+        if (ignoreError) toast.warning(t('envs.files.bind.notIgnored', { file }));
         if (status.state.type === 'conflict') {
           // One toast for this conflict, however the app hears of it.
           markConflictTold(env.id, status.file);
-          toast.warning(t('envs.files.bind.differs', { file: fileName(status.file) }), {
+          toast.warning(t('envs.files.bind.differs', { file }), {
             id: conflictToastId(env.id, status.file),
           });
           onDone(status.file);
           return;
         }
-        toast.success(t('envs.files.bind.done', { file: fileName(status.file) }));
+        if (!ignoreError) {
+          toast.success(
+            status.state.type === 'folderMissing'
+              ? t('envs.files.bind.later', { file })
+              : t('envs.files.bind.done', { file }),
+          );
+        }
         onDone();
       },
       onError: refused,

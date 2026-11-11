@@ -19,6 +19,8 @@ export interface FileLine {
  * on, Git or a cloud folder that would take the values along, missing
  * names), else syncing, else in sync; files whose folder isn't on this
  * computer only, said so. `null` for an environment without files.
+ * Without `risks` (they couldn't be had) the states alone count, and in
+ * sync isn't said as all clear.
  */
 export function fileLine(
   t: TFunction,
@@ -46,7 +48,7 @@ export function fileLine(
   const inSync = types.filter((type) => type === 'inSync').length;
   return {
     text: t('envs.files.line.inSync', { count: inSync }),
-    tone: inSync === mine.length ? 'ok' : 'neutral',
+    tone: inSync === mine.length && risks !== undefined ? 'ok' : 'neutral',
     attention: false,
   };
 }
@@ -56,7 +58,7 @@ const DOT: Record<StateTone, string> = {
   info: 'bg-info-solid',
   warning: 'bg-warning-solid',
   critical: 'bg-critical-solid',
-  neutral: 'bg-white/30',
+  neutral: 'bg-faint',
 };
 
 const TEXT: Record<StateTone, string> = {
@@ -84,6 +86,8 @@ export function FileStateLine({ envId, label, onOpen }: FileStateLineProps) {
   const { t } = useTranslation();
   const statuses = useFileStatuses();
   const risks = useFileRisks();
+  // Both, or a green "in sync" could show before Git's warning replaces it.
+  if (risks.isLoading) return null;
   const line = fileLine(t, envId, statuses.data, risks.data);
   if (!line) return null;
   const content = (

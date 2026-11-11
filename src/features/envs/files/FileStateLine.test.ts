@@ -58,6 +58,18 @@ describe('the file-state line', () => {
     expect(fileLine(t, 'env-1', [synced], [ignored])?.attention).toBe(false);
   });
 
+  it('doesn’t say all clear while Git and cloud folders are unknown', () => {
+    const synced = [status('.env', { type: 'inSync' })];
+    expect(fileLine(t, 'env-1', synced, undefined)).toEqual({
+      text: 'envs.files.line.inSync {"count":1}',
+      tone: 'neutral',
+      attention: false,
+    });
+    expect(fileLine(t, 'env-1', [status('.env', { type: 'conflict' })], undefined)?.attention).toBe(
+      true,
+    );
+  });
+
   it('says when files sync or their folder is away', () => {
     expect(fileLine(t, 'env-1', [status('.env', { type: 'fileChanged' })], [])?.text).toBe(
       'envs.files.line.syncing',

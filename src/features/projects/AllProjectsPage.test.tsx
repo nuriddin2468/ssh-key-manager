@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RouterProvider } from '@/app/router';
+import type { EnvFileReport } from '@/bindings/EnvFileReport';
 import type { KeyView } from '@/bindings/KeyView';
 import type { Project } from '@/bindings/Project';
 import type { ProjectSuggestion } from '@/bindings/ProjectSuggestion';
@@ -22,6 +23,8 @@ const api = vi.hoisted(() => ({
   leaksFindings: vi.fn(),
   projectsMissingFolders: vi.fn(),
   projectsSuggestions: vi.fn(),
+  envsFilesStatus: vi.fn(),
+  envsFilesRisks: vi.fn(),
 }));
 vi.mock('@/api/commands', () => ({ api }));
 vi.mock('@/app/dialogs', () => ({
@@ -91,6 +94,11 @@ function show({
 }
 
 const button = (name: string) => screen.findByRole('button', { name });
+const shopCard = (open: HTMLElement) => {
+  const card = open.closest('li');
+  if (!card) throw new Error('no card');
+  return card;
+};
 const isPrimary = (element: HTMLElement) => element.className.includes('accent-fill');
 
 beforeEach(() => {
@@ -101,6 +109,8 @@ beforeEach(() => {
   api.audit.mockResolvedValue({ findings: [] });
   api.leaksFindings.mockResolvedValue([]);
   api.projectsMissingFolders.mockResolvedValue([]);
+  api.envsFilesStatus.mockResolvedValue([]);
+  api.envsFilesRisks.mockResolvedValue([]);
 });
 afterEach(() => vi.clearAllMocks());
 
@@ -170,5 +180,42 @@ describe('a card', () => {
     expect(screen.queryByText('No problems')).toBeNull();
     answer({ findings: [] });
     expect(await screen.findAllByText('No problems')).not.toHaveLength(0);
+  });
+
+  it('counts its .env files that need attention among its problems', async () => {
+    const status = {
+      envId: 'env-1',
+      group: 'shop',
+      envName: 'dev',
+      file: { folder: '~/code/shop', path: '.env' },
+      location: '/code/shop/.env',
+      state: { type: 'inSync' },
+    } as const;
+    const report: EnvFileReport = {
+      ...status,
+      projects: ['p1'],
+      cloud: null,
+      example: null,
+      git: { state: 'tracked', repository: '/code/shop' },
+    };
+    api.envsFilesStatus.mockResolvedValue([status]);
+    api.envsFilesRisks.mockResolvedValue([report]);
+    show({ projects: [shop], hosts: [host] });
+    const card = shopCard(await button('Open Shop'));
+    expect(await within(card).findByText('1 .env file needs attention')).toBeInTheDocument();
+    // Committed to Git, values included: said as critical, to screen readers too.
+    expect(within(card).getByText('Critical:')).toBeInTheDocument();
+    expect(within(card).getByText('.env')).toBeInTheDocument();
+    expect(within(card).queryByText('No problems')).toBeNull();
+  });
+
+  it('says nothing of its problems while its .env files can’t be checked', async () => {
+    api.envsFilesRisks.mockRejectedValue({ code: 'io', message: 'git failed' });
+    show({ projects: [shop], hosts: [host] });
+    const card = shopCard(await button('Open Shop'));
+    expect(await button('Connect to prod-api')).toBeInTheDocument();
+    await vi.waitFor(() => expect(api.envsFilesRisks).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(within(card).queryByText('No problems')).toBeNull();
   });
 });

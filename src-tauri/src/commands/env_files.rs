@@ -501,6 +501,10 @@ pub(crate) fn git_state(path: &Path) -> GitInfo {
     let Some(repository) = envs::git_work_tree(folder) else {
         return outside;
     };
+    if !folder.is_dir() {
+        // A binding waiting for its folder: Git can't be asked from there.
+        return planned_git_state(&repository, path);
+    }
     let state = if tracked(path) {
         GitState::Tracked
     } else if unignored_in_git(path).is_some() {
@@ -620,6 +624,20 @@ mod tests {
         );
         std::fs::write(repo.join(".gitignore"), "/.env\n.env\n").unwrap();
         assert_eq!(planned_git_state(&repo, &planned).state, GitState::Ignored);
+        // Ignored before its folder is made, as Add file… offers.
+        let waiting = repo.join("services").join("api").join(".env.local");
+        assert_eq!(git_state(&waiting).state, GitState::Untracked);
+        managed::ignore_in_git(&repo, &waiting).unwrap();
+        assert_eq!(
+            git_state(&waiting),
+            GitInfo {
+                state: GitState::Ignored,
+                repository: Some(repo.clone()),
+            }
+        );
+        std::fs::create_dir_all(waiting.parent().unwrap()).unwrap();
+        std::fs::write(&waiting, "A=1\n").unwrap();
+        assert_eq!(git_state(&waiting).state, GitState::Ignored);
         let elsewhere = dir.path().join("plain");
         std::fs::create_dir(&elsewhere).unwrap();
         assert_eq!(

@@ -3884,6 +3884,9 @@ const uz = {
         submit: 'Fayl qoʻshish',
         taken: 'Bu muhit allaqachon shu faylga yoziladi.',
         done: '{{file}} endi yoziladi',
+        later: '{{file}} qoʻshildi. Papkasi paydo boʻlgach, u yoziladi.',
+        notIgnored:
+          '{{file}} qoʻshildi, lekin .gitignore ni oʻzgartirib boʻlmadi. Commit qilishdan oldin faylni unga oʻzingiz qoʻshing.',
         differs:
           '{{file}}da boshqa qiymatlar bor. Qaysilarini qoldirishni tanlash uchun ularni solishtiring.',
       },
@@ -3952,6 +3955,8 @@ const uz = {
         '{{repository}}dagi .gitignore ga shu fayl uchun qator qoʻshiladi. U yerda ishlaydiganlarning hammasida boʻlishi uchun bu oʻzgarishni commit qiling.',
       ignoreConfirm: 'Qator qoʻshish',
       ignored: 'Git endi {{file}}ni eʼtiborsiz qoldiradi',
+      ignoreFailed:
+        '{{file}}ni .gitignore ga qoʻshib boʻlmadi. Commit qilishdan oldin uni oʻzingiz qoʻshing.',
       cloudBadge: '{{service}}da',
       cloudText: '{{service}} bu papkani qiymatlari bilan birga oʻz serverlariga koʻchiradi.',
       cloudBadgeOther: 'Bulutli papkada',

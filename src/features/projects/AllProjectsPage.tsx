@@ -518,12 +518,15 @@ function ProjectCard({
       : [],
   );
   const quick = quickActions(members, gone, goneFolders, library.hosts);
+  // The files' reports, once in (or not asked for, the vault locked); if
+  // they couldn't be had, the files are unknown, as a check still running.
+  const filesKnown = fileRisks.data !== undefined || (!fileRisks.isLoading && !fileRisks.isError);
   // "No problems" only once everything was checked: the audits, the
   // folders on this computer, ~/.ssh/config, the keys, the hosts file and,
   // with the vault open, the .env files.
   const checked =
     audit.data !== undefined &&
-    !fileRisks.isLoading &&
+    filesKnown &&
     vaultAudit.data !== undefined &&
     goneFolders !== undefined &&
     library.hosts !== undefined &&

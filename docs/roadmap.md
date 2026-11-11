@@ -69,7 +69,8 @@ The foundation for everything below.
    sidebar, the library below, system sections last. The project page: hosts (connect),
    environments (file state, run), logins (copy), keys (in the agent or not), folders
    (open a terminal there, in the default shell, with the `local` environment), tunnels,
-   audit findings for the project. Adding items to a project from the library.
+   audit findings for the project. Adding items to a project from the library. In review:
+   [#37](https://github.com/nuriddin2468/ssh-key-manager/pull/37).
 
 ### 3. Managed `.env` files
 

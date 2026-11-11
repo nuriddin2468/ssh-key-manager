@@ -28,7 +28,7 @@ import { hostsFileFindings, hostsFileHandlers } from './hostsFile';
 import { leaksHandlers } from './leaks';
 import { nearbyHandlers } from './nearby';
 import { paletteHandlers } from './palette';
-import { projectsHandlers } from './projects';
+import { followHostRenames, projectsHandlers } from './projects';
 import { ROTATION_HOSTS, rotationHandlers } from './rotation';
 import { serverKeysHandlers } from './serverKeys';
 import { shellHistoryHandlers } from './shellHistory';
@@ -647,6 +647,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
       hostSpecs.splice(index, 0, { patterns, options });
       return { file: configFile(), id: index };
     }
+    followHostRenames(hostSpecs[id]?.patterns ?? [], patterns);
     hostSpecs[id] = { patterns, options };
     return { file: configFile(), id };
   },

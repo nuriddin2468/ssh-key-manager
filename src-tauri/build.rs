@@ -194,6 +194,8 @@ const COMMANDS: &[&str] = &[
     "projects_dismiss_suggestion",
     "projects_restore_suggestions",
     "projects_suggest_in_folder",
+    "projects_open_terminal",
+    "projects_missing_folders",
     "terminal_open",
     "terminal_write",
     "terminal_resize",

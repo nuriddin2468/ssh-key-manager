@@ -37,6 +37,8 @@ interface LocalOptions {
   shell?: string | null;
   /** A secret environment whose variables the shell gets; `label` names the tab. */
   env?: { id: string; label: string };
+  /** A project's folder the shell starts in; `label` names the tab. */
+  folder?: { project: string; path: string; label: string };
 }
 
 interface TerminalsValue {
@@ -173,9 +175,17 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
         else onEvent(key, message);
       };
       const opening = local
-        ? local.env
-          ? api.envsRun(local.env, local.shell, size, onMessage)
-          : api.terminalOpenLocal(local.shell, size, onMessage)
+        ? local.folder
+          ? api.projectsOpenTerminal(
+              local.folder.project,
+              local.folder.path,
+              local.shell,
+              size,
+              onMessage,
+            )
+          : local.env
+            ? api.envsRun(local.env, local.shell, size, onMessage)
+            : api.terminalOpenLocal(local.shell, size, onMessage)
         : api.terminalOpen(alias, size, { askPassword: options.askPassword ?? false }, onMessage);
       opening
         .then((info) => {
@@ -191,7 +201,10 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
             info: { ...info, phase: tab.state.phase },
             // Opened before the list of shells had loaded: now it has a name.
             alias:
-              tab.local && !tab.local.env && tab.alias === t('terminal.local.shell')
+              tab.local &&
+              !tab.local.env &&
+              !tab.local.folder &&
+              tab.alias === t('terminal.local.shell')
                 ? info.alias
                 : tab.alias,
           }));
@@ -201,20 +214,26 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
           const failure = { reason: 'openFailed' as const, message: errorMessage(t, error) };
           const appError = AppError.from(error);
           const shells = queryClient.getQueryData<ShellInfo[]>(shellsKey);
-          // Not found: the shell, unless the shell is there and it was the environment.
+          // Not found: the shell, unless the shell is there and it was the
+          // environment, or the project's folder.
+          const shellMissing =
+            local?.shell != null && !shells?.some((shell) => shell.id === local.shell);
           const shellGone =
             local !== undefined &&
             appError.code === 'not_found' &&
-            (!local.env ||
-              (local.shell !== null && !shells?.some((shell) => shell.id === local.shell)));
+            ((!local.env && !local.folder) || shellMissing);
+          const folderGone =
+            local?.folder !== undefined && appError.code === 'not_found' && !shellGone;
           // The only input `terminal_open` refuses is the alias.
           const detail = shellGone
             ? t('terminal.local.shellMissing')
-            : appError.code === 'invalid_input' && !local
-              ? t('terminal.failed.aliasRefused', { alias })
-              : appError.code === 'not_found' || appError.code === 'unsupported'
-                ? appError.message
-                : failure.message;
+            : folderGone
+              ? t('terminal.local.folderMissing')
+              : appError.code === 'invalid_input' && !local
+                ? t('terminal.failed.aliasRefused', { alias })
+                : appError.code === 'not_found' || appError.code === 'unsupported'
+                  ? appError.message
+                  : failure.message;
           update(key, (tab) => ({
             ...tab,
             state: { phase: 'failed', failure: { ...failure, message: detail } },
@@ -275,8 +294,17 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
           ? options.shell
           : preferredShellId(settingsRef.current.defaultShell);
       const known = defaultShell(queryClient.getQueryData<ShellInfo[]>(shellsKey), shell);
-      const label = options.env?.label ?? (known ? shellName(t, known) : t('terminal.local.shell'));
-      const local: LocalShell = { shell, env: options.env?.id };
+      const label =
+        options.env?.label ??
+        options.folder?.label ??
+        (known ? shellName(t, known) : t('terminal.local.shell'));
+      const local: LocalShell = {
+        shell,
+        env: options.env?.id,
+        folder: options.folder
+          ? { project: options.folder.project, path: options.folder.path }
+          : undefined,
+      };
       const tab = newTab(label, local);
       ensureScreen(tab.key);
       setTabs((list) => [...list, tab]);

@@ -23,6 +23,7 @@ import { useRouter } from '@/app/router';
 import type { CopyField } from '@/bindings/CopyField';
 import type { EntryDetail } from '@/bindings/EntryDetail';
 import type { EntrySummary } from '@/bindings/EntrySummary';
+import type { ProjectMember } from '@/bindings/ProjectMember';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
@@ -34,6 +35,7 @@ import { Tile, TONES } from '@/components/ui/Tile';
 import { HostPreview } from '@/features/hosts/HostPreview';
 import { KeyPreview } from '@/features/keys/KeyPreview';
 import { SendDialog } from '@/features/nearby/SendDialog';
+import { ProjectChips, useProjectMenu } from '@/features/projects/ProjectMenu';
 import { cn } from '@/lib/cn';
 import { formatDate, formatRelative, shortFingerprint } from '@/lib/format';
 import { avatar, openableUrl } from './model';
@@ -67,6 +69,10 @@ interface EntryPaneProps {
  */
 export function EntryPane({ entry, onEdit, onGone }: EntryPaneProps) {
   const { t, i18n } = useTranslation();
+  const projectMember: ProjectMember | null = entry.inTrash
+    ? null
+    : { type: 'login', id: entry.id };
+  const projectMenu = useProjectMenu(projectMember);
   const { navigate } = useRouter();
   const detail = useVaultEntry(entry.id);
   const config = useConfig();
@@ -208,6 +214,7 @@ export function EntryPane({ entry, onEdit, onGone }: EntryPaneProps) {
                 </Badge>
               ) : null}
             </p>
+            <ProjectChips member={projectMember} className="mt-1.5" />
           </div>
           <Menu>
             <MenuTrigger asChild>
@@ -234,6 +241,7 @@ export function EntryPane({ entry, onEdit, onGone }: EntryPaneProps) {
                   {t('passwords.copyUrl')}
                 </MenuItem>
               ) : null}
+              {projectMenu.sub}
               <MenuSeparator />
               {entry.inTrash ? (
                 <>
@@ -262,6 +270,7 @@ export function EntryPane({ entry, onEdit, onGone }: EntryPaneProps) {
               )}
             </MenuContent>
           </Menu>
+          {projectMenu.dialog}
         </div>
         <div className="flex flex-wrap gap-2">
           {entry.inTrash ? (

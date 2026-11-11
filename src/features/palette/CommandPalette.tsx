@@ -2,6 +2,7 @@ import type { TFunction } from 'i18next';
 import {
   Cpu,
   Download,
+  FolderKanban,
   Globe,
   KeyRound,
   Lock,
@@ -18,6 +19,7 @@ import {
   Sparkle,
   SquareTerminal,
   Upload,
+  User,
   Variable,
   Wrench,
 } from 'lucide-react';
@@ -33,6 +35,8 @@ import { type Page, type Route, useRouter } from '@/app/router';
 import { NAV_PAGES, PALETTE_EVENT } from '@/app/useAppEvents';
 import type { Tone } from '@/components/ui/Tile';
 import { toastVaultError } from '@/features/passwords/vault';
+import { projectTone } from '@/features/projects/model';
+import { useProjects } from '@/features/projects/queries';
 import { useConnect } from '@/features/terminal/connect';
 import { useTerminals } from '@/features/terminal/TerminalProvider';
 import { TOOLS } from '@/features/tools/registry';
@@ -54,8 +58,9 @@ import { byRecent, parseQuery } from './search';
 import { buildSections, type Group } from './sections';
 import { shortcutLabel } from './shortcut';
 
-const PAGE_LOOK: Record<Exclude<Page, 'tools'>, { icon: LucideIcon; tone: Tone }> = {
-  overview: { icon: Sparkle, tone: 'aurora' },
+const PAGE_LOOK: Record<Exclude<Page, 'tools' | 'project'>, { icon: LucideIcon; tone: Tone }> = {
+  personal: { icon: User, tone: 'slate' },
+  suggestions: { icon: Sparkle, tone: 'aurora' },
   keys: { icon: KeyRound, tone: 'teal' },
   hosts: { icon: Server, tone: 'blue' },
   agent: { icon: Cpu, tone: 'violet' },
@@ -68,6 +73,8 @@ const PAGE_LOOK: Record<Exclude<Page, 'tools'>, { icon: LucideIcon; tone: Tone }
   audit: { icon: ShieldCheck, tone: 'rose' },
   settings: { icon: SettingsIcon, tone: 'slate' },
 };
+
+const EMPTY_PROJECTS: [] = [];
 
 export const COPIED = {
   username: 'passwords.copiedUsername',
@@ -216,6 +223,7 @@ function PaletteDialog({ onClose }: { onClose: () => void }) {
     return list;
   }, [t, dialogs, navigate, setPickerOpen, vaultState]);
 
+  const projects = useProjects().data ?? EMPTY_PROJECTS;
   const pages = useMemo<PaletteItem[]>(() => {
     const list: PaletteItem[] = (Object.keys(PAGE_LOOK) as (keyof typeof PAGE_LOOK)[]).map(
       (page) => {
@@ -237,6 +245,21 @@ function PaletteDialog({ onClose }: { onClose: () => void }) {
         };
       },
     );
+    // Projects first: they are where things are used.
+    list.unshift(
+      ...projects.map(
+        (project): PaletteItem => ({
+          id: `project:${project.id}`,
+          title: project.name,
+          action: t('palette.verbs.openProject'),
+          verbs: [t('palette.verbs.openProject'), 'project', 'open'],
+          scope: 'actions',
+          icon: FolderKanban,
+          tone: projectTone(project.color),
+          run: () => navigate({ page: 'project', id: project.id }),
+        }),
+      ),
+    );
     if (TOOLS.length > 0) {
       list.splice(list.length - 1, 0, {
         id: 'page:tools',
@@ -250,7 +273,7 @@ function PaletteDialog({ onClose }: { onClose: () => void }) {
       });
     }
     return list;
-  }, [t, navigate]);
+  }, [t, navigate, projects]);
 
   const tools = useMemo<PaletteItem[]>(
     () =>

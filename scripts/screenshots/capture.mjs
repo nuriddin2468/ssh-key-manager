@@ -18,7 +18,7 @@ const app = process.env.APP_URL ?? 'http://localhost:1420';
 
 // Name, the app's dev query, and the section heading to scroll to, if any.
 const shots = [
-  ['overview', 'page=overview'],
+  ['project', 'page=project&project=0b6e1c52-6a3f-4c1e-9d55-1f2a3b4c5d01'],
   [
     'keys',
     `page=keys&key=${encodeURIComponent('SHA256:u9Fh2KdL7pQ3zX8mV1bN6rT4wY0sGcJ5aE2iOkHjUyB#id_rsa')}`,
@@ -35,6 +35,9 @@ const shots = [
   ['background', 'page=settings', 'Background'],
 ];
 
+// `SHOTS=project,hosts` takes only those.
+const only = process.env.SHOTS?.split(',').filter(Boolean);
+
 mkdirSync(out, { recursive: true });
 const browser = await puppeteer.launch({
   executablePath: chrome,
@@ -44,7 +47,7 @@ const browser = await puppeteer.launch({
 });
 
 try {
-  for (const [name, query, section] of shots) {
+  for (const [name, query, section] of shots.filter(([name]) => !only || only.includes(name))) {
     const page = await browser.newPage();
     const url = new URL(frame);
     // The mock vault starts locked; Passwords, Nearby and Settings show more unlocked.

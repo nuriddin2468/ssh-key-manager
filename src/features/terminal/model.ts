@@ -28,6 +28,8 @@ export interface LocalShell {
   shell: string | null;
   /** The secret environment whose variables it gets; the tab's `alias` then names it. */
   env?: string;
+  /** A project's folder it starts in, with the project's `local` environment. */
+  folder?: { project: string; path: string };
 }
 
 export interface Tab {

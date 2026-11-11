@@ -8,13 +8,19 @@ import {
   useRef,
   useState,
 } from 'react';
+import { currentSettings } from '@/lib/settings';
 
 /**
  * The app has a handful of top-level sections and no URLs to share, so a
  * typed in-memory route is simpler and safer than a URL router.
  */
 export type Route =
-  | { page: 'overview' }
+  /** A project's page: where its hosts, logins, environments and folders are used. */
+  | { page: 'project'; id: string }
+  /** What is in no project. */
+  | { page: 'personal' }
+  /** Projects the app proposes, to accept or dismiss. */
+  | { page: 'suggestions' }
   | { page: 'keys'; keyId?: string }
   | { page: 'hosts'; hostId?: number }
   | { page: 'agent' }
@@ -62,8 +68,10 @@ function devRoute(): Route | undefined {
   if (page === 'envs') return { page, envId: params.get('env') ?? undefined };
   if (page === 'terminal') return { page, connect: params.get('connect') ?? undefined };
   if (page === 'tools') return { page, tool: params.get('tool') ?? undefined };
+  if (page === 'project') return { page, id: params.get('project') ?? '' };
   if (
-    page === 'overview' ||
+    page === 'personal' ||
+    page === 'suggestions' ||
     page === 'agent' ||
     page === 'known' ||
     page === 'audit' ||
@@ -75,8 +83,14 @@ function devRoute(): Route | undefined {
   return undefined;
 }
 
+/** Where the app opens: the project used last, Personal the first time. */
+export function homeRoute(): Route {
+  const last = currentSettings().lastProject;
+  return last && last !== 'personal' ? { page: 'project', id: last } : { page: 'personal' };
+}
+
 export function RouterProvider({ initial, children }: { initial?: Route; children: ReactNode }) {
-  const [route, setRoute] = useState<Route>(() => initial ?? devRoute() ?? { page: 'overview' });
+  const [route, setRoute] = useState<Route>(() => initial ?? devRoute() ?? homeRoute());
   const blocker = useRef<Blocker | null>(null);
   const navigate = useCallback((next: Route, options?: { force?: boolean }) => {
     if (!options?.force && blocker.current?.(next)) return;

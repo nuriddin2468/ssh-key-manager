@@ -18,11 +18,12 @@ import { NearbyPage } from '@/features/nearby/NearbyPage';
 import { PairingDialog } from '@/features/nearby/PairingDialog';
 import { useNearbyEvents } from '@/features/nearby/queries';
 import { SyncDialog } from '@/features/nearby/SyncDialog';
-import { OverviewPage } from '@/features/overview/OverviewPage';
 import { CommandPalette } from '@/features/palette/CommandPalette';
 import { useVaultFileEvents } from '@/features/passwords/files';
 import { PasswordsPage } from '@/features/passwords/PasswordsPage';
 import { useVaultEvents } from '@/features/passwords/useVaultEvents';
+import { ProjectPage } from '@/features/projects/ProjectPage';
+import { SuggestionsPage } from '@/features/projects/SuggestionsPage';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { TerminalPage } from '@/features/terminal/TerminalPage';
 import { TerminalProvider } from '@/features/terminal/TerminalProvider';
@@ -92,7 +93,9 @@ function Shell() {
         data-section={route.page}
         className="section-glow flex min-w-0 flex-1 flex-col overflow-hidden"
       >
-        {route.page === 'overview' ? <OverviewPage /> : null}
+        {route.page === 'project' ? <ProjectPage key={route.id} id={route.id} /> : null}
+        {route.page === 'personal' ? <ProjectPage key="personal" /> : null}
+        {route.page === 'suggestions' ? <SuggestionsPage /> : null}
         {route.page === 'keys' ? <KeysPage keyId={route.keyId} /> : null}
         {route.page === 'hosts' ? <HostsPage hostId={route.hostId} /> : null}
         {route.page === 'agent' ? <AgentPage /> : null}

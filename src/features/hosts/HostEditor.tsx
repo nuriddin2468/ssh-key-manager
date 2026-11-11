@@ -29,6 +29,7 @@ import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
 import type { HostEdit } from '@/bindings/HostEdit';
 import type { HostEntry } from '@/bindings/HostEntry';
+import type { ProjectMember } from '@/bindings/ProjectMember';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Dialog } from '@/components/ui/Dialog';
@@ -45,6 +46,7 @@ import { HostResolution } from '@/features/hostsFile/HostResolution';
 import { CheckHostKeyDialog } from '@/features/known/CheckHostKeyDialog';
 import type { KnownHostsRemoval } from '@/features/known/removal';
 import { SendDialog } from '@/features/nearby/SendDialog';
+import { ProjectChips, useProjectMenu } from '@/features/projects/ProjectMenu';
 import { useConnect } from '@/features/terminal/connect';
 import { copyText } from '@/lib/clipboard';
 import { displayPath } from '@/lib/format';
@@ -194,6 +196,9 @@ export function HostEditor({ host, hosts, onClose }: HostEditorProps) {
 
   const readOnly = host.kind === 'match';
   const concrete = isConcrete(host) && alias !== '';
+  const projectMember: ProjectMember | null =
+    concrete && host.id !== null ? { type: 'host', alias } : null;
+  const projectMenu = useProjectMenu(projectMember);
   const git = gitService(host);
   const edit = editFromForm(form, host.id);
   const followUp = entryFollowUp(form, host, found);
@@ -384,338 +389,347 @@ export function HostEditor({ host, hosts, onClose }: HostEditorProps) {
     : previewLines(edit);
 
   return (
-    <form
-      onSubmit={submit}
-      // Dialogs and menus render elsewhere in the page, so their Escape is not
-      // inside the form; edits would be lost, so it waits for them.
-      onKeyDown={(event) => {
-        if (
-          event.key === 'Escape' &&
-          !dirty &&
-          !event.defaultPrevented &&
-          event.currentTarget.contains(event.target as Node)
-        ) {
-          onClose();
-        }
-      }}
-      aria-labelledby="host-title"
-      // `clip`, not `hidden`: the glow sticks out on the right, and a hidden
-      // overflow would let focus scroll the whole editor sideways.
-      className="glass-raised relative flex min-w-0 flex-1 flex-col overflow-clip rounded-2xl"
-    >
-      <div
-        aria-hidden="true"
-        className="soft-glow absolute -top-[215px] -right-[165px] h-[430px] w-[530px] [--glow-color:rgb(37_99_235/0.32)]"
-      />
-      <div ref={header} className="relative flex items-center gap-3 px-5 pt-[18px] pb-3.5">
-        <Tile tone={mono.tone} size={44}>
-          <span className="font-mono text-[14px] font-semibold">{mono.text}</span>
-        </Tile>
-        <div className="min-w-0 flex-1">
-          <h2
-            id="host-title"
-            title={hostLabel(host)}
-            className="truncate font-mono text-[17px] leading-6 font-medium"
-          >
-            {hostLabel(host)}
-          </h2>
-          <p className="truncate text-subtle">{subtitle}</p>
-        </div>
-        {!concrete || readOnly ? null : git ? (
-          // Not disabled while it runs, so it keeps focus for the next try.
-          <ActionButton
-            data-check=""
-            reason={runReason}
-            busy={check.running}
-            icon={<PlugZap className="size-4" strokeWidth={2} />}
-            onClick={runCheck}
-          >
-            {t('hosts.editor.check')}
-          </ActionButton>
-        ) : (
-          <ActionButton
-            reason={runReason}
-            icon={<Terminal className="size-4" strokeWidth={2.2} />}
-            onClick={() => connectTo(alias)}
-          >
-            {t('hosts.editor.connect')}
-          </ActionButton>
-        )}
-        <Menu>
-          <MenuTrigger asChild>
-            <IconButton
-              data-more=""
-              label={t('hosts.editor.moreActions')}
-              variant="secondary"
-              className="size-9 rounded-[10px]"
-              icon={<MoreHorizontal className="size-4" strokeWidth={2} />}
-            />
-          </MenuTrigger>
-          <MenuContent>
-            {concrete && !readOnly ? (
-              <>
-                {git ? null : (
-                  <MenuItem
-                    icon={<PlugZap className="size-[15px]" strokeWidth={1.9} />}
-                    disabled={runReason !== null}
-                    onSelect={runCheck}
-                  >
-                    {t('hosts.editor.checkConnection')}
-                  </MenuItem>
-                )}
-                {git ? null : (
-                  <MenuItem
-                    icon={<KeyRound className="size-[15px]" strokeWidth={1.9} />}
-                    disabled={runReason !== null}
-                    onSelect={() => openServerKeys({ withVault, passwordSaved })}
-                  >
-                    {t('hosts.editor.serverKeys')}
-                  </MenuItem>
-                )}
-                <MenuItem
-                  icon={<Copy className="size-[15px]" strokeWidth={1.9} />}
-                  onSelect={() => void copyCommand()}
-                >
-                  {t('hosts.editor.copyCommand')}
-                </MenuItem>
-                <MenuItem
-                  icon={<SquareTerminal className="size-[15px]" strokeWidth={1.9} />}
-                  disabled={runReason !== null}
-                  onSelect={() => void openTerminal()}
-                >
-                  {t('hosts.editor.openTerminal')}
-                </MenuItem>
-                <MenuItem
-                  icon={<Send className="size-[15px]" strokeWidth={1.9} />}
-                  disabled={dirty}
-                  onSelect={() => openSend(true)}
-                >
-                  {t('hosts.editor.send')}
-                </MenuItem>
-                <MenuSeparator />
-              </>
-            ) : null}
-            <MenuItem
-              destructive
-              icon={<Trash2 className="size-[15px]" strokeWidth={1.9} />}
-              onSelect={() => setConfirmDelete(true)}
-            >
-              {t('hosts.deleteHost')}
-            </MenuItem>
-          </MenuContent>
-        </Menu>
-        <IconButton
-          label={t('hosts.panel.close')}
-          className="size-9 rounded-[10px]"
-          icon={<X className="size-4" strokeWidth={2} />}
-          onClick={onClose}
+    <>
+      <form
+        onSubmit={submit}
+        // Dialogs and menus render elsewhere in the page, so their Escape is not
+        // inside the form; edits would be lost, so it waits for them.
+        onKeyDown={(event) => {
+          if (
+            event.key === 'Escape' &&
+            !dirty &&
+            !event.defaultPrevented &&
+            event.currentTarget.contains(event.target as Node)
+          ) {
+            onClose();
+          }
+        }}
+        aria-labelledby="host-title"
+        // `clip`, not `hidden`: the glow sticks out on the right, and a hidden
+        // overflow would let focus scroll the whole editor sideways.
+        className="glass-raised relative flex min-w-0 flex-1 flex-col overflow-clip rounded-2xl"
+      >
+        <div
+          aria-hidden="true"
+          className="soft-glow absolute -top-[215px] -right-[165px] h-[430px] w-[530px] [--glow-color:rgb(37_99_235/0.32)]"
         />
-      </div>
-
-      {/* Mounted before any result, so screen readers announce each one. */}
-      <div role="status" className="relative">
-        {test ? (
-          <LoginResult
-            className="mx-5 mb-3"
-            run={test.run}
-            context={test.context}
-            alias={alias}
-            okTitle={okTitle}
-            vaultLocked={vault.vault === 'locked'}
-            onAction={{ ...fixes, ...unlockFix(test.run) }}
-            diagnose={{
-              facts: hostFacts.facts,
-              onFix: diagnoseFixes,
-              publicKey: hostFacts.key?.publicKey ?? undefined,
-            }}
-            onClose={() => {
-              check.clearResult();
-              header.current
-                ?.querySelector<HTMLElement>(git ? '[data-check]' : '[data-more]')
-                ?.focus();
-            }}
-          />
-        ) : null}
-      </div>
-
-      <div className="relative flex min-h-0 flex-1 flex-wrap content-start gap-[18px] overflow-y-auto px-5 pt-0.5 pb-[18px]">
-        {readOnly ? (
-          <div className="flex min-w-0 flex-[999_1_400px] flex-col gap-3">
-            <p className="rounded-xl border border-info-solid/30 bg-info-solid/[0.09] px-3 py-2.5 text-[12.5px] text-info">
-              {t('hosts.matchReadOnly')}
-            </p>
+        <div ref={header} className="relative flex items-center gap-3 px-5 pt-[18px] pb-3.5">
+          <Tile tone={mono.tone} size={44}>
+            <span className="font-mono text-[14px] font-semibold">{mono.text}</span>
+          </Tile>
+          <div className="min-w-0 flex-1">
+            <h2
+              id="host-title"
+              title={hostLabel(host)}
+              className="truncate font-mono text-[17px] leading-6 font-medium"
+            >
+              {hostLabel(host)}
+            </h2>
+            <p className="truncate text-subtle">{subtitle}</p>
+            <ProjectChips member={projectMember} className="mt-1.5" />
           </div>
-        ) : (
-          <div className="flex min-w-0 flex-[999_1_400px] flex-col gap-[18px]">
-            <Section legend={t('hosts.editor.server')}>
-              <div ref={server} className="contents">
-                <ServerFields
-                  form={form}
-                  set={set}
-                  errors={dirty ? errors : { port: errors.port }}
-                  // Patterns say how to write more of them.
-                  aliasHint={concrete ? t('hosts.editor.aliasHint') : t('hosts.aliasHint')}
-                />
-              </div>
-            </Section>
-
-            <HostResolution form={form} />
-
-            {concrete && form.method !== null ? (
-              <SignInSection
-                ref={signIn}
-                form={{ ...form, method: form.method }}
-                update={setForm}
-                savedMethod={initial.method ?? 'key'}
-                vault={vault}
-                alias={alias}
-                trashPending={followUp.kind === 'trash'}
-                otherDirty={otherDirty}
-                onEditPassword={openPassword}
-                onInstallKey={() =>
-                  saved &&
-                  openSwitch({ alias, entryId: saved.id, keyPath: form.identityFile.trim() })
-                }
-                onCreateKey={() =>
-                  dialogs.generateKeyFor((made) => {
-                    const file = displayPath(made.privatePath ?? '', home);
-                    if (file) setForm((f) => chooseKey(f, file));
-                  })
-                }
+          {!concrete || readOnly ? null : git ? (
+            // Not disabled while it runs, so it keeps focus for the next try.
+            <ActionButton
+              data-check=""
+              reason={runReason}
+              busy={check.running}
+              icon={<PlugZap className="size-4" strokeWidth={2} />}
+              onClick={runCheck}
+            >
+              {t('hosts.editor.check')}
+            </ActionButton>
+          ) : (
+            <ActionButton
+              reason={runReason}
+              icon={<Terminal className="size-4" strokeWidth={2.2} />}
+              onClick={() => connectTo(alias)}
+            >
+              {t('hosts.editor.connect')}
+            </ActionButton>
+          )}
+          <Menu>
+            <MenuTrigger asChild>
+              <IconButton
+                data-more=""
+                label={t('hosts.editor.moreActions')}
+                variant="secondary"
+                className="size-9 rounded-[10px]"
+                icon={<MoreHorizontal className="size-4" strokeWidth={2} />}
               />
-            ) : null}
+            </MenuTrigger>
+            <MenuContent>
+              {concrete && !readOnly ? (
+                <>
+                  {git ? null : (
+                    <MenuItem
+                      icon={<PlugZap className="size-[15px]" strokeWidth={1.9} />}
+                      disabled={runReason !== null}
+                      onSelect={runCheck}
+                    >
+                      {t('hosts.editor.checkConnection')}
+                    </MenuItem>
+                  )}
+                  {git ? null : (
+                    <MenuItem
+                      icon={<KeyRound className="size-[15px]" strokeWidth={1.9} />}
+                      disabled={runReason !== null}
+                      onSelect={() => openServerKeys({ withVault, passwordSaved })}
+                    >
+                      {t('hosts.editor.serverKeys')}
+                    </MenuItem>
+                  )}
+                  <MenuItem
+                    icon={<Copy className="size-[15px]" strokeWidth={1.9} />}
+                    onSelect={() => void copyCommand()}
+                  >
+                    {t('hosts.editor.copyCommand')}
+                  </MenuItem>
+                  <MenuItem
+                    icon={<SquareTerminal className="size-[15px]" strokeWidth={1.9} />}
+                    disabled={runReason !== null}
+                    onSelect={() => void openTerminal()}
+                  >
+                    {t('hosts.editor.openTerminal')}
+                  </MenuItem>
+                  <MenuItem
+                    icon={<Send className="size-[15px]" strokeWidth={1.9} />}
+                    disabled={dirty}
+                    onSelect={() => openSend(true)}
+                  >
+                    {t('hosts.editor.send')}
+                  </MenuItem>
+                  {projectMenu.sub}
+                  <MenuSeparator />
+                </>
+              ) : null}
+              <MenuItem
+                destructive
+                icon={<Trash2 className="size-[15px]" strokeWidth={1.9} />}
+                onSelect={() => setConfirmDelete(true)}
+              >
+                {t('hosts.deleteHost')}
+              </MenuItem>
+            </MenuContent>
+          </Menu>
+          <IconButton
+            label={t('hosts.panel.close')}
+            className="size-9 rounded-[10px]"
+            icon={<X className="size-4" strokeWidth={2} />}
+            onClick={onClose}
+          />
+        </div>
 
-            <MoreSection form={form} set={set} hosts={hosts} hostId={host.id} />
-
-            {concrete ? <HistorySection aliases={hostAliases(host)} /> : null}
-          </div>
-        )}
-
-        <aside
-          aria-labelledby="host-preview-title"
-          className="flex min-w-[220px] flex-[1_1_220px] flex-col gap-2"
-        >
-          <h3
-            id="host-preview-title"
-            className="text-[12px] font-semibold tracking-[0.02em] text-subtle"
-          >
-            {t('hosts.editor.previewTitle')}
-          </h3>
-          <ConfigPreview lines={lines} changed={readOnly ? undefined : changedLines(lines, host)} />
-          <p className="flex gap-2 text-[12px] leading-[18px] text-subtle">
-            <ShieldCheck
-              aria-hidden="true"
-              className="mt-0.5 size-3.5 shrink-0"
-              strokeWidth={1.75}
+        {/* Mounted before any result, so screen readers announce each one. */}
+        <div role="status" className="relative">
+          {test ? (
+            <LoginResult
+              className="mx-5 mb-3"
+              run={test.run}
+              context={test.context}
+              alias={alias}
+              okTitle={okTitle}
+              vaultLocked={vault.vault === 'locked'}
+              onAction={{ ...fixes, ...unlockFix(test.run) }}
+              diagnose={{
+                facts: hostFacts.facts,
+                onFix: diagnoseFixes,
+                publicKey: hostFacts.key?.publicKey ?? undefined,
+              }}
+              onClose={() => {
+                check.clearResult();
+                header.current
+                  ?.querySelector<HTMLElement>(git ? '[data-check]' : '[data-more]')
+                  ?.focus();
+              }}
             />
-            {t('hosts.backupNote')}
-          </p>
-        </aside>
-      </div>
-
-      {!readOnly ? (
-        <footer className="relative flex flex-wrap items-center justify-end gap-2.5 border-t border-white/[0.07] px-5 py-3">
-          {dirty ? (
-            <span className="mr-auto inline-flex items-center gap-2 text-[12.5px] text-warning">
-              <span aria-hidden="true" className="size-[7px] rounded-full bg-warning" />
-              {t('hosts.unsaved')}
-            </span>
           ) : null}
-          <Button disabled={!dirty} onClick={() => setForm(initial)}>
-            {t('common.discard')}
-          </Button>
-          <Button
-            type="submit"
-            variant="primary"
-            loading={save.isPending}
-            disabled={!dirty || invalid}
+        </div>
+
+        <div className="relative flex min-h-0 flex-1 flex-wrap content-start gap-[18px] overflow-y-auto px-5 pt-0.5 pb-[18px]">
+          {readOnly ? (
+            <div className="flex min-w-0 flex-[999_1_400px] flex-col gap-3">
+              <p className="rounded-xl border border-info-solid/30 bg-info-solid/[0.09] px-3 py-2.5 text-[12.5px] text-info">
+                {t('hosts.matchReadOnly')}
+              </p>
+            </div>
+          ) : (
+            <div className="flex min-w-0 flex-[999_1_400px] flex-col gap-[18px]">
+              <Section legend={t('hosts.editor.server')}>
+                <div ref={server} className="contents">
+                  <ServerFields
+                    form={form}
+                    set={set}
+                    errors={dirty ? errors : { port: errors.port }}
+                    // Patterns say how to write more of them.
+                    aliasHint={concrete ? t('hosts.editor.aliasHint') : t('hosts.aliasHint')}
+                  />
+                </div>
+              </Section>
+
+              <HostResolution form={form} />
+
+              {concrete && form.method !== null ? (
+                <SignInSection
+                  ref={signIn}
+                  form={{ ...form, method: form.method }}
+                  update={setForm}
+                  savedMethod={initial.method ?? 'key'}
+                  vault={vault}
+                  alias={alias}
+                  trashPending={followUp.kind === 'trash'}
+                  otherDirty={otherDirty}
+                  onEditPassword={openPassword}
+                  onInstallKey={() =>
+                    saved &&
+                    openSwitch({ alias, entryId: saved.id, keyPath: form.identityFile.trim() })
+                  }
+                  onCreateKey={() =>
+                    dialogs.generateKeyFor((made) => {
+                      const file = displayPath(made.privatePath ?? '', home);
+                      if (file) setForm((f) => chooseKey(f, file));
+                    })
+                  }
+                />
+              ) : null}
+
+              <MoreSection form={form} set={set} hosts={hosts} hostId={host.id} />
+
+              {concrete ? <HistorySection aliases={hostAliases(host)} /> : null}
+            </div>
+          )}
+
+          <aside
+            aria-labelledby="host-preview-title"
+            className="flex min-w-[220px] flex-[1_1_220px] flex-col gap-2"
           >
-            {t('common.save')}
-          </Button>
-        </footer>
-      ) : null}
+            <h3
+              id="host-preview-title"
+              className="text-[12px] font-semibold tracking-[0.02em] text-subtle"
+            >
+              {t('hosts.editor.previewTitle')}
+            </h3>
+            <ConfigPreview
+              lines={lines}
+              changed={readOnly ? undefined : changedLines(lines, host)}
+            />
+            <p className="flex gap-2 text-[12px] leading-[18px] text-subtle">
+              <ShieldCheck
+                aria-hidden="true"
+                className="mt-0.5 size-3.5 shrink-0"
+                strokeWidth={1.75}
+              />
+              {t('hosts.backupNote')}
+            </p>
+          </aside>
+        </div>
 
-      <ConfirmDialog
-        open={confirmDelete}
-        onOpenChange={setConfirmDelete}
-        title={t('hosts.deleteTitle', { name: hostLabel(host) })}
-        description={t('hosts.deleteText')}
-        confirmLabel={t('common.delete')}
-        destructive
-        busy={remove.isPending}
-        onConfirm={() => remove.mutate(host.id)}
-      />
+        {!readOnly ? (
+          <footer className="relative flex flex-wrap items-center justify-end gap-2.5 border-t border-white/[0.07] px-5 py-3">
+            {dirty ? (
+              <span className="mr-auto inline-flex items-center gap-2 text-[12.5px] text-warning">
+                <span aria-hidden="true" className="size-[7px] rounded-full bg-warning" />
+                {t('hosts.unsaved')}
+              </span>
+            ) : null}
+            <Button disabled={!dirty} onClick={() => setForm(initial)}>
+              {t('common.discard')}
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              loading={save.isPending}
+              disabled={!dirty || invalid}
+            >
+              {t('common.save')}
+            </Button>
+          </footer>
+        ) : null}
 
-      {/* The switch to a key stays open under the password and host key dialogs it opens. */}
-      <Dialog open={switching !== null} onOpenChange={(open) => open || endSwitch()}>
-        {switching ? (
-          <SwitchToKeyDialog
-            host={host}
-            alias={switching.alias}
-            entryId={switching.entryId}
-            initialKeyPath={switching.keyPath || undefined}
-            onAction={{
-              checkHostKey: () => openHostKey(true),
-              editPassword: () => openPassword('edit'),
-              addOtp: () => openPassword('otp'),
-            }}
-            onConfigSaved={() => {
-              switchSaved.current = true;
-            }}
-            onDone={endSwitch}
-          />
-        ) : null}
-      </Dialog>
-      {check.dialog}
-      <Dialog open={sending !== null} onOpenChange={(open) => open || closeSend()}>
-        {sending ? (
-          <SendDialog what={{ type: 'host', alias }} name={alias} onStarted={closeSend} />
-        ) : null}
-      </Dialog>
-      {/* Under the password and host key dialogs its failed sign-ins open. */}
-      <Dialog open={serverKeys !== null} onOpenChange={(open) => open || closeServerKeys()}>
-        {serverKeys ? (
-          <ServerKeysDialog
-            alias={alias}
-            account={target}
-            withVault={serverKeys.withVault}
-            passwordSaved={serverKeys.passwordSaved}
-            vaultLocked={vault.vault === 'locked'}
-            onAction={fixes}
-          />
-        ) : null}
-      </Dialog>
-      <Dialog open={passwordOpen !== null} onOpenChange={(open) => open || closePassword()}>
-        {passwordOpen && vault.vault === 'unlocked' ? (
-          <HostPasswordDialog
-            alias={alias}
-            user={form.user.trim()}
-            entry={saved}
-            focusOtp={passwordOpen === 'otp'}
-            onDone={closePassword}
-          />
-        ) : null}
-      </Dialog>
-      <Dialog open={hostKeyOpen !== null} onOpenChange={(open) => open || closeHostKey()}>
-        {hostKeyOpen ? (
-          <CheckHostKeyDialog
-            initialHost={host.hostName ?? alias}
-            onRemove={setToRemove}
-            onDone={closeHostKey}
-          />
-        ) : null}
-      </Dialog>
-      <ConfirmDialog
-        open={toRemove !== null}
-        onOpenChange={(open) => open || setToRemove(null)}
-        title={t('known.removeTitle')}
-        description={t('known.removeText')}
-        confirmLabel={t('common.delete')}
-        destructive
-        busy={removeKnown.isPending}
-        onConfirm={() => toRemove && removeKnown.mutate(toRemove)}
-      />
-    </form>
+        <ConfirmDialog
+          open={confirmDelete}
+          onOpenChange={setConfirmDelete}
+          title={t('hosts.deleteTitle', { name: hostLabel(host) })}
+          description={t('hosts.deleteText')}
+          confirmLabel={t('common.delete')}
+          destructive
+          busy={remove.isPending}
+          onConfirm={() => remove.mutate(host.id)}
+        />
+
+        {/* The switch to a key stays open under the password and host key dialogs it opens. */}
+        <Dialog open={switching !== null} onOpenChange={(open) => open || endSwitch()}>
+          {switching ? (
+            <SwitchToKeyDialog
+              host={host}
+              alias={switching.alias}
+              entryId={switching.entryId}
+              initialKeyPath={switching.keyPath || undefined}
+              onAction={{
+                checkHostKey: () => openHostKey(true),
+                editPassword: () => openPassword('edit'),
+                addOtp: () => openPassword('otp'),
+              }}
+              onConfigSaved={() => {
+                switchSaved.current = true;
+              }}
+              onDone={endSwitch}
+            />
+          ) : null}
+        </Dialog>
+        {check.dialog}
+        <Dialog open={sending !== null} onOpenChange={(open) => open || closeSend()}>
+          {sending ? (
+            <SendDialog what={{ type: 'host', alias }} name={alias} onStarted={closeSend} />
+          ) : null}
+        </Dialog>
+        {/* Under the password and host key dialogs its failed sign-ins open. */}
+        <Dialog open={serverKeys !== null} onOpenChange={(open) => open || closeServerKeys()}>
+          {serverKeys ? (
+            <ServerKeysDialog
+              alias={alias}
+              account={target}
+              withVault={serverKeys.withVault}
+              passwordSaved={serverKeys.passwordSaved}
+              vaultLocked={vault.vault === 'locked'}
+              onAction={fixes}
+            />
+          ) : null}
+        </Dialog>
+        <Dialog open={passwordOpen !== null} onOpenChange={(open) => open || closePassword()}>
+          {passwordOpen && vault.vault === 'unlocked' ? (
+            <HostPasswordDialog
+              alias={alias}
+              user={form.user.trim()}
+              entry={saved}
+              focusOtp={passwordOpen === 'otp'}
+              onDone={closePassword}
+            />
+          ) : null}
+        </Dialog>
+        <Dialog open={hostKeyOpen !== null} onOpenChange={(open) => open || closeHostKey()}>
+          {hostKeyOpen ? (
+            <CheckHostKeyDialog
+              initialHost={host.hostName ?? alias}
+              onRemove={setToRemove}
+              onDone={closeHostKey}
+            />
+          ) : null}
+        </Dialog>
+        <ConfirmDialog
+          open={toRemove !== null}
+          onOpenChange={(open) => open || setToRemove(null)}
+          title={t('known.removeTitle')}
+          description={t('known.removeText')}
+          confirmLabel={t('common.delete')}
+          destructive
+          busy={removeKnown.isPending}
+          onConfirm={() => toRemove && removeKnown.mutate(toRemove)}
+        />
+      </form>
+      {/* Outside the form: a submit in the dialog must not save the host. */}
+      {projectMenu.dialog}
+    </>
   );
 }
 

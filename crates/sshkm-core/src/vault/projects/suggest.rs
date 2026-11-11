@@ -168,8 +168,42 @@ pub struct LoginFacts {
 pub struct Declined {
     /// Suggestions dismissed, by key, oldest first.
     pub keys: Vec<String>,
-    /// Members left out of an accepted suggestion, by its key.
-    pub members: BTreeMap<String, Vec<ProjectMember>>,
+    /// Members left out of an accepted suggestion, by its key, as records
+    /// keep them (`host:prod`, `hostsfile:app.test`): a version that doesn't
+    /// know a kind keeps it as text, and reads these settings all the same.
+    #[serde(deserialize_with = "member_keys")]
+    pub members: BTreeMap<String, Vec<String>>,
+}
+
+/// Reads left-out members as record keys; written by an earlier build as
+/// members (`{"type":"host","alias":"prod"}`), as keys, and members of a
+/// kind this version doesn't know are dropped, not the whole settings.
+fn member_keys<'de, D>(deserializer: D) -> Result<BTreeMap<String, Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Stored {
+        Key(String),
+        Member(ProjectMember),
+        Other(serde::de::IgnoredAny),
+    }
+    let stored = BTreeMap::<String, Vec<Stored>>::deserialize(deserializer)?;
+    Ok(stored
+        .into_iter()
+        .map(|(suggestion, members)| {
+            let keys = members
+                .into_iter()
+                .filter_map(|member| match member {
+                    Stored::Key(key) => Some(key),
+                    Stored::Member(member) => Some(super::member_key(&member)),
+                    Stored::Other(_) => None,
+                })
+                .collect();
+            (suggestion, keys)
+        })
+        .collect())
 }
 
 impl Declined {
@@ -199,9 +233,9 @@ impl Declined {
             return;
         }
         let list = self.members.entry(suggestion.key.clone()).or_default();
-        for member in left {
-            if !list.contains(&member) && list.len() < MAX_MEMBERS {
-                list.push(member);
+        for key in left.iter().map(super::member_key) {
+            if !list.contains(&key) && list.len() < MAX_MEMBERS {
+                list.push(key);
             }
         }
     }
@@ -348,9 +382,11 @@ impl ProjectSuggestion {
     }
 
     /// Drops what `declined` says the user left out.
-    fn drop_declined(&mut self, declined: &[ProjectMember]) {
-        for member in declined {
-            match member {
+    /// Leaves out the members turned down, by record key; kinds this
+    /// version doesn't know offer nothing to leave out.
+    fn drop_declined(&mut self, declined: &[String]) {
+        for member in declined.iter().filter_map(|key| super::parse_member(key)) {
+            match &member {
                 ProjectMember::Host { alias } => self.hosts.retain(|v| v != alias),
                 ProjectMember::Key { fingerprint } => self.keys.retain(|v| v != fingerprint),
                 ProjectMember::Login { id } => self.logins.retain(|v| v != id),

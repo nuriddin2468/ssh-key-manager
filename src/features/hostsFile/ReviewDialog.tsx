@@ -3,6 +3,7 @@ import { FileDiff, Info, Laptop, Lock, TriangleAlert } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
+import { errorMessage } from '@/api/useAppMutation';
 import type { HostsApplyResult } from '@/bindings/HostsApplyResult';
 import type { HostsChange } from '@/bindings/HostsChange';
 import type { HostsDiffLine } from '@/bindings/HostsDiffLine';
@@ -13,6 +14,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { SwitchRow } from '@/components/ui/Switch';
 import { Tile } from '@/components/ui/Tile';
 import { cn } from '@/lib/cn';
+import { AppError } from '@/lib/ipc';
 import { useHostsApply } from './useHostsApply';
 
 /** A group another computer sent, which the changes add. */
@@ -76,6 +78,10 @@ export function ReviewDialog({
     refetchOnWindowFocus: false,
   });
   const stale = preview.data?.stale ?? false;
+  // The file may already read this way (it changed while the review was
+  // open): then there is nothing to write, nor a password to ask for.
+  const changing =
+    preview.data?.diff.some((line) => line.kind === 'added' || line.kind === 'removed') ?? false;
   const receivedText = received
     ? t('hostsFile.received', {
         count: received.count,
@@ -168,6 +174,26 @@ export function ReviewDialog({
           >
             {t('hostsFile.previewStale')}
           </p>
+        ) : preview.isError ? (
+          <p
+            role="alert"
+            className="rounded-xl border border-critical-solid/30 bg-critical-solid/10 px-3 py-2.5 text-[12.5px] text-critical"
+          >
+            {t('hostsFile.previewFailed', { error: errorMessage(t, preview.error) })}
+            {/* The core's own words, as error toasts give them. */}
+            {AppError.from(preview.error).message ? (
+              <span className="mt-0.5 block font-mono text-[11.5px] text-subtle">
+                {AppError.from(preview.error).message}
+              </span>
+            ) : null}
+          </p>
+        ) : preview.data && !changing ? (
+          <p
+            role="status"
+            className="rounded-xl border border-info-solid/30 bg-info-solid/[0.09] px-3 py-2.5 text-[12.5px] text-fg-2"
+          >
+            {t('hostsFile.nothingToChange')}
+          </p>
         ) : preview.data ? (
           <section
             aria-label={t('hostsFile.reviewTitle')}
@@ -195,7 +221,7 @@ export function ReviewDialog({
           size="lg"
           icon={<Lock className="size-4" strokeWidth={2} />}
           loading={apply.isPending}
-          disabled={!preview.data || stale}
+          disabled={!preview.data || stale || !changing}
           onClick={submit}
         >
           {t('hostsFile.apply')}

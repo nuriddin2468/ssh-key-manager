@@ -8,7 +8,7 @@ import type { ProjectMember } from '@/bindings/ProjectMember';
 import { Button } from '@/components/ui/Button';
 import { Checkbox } from '@/components/ui/Checkbox';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
-import { isSystemName, isValidName, normalizeName } from '@/features/hostsFile/model';
+import { isValidName, listsSystemName, normalizeName } from '@/features/hostsFile/model';
 import { useVaultMutation } from '@/features/passwords/vault';
 import { cn } from '@/lib/cn';
 import { holds, memberKey as keyOf, type Library } from './model';
@@ -75,13 +75,14 @@ function choices(kind: MemberKind, project: Project, library: Library): Choice[]
       out.push({ member, title: group, subtitle: names.join(', '), mono: true });
     }
   } else if (kind === 'hostsFile') {
-    // Names, not lines; block lists and the system's own names aren't offered.
+    // Names, not lines; block lists aren't offered, nor lines that list a
+    // system name (`127.0.0.1 localhost app.test`): those can't be switched.
     const seen = new Set<string>();
     for (const entry of library.hostsFile ?? []) {
-      if (entry.kind === 'blocked') continue;
+      if (entry.kind === 'blocked' || listsSystemName(entry)) continue;
       for (const written of entry.names) {
         const name = normalizeName(written);
-        if (seen.has(name) || isSystemName(name) || !isValidName(name)) continue;
+        if (seen.has(name) || !isValidName(name)) continue;
         seen.add(name);
         const member: ProjectMember = { type: 'hostsFile', name };
         if (holds(project, member)) continue;

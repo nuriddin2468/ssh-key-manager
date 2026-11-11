@@ -111,7 +111,10 @@ const ru = {
     hostsFileTurnOff_few: 'Выключает {{count}} записи проекта «{{name}}».',
     hostsFileTurnOff_many: 'Выключает {{count}} записей проекта «{{name}}».',
     hostsFileTurnOff_other: 'Выключает {{count}} записи проекта «{{name}}».',
-    hostsFileSharedNote: 'Эти имена есть и в других проектах: {{list}}. Изменение коснётся и их.',
+    hostsFileOthersNote: 'В этих же строках есть {{list}}: они тоже изменятся.',
+    hostsFileSystemLine: 'В одной строке с {{names}}, нужным системе',
+    hostsFileKeptNote: 'Не меняются, потому что в них есть системное имя: {{lines}}.',
+    hostsFileReviewHint: 'Сначала покажет изменение для проверки',
     hostsFileSeveralNote:
       'Для {{names}} будет включено несколько записей; действует первая в файле.',
     hostsFileMissingNote:
@@ -1804,6 +1807,8 @@ const ru = {
     flushDns: 'Очистить кэш DNS',
     flushDnsHint: 'Чтобы программы сразу увидели новые адреса.',
     apply: 'Сохранить с паролем',
+    previewFailed: 'Не удалось показать изменение: {{error}}',
+    nothingToChange: 'Менять нечего: в файле уже так.',
     previewStale:
       'Файл hosts изменился, пока вы работали. Отмените свои изменения и сделайте их заново.',
     applied: 'Файл hosts сохранён',

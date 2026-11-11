@@ -101,8 +101,10 @@ const uz = {
     hostsFileTurnOn_other: '«{{name}}» loyihasining {{count}} ta yozuvi yoqiladi.',
     hostsFileTurnOff_one: '«{{name}}» loyihasining {{count}} ta yozuvi oʻchiriladi.',
     hostsFileTurnOff_other: '«{{name}}» loyihasining {{count}} ta yozuvi oʻchiriladi.',
-    hostsFileSharedNote:
-      'Bu nomlar boshqa loyihalarda ham bor: {{list}}. Oʻzgarish ularga ham taʼsir qiladi.',
+    hostsFileOthersNote: 'Shu qatorlarda {{list}} ham bor: ular ham oʻzgaradi.',
+    hostsFileSystemLine: 'Qatorida tizimga kerakli {{names}} ham bor',
+    hostsFileKeptNote: 'Tizim nomi ham borligi uchun oʻzgarmaydi: {{lines}}.',
+    hostsFileReviewHint: 'Avval oʻzgarishni koʻrib chiqish uchun koʻrsatadi',
     hostsFileSeveralNote:
       '{{names}} uchun bir nechta yozuv yoqiladi; fayldagi birinchisi ishlaydi.',
     hostsFileMissingNote:
@@ -1709,6 +1711,8 @@ const uz = {
     flushDns: 'DNS keshini tozalash',
     flushDnsHint: 'Dasturlar yangi manzillardan darhol foydalanishi uchun.',
     apply: 'Parol bilan saqlash',
+    previewFailed: 'Oʻzgarishni koʻrsatib boʻlmadi: {{error}}',
+    nothingToChange: 'Oʻzgartiradigan narsa yoʻq: faylda allaqachon shunday.',
     previewStale:
       'Siz ishlayotganingizda hosts fayli oʻzgardi. Oʻzgarishlaringizni bekor qilib, qaytadan kiriting.',
     applied: 'Hosts fayli saqlandi',

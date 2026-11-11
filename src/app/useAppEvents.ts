@@ -1,20 +1,22 @@
 import { isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { type RefObject, useEffect } from 'react';
-import { invalidateAll } from '@/api/queries';
+import { invalidateAll, queryClient } from '@/api/queries';
+import { projectKeys } from '@/features/projects/queries';
 import { useTerminals } from '@/features/terminal/TerminalProvider';
 import { platform } from '@/lib/platform';
 import { checkForUpdates } from '@/lib/updater';
 import { useDialogs } from './dialogs';
-import { type Page, type Route, useRouter } from './router';
+import { homeRoute, type Page, type Route, useRouter } from './router';
 
 /** ⌘F: the page's search, or the terminal's find bar. */
 export const FIND_EVENT = 'sshkm:find';
 /** ⌘K: opens or closes the command palette (src/features/palette). */
 export const PALETTE_EVENT = 'sshkm:palette';
-// ⌘1–⌘9, in the order they were added so existing shortcuts never move.
-export const NAV_PAGES: Page[] = [
-  'overview',
+// ⌘1–⌘9, in the order they were added so existing shortcuts never move;
+// ⌘1, once Overview, opens the project used last (`home`).
+export const NAV_PAGES: (Page | 'home')[] = [
+  'home',
   'keys',
   'hosts',
   'agent',
@@ -37,7 +39,8 @@ export function useAppEvents(): void {
 
   useEffect(() => {
     const command = (id: string) => {
-      if (id.startsWith('nav-')) navigate({ page: id.slice(4) } as Route);
+      if (id === 'nav-home') navigate(homeRoute());
+      else if (id.startsWith('nav-')) navigate({ page: id.slice(4) } as Route);
       else if (id === 'settings') navigate({ page: 'settings' });
       else if (id === 'new-session') {
         navigate({ page: 'terminal' });
@@ -59,6 +62,13 @@ export function useAppEvents(): void {
     const unlisten: Promise<() => void>[] = [];
     if (isTauri()) {
       unlisten.push(listen('ssh-files-changed', () => void invalidateAll()));
+      // A sync with one of the user's devices changed the projects.
+      unlisten.push(
+        listen('projects-changed', () => {
+          void queryClient.invalidateQueries({ queryKey: projectKeys.all });
+          void queryClient.invalidateQueries({ queryKey: projectKeys.suggestions });
+        }),
+      );
       unlisten.push(listen<string>('menu', (event) => command(event.payload)));
     }
 

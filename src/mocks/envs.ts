@@ -69,6 +69,11 @@ function env(project: string, name: string, vars: Variable[], extra: Partial<Env
 }
 
 const envs: Env[] = [
+  env('shop-api', 'local', [
+    v('NODE_ENV', 'development'),
+    v('PORT', '3000'),
+    v('DATABASE_URL', 'postgres://shop:local-pass@localhost:5432/shop', true),
+  ]),
   env('shop-api', 'dev', [
     v('NODE_ENV', 'development'),
     v('PORT', '3000', false, 'API server'),
@@ -258,6 +263,14 @@ export function envSummary(id: string): ItemSummary {
     secrets: item?.vars.filter((variable) => variable.secret).length ?? 0,
     names: item?.vars.slice(0, 3).map((variable) => variable.name) ?? [],
   };
+}
+
+/** The variables of the environment `name` of `project`, outside the recycle bin, if any. */
+export function mockEnvironment(project: string, name: string): [string, string][] | undefined {
+  const item = envs.find(
+    (e) => !e.inTrash && e.project === project && e.name.toLowerCase() === name.toLowerCase(),
+  );
+  return item?.vars.map((x): [string, string] => [x.name, x.value]);
 }
 
 export const envsHandlers: Record<string, Handler> = {

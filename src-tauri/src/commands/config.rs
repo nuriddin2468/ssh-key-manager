@@ -54,6 +54,12 @@ pub async fn save_host(
             load_at(state, &revision)?;
         }
         config.save(&state.paths.config, &state.backup_dir)?;
+        // A renamed host moves in the projects that hold it.
+        if let (Some(old), Some(new)) = (edit.id.and_then(|id| before.host(id)), config.host(id)) {
+            let renames =
+                super::projects::block_renames(&before.hosts(), &config.hosts(), &old, &new);
+            super::projects::follow_host_renames(&app, state, renames);
+        }
         Ok(SavedHost {
             file: config_file(state)?,
             id,
@@ -130,6 +136,11 @@ pub async fn write_config_raw(
         }
         fsutil::backup(&state.paths.config, &state.backup_dir)?;
         fsutil::atomic_write(&state.paths.config, text.as_bytes(), 0o600)?;
+        // Renamed hosts move in the projects that hold them, as far as the
+        // two texts tell (see `file_renames`).
+        let renames =
+            super::projects::file_renames(&before.hosts(), &SshConfig::parse(&text).hosts());
+        super::projects::follow_host_renames(&app, state, renames);
         config_file(state)
     })
     .await

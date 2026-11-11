@@ -273,6 +273,43 @@ fn a_login_tagged_with_a_project_in_keepassxc_joins_it_unless_taken_out() {
 }
 
 #[test]
+fn a_renamed_host_moves_in_every_project_that_holds_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "vault");
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    let blog = vault.add_project(&input("Blog")).unwrap();
+    let other = vault.add_project(&input("Other")).unwrap();
+    add(&mut vault, &shop, &host("bastion"));
+    add(&mut vault, &blog, &host("bastion"));
+    add(&mut vault, &blog, &host("jump"));
+    add(&mut vault, &other, &host("db"));
+    assert!(vault.rename_host_in_projects("bastion", "jump").unwrap());
+    assert_eq!(vault.project(&shop).unwrap().hosts, ["jump"]);
+    assert_eq!(vault.project(&blog).unwrap().hosts, ["jump"]);
+    assert_eq!(vault.project(&other).unwrap().hosts, ["db"]);
+    assert!(!vault.rename_host_in_projects("bastion", "x").unwrap());
+    assert!(!vault.rename_host_in_projects("db", "two words").unwrap());
+}
+
+#[test]
+fn a_folder_taken_out_is_one_the_project_held() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "vault");
+    let id = vault.add_project(&input("Shop")).unwrap();
+    let shop = ProjectMember::Folder {
+        path: "~/code/shop".into(),
+    };
+    let other = ProjectMember::Folder {
+        path: "/etc".into(),
+    };
+    assert!(!vault.project_has_held(&id, &shop).unwrap());
+    add(&mut vault, &id, &shop);
+    vault.set_project_member(&id, &shop, false).unwrap();
+    assert!(vault.project_has_held(&id, &shop).unwrap());
+    assert!(!vault.project_has_held(&id, &other).unwrap());
+}
+
+#[test]
 fn members_are_checked() {
     let dir = tempfile::tempdir().unwrap();
     let mut vault = vault(&dir, "vault");

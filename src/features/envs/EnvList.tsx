@@ -2,6 +2,7 @@ import { ChevronRight, Trash2 } from 'lucide-react';
 import { type KeyboardEvent, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { EnvSummary } from '@/bindings/EnvSummary';
+import { AddToProjectButton, ProjectChips } from '@/features/projects/ProjectMenu';
 import { cn } from '@/lib/cn';
 import { isProduction, type ProjectGroup } from './model';
 
@@ -48,9 +49,20 @@ export function EnvList({ groups, trash, selectedId, query, onSelect }: EnvListP
         ) : null}
         {groups.map((group) => (
           <section key={group.project} aria-label={group.project} className="flex flex-col gap-0.5">
-            <h2 className="truncate px-2.5 pt-1 pb-1 text-[12px] font-semibold tracking-[0.02em] text-subtle">
-              {group.project}
-            </h2>
+            <div className="flex min-h-7 items-center gap-1.5 pr-1">
+              <h2 className="min-w-0 flex-1 truncate px-2.5 pt-1 pb-1 text-[12px] font-semibold tracking-[0.02em] text-subtle">
+                {group.project}
+              </h2>
+              <AddToProjectButton
+                member={{ type: 'environment', group: group.project }}
+                name={group.project}
+                className="size-7"
+              />
+            </div>
+            <ProjectChips
+              member={{ type: 'environment', group: group.project }}
+              className="px-2.5 pb-1"
+            />
             {group.envs.map((env) => (
               <EnvRow
                 key={env.id}

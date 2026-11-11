@@ -525,6 +525,8 @@ export const api = {
    * Projects proposed from environments, Git folders, ~/.ssh/config and
    * KeePass groups and tags; nothing changes until one is accepted.
    */
+  /** The project's folders not found on this computer (a slow mount counts as found). */
+  projectsMissingFolders: (id: string) => call<string[]>('projects_missing_folders', { id }),
   projectsSuggestions: () => call<ProjectSuggestion[]>('projects_suggestions'),
   /**
    * Creates the suggested project (or adds to the existing one it names)
@@ -536,6 +538,26 @@ export const api = {
   projectsRestoreSuggestions: () => call<void>('projects_restore_suggestions'),
   /** Asks for a folder to look into for Git folders; `null` if cancelled. */
   projectsSuggestInFolder: () => call<ProjectSuggestion[] | null>('projects_suggest_in_folder'),
+  /**
+   * Starts a shell in one of the project's folders (as kept, e.g. `~/code/shop`),
+   * with its `local` environment's variables while the vault is unlocked;
+   * like `terminalOpenLocal` otherwise.
+   */
+  projectsOpenTerminal: (
+    id: string,
+    folder: string,
+    shell: string | null,
+    size: { cols: number; rows: number },
+    onMessage: (message: TerminalMessage) => void,
+  ) =>
+    call<TerminalInfo>('projects_open_terminal', {
+      id,
+      folder,
+      shell,
+      cols: size.cols,
+      rows: size.rows,
+      events: isTauri() ? new Channel<TerminalMessage>(onMessage) : onMessage,
+    }),
 
   // Running on with the window closed, and the tray icon
   // (src-tauri/src/commands/background.rs).

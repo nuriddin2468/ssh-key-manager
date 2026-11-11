@@ -27,6 +27,7 @@ import { Menu, MenuContent, MenuItem, MenuTrigger } from '@/components/ui/Menu';
 import { SearchField } from '@/components/ui/SearchField';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
+import { ProjectDots, RowProjectButton } from '@/features/projects/ProjectMenu';
 import { cn } from '@/lib/cn';
 import { formatRelative, shortFingerprint } from '@/lib/format';
 import { EntryEditor } from './EntryEditor';
@@ -267,12 +268,19 @@ export function VaultBrowser({ entryId }: { entryId?: string }) {
                     {/* biome-ignore lint/a11y/noStaticElementInteractions: arrow keys on the focused row button bubble here */}
                     <div ref={list} onKeyDown={onListKey} className="flex flex-col gap-0.5 p-1.5">
                       {visible.map((entry) => (
-                        <EntryRow
-                          key={entry.id}
-                          entry={entry}
-                          selected={entry.id === selected?.id}
-                          onSelect={() => select(entry)}
-                        />
+                        <div key={entry.id} className="group relative">
+                          <EntryRow
+                            entry={entry}
+                            selected={entry.id === selected?.id}
+                            onSelect={() => select(entry)}
+                          />
+                          {entry.inTrash ? null : (
+                            <RowProjectButton
+                              member={{ type: 'login', id: entry.id }}
+                              name={entry.title}
+                            />
+                          )}
+                        </div>
                       ))}
                       {visible.length === 0 ? (
                         <p className="px-4 py-10 text-center text-subtle">
@@ -383,6 +391,10 @@ function EntryRow({ entry, selected, onSelect }: EntryRowProps) {
           <span className="truncate text-[12px] leading-[18px] text-subtle">
             {entry.username || '—'}
           </span>
+          <ProjectDots
+            member={entry.inTrash ? null : { type: 'login', id: entry.id }}
+            className="mt-0.5"
+          />
         </span>
       </span>
       <span className="flex min-w-0 items-center gap-1.5">

@@ -16,6 +16,7 @@ import { SearchField } from '@/components/ui/SearchField';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
 import { findingsByKey } from '@/features/audit/model';
+import { ProjectDots, RowProjectButton } from '@/features/projects/ProjectMenu';
 import { cn } from '@/lib/cn';
 import { shortFingerprint } from '@/lib/format';
 import { modLabel } from '@/lib/platform';
@@ -160,13 +161,20 @@ export function KeysPage({ keyId }: { keyId?: string }) {
                     </div>
                     <div className="flex flex-col gap-0.5 p-1.5">
                       {visible.map((key) => (
-                        <KeyRow
-                          key={key.id}
-                          keyView={key}
-                          selected={key.id === selected?.id}
-                          attention={needsCare(key)}
-                          onSelect={() => navigate({ page: 'keys', keyId: key.id })}
-                        />
+                        <div key={key.id} className="group relative">
+                          <KeyRow
+                            keyView={key}
+                            selected={key.id === selected?.id}
+                            attention={needsCare(key)}
+                            onSelect={() => navigate({ page: 'keys', keyId: key.id })}
+                          />
+                          {key.fingerprint ? (
+                            <RowProjectButton
+                              member={{ type: 'key', fingerprint: key.fingerprint }}
+                              name={key.name}
+                            />
+                          ) : null}
+                        </div>
                       ))}
                       {visible.length === 0 ? (
                         <p className="px-4 py-10 text-center text-subtle">{t('keys.noMatches')}</p>
@@ -233,6 +241,10 @@ function KeyRow({ keyView: key, selected, attention, onSelect }: KeyRowProps) {
           <span className="truncate text-[12px] leading-[18px] text-subtle">
             {key.comment || '—'}
           </span>
+          <ProjectDots
+            member={key.fingerprint ? { type: 'key', fingerprint: key.fingerprint } : null}
+            className="mt-0.5"
+          />
         </span>
       </span>
       <span>

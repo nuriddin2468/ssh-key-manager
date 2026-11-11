@@ -6,12 +6,14 @@ import { useEnvironment } from '@/api/queries';
 import { useRouter } from '@/app/router';
 import type { ConnectionEvent } from '@/bindings/ConnectionEvent';
 import type { HostEntry } from '@/bindings/HostEntry';
+import type { ProjectMember } from '@/bindings/ProjectMember';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
 import { causeTitle } from '@/features/diagnose/model';
+import { AddToProjectButton, ProjectChips } from '@/features/projects/ProjectMenu';
 import { useConnect } from '@/features/terminal/connect';
 import { useTerminals } from '@/features/terminal/TerminalProvider';
 import { cn } from '@/lib/cn';
@@ -64,6 +66,9 @@ export function HostCard({
   const label = hostLabel(host);
   const aliases = hostAliases(host);
   const concrete = isConcrete(host) && aliases.length > 0;
+  const projectMember: ProjectMember | null = concrete
+    ? { type: 'host', alias: aliases[0] ?? '' }
+    : null;
   const isDefaults = host.kind === 'host' && host.patterns.length === 1 && host.patterns[0] === '*';
   const git = gitService(host);
 
@@ -143,6 +148,7 @@ export function HostCard({
         </button>
         {method ? <MethodIcons method={method} /> : null}
       </div>
+      <ProjectChips member={projectMember} className="-mt-1" />
 
       {status ? <StatusLabel status={status} className="min-h-9" /> : null}
 
@@ -198,6 +204,7 @@ export function HostCard({
               )}
             </>
           )}
+          <AddToProjectButton member={projectMember} name={label} />
         </div>
       ) : null}
       {check.dialog}

@@ -11,15 +11,18 @@
 //! Suggestions (`sshkm_core::vault::projects::suggest`) change nothing by
 //! themselves: the user accepts or dismisses each one.
 
-use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use serde::{Deserialize, Serialize};
-use sshkm_core::config::{HostKind, SshConfig};
+use sshkm_core::config::{HostEntry, HostKind, SshConfig};
 use sshkm_core::paths::home_dir;
+use sshkm_core::vault::envs::EnvSummary;
 use sshkm_core::vault::projects::suggest::{self, Declined, HostFacts, ProjectSuggestion};
 use sshkm_core::vault::projects::{self, Project, ProjectInput, ProjectMember};
-use sshkm_core::{ErrorCode, fsutil, keys};
+use sshkm_core::{ErrorCode, SecretString, fsutil, keys};
+use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
@@ -27,6 +30,9 @@ use super::{Shared, blocking};
 use crate::confirm::Localized;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
+use crate::terminal::Sink;
+use crate::terminal::shells;
+use crate::terminal::types::TerminalInfo;
 
 /// Emitted when a sync with one of the user's devices changed the projects.
 pub const CHANGED_EVENT: &str = "projects-changed";
@@ -37,13 +43,68 @@ pub const CHANGED_EVENT: &str = "projects-changed";
 #[tauri::command]
 pub async fn projects_list(app: AppHandle, state: State<'_, Shared>) -> AppResult<Vec<Project>> {
     blocking(&state, move |state| {
-        if !state.vault.is_unlocked() {
-            return Ok(state.vault.projects_copy());
+        apply_pending_renames(&app, state);
+        let projects = if state.vault.is_unlocked() {
+            match state.vault.with_quietly(&app, |vault| Ok(vault.projects())) {
+                Err(error) if error.code() == ErrorCode::VaultLocked => state.vault.projects_copy(),
+                other => other?,
+            }
+        } else {
+            state.vault.projects_copy()
+        };
+        Ok(projects)
+    })
+    .await
+}
+
+/// How long [`projects_missing_folders`] waits for the file system: a
+/// network mount that doesn't answer must not hold the page.
+const FOLDER_CHECK: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The project's folders not found on this computer. A folder whose check
+/// doesn't finish within [`FOLDER_CHECK`] counts as there: unknown is not
+/// missing.
+#[tauri::command]
+pub async fn projects_missing_folders(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    id: String,
+) -> AppResult<Vec<String>> {
+    blocking(&state, move |state| {
+        let folders = match state
+            .vault
+            .with_quietly(&app, |vault| Ok(vault.project(&id)?.folders))
+        {
+            Err(error) if error.code() == ErrorCode::VaultLocked => state
+                .vault
+                .projects_copy()
+                .into_iter()
+                .find(|p| p.id == id)
+                .map(|p| p.folders)
+                .unwrap_or_default(),
+            other => other?,
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let home = home_dir();
+            for folder in folders {
+                let found =
+                    projects::folder_path(&folder, home.as_deref()).is_some_and(|p| p.is_dir());
+                if tx.send((folder, found)).is_err() {
+                    return;
+                }
+            }
+        });
+        let deadline = std::time::Instant::now() + FOLDER_CHECK;
+        let mut gone = Vec::new();
+        while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+            match rx.recv_timeout(left) {
+                Ok((folder, false)) => gone.push(folder),
+                Ok((_, true)) => {}
+                Err(_) => break,
+            }
         }
-        match state.vault.with_quietly(&app, |vault| Ok(vault.projects())) {
-            Err(error) if error.code() == ErrorCode::VaultLocked => Ok(state.vault.projects_copy()),
-            other => other,
-        }
+        Ok(gone)
     })
     .await
 }
@@ -95,8 +156,8 @@ pub async fn projects_delete(
     .await
 }
 
-/// Puts an item into a project or takes it out. A folder is only taken
-/// out here; [`projects_add_folder`] adds one.
+/// Puts an item into a project or takes it out. A folder goes in from
+/// [`projects_add_folder`]; here only one the project held comes back.
 #[tauri::command]
 pub async fn projects_set_member(
     app: AppHandle,
@@ -105,11 +166,16 @@ pub async fn projects_set_member(
     member: ProjectMember,
     included: bool,
 ) -> AppResult<Project> {
-    if included && matches!(member, ProjectMember::Folder { .. }) {
-        return Err(AppError::invalid("choose the folder in the folder dialog"));
-    }
     blocking(&state, move |state| {
         state.vault.change(&app, &state.backup_dir, |vault| {
+            // A folder goes in from the folder dialog; here only one the
+            // project held already comes back (an Undo).
+            if included
+                && matches!(member, ProjectMember::Folder { .. })
+                && !vault.project_has_held(&id, &member)?
+            {
+                return Err(AppError::invalid("choose the folder in the folder dialog"));
+            }
             vault.set_project_member(&id, &member, included)?;
             Ok(vault.project(&id)?)
         })
@@ -411,4 +477,437 @@ pub async fn projects_suggest_in_folder(
         suggestions(&app, state).map(Some)
     })
     .await
+}
+
+/// Starts a shell in one of a project's folders, as `terminal_open_local`
+/// does: `shell` or the default one, in a `cols`×`rows` terminal. `folder`
+/// is the folder as the project keeps it; nothing outside the project's
+/// folders opens. While the vault is unlocked, the shell gets the variables
+/// of the project's `local` environment, if it has one; while it is locked
+/// the project comes from the copy kept for then, and the shell gets none.
+#[tauri::command]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Tauri passes command arguments one by one"
+)]
+pub async fn projects_open_terminal(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    id: String,
+    folder: String,
+    shell: Option<String>,
+    cols: u16,
+    rows: u16,
+    events: Channel<InvokeResponseBody>,
+) -> AppResult<TerminalInfo> {
+    let shared = Arc::clone(&state);
+    blocking(&state, move |state| {
+        let opened = state.vault.with(&app, |vault| {
+            let project = vault.project(&id)?;
+            let vars = local_variables(vault, &project)?;
+            Ok((project, vars))
+        });
+        let (project, vars) = with_copy(opened, || state.vault.projects_copy(), &id)?;
+        let path = terminal_folder(&project, &folder, home_dir().as_deref())?;
+        let name = path
+            .file_name()
+            .map_or_else(|| folder.clone(), |n| n.to_string_lossy().into_owned());
+        let shell = shells::find(shell.as_deref())?;
+        let sink: Arc<dyn Sink> = Arc::new(events);
+        shared.terminals.open_local(
+            &format!("{} · {name}", project.name),
+            &shell,
+            &vars,
+            &path,
+            (cols, rows),
+            sink,
+        )
+    })
+    .await
+}
+
+/// The variables of the project's `local` environment: the first of its
+/// environments' groups that has one outside the recycle bin.
+/// The project from the vault, or while it is locked from the copy kept
+/// for then, without variables.
+fn with_copy(
+    opened: AppResult<(Project, Vec<(String, SecretString)>)>,
+    copy: impl FnOnce() -> Vec<Project>,
+    id: &str,
+) -> AppResult<(Project, Vec<(String, SecretString)>)> {
+    match opened {
+        Err(error) if error.code() == ErrorCode::VaultLocked => copy()
+            .into_iter()
+            .find(|p| p.id == id)
+            .map(|project| (project, Vec::new()))
+            .ok_or_else(|| AppError::not_found(format!("project {id}"))),
+        other => other,
+    }
+}
+
+/// The folder a terminal opens in: one of the project's, found here.
+fn terminal_folder(project: &Project, folder: &str, home: Option<&Path>) -> AppResult<PathBuf> {
+    if !project.folders.iter().any(|f| f == folder) {
+        return Err(AppError::invalid("not one of the project's folders"));
+    }
+    projects::folder_path(folder, home)
+        .filter(|path| path.is_dir())
+        .ok_or_else(|| AppError::not_found(format!("{folder} on this computer")))
+}
+
+/// The project's `local` environment: in the first of its environment
+/// groups, in the project's order, that has one outside the recycle bin.
+fn local_environment<'a>(project: &Project, envs: &'a [EnvSummary]) -> Option<&'a EnvSummary> {
+    project.environments.iter().find_map(|group| {
+        envs.iter().find(|env| {
+            !env.in_trash && env.project == *group && env.name.eq_ignore_ascii_case("local")
+        })
+    })
+}
+
+/// The variables of the project's `local` environment ([`local_environment`]).
+fn local_variables(
+    vault: &mut sshkm_core::vault::Vault,
+    project: &Project,
+) -> AppResult<Vec<(String, SecretString)>> {
+    let envs = vault.environments();
+    let Some(local) = local_environment(project, &envs) else {
+        return Ok(Vec::new());
+    };
+    Ok(vault
+        .env_variables(&local.id)?
+        .into_iter()
+        .map(|var| (var.name, var.value))
+        .collect())
+}
+
+/// Host renames made while the vault was locked, oldest first: applied the
+/// next time projects are listed with the vault open.
+const PENDING_RENAMES: &str = "project-host-renames.json";
+/// Most renames kept waiting; past it the oldest go.
+const MAX_PENDING_RENAMES: usize = 200;
+/// Held while the file of waiting renames is read and written, so a rename
+/// saved meanwhile is never lost.
+static PENDING_LOCK: Mutex<()> = Mutex::new(());
+
+type Rename = (String, String);
+
+/// The renames between a block's aliases `before` and `after`, pair by
+/// pair: an alias that went and the one in its place that is new.
+pub fn renamed_aliases(before: &[String], after: &[String]) -> Vec<Rename> {
+    before
+        .iter()
+        .zip(after)
+        .filter(|(old, new)| old != new && !after.contains(old) && !before.contains(new))
+        .map(|(old, new)| (old.clone(), new.clone()))
+        .collect()
+}
+
+/// Every name the `Host` blocks of a file answer to.
+fn file_aliases(hosts: &[HostEntry]) -> BTreeSet<&str> {
+    hosts
+        .iter()
+        .filter(|host| host.kind == HostKind::Host)
+        .flat_map(|host| host.patterns.iter().map(String::as_str))
+        .collect()
+}
+
+/// The renames of block `old` (of the file `before`) into block `new` (of
+/// the file `after`): only an alias that is in no block of the new file,
+/// replaced by one that was in no block of the old file. A name that moved
+/// to another block, or one that was there already, is no rename.
+pub fn block_renames(
+    before: &[HostEntry],
+    after: &[HostEntry],
+    old: &HostEntry,
+    new: &HostEntry,
+) -> Vec<Rename> {
+    let (was, now) = (file_aliases(before), file_aliases(after));
+    renamed_aliases(&old.patterns, &new.patterns)
+        .into_iter()
+        .filter(|(from, to)| !now.contains(from.as_str()) && !was.contains(to.as_str()))
+        .collect()
+}
+
+/// The renames a whole new text of `~/.ssh/config` makes, as far as it can
+/// tell: the blocks line up one for one, and a block whose options stayed
+/// the same got new names ([`block_renames`]). Reordered, added or removed
+/// blocks are no renames.
+pub fn file_renames(before: &[HostEntry], after: &[HostEntry]) -> Vec<Rename> {
+    if before.len() != after.len() {
+        return Vec::new();
+    }
+    before
+        .iter()
+        .zip(after)
+        .filter(|(old, new)| old.kind == new.kind && old.options == new.options)
+        .flat_map(|(old, new)| block_renames(before, after, old, new))
+        .collect()
+}
+
+/// Moves renamed hosts in the projects that hold them, after `~/.ssh/config`
+/// was saved ([`block_renames`], [`file_renames`]). While the vault is
+/// locked the renames wait beside it and are made once it is open
+/// ([`apply_pending_renames`]). A failure here never undoes the host's save.
+pub fn follow_host_renames(app: &AppHandle, state: &AppState, renames: Vec<Rename>) {
+    if renames.is_empty() {
+        return;
+    }
+    if let Err(error) = queue_renames(state.vault.data_dir(), renames) {
+        log::warn!("projects: a renamed host was not kept for later: {error}");
+        return;
+    }
+    if state.vault.is_unlocked() {
+        apply_pending_renames(app, state);
+    }
+}
+
+/// Makes the host renames that waited for the vault, in order, then takes
+/// them off the list; renames added meanwhile stay. Does nothing while the
+/// vault is locked.
+pub fn apply_pending_renames(app: &AppHandle, state: &AppState) {
+    let dir = state.vault.data_dir();
+    let pending = {
+        let _guard = pending_lock();
+        load_pending(dir)
+    };
+    if pending.is_empty() || !state.vault.is_unlocked() {
+        return;
+    }
+    // A rename followed by another of the same host chains: `web` → `prod`
+    // → `api` moves `web` to `api`.
+    let holds = state.vault.with_quietly(app, |vault| {
+        let held: BTreeSet<String> = vault
+            .projects()
+            .into_iter()
+            .flat_map(|project| project.hosts)
+            .collect();
+        Ok(pending.iter().any(|(old, _)| held.contains(old)))
+    });
+    let moved = match holds {
+        Ok(false) => Ok(()),
+        Ok(true) => state.vault.change(app, &state.backup_dir, |vault| {
+            for (old, new) in &pending {
+                vault.rename_host_in_projects(old, new)?;
+            }
+            Ok(())
+        }),
+        Err(error) => Err(error),
+    };
+    match moved.and_then(|()| forget_renames(dir, &pending)) {
+        Ok(()) => {}
+        Err(error) => log::warn!("projects: renamed hosts were not moved yet: {error}"),
+    }
+}
+
+fn pending_lock() -> MutexGuard<'static, ()> {
+    PENDING_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Adds `renames` to the waiting ones in `dir`, keeping the latest
+/// [`MAX_PENDING_RENAMES`].
+fn queue_renames(dir: &Path, renames: Vec<Rename>) -> AppResult<()> {
+    let _guard = pending_lock();
+    let mut pending = load_pending(dir);
+    pending.extend(renames);
+    let excess = pending.len().saturating_sub(MAX_PENDING_RENAMES);
+    pending.drain(..excess);
+    save_pending(dir, &pending)
+}
+
+/// Takes `applied` off the waiting renames in `dir`, each once and in
+/// order; what was added since stays.
+fn forget_renames(dir: &Path, applied: &[Rename]) -> AppResult<()> {
+    let _guard = pending_lock();
+    let mut pending = load_pending(dir);
+    for rename in applied {
+        if let Some(index) = pending.iter().position(|p| p == rename) {
+            pending.remove(index);
+        }
+    }
+    save_pending(dir, &pending)
+}
+
+fn load_pending(dir: &Path) -> Vec<Rename> {
+    std::fs::read(dir.join(PENDING_RENAMES))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn save_pending(dir: &Path, pending: &[Rename]) -> AppResult<()> {
+    let path = dir.join(PENDING_RENAMES);
+    if pending.is_empty() {
+        return match std::fs::remove_file(&path) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+            _ => Ok(()),
+        };
+    }
+    let json = serde_json::to_vec(pending)
+        .map_err(|e| AppError::invalid(format!("renamed hosts: {e}")))?;
+    Ok(fsutil::atomic_write(&path, &json, 0o600)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project(folders: &[&str], groups: &[&str]) -> Project {
+        Project {
+            id: "p".into(),
+            name: "Shop".into(),
+            color: projects::ProjectColor::Blue,
+            folders: folders.iter().map(|f| (*f).to_owned()).collect(),
+            hosts: Vec::new(),
+            keys: Vec::new(),
+            environments: groups.iter().map(|g| (*g).to_owned()).collect(),
+            logins: Vec::new(),
+            modified: String::new(),
+        }
+    }
+
+    fn env(id: &str, group: &str, name: &str, in_trash: bool) -> EnvSummary {
+        EnvSummary {
+            id: id.into(),
+            project: group.into(),
+            name: name.into(),
+            variable_count: 0,
+            secret_count: 0,
+            in_trash,
+            modified: None,
+        }
+    }
+
+    #[test]
+    fn a_terminal_opens_only_in_a_folder_of_the_project_found_here() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        std::fs::create_dir_all(home.join("code").join("shop")).unwrap();
+        let shop = project(&["~/code/shop", "~/code/gone"], &[]);
+        assert_eq!(
+            terminal_folder(&shop, "~/code/shop", Some(home)).unwrap(),
+            home.join("code").join("shop")
+        );
+        let refused = terminal_folder(&shop, "/etc", Some(home)).unwrap_err();
+        assert_eq!(refused.code(), ErrorCode::InvalidInput);
+        let gone = terminal_folder(&shop, "~/code/gone", Some(home)).unwrap_err();
+        assert_eq!(gone.code(), ErrorCode::NotFound);
+    }
+
+    #[test]
+    fn a_locked_vault_opens_from_the_copy_without_variables() {
+        let locked = || Err(AppError::new(ErrorCode::VaultLocked, "locked"));
+        let (found, vars) = with_copy(locked(), || vec![project(&["~/x"], &[])], "p").unwrap();
+        assert_eq!(found.folders, ["~/x"]);
+        assert!(vars.is_empty());
+        let missing = with_copy(locked(), Vec::new, "p").unwrap_err();
+        assert_eq!(missing.code(), ErrorCode::NotFound);
+        let other = with_copy(
+            Err(AppError::invalid("bad")),
+            || vec![project(&[], &[])],
+            "p",
+        )
+        .unwrap_err();
+        assert_eq!(other.code(), ErrorCode::InvalidInput);
+    }
+
+    #[test]
+    fn the_local_environment_comes_from_the_projects_first_group_that_has_one() {
+        let envs = [
+            env("a-local", "api", "LOCAL", false),
+            env("w-local", "web", "local", false),
+            env("w-old", "web", "local", true),
+            env("w-dev", "web", "dev", false),
+        ];
+        let shop = project(&[], &["web", "api"]);
+        assert_eq!(local_environment(&shop, &envs).unwrap().id, "w-local");
+        let api_first = project(&[], &["api", "web"]);
+        assert_eq!(local_environment(&api_first, &envs).unwrap().id, "a-local");
+        assert!(local_environment(&project(&[], &["other"]), &envs).is_none());
+    }
+
+    fn hosts(text: &str) -> Vec<HostEntry> {
+        SshConfig::parse(text).hosts()
+    }
+
+    fn rename(old: &str, new: &str) -> Rename {
+        (old.to_owned(), new.to_owned())
+    }
+
+    #[test]
+    fn the_raw_editor_follows_only_real_renames() {
+        let before = "Host web\n    HostName 10.0.0.1\n\nHost db\n    HostName 10.0.0.2\n";
+        // Reordered blocks: nothing was renamed.
+        let reordered = "Host db\n    HostName 10.0.0.2\n\nHost web\n    HostName 10.0.0.1\n";
+        assert_eq!(file_renames(&hosts(before), &hosts(reordered)), []);
+        // One removed, one added: no rename either.
+        let swapped_out = "Host db\n    HostName 10.0.0.2\n\nHost new\n    HostName 10.0.0.9\n";
+        assert_eq!(file_renames(&hosts(before), &hosts(swapped_out)), []);
+        // Two blocks swapping names, options staying.
+        let names_swapped = "Host db\n    HostName 10.0.0.1\n\nHost web\n    HostName 10.0.0.2\n";
+        assert_eq!(file_renames(&hosts(before), &hosts(names_swapped)), []);
+        // A real rename among unchanged blocks.
+        let renamed = "Host prod\n    HostName 10.0.0.1\n\nHost db\n    HostName 10.0.0.2\n";
+        assert_eq!(
+            file_renames(&hosts(before), &hosts(renamed)),
+            [rename("web", "prod")]
+        );
+        // Renamed and changed at once: the raw editor can't tell.
+        let changed = "Host prod\n    HostName 10.9.9.9\n\nHost db\n    HostName 10.0.0.2\n";
+        assert_eq!(file_renames(&hosts(before), &hosts(changed)), []);
+    }
+
+    #[test]
+    fn the_host_editor_follows_a_rename_to_a_name_no_other_block_has() {
+        let before = hosts("Host web\n    User a\n\nHost db\n    User b\n");
+        let to_new = hosts("Host prod\n    User a\n\nHost db\n    User b\n");
+        assert_eq!(
+            block_renames(&before, &to_new, &before[0], &to_new[0]),
+            [rename("web", "prod")]
+        );
+        // Renamed to a name another block has: that host is still there.
+        let to_db = hosts("Host db\n    User a\n\nHost db\n    User b\n");
+        assert_eq!(block_renames(&before, &to_db, &before[0], &to_db[0]), []);
+    }
+
+    #[test]
+    fn renames_wait_in_a_file_and_leave_it_only_once_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        assert_eq!(load_pending(path), Vec::<Rename>::new());
+        queue_renames(path, vec![rename("web", "prod")]).unwrap();
+        queue_renames(path, vec![rename("prod", "api")]).unwrap();
+        let loaded = load_pending(path);
+        assert_eq!(loaded, [rename("web", "prod"), rename("prod", "api")]);
+        // Saved while the first two were being made: it stays.
+        queue_renames(path, vec![rename("db", "pg")]).unwrap();
+        forget_renames(path, &loaded).unwrap();
+        assert_eq!(load_pending(path), [rename("db", "pg")]);
+        forget_renames(path, &[rename("db", "pg")]).unwrap();
+        assert!(!path.join(PENDING_RENAMES).exists());
+        // Only the latest are kept.
+        let many: Vec<Rename> = (0..MAX_PENDING_RENAMES + 5)
+            .map(|n| rename(&format!("h{n}"), &format!("n{n}")))
+            .collect();
+        queue_renames(path, many).unwrap();
+        let kept = load_pending(path);
+        assert_eq!(kept.len(), MAX_PENDING_RENAMES);
+        assert_eq!(kept[0], rename("h5", "n5"));
+    }
+
+    #[test]
+    fn renames_pair_a_gone_alias_with_the_new_one_in_its_place() {
+        let s = |names: &[&str]| names.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            renamed_aliases(&s(&["web"]), &s(&["prod"])),
+            [("web".to_owned(), "prod".to_owned())]
+        );
+        // Kept, added or swapped names aren't renames.
+        assert_eq!(renamed_aliases(&s(&["web"]), &s(&["web", "www"])), []);
+        assert_eq!(renamed_aliases(&s(&["a", "b"]), &s(&["b", "a"])), []);
+        assert_eq!(
+            renamed_aliases(&s(&["web", "www"]), &s(&["prod", "www"])),
+            [("web".to_owned(), "prod".to_owned())]
+        );
+    }
 }

@@ -678,6 +678,15 @@ impl Vault {
         Ok(())
     }
 
+    /// Whether the project holds `member` or held it and took it out: a
+    /// folder it held may be put back (an Undo), one it never held may not.
+    pub fn project_has_held(&self, id: &str, member: &ProjectMember) -> Result<bool> {
+        Ok(self
+            .live_project(id)?
+            .members
+            .contains_key(&member_key(member)))
+    }
+
     /// Puts `member` into the project (`included`) or takes it out.
     /// Returns whether anything changed.
     pub fn set_project_member(
@@ -714,6 +723,45 @@ impl Vault {
             self.sync_tags();
         }
         Ok(true)
+    }
+
+    /// Moves the host `old` to `new` in every live project that holds it:
+    /// for a host renamed in `~/.ssh/config`. Returns whether any changed.
+    pub fn rename_host_in_projects(&mut self, old: &str, new: &str) -> Result<bool> {
+        let old = ProjectMember::Host {
+            alias: old.to_owned(),
+        };
+        let new = ProjectMember::Host {
+            alias: new.to_owned(),
+        };
+        if !is_valid_member(&old) || !is_valid_member(&new) || old == new {
+            return Ok(false);
+        }
+        let (old_key, new_key) = (member_key(&old), member_key(&new));
+        let mut changed = false;
+        for (id, stored) in self.stored_projects() {
+            if !stored.is_live() || !stored.members.get(&old_key).is_some_and(|p| p.present()) {
+                continue;
+            }
+            let mut stored = self.live_project(&id)?;
+            let t = stored.tick();
+            if let Some(presence) = stored.members.get_mut(&old_key) {
+                presence.r = Some(t);
+            }
+            let room = stored.members.len() < MAX_STORED_MEMBERS;
+            match stored.members.get_mut(&new_key) {
+                Some(presence) if !presence.present() => presence.a = t,
+                None if room => {
+                    stored
+                        .members
+                        .insert(new_key.clone(), Presence { a: t, r: None });
+                }
+                Some(_) | None => {}
+            }
+            self.put_project(&id, &stored)?;
+            changed = true;
+        }
+        Ok(changed)
     }
 
     /// Makes `suggestion` a project named and colored as `input`, or adds

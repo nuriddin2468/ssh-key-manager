@@ -8,13 +8,14 @@ import {
   useRef,
   useState,
 } from 'react';
-import { currentSettings } from '@/lib/settings';
 
 /**
  * The app has a handful of top-level sections and no URLs to share, so a
  * typed in-memory route is simpler and safer than a URL router.
  */
 export type Route =
+  /** Every project at a glance, Personal first: where the app opens. */
+  | { page: 'projects' }
   /** A project's page: where its hosts, logins, environments and folders are used. */
   | { page: 'project'; id: string }
   /** What is in no project. */
@@ -92,6 +93,7 @@ function devRoute(): Route | undefined {
   if (page === 'tools') return { page, tool: params.get('tool') ?? undefined };
   if (page === 'project') return { page, id: params.get('project') ?? '' };
   if (
+    page === 'projects' ||
     page === 'personal' ||
     page === 'suggestions' ||
     page === 'agent' ||
@@ -118,10 +120,9 @@ export function withBack(current: Route, next: Route): Route {
   return { ...next, back: current.back } as Route;
 }
 
-/** Where the app opens: the project used last, Personal the first time. */
+/** Where the app opens, and ⌘1: All projects. */
 export function homeRoute(): Route {
-  const last = currentSettings().lastProject;
-  return last && last !== 'personal' ? { page: 'project', id: last } : { page: 'personal' };
+  return { page: 'projects' };
 }
 
 export function RouterProvider({ initial, children }: { initial?: Route; children: ReactNode }) {

@@ -1,7 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
-import { updateSettings } from '@/lib/settings';
+import { describe, expect, it } from 'vitest';
 import {
   homeRoute,
   type Route,
@@ -10,19 +9,12 @@ import {
   useRouter,
   withBack,
 } from './router';
+import { NAV_PAGES } from './useAppEvents';
 
 describe('the route the app opens on', () => {
-  afterEach(() => updateSettings({ lastProject: 'personal' }));
-
-  it('is Personal the first time and once the last project is forgotten', () => {
-    expect(homeRoute()).toEqual({ page: 'personal' });
-    updateSettings({ lastProject: '' });
-    expect(homeRoute()).toEqual({ page: 'personal' });
-  });
-
-  it('is the project used last', () => {
-    updateSettings({ lastProject: '0b6e1c52-6a3f-4c1e-9d55-1f2a3b4c5d01' });
-    expect(homeRoute()).toEqual({ page: 'project', id: '0b6e1c52-6a3f-4c1e-9d55-1f2a3b4c5d01' });
+  it('is All projects, which ⌘1 opens too', () => {
+    expect(homeRoute()).toEqual({ page: 'projects' });
+    expect(NAV_PAGES[0]).toBe('projects');
   });
 });
 

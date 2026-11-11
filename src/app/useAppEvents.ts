@@ -8,16 +8,16 @@ import { useTerminals } from '@/features/terminal/TerminalProvider';
 import { platform } from '@/lib/platform';
 import { checkForUpdates } from '@/lib/updater';
 import { useDialogs } from './dialogs';
-import { homeRoute, type Page, type Route, useFreshNavigate } from './router';
+import { type Page, type Route, useFreshNavigate } from './router';
 
 /** ⌘F: the page's search, or the terminal's find bar. */
 export const FIND_EVENT = 'sshkm:find';
 /** ⌘K: opens or closes the command palette (src/features/palette). */
 export const PALETTE_EVENT = 'sshkm:palette';
 // ⌘1–⌘9, in the order they were added so existing shortcuts never move;
-// ⌘1, once Overview, opens the project used last (`home`).
-export const NAV_PAGES: (Page | 'home')[] = [
-  'home',
+// ⌘1, once Overview, opens All projects, where the app opens.
+export const NAV_PAGES: Page[] = [
+  'projects',
   'keys',
   'hosts',
   'agent',
@@ -43,8 +43,7 @@ export function useAppEvents(): void {
 
   useEffect(() => {
     const command = (id: string) => {
-      if (id === 'nav-home') navigate(homeRoute());
-      else if (id.startsWith('nav-')) navigate({ page: id.slice(4) } as Route);
+      if (id.startsWith('nav-')) navigate({ page: id.slice(4) } as Route);
       else if (id === 'settings') navigate({ page: 'settings' });
       else if (id === 'new-session') {
         navigate({ page: 'terminal' });

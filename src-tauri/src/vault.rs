@@ -25,7 +25,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sshkm_core::vault::{Vault, VaultPaths};
+use sshkm_core::vault::projects::{self, Project};
+use sshkm_core::vault::{self as core_vault, Vault, VaultPaths};
 use sshkm_core::{ErrorCode, ExposeSecret, SecretString, fsutil};
 use tauri::{AppHandle, Emitter};
 
@@ -37,6 +38,8 @@ pub const LOCKED_EVENT: &str = "vault-locked";
 pub const UNLOCKED_EVENT: &str = "vault-unlocked";
 
 const SETTINGS_FILE: &str = "vault.json";
+/// The projects without secrets, shown while the vault is locked.
+const PROJECTS_COPY: &str = "projects.json";
 const DATABASE_FILE: &str = "vault.kdbx";
 const TICK: Duration = Duration::from_secs(5);
 /// A tick that comes this late means the computer was asleep.
@@ -283,6 +286,7 @@ impl VaultRuntime {
     pub fn set_unlocked(&self, vault: Vault) {
         // Logins read from a browser for the vault open before are not for this one.
         crate::commands::browser_import::forget();
+        self.remember_projects(&vault);
         *lock(&self.unlocked) = Some(vault);
         self.touch();
         if let Some(app) = self.app.get() {
@@ -304,11 +308,36 @@ impl VaultRuntime {
     /// Drops the unlocked vault and clears a secret it copied. Returns
     /// whether it was unlocked.
     fn lock_now(&self) -> bool {
-        let was_unlocked = lock(&self.unlocked).take().is_some();
-        if was_unlocked {
-            self.clear_copied_secret();
+        let Some(vault) = lock(&self.unlocked).take() else {
+            return false;
+        };
+        // What another computer changed meanwhile shows while it is locked.
+        self.remember_projects(&vault);
+        drop(vault);
+        self.clear_copied_secret();
+        true
+    }
+
+    /// Keeps the copy of the vault's projects without secrets that shows
+    /// while it is locked ([`projects::save_copy`]). A copy that can't be
+    /// written is logged: it only makes the locked view out of date.
+    pub fn remember_projects(&self, vault: &Vault) {
+        let path = self.data_dir.join(PROJECTS_COPY);
+        if let Err(error) = projects::save_copy(&path, vault.vault_id(), &vault.projects()) {
+            log::warn!("projects: the copy for a locked vault was not saved: {error}");
         }
-        was_unlocked
+    }
+
+    /// The projects kept for the vault while it is locked; none for another
+    /// vault, or with no vault.
+    pub fn projects_copy(&self) -> Vec<Project> {
+        let Some(vault_id) = core_vault::probe(&self.paths())
+            .ok()
+            .and_then(|files| files.vault_id)
+        else {
+            return Vec::new();
+        };
+        projects::load_copy(&self.data_dir.join(PROJECTS_COPY), &vault_id)
     }
 
     /// Records activity, postponing the auto-lock.
@@ -406,15 +435,42 @@ impl VaultRuntime {
         work: impl FnOnce(&mut Vault) -> AppResult<T>,
         save: impl FnOnce(&mut Vault) -> sshkm_core::Result<()>,
     ) -> AppResult<T> {
-        self.with(app, |vault| {
-            let result = work(vault)?;
-            if let Err(error) = save(vault) {
-                // Reload what is on disk, whatever happened to the write.
-                let _ = vault.refresh();
-                return Err(error.into());
-            }
-            Ok(result)
+        self.change_then_save_or(work, save, || {
+            let _ = app.emit(LOCKED_EVENT, LockReason::Changed);
         })
+    }
+
+    /// [`Self::change_then_save`], calling `on_changed` as
+    /// [`Self::access_then`] does.
+    fn change_then_save_or<T>(
+        &self,
+        work: impl FnOnce(&mut Vault) -> AppResult<T>,
+        save: impl FnOnce(&mut Vault) -> sshkm_core::Result<()>,
+        on_changed: impl FnOnce(),
+    ) -> AppResult<T> {
+        self.access_then(
+            true,
+            |vault| {
+                let before = vault.snapshot();
+                let result = match work(vault) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        // What a change that failed halfway made in memory
+                        // must not go out with the next save.
+                        vault.restore(before);
+                        return Err(error);
+                    }
+                };
+                if let Err(error) = save(vault) {
+                    // Reload what is on disk, whatever happened to the write.
+                    let _ = vault.refresh();
+                    return Err(error.into());
+                }
+                self.remember_projects(vault);
+                Ok(result)
+            },
+            on_changed,
+        )
     }
 
     /// Copies `text` so that clipboard history and cloud clipboards skip it,
@@ -656,6 +712,44 @@ mod tests {
         assert_eq!(runtime.lock_due(true), Some(LockReason::Sleep));
         assert!(runtime.lock_now());
         assert_eq!(runtime.lock_due(true), None);
+    }
+
+    #[test]
+    fn a_change_that_fails_halfway_leaves_nothing_behind() {
+        use sshkm_core::vault::projects::{ProjectColor, ProjectInput, ProjectMember};
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(&dir.path().join("data"), &dir.path().join("vault.kdbx"));
+        let (vault, _) = Vault::create(&rt.paths(), &s("master")).unwrap();
+        rt.set_unlocked(vault);
+        let backups = dir.path().join("backups");
+        let input = ProjectInput {
+            name: "Shop".into(),
+            color: ProjectColor::Blue,
+        };
+        // The project is made, then a member it can't take fails the change.
+        let failed = rt.change_then_save_or(
+            |vault| {
+                let id = vault.add_project(&input)?;
+                let gone = ProjectMember::Login {
+                    id: "6f1c2d3e-0000-4000-8000-0000000000aa".into(),
+                };
+                vault.set_project_member(&id, &gone, true)?;
+                Ok(())
+            },
+            |vault| vault.save(&backups),
+            || {},
+        );
+        assert!(failed.is_err());
+        assert_eq!(run(&rt, false, |vault| Ok(vault.projects().len())), 0);
+        // The next change doesn't save it either, and trying again works.
+        rt.change_then_save_or(
+            |vault| Ok(vault.add_project(&input)?),
+            |vault| vault.save(&backups),
+            || {},
+        )
+        .unwrap();
+        let reopened = Vault::unlock(&rt.paths(), &s("master")).unwrap();
+        assert_eq!(reopened.projects().len(), 1);
     }
 
     #[test]

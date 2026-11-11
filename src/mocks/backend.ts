@@ -26,6 +26,7 @@ import { historyHandlers, recordCheck } from './history';
 import { hostsFileFindings, hostsFileHandlers } from './hostsFile';
 import { nearbyHandlers } from './nearby';
 import { paletteHandlers } from './palette';
+import { projectsHandlers } from './projects';
 import { ROTATION_HOSTS, rotationHandlers } from './rotation';
 import { serverKeysHandlers } from './serverKeys';
 import { shellHistoryHandlers } from './shellHistory';
@@ -514,6 +515,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   ...vaultLinkHandlers({ keys: () => keys, hosts, agent: agentLoaded }),
   ...vaultFilesHandlers,
   ...envsHandlers,
+  ...projectsHandlers,
   ...browserHandlers,
   ...backgroundHandlers,
   ...paletteHandlers({ hosts, entries: () => vaultHandlers.vault_entries?.({}) }),

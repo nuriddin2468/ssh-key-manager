@@ -66,6 +66,9 @@ import type { OtpCode } from '@/bindings/OtpCode';
 import type { PermissionFix } from '@/bindings/PermissionFix';
 import type { PortCheck } from '@/bindings/PortCheck';
 import type { PortProbe } from '@/bindings/PortProbe';
+import type { Project } from '@/bindings/Project';
+import type { ProjectInput } from '@/bindings/ProjectInput';
+import type { ProjectMember } from '@/bindings/ProjectMember';
 import type { PromptAnswer } from '@/bindings/PromptAnswer';
 import type { QuickItems } from '@/bindings/QuickItems';
 import type { QuickStatus } from '@/bindings/QuickStatus';
@@ -484,6 +487,21 @@ export const api = {
       rows: size.rows,
       events: isTauri() ? new Channel<TerminalMessage>(onMessage) : onMessage,
     }),
+
+  // Projects in the vault (src-tauri/src/commands/projects.rs). While the
+  // vault is locked the list comes from a copy without secrets: its
+  // projects have no logins, and changing one fails with `vault_locked`.
+  projectsList: () => call<Project[]>('projects_list'),
+  projectsCreate: (input: ProjectInput) => call<Project>('projects_create', { input }),
+  /** Renames a project (its logins' tag moves along) or changes its color. */
+  projectsUpdate: (id: string, input: ProjectInput) =>
+    call<Project>('projects_update', { id, input }),
+  projectsDelete: (id: string) => call<void>('projects_delete', { id }),
+  /** Adds or removes a member; a folder can only be removed here. */
+  projectsSetMember: (id: string, member: ProjectMember, included: boolean) =>
+    call<Project>('projects_set_member', { id, member, included }),
+  /** Asks for a folder in a system dialog; `null` if cancelled. */
+  projectsAddFolder: (id: string) => call<Project | null>('projects_add_folder', { id }),
 
   // Running on with the window closed, and the tray icon
   // (src-tauri/src/commands/background.rs).

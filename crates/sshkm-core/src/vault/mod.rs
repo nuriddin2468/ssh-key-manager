@@ -31,6 +31,7 @@ mod import;
 mod kdf;
 mod location;
 mod own_devices;
+pub mod projects;
 mod recovery;
 mod slots;
 #[cfg(test)]
@@ -287,6 +288,15 @@ pub struct DeviceKey {
     pub key: Zeroizing<[u8; 32]>,
 }
 
+/// The vault's database at one moment ([`Vault::snapshot`]).
+pub struct Snapshot(Database);
+
+impl std::fmt::Debug for Snapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Snapshot")
+    }
+}
+
 /// An unlocked vault. Dropping it locks the vault.
 pub struct Vault {
     paths: VaultPaths,
@@ -504,6 +514,20 @@ impl Vault {
         self.db = parse_database(&bytes, &self.secret)?;
         self.disk_hash = hash;
         Ok(true)
+    }
+
+    /// The database as it is in memory now, to put back with
+    /// [`Self::restore`] if a change fails halfway.
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot(self.db.clone())
+    }
+
+    /// Puts back the database of `snapshot`, dropping every change made in
+    /// memory since, so the next save doesn't write what is left of a
+    /// change that failed. Only for a change that saved nothing in between:
+    /// the hash of the file on disk stays as it is.
+    pub fn restore(&mut self, snapshot: Snapshot) {
+        self.db = snapshot.0;
     }
 
     /// Re-reads the key slots file if it changed on disk. When it is gone,

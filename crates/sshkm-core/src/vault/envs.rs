@@ -314,7 +314,7 @@ fn variables_of(entry: &EntryRef<'_>) -> Vec<EnvVariable> {
 
 /// A project's or an environment's name, trimmed: no control characters,
 /// no `/` (it names a group), at most [`MAX_LABEL`] characters.
-fn check_label(text: &str, what: &str) -> Result<String> {
+pub(super) fn check_label(text: &str, what: &str) -> Result<String> {
     let text = text.trim();
     if text.is_empty() {
         return Err(Error::invalid(format!("{what} needs a name")));

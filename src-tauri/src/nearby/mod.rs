@@ -1234,10 +1234,21 @@ impl AppSide<'_> {
         state
             .vault
             .with_quietly(app, |vault| {
-                let changed = work(vault)?;
-                if changed && let Err(error) = vault.save(&backup_dir) {
-                    let _ = vault.refresh();
-                    return Err(error.into());
+                let before = vault.snapshot();
+                let changed = match work(vault) {
+                    Ok(changed) => changed,
+                    Err(error) => {
+                        // Nothing of a merge that failed halfway is kept.
+                        vault.restore(before);
+                        return Err(error.into());
+                    }
+                };
+                if changed {
+                    if let Err(error) = vault.save(&backup_dir) {
+                        let _ = vault.refresh();
+                        return Err(error.into());
+                    }
+                    state.vault.remember_projects(vault);
                 }
                 Ok(changed)
             })
@@ -1430,6 +1441,7 @@ impl Side for AppSide<'_> {
             config,
             known,
             devices: self.read(Vault::device_records)?,
+            projects: self.read(Vault::project_records)?,
             state: store::load(&self.nearby.data_dir, &peer),
             hasher: Hasher::new(identity.derive_key(BASE_LABEL)),
         })
@@ -1445,6 +1457,11 @@ impl Side for AppSide<'_> {
             && let Some(app) = self.nearby.app.get()
         {
             let _ = app.emit(DEVICES_EVENT, ());
+        }
+        if self.write(|vault| vault.merge_projects(&write.projects))?
+            && let Some(app) = self.nearby.app.get()
+        {
+            let _ = app.emit(crate::commands::projects::CHANGED_EVENT, ());
         }
         Ok(())
     }

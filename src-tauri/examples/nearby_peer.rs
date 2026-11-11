@@ -305,6 +305,9 @@ impl Side for Terminal {
             devices: self
                 .with_vault(|vault| vault.device_records())
                 .unwrap_or_default(),
+            projects: self
+                .with_vault(|vault| vault.project_records())
+                .unwrap_or_default(),
             state: std::fs::read(state_file)
                 .ok()
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok())
@@ -327,7 +330,9 @@ impl Side for Terminal {
             println!("Wrote {}.", known.display());
         }
         self.with_vault(|vault| {
-            if vault.merge_own_devices(&write.devices).unwrap_or(false) {
+            let devices = vault.merge_own_devices(&write.devices).unwrap_or(false);
+            let projects = vault.merge_projects(&write.projects).unwrap_or(false);
+            if devices || projects {
                 let _ = vault.save(&backups);
             }
         });

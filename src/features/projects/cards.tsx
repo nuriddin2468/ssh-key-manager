@@ -678,6 +678,14 @@ function planNotes(
       }),
     });
   }
+  if (plan.shared.length > 0) {
+    notes.push({
+      tone: 'warning',
+      text: t('projects.hostsFileSharedNote', {
+        list: plan.shared.map((s) => `${s.name} (${s.projects.join(', ')})`).join(', '),
+      }),
+    });
+  }
   if (plan.several.length > 0) {
     notes.push({
       tone: 'warning',

@@ -111,6 +111,7 @@ const ru = {
     hostsFileTurnOff_few: 'Выключает {{count}} записи проекта «{{name}}».',
     hostsFileTurnOff_many: 'Выключает {{count}} записей проекта «{{name}}».',
     hostsFileTurnOff_other: 'Выключает {{count}} записи проекта «{{name}}».',
+    hostsFileSharedNote: 'Эти имена есть и в других проектах: {{list}}. Изменение коснётся и их.',
     hostsFileOthersNote: 'В этих же строках есть {{list}}: они тоже изменятся.',
     hostsFileSystemLine: 'В одной строке с {{names}}, нужным системе',
     hostsFileKeptNote: 'Не меняются, потому что в них есть системное имя: {{lines}}.',

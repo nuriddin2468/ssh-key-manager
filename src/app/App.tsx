@@ -22,6 +22,7 @@ import { CommandPalette } from '@/features/palette/CommandPalette';
 import { useVaultFileEvents } from '@/features/passwords/files';
 import { PasswordsPage } from '@/features/passwords/PasswordsPage';
 import { useVaultEvents } from '@/features/passwords/useVaultEvents';
+import { AllProjectsPage } from '@/features/projects/AllProjectsPage';
 import { ProjectPage } from '@/features/projects/ProjectPage';
 import { SuggestionsPage } from '@/features/projects/SuggestionsPage';
 import { SettingsPage } from '@/features/settings/SettingsPage';
@@ -93,6 +94,7 @@ function Shell() {
         data-section={route.page}
         className="section-glow flex min-w-0 flex-1 flex-col overflow-hidden"
       >
+        {route.page === 'projects' ? <AllProjectsPage /> : null}
         {route.page === 'project' ? <ProjectPage key={route.id} id={route.id} /> : null}
         {route.page === 'personal' ? <ProjectPage key="personal" /> : null}
         {route.page === 'suggestions' ? <SuggestionsPage /> : null}

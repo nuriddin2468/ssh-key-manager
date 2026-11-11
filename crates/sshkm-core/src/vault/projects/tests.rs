@@ -416,6 +416,29 @@ fn at(minutes: i64) -> i64 {
 }
 
 #[test]
+fn members_come_back_in_the_order_they_were_added() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "laptop");
+    let id = vault.add_project(&input("Shop")).unwrap();
+    let folder = |path: &str| ProjectMember::Folder { path: path.into() };
+    add(&mut vault, &id, &folder("~/code/shop-web"));
+    add(&mut vault, &id, &host("prod-api"));
+    add(&mut vault, &id, &folder("~/code/api"));
+    add(&mut vault, &id, &host("bastion"));
+    let project = vault.project(&id).unwrap();
+    // The card's "main" folder and host: the first added, not the first by name.
+    assert_eq!(project.folders, ["~/code/shop-web", "~/code/api"]);
+    assert_eq!(project.hosts, ["prod-api", "bastion"]);
+
+    // One taken out and added again goes last.
+    vault
+        .set_project_member(&id, &host("prod-api"), false)
+        .unwrap();
+    add(&mut vault, &id, &host("prod-api"));
+    assert_eq!(vault.project(&id).unwrap().hosts, ["bastion", "prod-api"]);
+}
+
+#[test]
 fn changes_made_on_two_devices_before_they_sync_all_survive() {
     let dir = tempfile::tempdir().unwrap();
     let (mut laptop, mut desktop) = (vault(&dir, "laptop"), vault(&dir, "desktop"));
@@ -423,9 +446,10 @@ fn changes_made_on_two_devices_before_they_sync_all_survive() {
     add(&mut laptop, &id, &host("shop-prod"));
     add(&mut laptop, &id, &host("shop-old"));
     sync(&mut laptop, &mut desktop);
+    // In the order they were added.
     assert_eq!(
         desktop.project(&id).unwrap().hosts,
-        ["shop-old", "shop-prod"]
+        ["shop-prod", "shop-old"]
     );
 
     // Each adds, removes and renames something before they sync again.
@@ -456,7 +480,7 @@ fn changes_made_on_two_devices_before_they_sync_all_survive() {
         let project = vault.project(&id).unwrap();
         assert_eq!(project.name, "Shop Co");
         assert_eq!(project.color, ProjectColor::Green);
-        assert_eq!(project.hosts, ["shop-db", "shop-prod"]);
+        assert_eq!(project.hosts, ["shop-prod", "shop-db"]);
         assert_eq!(project.folders, ["~/code/shop"]);
     }
     assert_eq!(laptop.project_records(), desktop.project_records());
@@ -576,7 +600,12 @@ fn projects_made_on_two_computers_with_one_name_become_one() {
         let projects = vault.projects();
         assert_eq!(projects.len(), 2, "{projects:?}");
         let shop = projects.iter().find(|p| p.id == kept).unwrap();
-        assert_eq!(shop.hosts, ["shop-db", "shop-prod"]);
+        // Added on two devices at about the same time: which came first is
+        // the clocks' call, so only what it holds is checked here (the
+        // order is in `members_come_back_in_the_order_they_were_added`).
+        let mut hosts = shop.hosts.clone();
+        hosts.sort();
+        assert_eq!(hosts, ["shop-db", "shop-prod"]);
     }
     assert_eq!(laptop.projects(), desktop.projects());
     assert_eq!(laptop.project_records(), desktop.project_records());

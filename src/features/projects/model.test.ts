@@ -1,22 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { EnvSummary } from '@/bindings/EnvSummary';
+import type { Finding } from '@/bindings/Finding';
 import type { HostEntry } from '@/bindings/HostEntry';
 import type { HostsFileEntry } from '@/bindings/HostsFileEntry';
 import type { KeyView } from '@/bindings/KeyView';
 import type { Project } from '@/bindings/Project';
+import type { Severity } from '@/bindings/Severity';
+import type { VaultFinding } from '@/bindings/VaultFinding';
 import {
   aliasOf,
   cardColumns,
   hostAliases,
   hostsFileEntries,
   initials,
+  memberSummary,
   missing,
   nextColor,
   personal,
   planHostsFileSwitch,
   problemsFirst,
+  projectFindings,
+  projectProblems,
   projectTone,
+  quickActions,
 } from './model';
 
 const project = (patch: Partial<Project>): Project => ({
@@ -266,9 +273,117 @@ describe('switching a project’s hosts file entries', () => {
   });
 });
 
+describe('a project’s card on All projects', () => {
+  const finding = (id: string, severity: Severity, subject: Partial<Finding['subject']>) =>
+    ({
+      id,
+      severity,
+      kind: { kind: 'x' },
+      subject: { keyId: null, hostId: null, path: null, ...subject },
+      fix: null,
+    }) as unknown as Finding;
+  const vaultFinding = (id: string, severity: Severity, entryId: string) =>
+    ({
+      id,
+      severity,
+      kind: { kind: 'weakPassword' },
+      entryId,
+      keyId: null,
+      hostId: null,
+    }) as VaultFinding;
+  const shop = project({
+    hosts: ['prod', 'old'],
+    keys: ['SHA256:a'],
+    logins: ['l1'],
+    folders: ['~/a', '~/b'],
+  });
+  const library = {
+    hosts: [host(1, ['prod']), host(2, ['nas'])],
+    keys: [key('id_shop', 'SHA256:a'), key('id_home', 'SHA256:b')],
+    entries: [entry('l1'), entry('l2')],
+  };
+  const found = {
+    ssh: [
+      finding('warn-prod', 'warning', { hostId: 1 }),
+      finding('nas', 'critical', { hostId: 2 }),
+      finding('crit-key', 'critical', { keyId: 'id_shop' }),
+      finding('info-prod', 'info', { hostId: 1 }),
+      finding('ignored', 'critical', { hostId: 1 }),
+    ],
+    vault: [
+      vaultFinding('weak', 'warning', 'l1'),
+      vaultFinding('reused', 'critical', 'l1'),
+      vaultFinding('other', 'critical', 'l2'),
+    ],
+  };
+
+  it('shows findings about its hosts, keys and logins, not those set aside', () => {
+    const mine = projectFindings(shop, library, found, new Set(['ignored', 'vault:reused']));
+    expect(mine.ssh.map((f) => f.id)).toEqual(['crit-key', 'warn-prod', 'info-prod']);
+    expect(mine.vault.map((f) => f.id)).toEqual(['weak']);
+  });
+
+  it('lists problems worst first: findings, then members missing here, no suggestions', () => {
+    const mine = projectFindings(shop, library, found, new Set(['ignored']));
+    const gone = missing(shop, library, ['~/a']);
+    expect(projectProblems(mine, gone).map((p) => p.key)).toEqual([
+      'crit-key',
+      'vault:reused',
+      'warn-prod',
+      'vault:weak',
+      'host:old',
+      'folder:~/a',
+    ]);
+  });
+
+  it('offers its first folder on this computer and its first host in ~/.ssh/config with a shell', () => {
+    const gone = missing(shop, library, ['~/a']);
+    expect(quickActions(shop, gone, ['~/a'], library.hosts)).toEqual({
+      folder: '~/b',
+      host: 'prod',
+    });
+    // Until the folders are checked, or the hosts read, none is offered.
+    expect(quickActions(shop, gone, undefined, library.hosts)).toEqual({
+      folder: undefined,
+      host: 'prod',
+    });
+    expect(quickActions(shop, missing(shop, {}), ['~/a'], undefined)).toEqual({
+      folder: '~/b',
+      host: undefined,
+    });
+    // GitHub and the like give no shell.
+    const code = project({ hosts: ['github.com', 'gl', 'prod'] });
+    const hosts = [
+      host(3, ['github.com']),
+      { ...host(4, ['gl']), hostName: 'gitlab.com' },
+      host(1, ['prod']),
+    ];
+    expect(quickActions(code, missing(code, { hosts }), [], hosts).host).toBe('prod');
+    const empty = project({ hosts: ['old'] });
+    expect(quickActions(empty, missing(empty, library), [], library.hosts)).toEqual({
+      folder: undefined,
+      host: undefined,
+    });
+  });
+});
+
 describe('a host made from a project', () => {
   it('joins by its first pattern that is a name', () => {
     expect(aliasOf(['*.internal', '!bad', 'app', 'api'])).toBe('app');
     expect(aliasOf(['web?', '*'])).toBeUndefined();
+  });
+});
+
+describe('a project’s counts', () => {
+  const t = ((key: string, options?: { count: number }) =>
+    `${options?.count} ${key.split('.').pop()}`) as unknown as import('i18next').TFunction;
+  const shop = project({ hosts: ['a', 'b'], environments: ['shop'], logins: ['l1'], keys: ['k'] });
+
+  it('name only the kinds it has', () => {
+    expect(memberSummary(t, shop, false)).toBe('2 hosts · 1 environments · 1 logins · 1 keys');
+  });
+
+  it('leave out environments and logins while the vault is locked', () => {
+    expect(memberSummary(t, shop, true)).toBe('2 hosts · 1 keys');
   });
 });

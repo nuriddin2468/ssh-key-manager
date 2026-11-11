@@ -32,7 +32,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
-import { useAudit, useConfig, useHostsFile, useVaultStatus } from '@/api/queries';
+import { useAudit, useConfig, useHostsFile } from '@/api/queries';
 import { toastError } from '@/api/useAppMutation';
 import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
@@ -48,6 +48,7 @@ import { Dialog } from '@/components/ui/Dialog';
 import { IconButton } from '@/components/ui/IconButton';
 import { MixedSwitch, Switch } from '@/components/ui/Switch';
 import { findingTitle } from '@/features/audit/model';
+import { useVaultAudit } from '@/features/audit/queries';
 import { vaultFindingTitle } from '@/features/audit/vaultModel';
 import { editOf } from '@/features/hostsFile/draft';
 import { isSystemName, listsSystemName, normalizeName } from '@/features/hostsFile/model';
@@ -61,6 +62,7 @@ import type { MemberKind } from './AddMembersDialog';
 import { useSetMember } from './actions';
 import { type Fold, useFolds } from './folds';
 import {
+  bySeverity,
   CARD_LIMIT,
   cardColumns,
   type HostsFilePlan,
@@ -72,6 +74,7 @@ import {
   missing,
   planHostsFileSwitch,
   problemsFirst,
+  projectFindings,
 } from './model';
 import { AddToProjectButton } from './ProjectMenu';
 import { useProjects } from './queries';
@@ -83,8 +86,7 @@ const COPIED = {
   otp: 'passwords.copiedOtp',
 } as const;
 
-const SEVERITY_ORDER: Severity[] = ['critical', 'warning', 'info'];
-const SEVERITY_DOT: Record<Severity, string> = {
+export const SEVERITY_DOT: Record<Severity, string> = {
   critical: 'bg-critical-solid',
   warning: 'bg-warning-solid',
   info: 'bg-info-solid',
@@ -1216,52 +1218,33 @@ function useFindingsCard(members: Members, library: Library): CardSpec | null {
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const audit = useAudit();
-  const vaultState = useVaultStatus().data?.state;
-  const vaultAudit = useQuery({
-    queryKey: ['vault', 'audit', vaultState],
-    queryFn: api.vaultAudit,
-    enabled: vaultState !== undefined,
-  });
+  const vaultAudit = useVaultAudit();
   const ignored = new Set(useSettings().ignoredFindings);
-  const hostIds = new Set(
-    (library.hosts ?? [])
-      .filter((h) => h.patterns.some((p) => members.hosts.includes(p)))
-      .map((h) => h.id),
-  );
-  const keyIds = new Set(
-    (library.keys ?? [])
-      .filter((k) => k.fingerprint !== null && members.keys.includes(k.fingerprint))
-      .map((k) => k.id),
-  );
-  const logins = new Set(members.logins);
   const keyNames = new Map((library.keys ?? []).map((k) => [k.id, k.name]));
   const hostNames = new Map((library.hosts ?? []).map((h) => [h.id, h.patterns.join(' ')]));
   const entryNames = new Map((library.entries ?? []).map((e) => [e.id, e.title]));
-  const found = [
-    ...(audit.data?.findings ?? [])
-      .filter((f) => !ignored.has(f.id))
-      .filter(
-        (f) =>
-          (f.subject.hostId !== null && hostIds.has(f.subject.hostId)) ||
-          (f.subject.keyId !== null && keyIds.has(f.subject.keyId)),
-      )
-      .map((f) => ({
-        id: f.id,
-        severity: f.severity,
-        title: findingTitle(t, f),
-        about:
-          (f.subject.keyId !== null ? keyNames.get(f.subject.keyId) : undefined) ??
-          (f.subject.hostId !== null ? hostNames.get(f.subject.hostId) : undefined),
-      })),
-    ...(vaultAudit.data?.findings ?? [])
-      .filter((f) => !ignored.has(f.id) && logins.has(f.entryId))
-      .map((f) => ({
-        id: f.id,
-        severity: f.severity,
-        title: vaultFindingTitle(t, f),
-        about: entryNames.get(f.entryId),
-      })),
-  ].sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity));
+  const mine = projectFindings(
+    members,
+    library,
+    { ssh: audit.data?.findings, vault: vaultAudit.data?.findings },
+    ignored,
+  );
+  const found = bySeverity([
+    ...mine.ssh.map((f) => ({
+      id: f.id,
+      severity: f.severity,
+      title: findingTitle(t, f),
+      about:
+        (f.subject.keyId !== null ? keyNames.get(f.subject.keyId) : undefined) ??
+        (f.subject.hostId !== null ? hostNames.get(f.subject.hostId) : undefined),
+    })),
+    ...mine.vault.map((f) => ({
+      id: f.id,
+      severity: f.severity,
+      title: vaultFindingTitle(t, f),
+      about: entryNames.get(f.entryId),
+    })),
+  ]);
   if (found.length === 0) return null;
   return {
     id: 'findings',

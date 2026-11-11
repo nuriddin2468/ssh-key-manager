@@ -88,6 +88,15 @@ The foundation for everything below.
    (`127.0.0.1 localhost app.test`) are left as they are. Not yet: a name renamed in the
    Hosts file section isn't followed; the project flags the old one as gone. In review:
    [#41](https://github.com/nuriddin2468/ssh-key-manager/pull/41).
+6. **All projects, the home screen**: the app opens on it and ⌘1 comes back (it was the
+   project used last). A card per project, Personal first: what it holds, its problems
+   (audit findings, members missing on this computer; `.env` file states with step 3)
+   and quick actions — a terminal in its first folder on this computer, that folder in
+   Finder, Explorer or Files, a session to its first host with a shell. Above the cards:
+   Audit's numbers (or "No issues found"), one Unlock prompt while the vault is locked,
+   and the suggestions. The first run explains projects and leads with Generate key while
+   there are no keys. In review:
+   [#42](https://github.com/nuriddin2468/ssh-key-manager/pull/42).
 
 ### 3. Managed `.env` files — in progress
 

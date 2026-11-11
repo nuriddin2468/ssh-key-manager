@@ -1,5 +1,4 @@
 import { useQuery } from '@tanstack/react-query';
-import type { TFunction } from 'i18next';
 import {
   FolderKanban,
   FolderPlus,
@@ -33,11 +32,10 @@ import { EnvDialog } from '@/features/envs/EnvDialog';
 import { useEnvs } from '@/features/envs/queries';
 import { EntryEditor } from '@/features/passwords/EntryEditor';
 import { useVaultMutation } from '@/features/passwords/vault';
-import { updateSettings } from '@/lib/settings';
 import { AddMembersDialog, type MemberKind } from './AddMembersDialog';
 import { useJoinMade } from './actions';
 import { Cards } from './cards';
-import { holds, type Library, type Members, memberKey, personal } from './model';
+import { holds, type Library, type Members, memberKey, memberSummary, personal } from './model';
 import { ProjectDialog } from './ProjectDialog';
 import { PersonalTile, ProjectTile } from './ProjectTile';
 import { projectKeys, refreshSuggestions, useProjects } from './queries';
@@ -79,14 +77,9 @@ export function ProjectPage({ id }: { id?: string }) {
     enabled: Boolean(project && project.folders.length > 0),
   });
 
-  // The app opens on the project used last; one that is gone is forgotten.
+  // Without a vault there are no projects: All projects shows Personal.
   useEffect(() => {
-    if (!id || gone) updateSettings({ lastProject: 'personal' });
-    else if (project) updateSettings({ lastProject: project.id });
-  }, [id, project, gone]);
-  // Without a vault there are no projects: Personal is all there is.
-  useEffect(() => {
-    if (id && vaultState === 'missing') navigate({ page: 'personal' });
+    if (id && vaultState === 'missing') navigate({ page: 'projects' });
   }, [id, vaultState, navigate]);
 
   const library: Library = {
@@ -108,7 +101,7 @@ export function ProjectPage({ id }: { id?: string }) {
     onSuccess: () => {
       setDeleting(false);
       void refreshSuggestions();
-      navigate({ page: 'personal' });
+      navigate({ page: 'projects' });
     },
   });
   const addFolder = useVaultMutation(() => api.projectsAddFolder(id ?? ''), {
@@ -146,8 +139,8 @@ export function ProjectPage({ id }: { id?: string }) {
             title={t('projects.goneTitle')}
             description={t('projects.goneText')}
             action={
-              <Button variant="primary" onClick={() => navigate({ page: 'personal' })}>
-                {t('projects.openPersonal')}
+              <Button variant="primary" onClick={() => navigate({ page: 'projects' })}>
+                {t('projects.openAll')}
               </Button>
             }
           />
@@ -157,7 +150,7 @@ export function ProjectPage({ id }: { id?: string }) {
   }
 
   const locked = vaultState === 'locked';
-  const counts = members ? summary(t, members, locked) : '';
+  const counts = members ? memberSummary(t, members, locked) : '';
   const empty =
     members &&
     members.hosts.length +
@@ -355,25 +348,6 @@ export function ProjectPage({ id }: { id?: string }) {
       ) : null}
     </>
   );
-}
-
-/** "3 hosts · 2 folders · …": what the project shows, kinds it has only. */
-function summary(t: TFunction, members: Members, locked: boolean) {
-  const parts = [
-    members.hosts.length ? t('projects.count.hosts', { count: members.hosts.length }) : null,
-    members.folders.length ? t('projects.count.folders', { count: members.folders.length }) : null,
-    members.environments.length
-      ? t('projects.count.environments', { count: members.environments.length })
-      : null,
-    !locked && members.logins.length
-      ? t('projects.count.logins', { count: members.logins.length })
-      : null,
-    members.keys.length ? t('projects.count.keys', { count: members.keys.length }) : null,
-    members.hostsFile.length
-      ? t('projects.count.hostsFile', { count: members.hostsFile.length })
-      : null,
-  ];
-  return parts.filter(Boolean).join(' · ');
 }
 
 /**

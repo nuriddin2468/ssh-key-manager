@@ -33,7 +33,8 @@ export type Route =
   | { page: 'hostsFile'; line?: number; received?: number; back?: string }
   | { page: 'audit' }
   | { page: 'passwords'; entryId?: string; back?: string }
-  | { page: 'envs'; envId?: string; back?: string }
+  /** `view: 'files'`: the files environments are written to, of every project or `project`. */
+  | { page: 'envs'; envId?: string; view?: 'files'; project?: string; back?: string }
   /** `connect` starts a session to that alias; `nonce` makes each request a new one. */
   | { page: 'terminal'; connect?: string; nonce?: number }
   | { page: 'nearby' }
@@ -79,7 +80,14 @@ function devRoute(): Route | undefined {
   if (page === 'hostsFile')
     return { page, line: params.has('line') ? Number(params.get('line')) : undefined };
   if (page === 'passwords') return { page, entryId: params.get('entry') ?? undefined };
-  if (page === 'envs') return { page, envId: params.get('env') ?? undefined };
+  if (page === 'envs') {
+    return {
+      page,
+      envId: params.get('env') ?? undefined,
+      view: params.get('view') === 'files' ? 'files' : undefined,
+      project: params.get('project') ?? undefined,
+    };
+  }
   if (page === 'terminal') return { page, connect: params.get('connect') ?? undefined };
   if (page === 'tools') return { page, tool: params.get('tool') ?? undefined };
   if (page === 'project') return { page, id: params.get('project') ?? '' };

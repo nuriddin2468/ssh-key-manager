@@ -2,6 +2,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { type RefObject, useEffect } from 'react';
 import { invalidateAll, queryClient } from '@/api/queries';
+import { useEnvFilesEvents } from '@/features/envs/files/announce';
 import { projectKeys } from '@/features/projects/queries';
 import { useTerminals } from '@/features/terminal/TerminalProvider';
 import { platform } from '@/lib/platform';
@@ -30,13 +31,15 @@ export const NAV_PAGES: (Page | 'home')[] = [
 /**
  * Wires the native menu (macOS) and the tray menu, keyboard shortcuts
  * (Windows/Linux, where there is no menu bar) and file-change notifications
- * from the backend.
+ * from the backend, managed `.env` files' included.
  */
 export function useAppEvents(): void {
   // Menus and shortcuts open sections afresh: without the way back to a project.
   const navigate = useFreshNavigate();
   const dialogs = useDialogs();
   const { setPickerOpen } = useTerminals();
+  // Edits of managed `.env` files that went to the vault, with Undo.
+  useEnvFilesEvents();
 
   useEffect(() => {
     const command = (id: string) => {

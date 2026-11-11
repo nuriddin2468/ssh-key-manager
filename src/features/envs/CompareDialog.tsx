@@ -146,7 +146,8 @@ interface GroupProps {
   folded?: boolean;
 }
 
-function Group({ icon, tone, title, names, folded = false }: GroupProps) {
+/** A list of names that differ one way, folding open and shut. */
+export function Group({ icon, tone, title, names, folded = false }: GroupProps) {
   const { t } = useTranslation();
   const listId = useId();
   const [open, setOpen] = useState(!folded);

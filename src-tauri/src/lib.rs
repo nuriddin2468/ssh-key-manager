@@ -268,6 +268,8 @@ pub fn run() {
             commands::env_files::envs_files_ignore,
             commands::env_files::envs_files_adopt_preview,
             commands::env_files::envs_files_adopt,
+            commands::env_files::envs_files_check,
+            commands::env_files::envs_files_risks,
             commands::projects::projects_list,
             commands::projects::projects_create,
             commands::projects::projects_update,

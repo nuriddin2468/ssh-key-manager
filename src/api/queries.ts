@@ -31,10 +31,16 @@ export const keys = {
 export function invalidateAll(): Promise<void> {
   return queryClient.invalidateQueries({
     // Project suggestions read code folders: they are looked for again only
-    // when the projects change (src/features/projects).
+    // when the projects change (src/features/projects). The managed files'
+    // reports run Git and look through project folders: they are fetched
+    // again when files are bound or the user asks (src/features/envs/files).
     predicate: (query) =>
       query.queryKey[0] !== 'environment' &&
-      !(query.queryKey[0] === 'vault' && query.queryKey[1] === 'project-suggestions'),
+      !(
+        query.queryKey[0] === 'vault' &&
+        (query.queryKey[1] === 'project-suggestions' ||
+          String(query.queryKey[1]).startsWith('env-files-'))
+      ),
   });
 }
 

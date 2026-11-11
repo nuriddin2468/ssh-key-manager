@@ -4,6 +4,7 @@ import {
   ArrowLeftRight,
   ChevronDown,
   Copy,
+  Folder,
   FolderOpen,
   FolderPlus,
   KeyRound,
@@ -22,6 +23,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
 import { useAudit, useConfig, useVaultStatus } from '@/api/queries';
+import { toastError } from '@/api/useAppMutation';
 import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
 import type { CopyField } from '@/bindings/CopyField';
@@ -38,6 +40,7 @@ import { vaultFindingTitle } from '@/features/audit/vaultModel';
 import { toastVaultError } from '@/features/passwords/vault';
 import { useTerminals } from '@/features/terminal/TerminalProvider';
 import { cn } from '@/lib/cn';
+import { fileManagerName } from '@/lib/platform';
 import { useSettings } from '@/lib/settings';
 import type { MemberKind } from './AddMembersDialog';
 import { useSetMember } from './actions';
@@ -501,6 +504,10 @@ function useFoldersCard(
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const terminals = useTerminals();
+  const reveal = useMutation({
+    mutationFn: ({ id, path }: { id: string; path: string }) => api.projectsRevealFolder(id, path),
+    onError: (error) => toastError(t, error),
+  });
   if (!project || folders.length === 0) return null;
   const hasLocal =
     !locked &&
@@ -525,7 +532,7 @@ function useFoldersCard(
           <Row
             mono
             leading={
-              <FolderOpen
+              <Folder
                 aria-hidden="true"
                 className="size-4 shrink-0 text-subtle"
                 strokeWidth={1.9}
@@ -543,19 +550,28 @@ function useFoldersCard(
             {problem ? (
               <RemoveButton project={project} member={{ type: 'folder', path }} name={path} />
             ) : (
-              <Button
-                size="sm"
-                icon={<SquareTerminal className="size-3.5" strokeWidth={2} />}
-                aria-label={t('projects.openTerminalIn', { name: path })}
-                onClick={() => {
-                  terminals.openLocal({
-                    folder: { project: project.id, path, label: `${project.name} · ${name}` },
-                  });
-                  navigate({ page: 'terminal' });
-                }}
-              >
-                {t('projects.openTerminal')}
-              </Button>
+              <>
+                <IconButton
+                  label={t('projects.showFolderIn', { name: path, app: fileManagerName })}
+                  tooltip={t('keys.showIn', { app: fileManagerName })}
+                  variant="ghost"
+                  icon={<FolderOpen className="size-4" strokeWidth={1.9} />}
+                  onClick={() => reveal.mutate({ id: project.id, path })}
+                />
+                <Button
+                  size="sm"
+                  icon={<SquareTerminal className="size-3.5" strokeWidth={2} />}
+                  aria-label={t('projects.openTerminalIn', { name: path })}
+                  onClick={() => {
+                    terminals.openLocal({
+                      folder: { project: project.id, path, label: `${project.name} · ${name}` },
+                    });
+                    navigate({ page: 'terminal' });
+                  }}
+                >
+                  {t('projects.openTerminal')}
+                </Button>
+              </>
             )}
           </Row>
         ),

@@ -149,6 +149,7 @@ const en = {
     connectTo: 'Connect to {{name}}',
     openTerminal: 'Open terminal',
     openTerminalIn: 'Open terminal in {{name}}',
+    showFolderIn: 'Show {{name}} in {{app}}',
     withLocal: 'Opens with the local environment',
     run: 'Run in terminal',
     runIn: 'Run in terminal: {{name}}',

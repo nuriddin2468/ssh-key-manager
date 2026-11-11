@@ -526,6 +526,29 @@ pub async fn projects_open_terminal(
     .await
 }
 
+/// Shows one of the project's folders in the file manager (Finder,
+/// Explorer, Files). As for its terminal, the page names the project and
+/// the folder as the project keeps it; only a folder the project holds and
+/// this computer has is shown, never a path the page made up.
+#[tauri::command]
+pub async fn projects_reveal_folder(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    id: String,
+    folder: String,
+) -> AppResult<()> {
+    blocking(&state, move |state| {
+        let opened = state
+            .vault
+            .with(&app, |vault| Ok((vault.project(&id)?, Vec::new())));
+        let (project, _) = with_copy(opened, || state.vault.projects_copy(), &id)?;
+        let path = terminal_folder(&project, &folder, home_dir().as_deref())?;
+        tauri_plugin_opener::reveal_item_in_dir(&path)
+            .map_err(|error| AppError::new(ErrorCode::Io, error.to_string()))
+    })
+    .await
+}
+
 /// The variables of the project's `local` environment: the first of its
 /// environments' groups that has one outside the recycle bin.
 /// The project from the vault, or while it is locked from the copy kept
@@ -545,7 +568,8 @@ fn with_copy(
     }
 }
 
-/// The folder a terminal opens in: one of the project's, found here.
+/// The folder a terminal opens in, or the file manager shows: one of the
+/// project's, found here.
 fn terminal_folder(project: &Project, folder: &str, home: Option<&Path>) -> AppResult<PathBuf> {
     if !project.folders.iter().any(|f| f == folder) {
         return Err(AppError::invalid("not one of the project's folders"));

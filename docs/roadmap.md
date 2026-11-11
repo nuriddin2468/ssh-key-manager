@@ -74,7 +74,9 @@ The foundation for everything below.
 4. **Project page polish**: cards show five rows, problems first, and Show all for the
    rest; two columns that don't push each other down; an item's name opens it in its
    Library section, with a way back to the project; Add also makes a new host, key, login
-   or environment in the Library's own dialogs, and it joins the project. In review:
+   or environment in the Library's own dialogs, and it joins the project; a project folder
+   can be shown in Finder, Explorer or Files (the backend checks it is the project's). In
+   review:
    [#39](https://github.com/nuriddin2468/ssh-key-manager/pull/39).
 
 ### 3. Managed `.env` files — in progress

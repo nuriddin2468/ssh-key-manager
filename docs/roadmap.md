@@ -71,9 +71,11 @@ The foundation for everything below.
    (open a terminal there, in the default shell, with the `local` environment), tunnels,
    audit findings for the project. Adding items to a project from the library.
 
-### 3. Managed `.env` files
+### 3. Managed `.env` files — in progress
 
-Environments get files, inside projects.
+Environments get files, inside projects. Core, commands and mocks (local or remote,
+bindings, safe writes, lossless editing, two-way sync, the management center's data) in
+review: [#38](https://github.com/nuriddin2468/ssh-key-manager/pull/38); the UI follows.
 
 - Bindings: environment → file(s) in the project's folders (`.env`, `.env.local`,
   `.env.development.local`…; several in a monorepo).

@@ -93,7 +93,8 @@ The foundation for everything below.
    Finder, Explorer or Files, a session to its first host with a shell. Above the cards:
    Audit's numbers (or "No issues found"), one Unlock prompt while the vault is locked,
    and the suggestions. The first run explains projects and leads with Generate key while
-   there are no keys. In review.
+   there are no keys. In review:
+   [#42](https://github.com/nuriddin2468/ssh-key-manager/pull/42).
 
 ### 3. Managed `.env` files — in progress
 

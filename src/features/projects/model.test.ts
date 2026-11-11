@@ -2,16 +2,19 @@ import { describe, expect, it } from 'vitest';
 import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { EnvSummary } from '@/bindings/EnvSummary';
 import type { HostEntry } from '@/bindings/HostEntry';
+import type { HostsFileEntry } from '@/bindings/HostsFileEntry';
 import type { KeyView } from '@/bindings/KeyView';
 import type { Project } from '@/bindings/Project';
 import {
   aliasOf,
   cardColumns,
   hostAliases,
+  hostsFileEntries,
   initials,
   missing,
   nextColor,
   personal,
+  planHostsFileSwitch,
   problemsFirst,
   projectTone,
 } from './model';
@@ -25,6 +28,7 @@ const project = (patch: Partial<Project>): Project => ({
   keys: [],
   environments: [],
   logins: [],
+  hostsFile: [],
   modified: '2026-11-10T10:00:00Z',
   ...patch,
 });
@@ -87,6 +91,7 @@ describe('Personal', () => {
       environments: ['blog'],
       logins: ['l2'],
       folders: [],
+      hostsFile: [],
     });
   });
 
@@ -97,6 +102,7 @@ describe('Personal', () => {
       environments: [],
       logins: [],
       folders: [],
+      hostsFile: [],
     });
   });
 });
@@ -125,6 +131,7 @@ describe('gone members', () => {
 
     const unknown = missing(shop, {});
     expect(unknown.hosts.size + unknown.keys.size + unknown.environments.size).toBe(0);
+    expect(unknown.hostsFile.size).toBe(0);
     // Hosts of included files aren't listed: none is called gone then.
     const included = missing(shop, { hosts: [host(0, ['prod'])], includes: true });
     expect(included.hosts.size).toBe(0);
@@ -161,6 +168,101 @@ describe('cards', () => {
     expect(cardColumns([])).toEqual([[], []]);
     // A long card counts as five rows: the next two still fit beside it.
     expect(cardColumns([40, 2, 2])).toEqual([[0], [1, 2]]);
+  });
+});
+
+describe('hosts file names', () => {
+  const line = (n: number, address: string, names: string[], enabled = true) =>
+    ({ line: n, address, names, enabled }) as HostsFileEntry;
+  const file = [
+    line(1, '10.0.8.20', ['Staging-API.internal']),
+    line(2, '10.0.8.21', ['staging-api.internal.'], false),
+    line(3, '127.0.0.1', ['app.test', 'api.test']),
+  ];
+
+  it('find every line for a name, turned on or off', () => {
+    expect(hostsFileEntries(file, ['staging-api.internal']).map((e) => e.line)).toEqual([1, 2]);
+    expect(hostsFileEntries(file, ['api.test']).map((e) => e.line)).toEqual([3]);
+    expect(hostsFileEntries(file, [])).toEqual([]);
+  });
+
+  it('are gone when no line lists them, once the file is read', () => {
+    const shop = project({ hostsFile: ['staging-api.internal', 'old.internal'] });
+    expect([...missing(shop, { hostsFile: file }).hostsFile]).toEqual(['old.internal']);
+    expect(missing(shop, {}).hostsFile.size).toBe(0);
+  });
+});
+
+describe('switching a project’s hosts file entries', () => {
+  const line = (n: number, names: string[], enabled: boolean, address = `10.0.0.${n}`) =>
+    // `system` as the core sets it: only when every name is the system's.
+    ({
+      line: n,
+      address,
+      names,
+      enabled,
+      system: names.every((name) => name.startsWith('localhost')),
+    }) as HostsFileEntry;
+  const file = [
+    line(1, ['localhost'], true, '127.0.0.1'),
+    line(2, ['localhost', 'app.test'], true, '127.0.0.1'),
+    line(3, ['app.test'], false),
+    line(4, ['api.test', 'docs.test', 'unrelated.test'], true),
+    line(5, ['api.test'], false),
+    line(6, ['api.test'], false, 'fd00::6'),
+    line(7, ['other.test'], false),
+  ];
+  const shop = project({
+    id: 'p1',
+    name: 'Shop',
+    hostsFile: ['app.test', 'api.test', 'gone.test'],
+  });
+  const blog = project({ id: 'p2', name: 'Blog', hostsFile: ['docs.test', 'api.test'] });
+
+  it('changes only entries in the other state, never a line with a system name', () => {
+    const on = planHostsFileSwitch(shop, [shop, blog], file, true);
+    expect(on.entries.map((e) => e.line)).toEqual([3, 4, 5, 6]);
+    expect(on.kept.map((e) => e.line)).toEqual([2]);
+    expect(on.lines.map((e) => e.line)).toEqual([3, 5, 6]);
+    const off = planHostsFileSwitch(shop, [shop, blog], file, false);
+    expect(off.lines.map((e) => e.line)).toEqual([4]);
+  });
+
+  it('changes one entry for its own switch', () => {
+    expect(planHostsFileSwitch(shop, [shop], file, true, 5).lines.map((e) => e.line)).toEqual([5]);
+    // A line with a system name has no switch: nothing changes on it.
+    expect(planHostsFileSwitch(shop, [shop], file, false, 2).lines).toEqual([]);
+  });
+
+  it('names every other name on a changing line, with the projects that hold it', () => {
+    const off = planHostsFileSwitch(shop, [shop, blog], file, false);
+    expect(off.others).toEqual([
+      { name: 'docs.test', projects: ['Blog'] },
+      { name: 'unrelated.test', projects: [] },
+    ]);
+    expect(planHostsFileSwitch(shop, [shop], file, false).shared).toEqual([]);
+    expect(planHostsFileSwitch(shop, [shop, blog], file, false, 4).others).toHaveLength(2);
+  });
+
+  it('names its own names that other projects hold too', () => {
+    // api.test is Shop's and Blog's: turning off line 4 turns it off for Blog.
+    const off = planHostsFileSwitch(shop, [shop, blog], file, false);
+    expect(off.shared).toEqual([{ name: 'api.test', projects: ['Blog'] }]);
+    expect(planHostsFileSwitch(shop, [shop, blog], file, false, 4).shared).toEqual([
+      { name: 'api.test', projects: ['Blog'] },
+    ]);
+    // Turning on lines 3, 5 and 6: app.test is Shop's alone; api.test is Blog's too.
+    expect(planHostsFileSwitch(shop, [shop, blog], file, true).shared).toEqual([
+      { name: 'api.test', projects: ['Blog'] },
+    ]);
+  });
+
+  it('warns when a name ends up with several entries on in one address family', () => {
+    // app.test: line 2 stays on and line 3 turns on. api.test: lines 4 and 5
+    // in IPv4; line 6 is IPv6, a family of its own.
+    expect(planHostsFileSwitch(shop, [shop], file, true).several).toEqual(['app.test', 'api.test']);
+    expect(planHostsFileSwitch(shop, [shop], file, true, 6).several).toEqual([]);
+    expect(planHostsFileSwitch(shop, [shop], file, false).several).toEqual([]);
   });
 });
 

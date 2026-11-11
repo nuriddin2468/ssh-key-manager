@@ -1,4 +1,4 @@
-import { KeyRound, RectangleEllipsis, Search, Server, Variable } from 'lucide-react';
+import { KeyRound, Network, RectangleEllipsis, Search, Server, Variable } from 'lucide-react';
 import { RadioGroup } from 'radix-ui';
 import { type ReactNode, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -8,6 +8,7 @@ import type { ProjectMember } from '@/bindings/ProjectMember';
 import { Button } from '@/components/ui/Button';
 import { Checkbox } from '@/components/ui/Checkbox';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
+import { isValidName, listsSystemName, normalizeName } from '@/features/hostsFile/model';
 import { useVaultMutation } from '@/features/passwords/vault';
 import { cn } from '@/lib/cn';
 import { holds, memberKey as keyOf, type Library } from './model';
@@ -15,7 +16,7 @@ import { ProjectTile } from './ProjectTile';
 import { refreshSuggestions } from './queries';
 
 /** What the Add menu adds: a kind of the library, or a folder (in a system dialog). */
-export type MemberKind = 'hosts' | 'keys' | 'logins' | 'environments' | 'folder';
+export type MemberKind = 'hosts' | 'keys' | 'logins' | 'environments' | 'hostsFile' | 'folder';
 
 interface Choice {
   member: ProjectMember;
@@ -73,6 +74,21 @@ function choices(kind: MemberKind, project: Project, library: Library): Choice[]
       if (holds(project, member)) continue;
       out.push({ member, title: group, subtitle: names.join(', '), mono: true });
     }
+  } else if (kind === 'hostsFile') {
+    // Names, not lines; block lists aren't offered, nor lines that list a
+    // system name (`127.0.0.1 localhost app.test`): those can't be switched.
+    const seen = new Set<string>();
+    for (const entry of library.hostsFile ?? []) {
+      if (entry.kind === 'blocked' || listsSystemName(entry)) continue;
+      for (const written of entry.names) {
+        const name = normalizeName(written);
+        if (seen.has(name) || !isValidName(name)) continue;
+        seen.add(name);
+        const member: ProjectMember = { type: 'hostsFile', name };
+        if (holds(project, member)) continue;
+        out.push({ member, title: name, subtitle: `→ ${entry.address}`, mono: true });
+      }
+    }
   }
   return out;
 }
@@ -82,6 +98,7 @@ const KINDS: { kind: Exclude<MemberKind, 'folder'>; icon: ReactNode }[] = [
   { kind: 'keys', icon: <KeyRound className="size-3.5" strokeWidth={2} /> },
   { kind: 'logins', icon: <RectangleEllipsis className="size-3.5" strokeWidth={2} /> },
   { kind: 'environments', icon: <Variable className="size-3.5" strokeWidth={2} /> },
+  { kind: 'hostsFile', icon: <Network className="size-3.5" strokeWidth={2} /> },
 ];
 
 /** Adds items of the library to a project: one kind at a time, ticked in a list. */

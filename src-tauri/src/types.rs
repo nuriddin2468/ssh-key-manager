@@ -199,6 +199,9 @@ pub enum HostsApplyOutcome {
 pub struct HostsApplyResult {
     pub outcome: HostsApplyOutcome,
     pub file: HostsFileInfo,
+    /// When applied, the backup of the file as it was just before: restoring
+    /// it undoes the change.
+    pub backup: Option<String>,
 }
 
 /// A copy of the hosts file saved before the app changed it.

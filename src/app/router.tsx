@@ -30,7 +30,7 @@ export type Route =
   | { page: 'agent' }
   | { page: 'known' }
   /** `received` shows the hosts file group that came with that pairing as a change. */
-  | { page: 'hostsFile'; line?: number; received?: number }
+  | { page: 'hostsFile'; line?: number; received?: number; back?: string }
   | { page: 'audit' }
   | { page: 'passwords'; entryId?: string; back?: string }
   | { page: 'envs'; envId?: string; back?: string }

@@ -4,11 +4,13 @@
 import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { EnvSummary } from '@/bindings/EnvSummary';
 import type { HostEntry } from '@/bindings/HostEntry';
+import type { HostsFileEntry } from '@/bindings/HostsFileEntry';
 import type { KeyView } from '@/bindings/KeyView';
 import type { Project } from '@/bindings/Project';
 import type { ProjectColor } from '@/bindings/ProjectColor';
 import type { ProjectMember } from '@/bindings/ProjectMember';
 import type { Tone } from '@/components/ui/Tile';
+import { listsSystemName, normalizeName } from '@/features/hostsFile/model';
 
 /** In the order the color picker shows them. */
 export const PROJECT_COLORS: ProjectColor[] = [
@@ -80,6 +82,8 @@ export interface Library {
   envs?: EnvSummary[];
   /** Only while the vault is unlocked. */
   entries?: EntrySummary[];
+  /** The system hosts file's entries, turned on and off. */
+  hostsFile?: HostsFileEntry[];
 }
 
 /** Members by kind, as a project holds them. */
@@ -89,12 +93,15 @@ export interface Members {
   environments: string[];
   logins: string[];
   folders: string[];
+  /** Names in the system hosts file. */
+  hostsFile: string[];
 }
 
 /**
  * Personal: what no project holds. A host block is in a project when any of
  * its names is; logins are the vault's own (not a host's or a key's saved
- * password), outside the recycle bin.
+ * password), outside the recycle bin. The hosts file is the whole
+ * computer's, block lists and all: its entries show in projects only.
  */
 export function personal(projects: Project[], library: Library): Members {
   const held = (pick: (p: Project) => string[]) => new Set(projects.flatMap(pick));
@@ -121,6 +128,7 @@ export function personal(projects: Project[], library: Library): Members {
       .filter((e) => !e.inTrash && e.kind === 'login' && !logins.has(e.id))
       .map((e) => e.id),
     folders: [],
+    hostsFile: [],
   };
 }
 
@@ -133,6 +141,8 @@ export interface Missing {
   keys: Set<string>;
   environments: Set<string>;
   folders: Set<string>;
+  /** Names no line of the hosts file lists, turned on or off. */
+  hostsFile: Set<string>;
 }
 
 export function missing(project: Project, library: Library, goneFolders: string[] = []): Missing {
@@ -141,12 +151,25 @@ export function missing(project: Project, library: Library, goneFolders: string[
   const groups = library.envs
     ? new Set(library.envs.filter((e) => !e.inTrash).map((e) => e.project))
     : undefined;
+  const listed = library.hostsFile
+    ? new Set(library.hostsFile.flatMap((entry) => entry.names.map(normalizeName)))
+    : undefined;
   return {
     hosts: new Set(aliases ? project.hosts.filter((h) => !aliases.has(h)) : []),
     keys: new Set(fingerprints ? project.keys.filter((k) => !fingerprints.has(k)) : []),
     environments: new Set(groups ? project.environments.filter((g) => !groups.has(g)) : []),
     folders: new Set(goneFolders.filter((folder) => project.folders.includes(folder))),
+    hostsFile: new Set(listed ? project.hostsFile.filter((name) => !listed.has(name)) : []),
   };
+}
+
+/** The hosts file's entries that list one of `names`, in file order. */
+export function hostsFileEntries(
+  entries: readonly HostsFileEntry[],
+  names: readonly string[],
+): HostsFileEntry[] {
+  const wanted = new Set(names);
+  return entries.filter((entry) => entry.names.some((name) => wanted.has(normalizeName(name))));
 }
 
 /** Whether `project` holds `member`. */
@@ -162,6 +185,8 @@ export function holds(project: Project, member: ProjectMember): boolean {
       return project.environments.includes(member.group);
     case 'folder':
       return project.folders.includes(member.path);
+    case 'hostsFile':
+      return project.hostsFile.includes(member.name);
   }
 }
 
@@ -173,6 +198,7 @@ export function memberCounts(members: Members) {
     environments: members.environments.length,
     logins: members.logins.length,
     keys: members.keys.length,
+    hostsFile: members.hostsFile.length,
   };
 }
 
@@ -222,5 +248,85 @@ export function memberKey(member: ProjectMember): string {
       return `env:${member.group}`;
     case 'folder':
       return `folder:${member.path}`;
+    case 'hostsFile':
+      return `hostsfile:${member.name}`;
   }
+}
+
+/** What switching a project's hosts file entries on or off does. */
+export interface HostsFilePlan {
+  /** The project's entries a switch acts on: not those listing a system name. */
+  entries: HostsFileEntry[];
+  /** The project's entries left as they are: they list a system name too. */
+  kept: HostsFileEntry[];
+  /** Those not already in the state asked for: the ones that change. */
+  lines: HostsFileEntry[];
+  /**
+   * Names the project doesn't hold on a changing line, which change with it,
+   * with the other projects that hold them.
+   */
+  others: { name: string; projects: string[] }[];
+  /** The project's names on a changing line that other projects hold too, with those. */
+  shared: { name: string; projects: string[] }[];
+  /** Names that will have more than one entry on in an address family: the first wins. */
+  several: string[];
+}
+
+/**
+ * Plans turning `project`'s hosts file entries `on` (or off): all of them,
+ * or the one on `line`. Only entries in the other state change; lines that
+ * list a system name stay as they are; names the file doesn't have add
+ * nothing; what else the change touches is named for the review.
+ */
+export function planHostsFileSwitch(
+  project: Project,
+  projects: Project[],
+  file: readonly HostsFileEntry[],
+  on: boolean,
+  line?: number,
+): HostsFilePlan {
+  const mine = hostsFileEntries(file, project.hostsFile).filter((entry) => !entry.system);
+  const entries = mine.filter((entry) => !listsSystemName(entry));
+  const kept = mine.filter(listsSystemName);
+  const lines = entries.filter(
+    (entry) => entry.enabled !== on && (line === undefined || entry.line === line),
+  );
+  const held = new Set(project.hostsFile);
+  const others = new Map<string, string[]>();
+  const shared = new Map<string, string[]>();
+  for (const changing of lines) {
+    for (const name of changing.names.map(normalizeName)) {
+      if (others.has(name) || shared.has(name)) continue;
+      const holders = projects
+        .filter((other) => other.id !== project.id && other.hostsFile.includes(name))
+        .map((other) => other.name);
+      // The project's own names are named only when another project holds them too.
+      if (!held.has(name)) others.set(name, holders);
+      else if (holders.length > 0) shared.set(name, holders);
+    }
+  }
+  // Resolvers use the first entry on for a name in each family, IPv4 and IPv6.
+  const changingNames = new Set(lines.flatMap((entry) => entry.names.map(normalizeName)));
+  const onAfter = file.filter((entry) => (lines.includes(entry) ? on : entry.enabled));
+  const several = project.hostsFile.filter(
+    (name) =>
+      on &&
+      changingNames.has(name) &&
+      [false, true].some(
+        (ipv6) =>
+          onAfter.filter(
+            (entry) =>
+              entry.address.includes(':') === ipv6 &&
+              entry.names.some((n) => normalizeName(n) === name),
+          ).length > 1,
+      ),
+  );
+  return {
+    entries,
+    kept,
+    lines,
+    others: [...others].map(([name, holders]) => ({ name, projects: holders })),
+    shared: [...shared].map(([name, holders]) => ({ name, projects: holders })),
+    several,
+  };
 }

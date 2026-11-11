@@ -110,7 +110,8 @@ export function Sidebar() {
     project.keys.length +
     project.environments.length +
     project.folders.length +
-    project.logins.length;
+    project.logins.length +
+    project.hostsFile.length;
   const folded = (group: string) => settings.foldedNav.includes(group);
   const fold = (group: string) =>
     updateSettings({

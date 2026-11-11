@@ -33,7 +33,7 @@ function project(
   id: string,
   name: string,
   color: ProjectColor,
-  members: Partial<Pick<MockProject, 'folders' | 'hosts' | 'keys' | 'environments'>>,
+  members: Partial<Pick<MockProject, 'folders' | 'hosts' | 'keys' | 'environments' | 'hostsFile'>>,
   loginTitles: string[],
 ): MockProject {
   return {
@@ -44,6 +44,7 @@ function project(
     hosts: [],
     keys: [],
     environments: [],
+    hostsFile: [],
     ...members,
     loginTitles,
     logins: [],
@@ -62,6 +63,8 @@ const projects: MockProject[] = [
       hosts: ['bastion', 'prod-api', 'staging-api'],
       keys: ['SHA256:Qm7Tz2LkP9wX4cVb1NrY8sHd3FgJ6aE0uKoBiWq5ZxR'],
       environments: ['shop-api'],
+      // The second isn't in the sample hosts file: it shows as missing.
+      hostsFile: ['staging-api.internal', 'shop-cdn.internal', 'shop.test'],
     },
     ['AWS console', 'prod-api'],
   ),
@@ -182,6 +185,12 @@ function setMember(
       if (!isMockEntry(member.id)) return fail('not_found', `entry ${member.id}`);
       toggle(p.logins, member.id);
       break;
+    case 'hostsFile':
+      if (!/^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/.test(member.name)) {
+        return fail('invalid_input', `not a host name in lower case: ${member.name}`);
+      }
+      toggle(p.hostsFile, member.name);
+      break;
   }
   p.modified = now();
   return undefined;
@@ -193,7 +202,9 @@ const suggestion = (
   key: string,
   name: string,
   reasons: ProjectSuggestion['reasons'],
-  members: Partial<Pick<ProjectSuggestion, 'folders' | 'hosts' | 'keys' | 'environments'>>,
+  members: Partial<
+    Pick<ProjectSuggestion, 'folders' | 'hosts' | 'keys' | 'environments' | 'hostsFile'>
+  >,
 ): ProjectSuggestion => ({
   key,
   name,
@@ -205,6 +216,7 @@ const suggestion = (
   keys: [],
   environments: [],
   logins: [],
+  hostsFile: [],
   ...members,
 });
 
@@ -219,9 +231,15 @@ const candidates: ProjectSuggestion[] = [
       environments: ['billing'],
     },
   ),
-  suggestion('shop', 'shop', [{ type: 'gitFolder', folder: '~/code/shop-admin' }], {
-    folders: ['~/code/shop-admin'],
-  }),
+  suggestion(
+    'shop',
+    'shop',
+    [
+      { type: 'gitFolder', folder: '~/code/shop-admin' },
+      { type: 'hostsFile', host: 'prod-api' },
+    ],
+    { folders: ['~/code/shop-admin'], hostsFile: ['prod-db.internal'] },
+  ),
   suggestion('dotfiles', 'dotfiles', [{ type: 'gitFolder', folder: '~/dotfiles' }], {
     folders: ['~/dotfiles'],
   }),
@@ -250,6 +268,8 @@ function memberKey(m: ProjectMember): string {
       return `env:${m.group}`;
     case 'folder':
       return `folder:${m.path}`;
+    case 'hostsFile':
+      return `hostsfile:${m.name}`;
   }
 }
 
@@ -260,6 +280,7 @@ function memberList(s: ProjectSuggestion): ProjectMember[] {
     ...s.environments.map((group): ProjectMember => ({ type: 'environment', group })),
     ...s.folders.map((path): ProjectMember => ({ type: 'folder', path })),
     ...s.logins.map((id): ProjectMember => ({ type: 'login', id })),
+    ...s.hostsFile.map((name): ProjectMember => ({ type: 'hostsFile', name })),
   ];
 }
 let offered: ProjectSuggestion[] = [];
@@ -306,6 +327,7 @@ function suggestions(): ProjectSuggestion[] {
         environments: kept.flatMap((m) => (m.type === 'environment' ? [m.group] : [])),
         folders: kept.flatMap((m) => (m.type === 'folder' ? [m.path] : [])),
         logins: kept.flatMap((m) => (m.type === 'login' ? [m.id] : [])),
+        hostsFile: kept.flatMap((m) => (m.type === 'hostsFile' ? [m.name] : [])),
       };
       if (existing) {
         s.existing = existing.id;
@@ -395,28 +417,8 @@ export const projectsHandlers: Record<string, Handler> = {
       projects.push(target);
     }
     for (const m of chosen) {
-      const list =
-        m.type === 'host'
-          ? target.hosts
-          : m.type === 'key'
-            ? target.keys
-            : m.type === 'environment'
-              ? target.environments
-              : m.type === 'folder'
-                ? target.folders
-                : target.logins;
-      const value =
-        m.type === 'host'
-          ? m.alias
-          : m.type === 'key'
-            ? m.fingerprint
-            : m.type === 'environment'
-              ? m.group
-              : m.type === 'folder'
-                ? m.path
-                : m.id;
-      if (!list.includes(value)) list.push(value);
-      if (m.type === 'folder') target.heldFolders.add(value);
+      setMember(target, m, true);
+      if (m.type === 'folder') target.heldFolders.add(m.path);
     }
     target.modified = now();
     const chosenKeys = new Set(chosen.map(memberKey));

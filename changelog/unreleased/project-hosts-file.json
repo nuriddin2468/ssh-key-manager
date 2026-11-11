@@ -1,0 +1,6 @@
+{
+  "kind": "new",
+  "en": "Projects: names from the hosts file can be part of a project. Its page shows their entries (name → address) and flags a name the file no longer has. A switch per entry, or one for all of them, goes through the usual review and administrator password, and Undo puts the backup back. Add names from Add or a Hosts file entry's menu; suggestions offer those of a project's hosts and domains.",
+  "ru": "Проекты: имена из файла hosts теперь входят в проект. Страница проекта показывает их записи (имя → адрес) и отмечает имена, которых в файле нет. Переключатель у записи или один на все проходит обычный просмотр и пароль администратора, а «Отменить» возвращает резервную копию. Имена добавляются через «Добавить» или меню записи; предложения берут имена хостов и доменов проекта.",
+  "uz": "Loyihalar: hosts faylidagi nomlar endi loyihaga kiradi. Sahifa ularning yozuvlarini (nom → manzil) koʻrsatadi va faylda yoʻq nomni belgilaydi. Yozuv yoki hammasi uchun bitta kalit odatdagi koʻrib chiqish va administrator paroli bilan ishlaydi, «Bekor qilish» zaxirani qaytaradi. Nomlar «Qoʻshish» yoki yozuv menyusidan qoʻshiladi; takliflar loyiha xostlari va domenlari nomlarini beradi."
+}

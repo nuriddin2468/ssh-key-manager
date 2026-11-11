@@ -69,6 +69,8 @@ const MAX_REFERENCE: usize = 4096;
 /// taken as it is, in milliseconds, for clocks a little apart; a later one
 /// is taken as this much ahead.
 const MAX_AHEAD_MS: i64 = 5 * 60 * 1000;
+/// The kinds of member this version knows, as records name them.
+const KINDS: &[&str] = &["host", "key", "login", "env", "folder", "hostsfile"];
 /// How long a removed project or member is remembered, in milliseconds: a
 /// device that syncs after longer than that may bring it back.
 pub const KEEP_REMOVED_MS: i64 = 400 * 24 * 60 * 60 * 1000;
@@ -164,6 +166,11 @@ pub struct Project {
     /// The vault's logins by entry id, not counting those in the recycle
     /// bin or gone. Empty in the copy kept for while the vault is locked.
     pub logins: Vec<String>,
+    /// Names in the system hosts file ([`hosts_file_name`]): the entries
+    /// that list one are the project's. A copy kept by an older version has
+    /// none.
+    #[serde(default)]
+    pub hosts_file: Vec<String>,
     /// RFC 3339, UTC.
     pub modified: String,
 }
@@ -193,6 +200,20 @@ pub enum ProjectMember {
     Environment { group: String },
     /// A folder as [`folder_text`] keeps it.
     Folder { path: String },
+    /// The system hosts file's entries for a name, as [`hosts_file_name`]
+    /// writes it. Changing those entries is the hosts file's own business.
+    HostsFile { name: String },
+}
+
+/// A name of the system hosts file as a project keeps it: lower case,
+/// without the final dot, as resolvers compare names. `None` when it isn't a
+/// host name.
+pub fn hosts_file_name(name: &str) -> Option<String> {
+    let name = name.trim();
+    if !crate::hosts_file::is_valid_name(name) {
+        return None;
+    }
+    Some(crate::hosts_file::normalize_name(name))
 }
 
 /// A project's record as it goes to the user's other devices: the stored
@@ -438,6 +459,7 @@ fn member_key(member: &ProjectMember) -> String {
         ProjectMember::Login { id } => format!("login:{id}"),
         ProjectMember::Environment { group } => format!("env:{group}"),
         ProjectMember::Folder { path } => format!("folder:{path}"),
+        ProjectMember::HostsFile { name } => format!("hostsfile:{name}"),
     }
 }
 
@@ -452,6 +474,7 @@ fn parse_member(key: &str) -> Option<ProjectMember> {
         "login" => ProjectMember::Login { id: value },
         "env" => ProjectMember::Environment { group: value },
         "folder" => ProjectMember::Folder { path: value },
+        "hostsfile" => ProjectMember::HostsFile { name: value },
         _ => return None,
     };
     is_valid_member(&member).then_some(member)
@@ -459,8 +482,8 @@ fn parse_member(key: &str) -> Option<ProjectMember> {
 
 /// Whether `member` is a reference a project takes, by its form alone: a
 /// host alias that isn't a pattern, a `SHA256:` fingerprint, an entry id,
-/// an environments' group name, a folder on one line. Whether it exists is
-/// another question.
+/// an environments' group name, a folder on one line, a hosts file name in
+/// lower case. Whether it exists is another question.
 pub fn is_valid_member(member: &ProjectMember) -> bool {
     match member {
         ProjectMember::Host { alias } => check_alias(alias).is_ok_and(|a| a == *alias),
@@ -474,6 +497,7 @@ pub fn is_valid_member(member: &ProjectMember) -> bool {
             check_label(group, "a project").is_ok_and(|g| g == *group)
         }
         ProjectMember::Folder { path } => check_folder_text(path).is_ok(),
+        ProjectMember::HostsFile { name } => hosts_file_name(name).is_some_and(|n| n == *name),
     }
 }
 
@@ -491,9 +515,7 @@ fn parse(id: &str, json: &str) -> Option<Stored> {
     stored.members.retain(|key, _| {
         key.len() <= MAX_REFERENCE + 16
             && match key.split_once(':') {
-                Some((kind, _)) if ["host", "key", "login", "env", "folder"].contains(&kind) => {
-                    parse_member(key).is_some()
-                }
+                Some((kind, _)) if KINDS.contains(&kind) => parse_member(key).is_some(),
                 Some((kind, _)) => !kind.is_empty(),
                 None => false,
             }
@@ -549,6 +571,7 @@ fn project_view(id: String, stored: &Stored, logins: &BTreeSet<String>) -> Proje
         keys: Vec::new(),
         environments: Vec::new(),
         logins: Vec::new(),
+        hosts_file: Vec::new(),
         modified,
     };
     for member in stored.present() {
@@ -557,6 +580,7 @@ fn project_view(id: String, stored: &Stored, logins: &BTreeSet<String>) -> Proje
             ProjectMember::Key { fingerprint } => project.keys.push(fingerprint),
             ProjectMember::Environment { group } => project.environments.push(group),
             ProjectMember::Folder { path } => project.folders.push(path),
+            ProjectMember::HostsFile { name } => project.hosts_file.push(name),
             ProjectMember::Login { id } if logins.contains(&id) => project.logins.push(id),
             ProjectMember::Login { .. } => {}
         }
@@ -662,6 +686,9 @@ impl Vault {
                 ProjectMember::Key { fingerprint } => check_fingerprint(fingerprint).err(),
                 ProjectMember::Environment { group } => check_label(group, "a project").err(),
                 ProjectMember::Folder { path } => check_folder_text(path).err(),
+                ProjectMember::HostsFile { name } => Some(Error::invalid(format!(
+                    "not a host name in lower case: {name}"
+                ))),
                 ProjectMember::Login { id } => {
                     Some(Error::invalid(format!("not an entry id: {id}")))
                 }

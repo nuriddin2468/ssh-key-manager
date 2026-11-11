@@ -3,4 +3,4 @@
 /**
  * Why a project is suggested.
  */
-export type SuggestionReason = { "type": "environments", group: string, } | { "type": "gitFolder", folder: string, } | { "type": "proxyJump", bastion: string, } | { "type": "namePrefix", prefix: string, } | { "type": "domain", domain: string, } | { "type": "keepassGroup", group: string, } | { "type": "keepassTag", tag: string, };
+export type SuggestionReason = { "type": "environments", group: string, } | { "type": "gitFolder", folder: string, } | { "type": "proxyJump", bastion: string, } | { "type": "namePrefix", prefix: string, } | { "type": "domain", domain: string, } | { "type": "keepassGroup", group: string, } | { "type": "keepassTag", tag: string, } | { "type": "hostsFile", host: string, };

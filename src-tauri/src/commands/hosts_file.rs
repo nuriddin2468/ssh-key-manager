@@ -63,7 +63,7 @@ pub async fn apply_hosts_changes(
     blocking(&state, move |state| {
         let file = writable_hosts_file(state)?;
         if file.revision() != revision {
-            return apply_result(state, HostsApplyOutcome::Stale);
+            return apply_result(state, HostsApplyOutcome::Stale, None);
         }
         let edited = file.edited(&changes)?;
         let prompt = auth_prompt(false, &file, &edited.file);
@@ -102,12 +102,15 @@ pub async fn list_hosts_backups(state: State<'_, Shared>) -> AppResult<Vec<Hosts
     .await
 }
 
-/// Puts a backup back in place with administrator rights.
+/// Puts a backup back in place with administrator rights. With `revision`,
+/// only over that revision of the file (an Undo of the change that made
+/// it): a file changed since is left alone, as `Stale`.
 #[tauri::command]
 pub async fn restore_hosts_backup(
     state: State<'_, Shared>,
     path: String,
     flush_dns: bool,
+    revision: Option<String>,
 ) -> AppResult<HostsApplyResult> {
     blocking(&state, move |state| {
         let path = PathBuf::from(path);
@@ -115,6 +118,9 @@ pub async fn restore_hosts_backup(
             return Err(AppError::invalid("not a backup of the hosts file"));
         }
         let file = writable_hosts_file(state)?;
+        if revision.is_some_and(|revision| revision != file.revision()) {
+            return apply_result(state, HostsApplyOutcome::Stale, None);
+        }
         let text = String::from_utf8(fs::read(&path)?)
             .map_err(|_| AppError::invalid("the backup is not UTF-8"))?;
         let prompt = auth_prompt(true, &file, &HostsFile::parse(&text));
@@ -300,9 +306,8 @@ fn install_with(
 ) -> AppResult<HostsApplyResult> {
     let backup = fsutil::backup(&state.hosts_file, &state.backup_dir)?;
     let outcome = install(&state.hosts_file);
-    if !matches!(outcome, Ok(InstallOutcome::Installed))
-        && let Some(backup) = backup
-    {
+    let installed = matches!(outcome, Ok(InstallOutcome::Installed));
+    if !installed && let Some(backup) = &backup {
         let _ = fs::remove_file(backup);
     }
     let outcome = match outcome? {
@@ -310,13 +315,21 @@ fn install_with(
         InstallOutcome::Cancelled => HostsApplyOutcome::Cancelled,
         InstallOutcome::Stale => HostsApplyOutcome::Stale,
     };
-    apply_result(state, outcome)
+    let backup = backup
+        .filter(|_| installed)
+        .map(|path| path.to_string_lossy().into_owned());
+    apply_result(state, outcome, backup)
 }
 
-fn apply_result(state: &AppState, outcome: HostsApplyOutcome) -> AppResult<HostsApplyResult> {
+fn apply_result(
+    state: &AppState,
+    outcome: HostsApplyOutcome,
+    backup: Option<String>,
+) -> AppResult<HostsApplyResult> {
     Ok(HostsApplyResult {
         outcome,
         file: hosts_file_info(state)?,
+        backup,
     })
 }
 
@@ -388,6 +401,7 @@ mod tests {
         let result = install_with(&state, |_| Ok(InstallOutcome::Stale)).unwrap();
         assert_eq!(result.outcome, HostsApplyOutcome::Stale);
         assert_eq!(result.file.revision, revision);
+        assert_eq!(result.backup, None);
         assert_eq!(hosts_backups(&state), Vec::<PathBuf>::new());
         let result = install_with(&state, |_| Ok(InstallOutcome::Cancelled)).unwrap();
         assert_eq!(result.outcome, HostsApplyOutcome::Cancelled);
@@ -404,5 +418,10 @@ mod tests {
         let backups = hosts_backups(&state);
         assert_eq!(backups.len(), 1);
         assert_eq!(fs::read(&backups[0]).unwrap(), b"127.0.0.1 localhost\n");
+        // The result names it, for an Undo.
+        assert_eq!(
+            result.backup.as_deref(),
+            Some(backups[0].to_string_lossy().as_ref())
+        );
     }
 }

@@ -32,6 +32,7 @@ import { useFindShortcut } from '@/app/useAppEvents';
 import type { HostsAddressKind } from '@/bindings/HostsAddressKind';
 import type { HostsEntryEdit } from '@/bindings/HostsEntryEdit';
 import type { HostsFileView } from '@/bindings/HostsFileView';
+import type { ProjectMember } from '@/bindings/ProjectMember';
 import { PageBody, Toolbar } from '@/components/layout/Toolbar';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -54,6 +55,8 @@ import { Switch } from '@/components/ui/Switch';
 import { Tile } from '@/components/ui/Tile';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { SendDialog } from '@/features/nearby/SendDialog';
+import { BackToProject } from '@/features/projects/BackToProject';
+import { ProjectDots, useProjectMenu } from '@/features/projects/ProjectMenu';
 import { cn } from '@/lib/cn';
 import { fileManagerName } from '@/lib/platform';
 import { BackupsDialog } from './BackupsDialog';
@@ -85,7 +88,14 @@ import {
 } from './draft';
 import { EntryDialog, GroupDialog } from './EntryDialog';
 import { LookupDialog } from './LookupDialog';
-import { isExpired, KIND_STYLE } from './model';
+import {
+  isExpired,
+  isSystemName,
+  isValidName,
+  KIND_STYLE,
+  listsSystemName,
+  normalizeName,
+} from './model';
 import { type ReceivedNote, ReviewDialog } from './ReviewDialog';
 import { useEntryDrag } from './useEntryDrag';
 
@@ -427,6 +437,7 @@ export function HostsFilePage({ line, received }: { line?: number; received?: nu
   return (
     <>
       <Toolbar
+        leading={<BackToProject />}
         title={t('hostsFile.title')}
         meta={
           info ? t('hostsFile.meta', { count: view.entries.length, path: info.path }) : undefined
@@ -1065,6 +1076,16 @@ function EntryLine({
   const removed = status === 'removed';
   const movable = editable && !removed && !base?.system;
   const name = entry.names[0] ?? entry.address;
+  // A line joins a project by its first name of its own, as the file has it.
+  const projectName =
+    // A line that lists a system name can't be switched: none of its names join.
+    base && status !== 'new' && !listsSystemName(base) && base.kind !== 'blocked'
+      ? base.names.map(normalizeName).find((n) => isValidName(n) && !isSystemName(n))
+      : undefined;
+  const projectMember: ProjectMember | null = projectName
+    ? { type: 'hostsFile', name: projectName }
+    : null;
+  const projectMenu = useProjectMenu(projectMember);
   const expires = entry.expires ? new Date(entry.expires) : null;
   const today = expires?.toDateString() === new Date().toDateString();
   const until = expires
@@ -1159,6 +1180,7 @@ function EntryLine({
           </Badge>
         ) : null}
         {!entry.enabled && !removed ? <Badge pill>{t('hostsFile.off')}</Badge> : null}
+        <ProjectDots member={projectMember} />
         {base?.system ? (
           <Badge tone="info" pill>
             {t('hostsFile.system')}
@@ -1251,6 +1273,7 @@ function EntryLine({
                     {t('hostsFile.undoChanges')}
                   </MenuItem>
                 ) : null}
+                {projectMenu.sub}
                 <MenuSeparator />
                 <MenuItem destructive icon={<Trash2 className="size-4" />} onSelect={onRemove}>
                   {t('hostsFile.delete')}
@@ -1260,6 +1283,7 @@ function EntryLine({
           </>
         )}
       </span>
+      {projectMenu.dialog}
     </div>
   );
 }

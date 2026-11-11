@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use serde::{Deserialize, Serialize};
 use sshkm_core::config::{HostEntry, HostKind, SshConfig};
+use sshkm_core::hosts_file::{self, HostsAddressKind, HostsFile};
 use sshkm_core::paths::home_dir;
 use sshkm_core::vault::envs::{EnvKind, EnvSummary};
 use sshkm_core::vault::projects::suggest::{self, Declined, HostFacts, ProjectSuggestion};
@@ -337,6 +338,36 @@ fn code_roots(prefs: &SuggestionPrefs) -> Vec<PathBuf> {
     roots
 }
 
+/// The hosts file's names suggestions look at: not the operating system's
+/// own, nor blocked ones (block lists hold thousands). None when it can't
+/// be read.
+fn hosts_file_names(state: &AppState) -> Vec<String> {
+    let Ok(file) = HostsFile::load(&state.hosts_file) else {
+        return Vec::new();
+    };
+    member_names(&file)
+}
+
+/// The hosts file's names a project can hold: not blocked ones, and none
+/// from a line that lists a system name (`127.0.0.1 localhost app.test`),
+/// which the app can't turn on or off.
+fn member_names(file: &HostsFile) -> Vec<String> {
+    let names: BTreeSet<String> = file
+        .entries()
+        .into_iter()
+        .filter(|entry| entry.kind != HostsAddressKind::Blocked)
+        .filter(|entry| {
+            !entry
+                .names
+                .iter()
+                .any(|name| hosts_file::is_system_name(name))
+        })
+        .flat_map(|entry| entry.names)
+        .filter_map(|name| projects::hosts_file_name(&name))
+        .collect();
+    names.into_iter().collect()
+}
+
 fn suggestions(app: &AppHandle, state: &AppState) -> AppResult<Vec<ProjectSuggestion>> {
     // Nothing is read on disk while the vault is locked.
     let vault_id = state
@@ -344,6 +375,7 @@ fn suggestions(app: &AppHandle, state: &AppState) -> AppResult<Vec<ProjectSugges
         .with_quietly(app, |vault| Ok(vault.vault_id().to_owned()))?;
     let prefs = load_prefs(state);
     let hosts = host_facts(state)?;
+    let hosts_file = hosts_file_names(state);
     let repositories = suggest::find_repositories(&code_roots(&prefs));
     // The working trees come by their real paths; so does the home folder.
     let home = home_dir().map(|home| suggest::canonical(&home).unwrap_or(home));
@@ -359,6 +391,7 @@ fn suggestions(app: &AppHandle, state: &AppState) -> AppResult<Vec<ProjectSugges
                 repositories: &repositories,
                 projects: &projects,
                 home: home.as_deref(),
+                hosts_file: &hosts_file,
             },
             &prefs.declined,
         ))
@@ -792,6 +825,7 @@ mod tests {
             keys: Vec::new(),
             environments: groups.iter().map(|g| (*g).to_owned()).collect(),
             logins: Vec::new(),
+            hosts_file: Vec::new(),
             modified: String::new(),
         }
     }
@@ -807,6 +841,17 @@ mod tests {
             in_trash,
             modified: None,
         }
+    }
+
+    #[test]
+    fn hosts_file_names_come_from_lines_the_app_can_switch() {
+        let file = HostsFile::parse(
+            "127.0.0.1 localhost app.test\n\
+             10.0.0.3 API.test.\n\
+             # 10.0.0.4 off.test\n\
+             0.0.0.0 ads.example\n",
+        );
+        assert_eq!(member_names(&file), ["api.test", "off.test"]);
     }
 
     #[test]

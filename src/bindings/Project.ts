@@ -29,6 +29,12 @@ environments: Array<string>,
  */
 logins: Array<string>, 
 /**
+ * Names in the system hosts file ([`hosts_file_name`]): the entries
+ * that list one are the project's. A copy kept by an older version has
+ * none.
+ */
+hostsFile: Array<string>, 
+/**
  * RFC 3339, UTC.
  */
 modified: string, };

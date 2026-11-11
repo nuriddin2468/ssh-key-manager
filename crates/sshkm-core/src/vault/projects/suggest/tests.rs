@@ -41,6 +41,7 @@ fn project(name: &str, hosts: &[&str]) -> Project {
         keys: Vec::new(),
         environments: Vec::new(),
         logins: Vec::new(),
+        hosts_file: Vec::new(),
         modified: "2026-11-10T10:00:00Z".into(),
     }
 }
@@ -148,6 +149,7 @@ fn environments_folders_and_keepass_join_by_name() {
             repositories: &repositories,
             projects: &[],
             home: Some(&home),
+            hosts_file: &[],
         },
         &Declined::default(),
     );
@@ -594,4 +596,105 @@ fn a_login_that_joined_since_the_suggestion_stays_when_left_unticked() {
     let mut expected = vec![first, second];
     expected.sort();
     assert_eq!(members, expected);
+}
+
+#[test]
+fn hosts_file_names_join_the_project_their_hosts_are_in() {
+    let hosts = [
+        host("shop-prod", Some("api.shop.example.com"), None),
+        host("blog", Some("blog.example.org"), None),
+        host("gh", Some("github.com"), None),
+    ];
+    let in_file: Vec<String> = [
+        "api.shop.example.com",
+        "staging.shop.example.com",
+        "shop-prod",
+        "blog.example.org",
+        "github.com",
+        "unrelated.test",
+    ]
+    .map(String::from)
+    .into();
+    let projects = [project("Shop", &["shop-prod", "gh"])];
+    let suggestions = suggest(
+        &Sources {
+            hosts: &hosts,
+            projects: &projects,
+            hosts_file: &in_file,
+            ..Sources::default()
+        },
+        &Declined::default(),
+    );
+    // The project's hosts by name and by domain; code hosting says nothing.
+    let shop = find(&suggestions, "Shop");
+    assert_eq!(shop.existing.as_deref(), Some("id-Shop"));
+    assert_eq!(
+        shop.hosts_file,
+        [
+            "api.shop.example.com",
+            "staging.shop.example.com",
+            "shop-prod"
+        ]
+    );
+    assert_eq!(
+        shop.reasons,
+        [
+            SuggestionReason::HostsFile {
+                host: "shop-prod".into()
+            },
+            SuggestionReason::Domain {
+                domain: "example.com".into()
+            },
+        ]
+    );
+    // One host in a domain doesn't make a new project, with hosts file names or not.
+    assert_eq!(names(&suggestions), ["Shop"]);
+
+    // Names a project has already aren't suggested again.
+    let mut held = project("Shop", &["shop-prod"]);
+    held.hosts_file = in_file[..3].to_vec();
+    let suggestions = suggest(
+        &Sources {
+            hosts: &hosts,
+            projects: &[held],
+            hosts_file: &in_file,
+            ..Sources::default()
+        },
+        &Declined::default(),
+    );
+    assert_eq!(suggestions, []);
+}
+
+#[test]
+fn left_out_members_are_kept_as_record_keys_and_read_from_any_build() {
+    let mut declined = Declined::default();
+    declined.dismiss("shop");
+    declined.members.insert(
+        "shop".into(),
+        vec!["host:shop-db".into(), "hostsfile:app.test".into()],
+    );
+    let json = serde_json::to_value(&declined).unwrap();
+    assert_eq!(
+        json["members"]["shop"],
+        serde_json::json!(["host:shop-db", "hostsfile:app.test"])
+    );
+    // An earlier build wrote members; a later one may add kinds this one
+    // doesn't know: they are dropped, never the whole settings.
+    let read: Declined = serde_json::from_value(serde_json::json!({
+        "keys": ["shop"],
+        "members": {
+            "shop": [
+                { "type": "host", "alias": "shop-db" },
+                "hostsfile:app.test",
+                { "type": "bucket", "name": "s3://shop" },
+                "bucket:s3://shop"
+            ]
+        }
+    }))
+    .unwrap();
+    assert_eq!(read.keys, ["shop"]);
+    assert_eq!(
+        read.members["shop"],
+        ["host:shop-db", "hostsfile:app.test", "bucket:s3://shop"]
+    );
 }

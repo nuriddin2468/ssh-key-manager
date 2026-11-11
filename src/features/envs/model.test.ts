@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { EnvSummary } from '@/bindings/EnvSummary';
 import {
   envLabel,
+  folderParts,
   initialChoices,
   isProduction,
   isVariableName,
@@ -9,7 +10,9 @@ import {
   looksSecretName,
   nameTaken,
   partsOf,
+  secondPart,
   sectionsOf,
+  showsParts,
   trashed,
 } from './model';
 
@@ -110,5 +113,32 @@ describe('envs model', () => {
         problems: [],
       }),
     ).toEqual([{ name: 'A', secret: true }]);
+  });
+});
+
+describe('a project’s parts', () => {
+  it('ask for a name when a project with one part gets a second', () => {
+    // Blog has one part (none); Shop has two already.
+    expect(secondPart(ALL, 'p-blog', 'web')).toEqual({ part: '', ids: ['3'] });
+    expect(secondPart(ALL, 'p-blog', '')).toBeNull();
+    expect(secondPart(ALL, 'p-shop', 'admin')).toBeNull();
+    // Moving its only environment leaves nothing to name.
+    expect(secondPart(ALL, 'p-blog', 'web', '3')).toBeNull();
+    expect(secondPart(ALL, null, 'tools')).toEqual({ part: 'scripts', ids: ['6'] });
+  });
+
+  it('are offered from the project’s folders, without those it has', () => {
+    expect(
+      folderParts(
+        ['.env', 'backend/.env', 'frontend/.env.local', 'backend/api/.env', '.config/.env'],
+        ['Frontend'],
+      ),
+    ).toEqual(['backend']);
+  });
+
+  it('show only when a project has more than one', () => {
+    expect(showsParts(ALL, 'p-shop')).toBe(true);
+    expect(showsParts(ALL, 'p-blog')).toBe(false);
+    expect(envLabel(ALL[0] as EnvSummary, NAMES, false)).toBe('Shop · dev');
   });
 });

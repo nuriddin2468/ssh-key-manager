@@ -68,7 +68,7 @@ const projects: MockProject[] = [
       folders: ['~/code/shop-api', '~/code/shop-web'],
       hosts: ['bastion', 'prod-api', 'staging-api'],
       keys: ['SHA256:Qm7Tz2LkP9wX4cVb1NrY8sHd3FgJ6aE0uKoBiWq5ZxR'],
-      environments: ['shop-api'],
+      environments: ['shop-api', 'shop-web'],
       // The second isn't in the sample hosts file: it shows as missing.
       hostsFile: ['staging-api.internal', 'shop-cdn.internal', 'shop.test'],
     },

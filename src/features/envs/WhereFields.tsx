@@ -5,7 +5,8 @@ import { Select } from '@/components/ui/Select';
 import { TextField } from '@/components/ui/TextField';
 import { PersonalTile, ProjectTile } from '@/features/projects/ProjectTile';
 import { useProjects } from '@/features/projects/queries';
-import { labelProblem, partsOf } from './model';
+import { useFilesOverview } from './files/queries';
+import { folderParts, labelProblem, partsOf } from './model';
 
 /** Personal in the project choice: Select values are strings, never empty. */
 export const PERSONAL = 'personal';
@@ -47,6 +48,20 @@ export function WhereFields({
   const listId = useId();
   const projects = useProjects().data ?? [];
   const problem = partProblem(part);
+  const chosen = projectOf(project);
+  const parts = partsOf(all, chosen);
+  // Folders in the project with a `.env` (`backend/.env`) name parts too.
+  const overview = useFilesOverview(chosen, chosen !== null).data;
+  const fromFolders =
+    chosen === null
+      ? []
+      : folderParts(
+          [
+            ...(overview?.files ?? []).map((report) => report.file.path),
+            ...(overview?.unmanaged ?? []).map((found) => found.file.path),
+          ],
+          parts,
+        );
   return (
     <>
       {partOnly ? null : (
@@ -74,7 +89,7 @@ export function WhereFields({
         hint={t('envs.form.partHint')}
       />
       <datalist id={listId}>
-        {partsOf(all, projectOf(project)).map((item) => (
+        {[...parts, ...fromFolders].map((item) => (
           <option key={item} value={item} />
         ))}
       </datalist>

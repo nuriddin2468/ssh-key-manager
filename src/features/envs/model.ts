@@ -96,6 +96,48 @@ export function envLabel(
   return whereLabel(whereLabel(project, shown ? env.part : '') || null, env.name);
 }
 
+/** The part a project's environments share, to name when it gets a second. */
+export interface FirstPart {
+  /** Its name so far: from before projects, the old group's. */
+  part: string;
+  /** The environments in it. */
+  ids: string[];
+}
+
+/**
+ * Whether putting an environment in `part` gives `project` (or Personal)
+ * its second part: then the part its other environments (not `except`)
+ * share is named first.
+ */
+export function secondPart(
+  envs: readonly EnvSummary[],
+  project: string | null,
+  part: string,
+  except?: string,
+): FirstPart | null {
+  const others = envs.filter((env) => !env.inTrash && env.project === project && env.id !== except);
+  const first = others[0];
+  if (!first || others.some((env) => !same(env.part, first.part))) return null;
+  if (same(first.part, part.trim())) return null;
+  return { part: first.part, ids: others.map((env) => env.id) };
+}
+
+/**
+ * Names a part could have, from a project's folders: the first folder of
+ * paths of `.env` files found in them (`backend/.env` → `backend`), without
+ * the parts it has.
+ */
+export function folderParts(paths: readonly string[], taken: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const path of paths) {
+    const [first, ...rest] = path.split('/');
+    if (!first || rest.length === 0 || first.startsWith('.')) continue;
+    if (taken.some((part) => same(part, first)) || out.some((part) => same(part, first))) continue;
+    out.push(first);
+  }
+  return out;
+}
+
 /** Whether a project (or Personal) has more than one part: only then are parts shown. */
 export function showsParts(envs: readonly EnvSummary[], project: string | null): boolean {
   const parts = new Set(

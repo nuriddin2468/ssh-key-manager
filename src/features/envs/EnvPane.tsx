@@ -6,10 +6,12 @@ import {
   EyeOff,
   FileDown,
   FileUp,
+  FolderInput,
   Lock,
   MonitorSmartphone,
   MoreHorizontal,
   Pencil,
+  PencilLine,
   Plus,
   Send,
   Server,
@@ -18,7 +20,7 @@ import {
   Undo2,
   Variable,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
@@ -28,7 +30,6 @@ import type { EnvDetail } from '@/bindings/EnvDetail';
 import type { EnvKind } from '@/bindings/EnvKind';
 import type { EnvSummary } from '@/bindings/EnvSummary';
 import type { EnvVarInfo } from '@/bindings/EnvVarInfo';
-import type { ProjectMember } from '@/bindings/ProjectMember';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
@@ -44,10 +45,10 @@ import {
 } from '@/components/ui/Menu';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
+import { Tooltip } from '@/components/ui/Tooltip';
 import { SendDialog } from '@/features/nearby/SendDialog';
 import { MASK, REVEAL_MS } from '@/features/passwords/SavedSecret';
 import { toastVaultError, useSecretCall, useVaultMutation } from '@/features/passwords/vault';
-import { ProjectChips, useProjectMenu } from '@/features/projects/ProjectMenu';
 import { defaultShell, shellName, useShells } from '@/features/terminal/shells';
 import { useTerminals } from '@/features/terminal/TerminalProvider';
 import { cn } from '@/lib/cn';
@@ -57,8 +58,10 @@ import { CompareDialog } from './CompareDialog';
 import { ExportEnvDialog } from './ExportEnvDialog';
 import { FilesSection } from './files/FilesSection';
 import { useMakeLocal } from './files/useMakeLocal';
+import { MoveEnvDialog } from './MoveEnvDialog';
 import { isProduction, showsParts, whereLabel } from './model';
 import { useEnv } from './queries';
+import { RenamePartDialog } from './RenamePartDialog';
 import { useEnvLabel, useProjectNames } from './useProjectNames';
 import { VariableDialog } from './VariableDialog';
 
@@ -66,7 +69,9 @@ type Open =
   | { kind: 'variable'; variable: EnvVarInfo | null }
   | { kind: 'export' }
   | { kind: 'compare' }
-  | { kind: 'send' };
+  | { kind: 'send' }
+  | { kind: 'move' }
+  | { kind: 'renamePart' };
 
 interface EnvPaneProps {
   summary: EnvSummary;
@@ -87,16 +92,20 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
   const { t, i18n } = useTranslation();
   const envLabelOf = useEnvLabel();
   const names = useProjectNames();
-  const projectMember: ProjectMember | null = summary.inTrash
-    ? null
-    : { type: 'environment', id: summary.id };
-  const projectMenu = useProjectMenu(projectMember);
   const { navigate } = useRouter();
   const terminals = useTerminals();
   const shells = useShells().data ?? [];
   const opensByDefault = defaultShell(shells, useSettings().defaultShell);
   const detail = useEnv(summary.id);
   const [open, setOpen] = useState<Open | null>(null);
+  const compareHintId = useId();
+  const siblings = all.filter(
+    (other) =>
+      !other.inTrash &&
+      other.id !== summary.id &&
+      other.project === summary.project &&
+      other.part.toLowerCase() === summary.part.toLowerCase(),
+  );
   const [removing, setRemoving] = useState<EnvVarInfo | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const env = detail.data;
@@ -277,7 +286,22 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
                   >
                     {t('envs.send')}
                   </MenuItem>
-                  {projectMenu.sub}
+                  <MenuItem
+                    icon={<FolderInput className="size-4" />}
+                    disabled={!env}
+                    onSelect={() => setOpen({ kind: 'move' })}
+                  >
+                    {t('envs.move.menu')}
+                  </MenuItem>
+                  {/* Where parts show: names from before projects can change at once. */}
+                  {summary.part && showsParts(all, summary.project) ? (
+                    <MenuItem
+                      icon={<PencilLine className="size-4" />}
+                      onSelect={() => setOpen({ kind: 'renamePart' })}
+                    >
+                      {t('envs.renamePart.menu')}
+                    </MenuItem>
+                  ) : null}
                   <MenuSeparator />
                   <MenuItem
                     destructive
@@ -290,10 +314,8 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
               )}
             </MenuContent>
           </Menu>
-          {projectMenu.dialog}
           {makeLocal.dialog}
         </div>
-        <ProjectChips member={projectMember} />
         {env?.notes ? (
           <p className="selectable text-[12.5px] leading-[19px] whitespace-pre-wrap text-fg-2">
             {env.notes}
@@ -329,14 +351,32 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
             >
               {t('envs.exportEnv')}
             </Button>
-            <Button
-              size="sm"
-              icon={<ArrowLeftRight className="size-[15px]" strokeWidth={1.9} />}
-              disabled={all.filter((other) => !other.inTrash).length < 2}
-              onClick={() => setOpen({ kind: 'compare' })}
-            >
-              {t('envs.compare')}
-            </Button>
+            {/* Stages of one project and part are what compare. */}
+            {siblings.length > 0 ? (
+              <Button
+                size="sm"
+                icon={<ArrowLeftRight className="size-[15px]" strokeWidth={1.9} />}
+                onClick={() => setOpen({ kind: 'compare' })}
+              >
+                {t('envs.compare')}
+              </Button>
+            ) : (
+              // Focusable, so its reason reaches the keyboard and screen readers.
+              <Tooltip content={t('envs.compareDisabled')}>
+                <Button
+                  size="sm"
+                  icon={<ArrowLeftRight className="size-[15px]" strokeWidth={1.9} />}
+                  aria-disabled="true"
+                  aria-describedby={compareHintId}
+                  className="cursor-default opacity-50"
+                >
+                  {t('envs.compare')}
+                  <span id={compareHintId} className="sr-only">
+                    {t('envs.compareDisabled')}
+                  </span>
+                </Button>
+              </Tooltip>
+            )}
             {summary.modified ? (
               <span className="ml-auto text-[12px] text-subtle">
                 {t('envs.modified', {
@@ -447,7 +487,13 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
           <ExportEnvDialog env={summary} onDone={() => setOpen(null)} />
         ) : null}
         {open?.kind === 'compare' ? (
-          <CompareDialog env={summary} all={all} onDone={() => setOpen(null)} />
+          <CompareDialog env={summary} all={siblings} onDone={() => setOpen(null)} />
+        ) : null}
+        {open?.kind === 'renamePart' ? (
+          <RenamePartDialog env={summary} all={all} onDone={() => setOpen(null)} />
+        ) : null}
+        {open?.kind === 'move' && env ? (
+          <MoveEnvDialog env={env} all={all} onDone={() => setOpen(null)} />
         ) : null}
         {open?.kind === 'send' ? (
           <SendDialog

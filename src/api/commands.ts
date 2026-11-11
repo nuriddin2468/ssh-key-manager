@@ -483,6 +483,8 @@ export const api = {
   envsGet: (id: string) => call<EnvDetail>('envs_get', { id }),
   envsCreate: (input: EnvInput) => call<EnvDetail>('envs_create', { input }),
   envsUpdate: (id: string, input: EnvInput) => call<EnvDetail>('envs_update', { id, input }),
+  /** Gives environments a part (or none): a project's first, named when it gets a second. */
+  envsSetPart: (ids: string[], part: string) => call<void>('envs_set_part', { ids, part }),
   /** Adds a variable (`previous` null) or changes the one named `previous`. */
   envsSetVar: (id: string, previous: string | null, input: EnvVarInput) =>
     call<EnvDetail>('envs_set_var', { id, previous, input }),

@@ -10,7 +10,8 @@ import { TextField } from '@/components/ui/TextField';
 import { Tile } from '@/components/ui/Tile';
 import { useVaultMutation } from '@/features/passwords/vault';
 import { cn } from '@/lib/cn';
-import { labelProblem, nameTaken, partsOf, whereLabel } from './model';
+import { FirstPartField, useFirstPart } from './FirstPart';
+import { labelProblem, nameTaken, partsOf, secondPart, whereLabel } from './model';
 import { useProjectNames } from './useProjectNames';
 import { PERSONAL, partProblem, projectOf, WhereFields } from './WhereFields';
 
@@ -30,8 +31,10 @@ interface EnvDialogProps {
 }
 
 /**
- * A new environment, or another project, part, stage or notes for one: in
- * a project (or Personal), an optional part, and its stage.
+ * A new environment in a project (or Personal), with an optional part and
+ * its stage; or another part, stage or notes for one (it moves to another
+ * project with Move to project…). When that gives the project its second
+ * part, the part its environments share is named first.
  */
 export function EnvDialog({ env, all, defaultProject, onDone, onSaved }: EnvDialogProps) {
   const { t } = useTranslation();
@@ -47,10 +50,16 @@ export function EnvDialog({ env, all, defaultProject, onDone, onSaved }: EnvDial
   const [name, setName] = useState(env?.name ?? '');
   const [notes, setNotes] = useState(env?.notes ?? '');
   const [touched, setTouched] = useState(false);
+  const firstPart = useFirstPart();
+  const first = secondPart(all, projectId, part, env?.id);
 
   const input = { project: projectId, part: part.trim(), name, notes };
   const save = useVaultMutation(
-    () => (env ? api.envsUpdate(env.id, input) : api.envsCreate(input)),
+    async () => {
+      const naming = firstPart.naming;
+      if (naming) await api.envsSetPart(naming.ids, firstPart.name.trim());
+      return env ? api.envsUpdate(env.id, input) : api.envsCreate(input);
+    },
     {
       success: (saved) =>
         env ? t('envs.saved', { name: saved.name }) : t('envs.created', { name: saved.name }),
@@ -77,11 +86,21 @@ export function EnvDialog({ env, all, defaultProject, onDone, onSaved }: EnvDial
   // Where KeePassXC shows a new one; an edited one stays where it is.
   const path = [projectName, part.trim(), name.trim()].filter(Boolean).join(' / ');
 
+  const naming = firstPart.naming;
+  const namingProblem = naming ? firstPart.problem(part) : null;
   const submit = (event: FormEvent) => {
     event.preventDefault();
     setTouched(true);
-    if (ready && !save.isPending) save.mutate(undefined);
+    if (!ready || save.isPending) return;
+    // The project gets its second part: its first is named before.
+    if (first && !naming) {
+      firstPart.ask(first);
+      return;
+    }
+    if (namingProblem) return;
+    save.mutate(undefined);
   };
+  const projectTitle = projectName ?? t('projects.personal');
 
   return (
     <DialogContent section="envs" className="max-w-[520px]">
@@ -96,73 +115,98 @@ export function EnvDialog({ env, all, defaultProject, onDone, onSaved }: EnvDial
               )}
             </Tile>
           }
-          title={env ? t('envs.form.editTitle') : t('envs.form.newTitle')}
-          description={t('envs.form.description')}
+          title={
+            naming
+              ? t('envs.firstPart.title', { project: projectTitle })
+              : env
+                ? t('envs.form.editTitle')
+                : t('envs.form.newTitle')
+          }
+          description={naming ? t('envs.firstPart.text') : t('envs.form.description')}
         />
-        <DialogBody>
-          <WhereFields
-            all={all}
-            project={project}
-            part={part}
-            onProject={setProject}
-            onPart={setPart}
-            touched={touched}
-          />
-          <div className="flex flex-col gap-2">
-            <TextField
-              label={t('envs.form.name')}
-              value={name}
-              placeholder={t('envs.form.namePlaceholder')}
-              onChange={(event) => setName(event.target.value)}
-              error={
-                touched
-                  ? (problemText(nameProblem) ??
-                    (taken ? t('envs.form.taken', { where, stage: name.trim() }) : undefined))
-                  : undefined
-              }
+        {naming ? (
+          <DialogBody>
+            <FirstPartField
+              value={firstPart.name}
+              onChange={firstPart.setName}
+              part={part}
+              problem={namingProblem}
+              touched={touched}
             />
-            <div className="flex flex-wrap items-center gap-1.5">
-              {STAGES.map((stage) => (
-                <button
-                  key={stage}
-                  type="button"
-                  aria-label={t('envs.form.useName', { name: stage })}
-                  onClick={() => setName(stage)}
-                  className={cn(
-                    'pressable rounded-full border px-2.5 py-0.5 font-mono text-[12px]',
-                    name === stage
-                      ? 'border-[rgb(var(--accent-rgb)/0.5)] bg-[rgb(var(--accent-rgb)/0.14)] text-[var(--accent-text)]'
-                      : 'border-white/10 bg-white/[0.04] text-fg-2 hover:bg-white/[0.08]',
-                  )}
-                >
-                  {stage}
-                </button>
-              ))}
+          </DialogBody>
+        ) : (
+          <DialogBody>
+            <WhereFields
+              all={all}
+              project={project}
+              part={part}
+              onProject={setProject}
+              onPart={setPart}
+              touched={touched}
+              partOnly={env !== null}
+            />
+            <div className="flex flex-col gap-2">
+              <TextField
+                label={t('envs.form.name')}
+                value={name}
+                placeholder={t('envs.form.namePlaceholder')}
+                onChange={(event) => setName(event.target.value)}
+                error={
+                  touched
+                    ? (problemText(nameProblem) ??
+                      (taken ? t('envs.form.taken', { where, stage: name.trim() }) : undefined))
+                    : undefined
+                }
+              />
+              <div className="flex flex-wrap items-center gap-1.5">
+                {STAGES.map((stage) => (
+                  <button
+                    key={stage}
+                    type="button"
+                    aria-label={t('envs.form.useName', { name: stage })}
+                    onClick={() => setName(stage)}
+                    className={cn(
+                      'pressable rounded-full border px-2.5 py-0.5 font-mono text-[12px]',
+                      name === stage
+                        ? 'border-[rgb(var(--accent-rgb)/0.5)] bg-[rgb(var(--accent-rgb)/0.14)] text-[var(--accent-text)]'
+                        : 'border-white/10 bg-white/[0.04] text-fg-2 hover:bg-white/[0.08]',
+                    )}
+                  >
+                    {stage}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
-          {env || !name.trim() ? null : (
-            <p className="text-[12px] text-subtle">{t('envs.form.keepass', { path })}</p>
-          )}
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor={notesId} className="text-[12px] font-semibold text-fg-2">
-              {t('envs.form.notes')}
-            </label>
-            <textarea
-              id={notesId}
-              value={notes}
-              onChange={(event) => setNotes(event.target.value)}
-              rows={3}
-              placeholder={t('envs.form.notesPlaceholder')}
-              className="field min-h-[76px] resize-y rounded-[10px] px-[11px] py-2 text-fg outline-none focus:border-[rgb(var(--accent-rgb)/0.55)] focus:shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.15)]"
-            />
-          </div>
-        </DialogBody>
+            {env || !name.trim() ? null : (
+              <p className="text-[12px] text-subtle">{t('envs.form.keepass', { path })}</p>
+            )}
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor={notesId} className="text-[12px] font-semibold text-fg-2">
+                {t('envs.form.notes')}
+              </label>
+              <textarea
+                id={notesId}
+                value={notes}
+                onChange={(event) => setNotes(event.target.value)}
+                rows={3}
+                placeholder={t('envs.form.notesPlaceholder')}
+                className="field min-h-[76px] resize-y rounded-[10px] px-[11px] py-2 text-fg outline-none focus:border-[rgb(var(--accent-rgb)/0.55)] focus:shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.15)]"
+              />
+            </div>
+          </DialogBody>
+        )}
         <DialogFooter>
-          <Button size="lg" onClick={() => onDone()}>
-            {t('common.cancel')}
-          </Button>
+          {naming ? (
+            <Button size="lg" onClick={firstPart.back}>
+              {t('envs.firstPart.back')}
+            </Button>
+          ) : (
+            <Button size="lg" onClick={() => onDone()}>
+              {t('common.cancel')}
+            </Button>
+          )}
           <Button type="submit" variant="primary" size="lg" loading={save.isPending}>
-            {env ? t('common.save') : t('envs.form.create')}
+            {naming ? t('envs.firstPart.go') : env ? t('common.save') : t('envs.form.create')}
           </Button>
         </DialogFooter>
       </form>

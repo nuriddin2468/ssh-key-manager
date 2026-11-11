@@ -158,6 +158,17 @@ const envs: Env[] = [
     v('PLAUSIBLE_DOMAIN', 'shop.example'),
   ]),
   env('shop-api', 'qa-old', [v('NODE_ENV', 'test')], { inTrash: true }),
+  // Shop's storefront: a second group, which becomes its second part.
+  env('shop-web', 'local', [
+    v('NEXT_PUBLIC_API_URL', 'http://localhost:8080'),
+    v('STRIPE_PUBLISHABLE_KEY', 'pk_test_51Hq'),
+  ]),
+  env('shop-web', 'prod', [
+    v('NEXT_PUBLIC_API_URL', 'https://api.shop.example'),
+    v('STRIPE_PUBLISHABLE_KEY', 'pk_live_51Hq', true),
+  ]),
+  // In no project: Personal's, its old group the part.
+  env('scripts', 'local', [v('DEPLOY_TOKEN', 'example-deploy-token', true)]),
 ];
 
 /** The sample file the import's "file dialog" picks. */

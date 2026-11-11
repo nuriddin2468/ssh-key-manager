@@ -105,8 +105,10 @@ The foundation for everything below.
    filed under `Environments/<project>/<part>`. The step from groups runs on every unlock,
    changes only project records and gives the same result on two devices at once; older
    versions keep seeing the groups. Core and app: in review,
-   [#44](https://github.com/nuriddin2468/ssh-key-manager/pull/44). Environments page,
-   creating with a part and moving: next.
+   [#44](https://github.com/nuriddin2468/ssh-key-manager/pull/44). The Environments page by
+   project and part, creating with a part (naming the first when a project gets a
+   second), Move to project… and Rename part…: in review,
+   [#45](https://github.com/nuriddin2468/ssh-key-manager/pull/45).
 
 ### 3. Managed `.env` files — done
 

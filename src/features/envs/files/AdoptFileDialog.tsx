@@ -45,7 +45,14 @@ export function AdoptFileDialog({ found, onDone }: AdoptFileDialogProps) {
   const envs = useEnvs();
   const projects = useProjects();
   const project = projects.data?.find((item) => item.id === found.project);
-  const local = (envs.data ?? []).filter((env) => !env.inTrash && env.kind === 'local');
+  // This project's local environments, and Personal's, which come in: one
+  // another project has would leave its own files there unwritten.
+  const local = (envs.data ?? []).filter(
+    (env) =>
+      !env.inTrash &&
+      env.kind === 'local' &&
+      (env.project === found.project || env.project === null),
+  );
   const preview = useQuery({
     queryKey: [
       'vault',

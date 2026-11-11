@@ -728,14 +728,13 @@ pub fn follow_host_renames(app: &AppHandle, state: &AppState, renames: Vec<Renam
     }
 }
 
-/// Makes the host renames that waited for the vault, in order, then takes
-/// them off the list; renames added meanwhile stay. Does nothing while the
-/// vault is locked.
-/// Takes the step from environment groups to projects and writes the
-/// `project/` tags ([`sshkm_core::vault::Vault::tidy_projects`]), saving the
-/// vault only when there is something to do: after an unlock, or a sync of
-/// the vault's file from a device with an older version.
-fn tidy_projects(app: &AppHandle, state: &AppState) {
+/// Takes the step from environment groups to projects, settles holds a sync
+/// left in two projects, and writes the `project/` tags
+/// ([`sshkm_core::vault::Vault::tidy_projects`]), saving the vault only when
+/// there is something to do: after an unlock, or a change of the vault's
+/// file from another device. The managed files' round starts with it
+/// ([`crate::env_files::EnvFiles::sync`]), so their states follow at once.
+pub(crate) fn tidy_projects(app: &AppHandle, state: &AppState) {
     if !state.vault.is_unlocked() {
         return;
     }
@@ -753,6 +752,9 @@ fn tidy_projects(app: &AppHandle, state: &AppState) {
     }
 }
 
+/// Makes the host renames that waited for the vault, in order, then takes
+/// them off the list; renames added meanwhile stay. Does nothing while the
+/// vault is locked.
 pub fn apply_pending_renames(app: &AppHandle, state: &AppState) {
     let dir = state.vault.data_dir();
     let pending = {

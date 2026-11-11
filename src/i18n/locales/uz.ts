@@ -169,6 +169,7 @@ const uz = {
     connectTo: 'Ulanish: {{name}}',
     openTerminal: 'Terminalni ochish',
     openTerminalIn: 'Terminalni ochish: {{name}}',
+    showFolderIn: '{{app}} da koʻrsatish: {{name}}',
     withLocal: 'local muhiti bilan ochiladi',
     run: 'Terminalda ishga tushirish',
     runIn: 'Terminalda ishga tushirish: {{name}}',

@@ -194,6 +194,7 @@ const ru = {
     connectTo: 'Подключиться к {{name}}',
     openTerminal: 'Открыть терминал',
     openTerminalIn: 'Открыть терминал в {{name}}',
+    showFolderIn: 'Показать {{name}} в {{app}}',
     withLocal: 'Откроется с окружением local',
     run: 'Запустить в терминале',
     runIn: 'Запустить в терминале: {{name}}',

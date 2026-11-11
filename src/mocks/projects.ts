@@ -442,6 +442,15 @@ export const projectsHandlers: Record<string, Handler> = {
     if (!candidates.includes(inPickedFolder)) candidates.push(inPickedFolder);
     return suggestions();
   },
+  // Stands in for Finder: checks the folder as the backend does.
+  projects_reveal_folder: ({ id, folder }) => {
+    const p = projects.find((x) => x.id === id);
+    if (!p) return fail('not_found', `project ${id}`);
+    const path = String(folder);
+    if (!p.folders.includes(path)) return fail('invalid_input', 'not one of the project’s folders');
+    if (MISSING_FOLDERS.has(path)) return fail('not_found', `${path} on this computer`);
+    return null;
+  },
   projects_missing_folders: ({ id }) =>
     (projects.find((x) => x.id === id)?.folders ?? []).filter((f) => MISSING_FOLDERS.has(f)),
   projects_open_terminal: ({ id, folder, shell, events }) => {

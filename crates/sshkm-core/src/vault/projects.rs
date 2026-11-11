@@ -584,6 +584,23 @@ struct Held {
     owners: BTreeMap<String, String>,
 }
 
+/// How a record's hold of an environment ranks against another's: one the
+/// user placed (by its time, the later first) before one the step from
+/// groups placed (at the time the group was named, the earlier first). The
+/// step's are told by their time, that of a group the record names: the
+/// user's are later than anything the record held then.
+fn hold_rank(stored: &Stored, presence: Presence) -> (bool, i64) {
+    let adopted = stored
+        .members
+        .iter()
+        .any(|(key, p)| key.starts_with(GROUP_KIND) && p.a == presence.a);
+    if adopted {
+        (false, presence.a.saturating_neg())
+    } else {
+        (true, presence.a)
+    }
+}
+
 fn project_view(id: String, stored: &Stored, held: &Held) -> Project {
     let modified = rfc3339_ms(stored.latest());
     let mut project = Project {
@@ -646,11 +663,13 @@ impl Vault {
     }
 
     /// Which live project has each environment, by entry id: of the records
-    /// that hold it, the one that took it last (at the same time, the one
-    /// with the smaller id), so every device agrees after a sync whatever
-    /// two of them did meanwhile.
+    /// that hold it, the one the user put it in last; else, of those the
+    /// step from groups put it in, the one whose group was named first (at
+    /// the same time, the one with the smaller id). So every device agrees
+    /// after a sync whatever two of them did meanwhile.
     pub(super) fn environment_owners(&self) -> BTreeMap<String, String> {
-        let mut best: BTreeMap<String, (i64, std::cmp::Reverse<String>)> = BTreeMap::new();
+        type Rank = ((bool, i64), std::cmp::Reverse<String>);
+        let mut best: BTreeMap<String, Rank> = BTreeMap::new();
         for (id, stored) in self.stored_projects() {
             if !stored.is_live() {
                 continue;
@@ -662,7 +681,7 @@ impl Vault {
                 if !presence.present() {
                     continue;
                 }
-                let rank = (presence.a, std::cmp::Reverse(id.clone()));
+                let rank = (hold_rank(&stored, *presence), std::cmp::Reverse(id.clone()));
                 match best.get(env) {
                     Some(current) if *current >= rank => {}
                     _ => {
@@ -674,6 +693,69 @@ impl Vault {
         best.into_iter()
             .map(|(env, (_, std::cmp::Reverse(id)))| (env, id))
             .collect()
+    }
+
+    /// The holds of an environment that lose to its owner's
+    /// ([`Self::environment_owners`]), by project id and member key: two
+    /// devices put it in two projects before they synced.
+    fn stale_holds(&self) -> Vec<(String, String)> {
+        let owners = self.environment_owners();
+        let mut stale = Vec::new();
+        for (id, stored) in self.stored_projects() {
+            if !stored.is_live() {
+                continue;
+            }
+            for (key, presence) in &stored.members {
+                if let Some(env) = key.strip_prefix(ENV_KIND)
+                    && presence.present()
+                    && owners.get(env).is_some_and(|owner| *owner != id)
+                {
+                    stale.push((id.clone(), key.clone()));
+                }
+            }
+        }
+        stale
+    }
+
+    /// Records the holds that lose as taken out, so the environment goes to
+    /// Personal, not to them, when its owner lets it go. Taken out at the
+    /// time it was put in: the same on every device, so records stay as
+    /// they are on the next sync, and no later than anything the record
+    /// holds, so a project removed elsewhere isn't kept alive by it.
+    /// Returns whether anything changed.
+    fn settle_holds(&mut self) -> bool {
+        let mut by_project: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (id, key) in self.stale_holds() {
+            by_project.entry(id).or_default().push(key);
+        }
+        let mut changed = false;
+        for (id, keys) in by_project {
+            let Some(mut stored) = self.stored_project(&id) else {
+                continue;
+            };
+            for key in keys {
+                if let Some(presence) = stored.members.get_mut(&key) {
+                    presence.r = Some(presence.a);
+                }
+            }
+            changed |= self.put_project(&id, &stored).is_ok();
+        }
+        changed
+    }
+
+    /// Fails if the stage of the environment `env` is in its part of
+    /// `project` (or Personal) already, outside the recycle bin: a stage is
+    /// unique within a project and part, however it comes in.
+    fn check_stage_free(&self, project: Option<&str>, env: &str) -> Result<()> {
+        let summary = self
+            .environments()
+            .into_iter()
+            .find(|summary| summary.id == env)
+            .ok_or_else(|| Error::NotFound(format!("environment {env}")))?;
+        if summary.in_trash {
+            return Ok(());
+        }
+        self.check_free(project, &summary.part, &summary.name, Some(env))
     }
 
     /// Puts an environment into `project`, out of any other, or (`None`)
@@ -695,6 +777,9 @@ impl Vault {
             })
             .map(|(id, _)| id)
             .collect();
+        if !holders.is_empty() {
+            self.check_stage_free(None, env)?;
+        }
         let mut changed = false;
         for holder in holders {
             changed |= self.set_project_member(&holder, &member, false)?;
@@ -828,6 +913,14 @@ impl Vault {
         if presence.is_some_and(Presence::present) == included && !taken_back {
             return Ok(false);
         }
+        if let ProjectMember::Environment { id: env } = member {
+            if included {
+                self.check_stage_free(Some(id), env)?;
+            }
+            // Placed by the user: the step from groups leaves it alone,
+            // however long ago that was.
+            self.keep_part(env)?;
+        }
         let kind = key.split(':').next().unwrap_or_default();
         if included && stored.count(kind) >= MAX_MEMBERS {
             return Err(Error::invalid(format!(
@@ -936,6 +1029,14 @@ impl Vault {
                 )));
             }
             self.check_project_member(member, true)?;
+            if let ProjectMember::Environment { id: env } = member {
+                self.check_stage_free(suggestion.existing.as_deref(), env)
+                    .or_else(|error| match &suggestion.existing {
+                        // A new project has nothing yet.
+                        None => Ok(()),
+                        Some(_) => Err(error),
+                    })?;
+            }
         }
         // Logins the project holds already (added since the suggestion was
         // made, or by a sync) stay, whatever the suggestion's list says.
@@ -1140,13 +1241,16 @@ impl Vault {
     fn sync_tags(&mut self) -> bool {
         self.adopt_tagged_logins();
         let adopted = self.adopt_environments();
-        self.write_tags() || adopted
+        let settled = self.settle_holds();
+        self.write_tags() || adopted || settled
     }
 
-    /// What every unlock and every sync of the vault's file is followed by:
-    /// environments in a group a project named before join it
-    /// ([`Self::adopt_environments`]), and the `project/` tags are written.
-    /// Returns whether anything changed, to save.
+    /// What every unlock and every change of the vault's file is followed
+    /// by: environments in a group a project named before join it
+    /// ([`Self::adopt_environments`]), holds of an environment that lose to
+    /// another project's are taken out ([`Self::settle_holds`]), and the
+    /// `project/` tags are written. Returns whether anything changed, to
+    /// save.
     pub fn tidy_projects(&mut self) -> bool {
         self.sync_tags()
     }
@@ -1154,41 +1258,52 @@ impl Vault {
     /// Whether [`Self::tidy_projects`] has something to do, without doing
     /// it: so the vault is saved only then.
     pub fn projects_untidy(&self) -> bool {
-        !self.adoptions().is_empty() || !self.tag_changes().is_empty()
+        !self.adoptions().is_empty()
+            || !self.stale_holds().is_empty()
+            || !self.tag_changes().is_empty()
     }
 
     /// The step from groups to projects, safe to take again and on two
-    /// devices at once: an environment in a group a live project named
-    /// (`env:<group>`, as projects held environments before) joins the
-    /// project that named the group first (at the same time, the one with
-    /// the smaller id), unless a record already says where it is
-    /// (`envid:<id>`, in or taken out). So one an older device makes in such
-    /// a group joins too, and one the user took out never comes back. Only
-    /// records change. Returns whether any did.
+    /// devices at once: an environment an older version made (without its
+    /// part on the entry), in a group a live project named (`env:<group>`,
+    /// as projects held environments before), joins the project that named
+    /// the group first (at the same time, the one with the smaller id),
+    /// unless a record already says where it is (`envid:<id>`, in or taken
+    /// out). So one an older device makes in such a group joins too, and
+    /// one the user took out never comes back.
+    ///
+    /// It joins at the time the group was named, not now: two devices
+    /// taking the step write the same records, and whatever the user did
+    /// since on another device (a move, a removal, a project deleted) wins.
+    /// Only records change. Returns whether any did.
     fn adopt_environments(&mut self) -> bool {
         let mut changed = false;
         for (id, envs) in self.adoptions() {
             let Some(mut stored) = self.stored_project(&id) else {
                 continue;
             };
-            let t = stored.tick();
-            for env in envs {
-                if stored.count("envid") < MAX_MEMBERS && stored.members.len() < MAX_STORED_MEMBERS
+            let mut added = false;
+            for (env, a) in envs {
+                if let std::collections::btree_map::Entry::Vacant(slot) =
+                    stored.members.entry(format!("{ENV_KIND}{env}"))
                 {
-                    stored
-                        .members
-                        .entry(format!("{ENV_KIND}{env}"))
-                        .or_insert(Presence { a: t, r: None });
+                    slot.insert(Presence { a, r: None });
+                    added = true;
                 }
             }
-            changed |= self.put_project(&id, &stored).is_ok();
+            if added {
+                changed |= self.put_project(&id, &stored).is_ok();
+            }
         }
         changed
     }
 
     /// What [`Self::adopt_environments`] does: the environments that join
-    /// each project, by its id.
-    fn adoptions(&self) -> BTreeMap<String, Vec<String>> {
+    /// each project, by its id, with the time its group was named. Within
+    /// what a record takes, so a full project isn't asked to take more on
+    /// every tidy; and never a second of a stage the project has in that
+    /// part.
+    fn adoptions(&self) -> BTreeMap<String, Vec<(String, i64)>> {
         let all = self.stored_projects();
         let mut named: BTreeMap<String, (i64, String)> = BTreeMap::new();
         let mut decided: BTreeSet<String> = BTreeSet::new();
@@ -1212,18 +1327,57 @@ impl Vault {
                 }
             }
         }
-        let mut adopted: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut adopted: BTreeMap<String, Vec<(String, i64)>> = BTreeMap::new();
         if named.is_empty() {
             return adopted;
         }
-        for env in self.environments() {
-            if decided.contains(&env.id) {
+        let placed = self.envs_with_part();
+        let mut envs = self.environments();
+        envs.sort_by(|a, b| a.id.cmp(&b.id));
+        let stage = |project: &str, env: &envs::EnvSummary| {
+            (
+                project.to_owned(),
+                env.part.to_lowercase(),
+                env.name.to_lowercase(),
+            )
+        };
+        let mut taken: BTreeSet<(String, String, String)> = envs
+            .iter()
+            .filter(|env| !env.in_trash)
+            .filter_map(|env| Some(stage(env.project.as_deref()?, env)))
+            .collect();
+        for env in &envs {
+            if decided.contains(&env.id) || placed.contains(&env.id) {
                 continue;
             }
-            if let Some((_, project)) = named.get(&env.group) {
-                adopted.entry(project.clone()).or_default().push(env.id);
+            let Some((a, project)) = named.get(&env.group) else {
+                continue;
+            };
+            if !env.in_trash && !taken.insert(stage(project, env)) {
+                continue;
             }
+            adopted
+                .entry(project.clone())
+                .or_default()
+                .push((env.id.clone(), *a));
         }
+        let records: BTreeMap<String, Stored> = all.into_iter().collect();
+        adopted.retain(|id, envs| {
+            let Some(stored) = records.get(id) else {
+                return false;
+            };
+            let room = MAX_MEMBERS
+                .saturating_sub(stored.count("envid"))
+                .min(MAX_STORED_MEMBERS.saturating_sub(stored.members.len()));
+            envs.truncate(room);
+            let mut next = stored.clone();
+            for (env, a) in envs.iter() {
+                next.members
+                    .insert(format!("{ENV_KIND}{env}"), Presence { a: *a, r: None });
+            }
+            !envs.is_empty()
+                && serde_json::to_string(&next).is_ok_and(|json| json.len() <= MAX_RECORD)
+        });
         adopted
     }
 

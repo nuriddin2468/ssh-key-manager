@@ -720,6 +720,32 @@ impl Vault {
         }
     }
 
+    /// Keeps an environment's part on its entry, when it has none there yet
+    /// (one an older version made, whose part is its group's name): it is
+    /// placed by the user from then on, and the step from groups leaves it
+    /// alone ([`Vault::tidy_projects`]).
+    pub(super) fn keep_part(&mut self, id: &str) -> Result<()> {
+        let part = {
+            let entry = self.env_entry(id)?;
+            if entry.custom_data.contains_key(PART) {
+                return Ok(());
+            }
+            self.env_summary(&entry, &std::collections::BTreeMap::new())
+                .part
+        };
+        self.put_part(parse_id(id)?, &part)
+    }
+
+    /// The environments that keep their part on the entry: every one this
+    /// version made or placed. The others, an older version made.
+    pub(super) fn envs_with_part(&self) -> std::collections::BTreeSet<String> {
+        self.db
+            .iter_all_entries()
+            .filter(|entry| is_environment(entry) && entry.custom_data.contains_key(PART))
+            .map(|entry| entry.id().uuid().to_string())
+            .collect()
+    }
+
     /// Keeps `part` on the entry.
     fn put_part(&mut self, entry_id: keepass::db::EntryId, part: &str) -> Result<()> {
         let mut entry = self
@@ -980,7 +1006,7 @@ impl Vault {
     /// Fails if `project` (or Personal) has an environment with the stage
     /// `name` in `part` (ignoring case) outside the recycle bin, other than
     /// `except`.
-    fn check_free(
+    pub(super) fn check_free(
         &self,
         project: Option<&str>,
         part: &str,

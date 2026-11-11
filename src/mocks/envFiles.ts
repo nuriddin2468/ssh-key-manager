@@ -578,6 +578,10 @@ export const envFilesHandlers: Record<string, Handler> = {
     const item = await withMockRename(rename, async (): Promise<Env> => {
       if (to.type === 'new') return addMockEnv(String(project), to.part, to.name, []);
       const existing = await findEnv(to.id);
+      const owner = mockEnvOwner(existing.id);
+      if (owner !== null && owner !== project) {
+        return fail('invalid_input', 'the environment is in another project: move it first');
+      }
       if (kindOf(existing) === 'remote') {
         return fail('invalid_input', 'a remote environment has no files: make it local first');
       }

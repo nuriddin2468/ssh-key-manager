@@ -22,7 +22,7 @@ import { useProjects } from '@/features/projects/queries';
 import { cn } from '@/lib/cn';
 import { AdoptFileDialog } from './AdoptFileDialog';
 import { announceSynced } from './announce';
-import { isFileConflict } from './errors';
+import { ignoreFailed, isFileConflict } from './errors';
 import { FileCompareDialog } from './FileCompareDialog';
 import {
   bindingPath,
@@ -120,6 +120,7 @@ export function FilesCenter({ project, onProject }: FilesCenterProps) {
         setIgnoring(null);
         void refreshFileReports();
       },
+      onError: (error, report) => ignoreFailed(t, error, report.file),
     },
   );
 

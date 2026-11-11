@@ -7,7 +7,10 @@
 // marketing-site / dev to `.env.local`, which Git doesn't ignore and which
 // lacks a name its `.env.example` has, and to `apps/blog/.env`, which was
 // deleted (Write again). Binding a file under shop-api finds a working tree
-// that doesn't ignore it, to show the warning first. A few `.env` files in the projects'
+// that doesn't ignore it, to show the warning first; under shop-web, a
+// folder that isn't on this computer, where Git can't be asked. Adding
+// marketing-site's files to its `.gitignore` fails (it is a link), to show
+// that failure. A few `.env` files in the projects'
 // folders are unmanaged, to take under management. Files exist only here:
 // their variables are kept with each binding.
 
@@ -360,17 +363,21 @@ export const envFilesHandlers: Record<string, Handler> = {
     if (item.files.some((x) => x.folder === checked.folder && x.path === checked.path)) {
       return fail('already_exists', checked.path);
     }
-    const here = !checked.path.includes('/');
+    // `~/code/shop-web` stands for a folder that isn't on this computer:
+    // Git can't be asked there. Elsewhere a missing subfolder is asked from
+    // the project's folder.
+    const away = checked.folder === '~/code/shop-web';
     return {
       file: checked,
-      location: here ? locate(checked) : null,
+      location: away ? null : locate(checked),
+      folderHere: !away && !checked.path.includes('/'),
       // shop-api's working tree doesn't ignore new files yet.
-      git: here
-        ? {
+      git: away
+        ? null
+        : {
             state: checked.folder.includes('shop-api') ? 'untracked' : 'ignored',
             repository: expand(checked.folder),
-          }
-        : null,
+          },
       cloud: null,
     };
   },
@@ -510,6 +517,15 @@ export const envFilesHandlers: Record<string, Handler> = {
     seed();
     const item = await findEnv(id);
     const bound = await boundFile(item, file as EnvFile);
+    // As the backend: a folder not made yet is placed by the nearest one
+    // that is; a project folder that isn't on this computer has no working
+    // tree to ask; marketing-site's `.gitignore` is a link, never written.
+    if (bound.folder === '~/code/shop-web') {
+      return fail('invalid_input', "the file's folder isn't on this computer");
+    }
+    if (bound.folder.endsWith('/marketing-site')) {
+      return fail('invalid_input', '.gitignore is not a regular file');
+    }
     const found = disk.get(key(item.id, bound));
     const git: GitInfo = { state: 'ignored', repository: expand(bound.folder) };
     if (found) found.git = git;

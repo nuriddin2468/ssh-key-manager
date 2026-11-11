@@ -107,6 +107,8 @@ const uz = {
       open: 'Ochish: {{name}}',
       empty: 'Hozircha hech narsa qoʻshilmagan',
       noProblems: 'Muammo yoʻq',
+      envFiles_one: '{{count}} ta .env fayl eʼtibor talab qiladi',
+      envFiles_other: '{{count}} ta .env fayl eʼtibor talab qiladi',
       moreProblems_one: 'yana {{count}} ta',
       moreProblems_other: 'yana {{count}} ta',
     },
@@ -3749,6 +3751,15 @@ const uz = {
     },
     files: {
       title: 'Fayllar',
+      line: {
+        inSync_one: '{{count}} ta fayl mos',
+        inSync_other: '{{count}} ta fayl mos',
+        attention_one: '{{count}} ta fayl eʼtibor talab qiladi',
+        attention_other: '{{count}} ta fayl eʼtibor talab qiladi',
+        syncing: 'Fayllar moslashtirilmoqda…',
+        away: 'Fayllar: papka bu kompyuterda yoʻq',
+        open: '{{state}}: {{env}} fayllarini koʻrsatish',
+      },
       statusFailed: 'Fayllarni tekshirib boʻlmadi',
       errors: {
         undoChanged:
@@ -3779,6 +3790,10 @@ const uz = {
           'Bu fayl {{repository}}da Gitga commit qilingan. Unga yozilgan qiymatlar, git rm --cached bilan olib tashlanmasa, keyingi commitga tushadi.',
         cloud: '{{service}} bu papkani qiymatlari bilan birga oʻz serverlariga koʻchiradi.',
         cloudOther: 'Bulut xizmati bu papkani qiymatlari bilan birga oʻz serverlariga koʻchiradi.',
+        gitUnknownTitle: 'Gitni hozircha tekshirib boʻlmaydi',
+        gitUnknown:
+          'Bu papka kompyuterda yoʻq, shuning uchun ilova Git faylni eʼtiborsiz qoldirishini tekshira olmaydi. U yerda commit qilishdan oldin Git uni eʼtiborsiz qoldirishiga ishonch hosil qiling.',
+        notYet: 'Uning papkasi hali yoʻq — papka paydo boʻlgach, fayl yoziladi.',
         ignoreAndWrite: '.gitignore ga qoʻshib yozish',
         writeAnyway: 'Baribir yozish',
         back: 'Boshqa fayl tanlash',
@@ -3869,6 +3884,9 @@ const uz = {
         submit: 'Fayl qoʻshish',
         taken: 'Bu muhit allaqachon shu faylga yoziladi.',
         done: '{{file}} endi yoziladi',
+        later: '{{file}} qoʻshildi. Papkasi paydo boʻlgach, u yoziladi.',
+        notIgnored:
+          '{{file}} qoʻshildi, lekin .gitignore ni oʻzgartirib boʻlmadi. Commit qilishdan oldin faylni unga oʻzingiz qoʻshing.',
         differs:
           '{{file}}da boshqa qiymatlar bor. Qaysilarini qoldirishni tanlash uchun ularni solishtiring.',
       },
@@ -3937,6 +3955,8 @@ const uz = {
         '{{repository}}dagi .gitignore ga shu fayl uchun qator qoʻshiladi. U yerda ishlaydiganlarning hammasida boʻlishi uchun bu oʻzgarishni commit qiling.',
       ignoreConfirm: 'Qator qoʻshish',
       ignored: 'Git endi {{file}}ni eʼtiborsiz qoldiradi',
+      ignoreFailed:
+        '{{file}}ni .gitignore ga qoʻshib boʻlmadi. Commit qilishdan oldin uni oʻzingiz qoʻshing.',
       cloudBadge: '{{service}}da',
       cloudText: '{{service}} bu papkani qiymatlari bilan birga oʻz serverlariga koʻchiradi.',
       cloudBadgeOther: 'Bulutli papkada',

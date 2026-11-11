@@ -12,11 +12,19 @@ export type EnvFileCheck = {
  */
 file: EnvFile, 
 /**
- * The file on this computer, if its folder is here.
+ * Where the file would be on this computer, when the project's folder
+ * is here.
  */
 location: string | null, 
 /**
- * What Git makes of it there; `None` without a folder here.
+ * The file's own folder is here, so it is written at once; otherwise
+ * once that folder is made.
+ */
+folderHere: boolean, 
+/**
+ * What Git makes of it there, asked from the nearest folder on the way
+ * that is here; `None` when the project's folder isn't on this
+ * computer, so Git can't be asked.
  */
 git: GitInfo | null, 
 /**

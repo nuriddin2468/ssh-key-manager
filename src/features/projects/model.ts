@@ -3,6 +3,7 @@
 
 import type { TFunction } from 'i18next';
 import type { EntrySummary } from '@/bindings/EntrySummary';
+import type { EnvFileReport } from '@/bindings/EnvFileReport';
 import type { EnvSummary } from '@/bindings/EnvSummary';
 import type { Finding } from '@/bindings/Finding';
 import type { HostEntry } from '@/bindings/HostEntry';
@@ -284,13 +285,21 @@ export type ProjectProblem =
   | { key: string; severity: Severity; source: 'ssh'; finding: Finding }
   | { key: string; severity: Severity; source: 'vault'; finding: VaultFinding }
   /** A member not found on this computer. */
-  | { key: string; severity: 'warning'; source: 'gone'; member: ProjectMember };
+  | { key: string; severity: 'warning'; source: 'gone'; member: ProjectMember }
+  /** Its `.env` files that need the user, as one problem. */
+  | { key: string; severity: Severity; source: 'files'; files: EnvFileReport[] };
 
 /**
  * What is wrong with a project, worst first: its critical findings and
- * warnings (suggestions aren't problems), then members missing here.
+ * warnings (suggestions aren't problems), its `.env` files that need the
+ * user (critical when Git tracks one: its values go along with a commit),
+ * then members missing here.
  */
-export function projectProblems(findings: Findings, gone: Missing): ProjectProblem[] {
+export function projectProblems(
+  findings: Findings,
+  gone: Missing,
+  files: readonly EnvFileReport[] = [],
+): ProjectProblem[] {
   const serious = (severity: Severity) => severity !== 'info';
   const members: ProjectMember[] = [
     ...[...gone.hosts].map((alias): ProjectMember => ({ type: 'host', alias })),
@@ -316,6 +325,18 @@ export function projectProblems(findings: Findings, gone: Missing): ProjectProbl
         source: 'vault' as const,
         finding,
       })),
+    ...(files.length > 0
+      ? [
+          {
+            key: 'env-files',
+            severity: files.some((file) => file.git?.state === 'tracked')
+              ? ('critical' as const)
+              : ('warning' as const),
+            source: 'files' as const,
+            files: [...files],
+          },
+        ]
+      : []),
     ...members.map((member) => ({
       key: memberKey(member),
       severity: 'warning' as const,

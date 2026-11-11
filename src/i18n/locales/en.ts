@@ -105,6 +105,8 @@ const en = {
       open: 'Open {{name}}',
       empty: 'Nothing added yet',
       noProblems: 'No problems',
+      envFiles_one: '{{count}} .env file needs attention',
+      envFiles_other: '{{count}} .env files need attention',
       moreProblems_one: '+{{count}} more',
       moreProblems_other: '+{{count}} more',
     },
@@ -3689,6 +3691,15 @@ const en = {
     },
     files: {
       title: 'Files',
+      line: {
+        inSync_one: '{{count}} file in sync',
+        inSync_other: '{{count}} files in sync',
+        attention_one: '{{count}} file needs attention',
+        attention_other: '{{count}} files need attention',
+        syncing: 'Syncing files…',
+        away: 'Files: folder not on this computer',
+        open: '{{state}}: show the files of {{env}}',
+      },
       statusFailed: 'Couldn’t check the files',
       errors: {
         undoChanged:
@@ -3718,6 +3729,10 @@ const en = {
           'This file is committed to Git in {{repository}}. Values written into it go into the next commit unless it’s removed with git rm --cached.',
         cloud: '{{service}} copies this folder to its servers, values included.',
         cloudOther: 'A cloud service copies this folder to its servers, values included.',
+        gitUnknownTitle: 'Git can’t be checked yet',
+        gitUnknown:
+          'This folder isn’t on this computer, so the app can’t check whether Git ignores the file. Make sure Git ignores it before you commit there.',
+        notYet: 'Its folder isn’t here yet, so the file is written once that folder exists.',
         ignoreAndWrite: 'Add to .gitignore and write',
         writeAnyway: 'Write anyway',
         back: 'Choose another file',
@@ -3805,6 +3820,9 @@ const en = {
         submit: 'Add file',
         taken: 'This environment is written to this file already.',
         done: '{{file}} is written now',
+        later: '{{file}} is added. It’s written once its folder exists.',
+        notIgnored:
+          '{{file}} is added, but .gitignore couldn’t be changed. Add the file to it yourself before you commit.',
         differs: '{{file}} already holds other values. Compare them to choose which to keep.',
       },
       unbind: {
@@ -3872,6 +3890,7 @@ const en = {
         'Adds a line for this file to .gitignore in {{repository}}. Commit that change so everyone working there gets it.',
       ignoreConfirm: 'Add the line',
       ignored: 'Git ignores {{file}} now',
+      ignoreFailed: 'Couldn’t add {{file}} to .gitignore. Add it yourself before you commit.',
       cloudBadge: 'In {{service}}',
       cloudText: '{{service}} copies this folder to its servers, values included.',
       cloudBadgeOther: 'In a cloud folder',

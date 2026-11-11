@@ -1,4 +1,4 @@
-import { CloudUpload, FilePlus2, GitBranch, TriangleAlert } from 'lucide-react';
+import { CloudUpload, FilePlus2, GitBranch, HelpCircle, TriangleAlert } from 'lucide-react';
 import { type FormEvent, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -12,7 +12,7 @@ import { Select } from '@/components/ui/Select';
 import { TextField } from '@/components/ui/TextField';
 import { Tile } from '@/components/ui/Tile';
 import { Callout } from '@/features/passwords/files/Callout';
-import { toastVaultError, useVaultMutation } from '@/features/passwords/vault';
+import { useVaultMutation } from '@/features/passwords/vault';
 import { useProjects } from '@/features/projects/queries';
 import { cn } from '@/lib/cn';
 import { conflictToastId, markConflictTold } from './announce';
@@ -31,9 +31,15 @@ interface BindFileDialogProps {
 /** A `.env` file's name, with folders before it; the backend checks the rest. */
 const LOOKS_LIKE_ENV = /^(?:[^/\\]+[/\\])*(?:\.env(?:\..+)?|.+\.env|\.dev\.vars)$/i;
 
-/** Git or a cloud service would take the file's values along. */
+/**
+ * Git or a cloud service would take the file's values along, or Git can't
+ * be asked because the project's folder isn't on this computer.
+ */
 const risky = (check: EnvFileCheck) =>
-  check.git?.state === 'untracked' || check.git?.state === 'tracked' || check.cloud !== null;
+  check.git === null ||
+  check.git.state === 'untracked' ||
+  check.git.state === 'tracked' ||
+  check.cloud !== null;
 
 /**
  * Writes an environment to a file in a folder of a project that holds its
@@ -106,17 +112,25 @@ export function BindFileDialog({ env, bound, onDone }: BindFileDialogProps) {
     {
       onSuccess: ({ status, ignoreError }) => {
         void refreshFileReports();
-        if (ignoreError) toastVaultError(t, ignoreError);
+        const file = fileName(status.file);
+        // Bound, but Git would take it along: said as such, not as the error itself.
+        if (ignoreError) toast.warning(t('envs.files.bind.notIgnored', { file }));
         if (status.state.type === 'conflict') {
           // One toast for this conflict, however the app hears of it.
           markConflictTold(env.id, status.file);
-          toast.warning(t('envs.files.bind.differs', { file: fileName(status.file) }), {
+          toast.warning(t('envs.files.bind.differs', { file }), {
             id: conflictToastId(env.id, status.file),
           });
           onDone(status.file);
           return;
         }
-        toast.success(t('envs.files.bind.done', { file: fileName(status.file) }));
+        if (!ignoreError) {
+          toast.success(
+            status.state.type === 'folderMissing'
+              ? t('envs.files.bind.later', { file })
+              : t('envs.files.bind.done', { file }),
+          );
+        }
         onDone();
       },
       onError: refused,
@@ -156,6 +170,9 @@ export function BindFileDialog({ env, bound, onDone }: BindFileDialogProps) {
           <p className="selectable truncate font-mono text-[12px] text-subtle">
             {risk.location ?? bindingPath(risk.file)}
           </p>
+          {risk.location && !risk.folderHere ? (
+            <p className="text-[12.5px] text-muted">{t('envs.files.risk.notYet')}</p>
+          ) : null}
           {risk.git?.state === 'untracked' ? (
             <Callout tone="warning" icon={GitBranch} title={t('envs.center.gitUntracked')}>
               {t('envs.files.risk.gitUntracked', { repository })}
@@ -164,6 +181,11 @@ export function BindFileDialog({ env, bound, onDone }: BindFileDialogProps) {
           {risk.git?.state === 'tracked' ? (
             <Callout tone="critical" icon={GitBranch} title={t('envs.center.gitTracked')}>
               {t('envs.files.risk.gitTracked', { repository })}
+            </Callout>
+          ) : null}
+          {risk.git === null ? (
+            <Callout tone="info" icon={HelpCircle} title={t('envs.files.risk.gitUnknownTitle')}>
+              {t('envs.files.risk.gitUnknown')}
             </Callout>
           ) : null}
           {risk.cloud ? (
@@ -185,7 +207,7 @@ export function BindFileDialog({ env, bound, onDone }: BindFileDialogProps) {
             disabled={busy}
             onClick={() => bind.mutate({ file: risk.file, ignore: false })}
           >
-            {t('envs.files.risk.writeAnyway')}
+            {risk.folderHere ? t('envs.files.risk.writeAnyway') : t('envs.files.bind.submit')}
           </Button>
           {risk.git?.state === 'untracked' ? (
             <Button

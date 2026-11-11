@@ -20,7 +20,7 @@ import { useProjects } from '@/features/projects/queries';
 import { Problems } from '../ImportEnvDialog';
 import { envLabel, labelProblem, nameTaken } from '../model';
 import { useEnvs } from '../queries';
-import { bindRefusal } from './errors';
+import { bindRefusal, isEnvNameClash } from './errors';
 import { fileName } from './model';
 import { refreshFileReports } from './queries';
 
@@ -64,6 +64,7 @@ export function AdoptFileDialog({ found, onDone }: AdoptFileDialogProps) {
   const [secrets, setSecrets] = useState<Record<string, boolean>>({});
   const [touched, setTouched] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
+  const [serverTaken, setServerTaken] = useState(false);
   const file = fileName(found.file);
 
   const data = preview.data;
@@ -83,7 +84,7 @@ export function AdoptFileDialog({ found, onDone }: AdoptFileDialogProps) {
     target === 'new' &&
     !groupProblem &&
     !nameProblem &&
-    nameTaken(envs.data ?? [], groupValue, nameValue);
+    (serverTaken || nameTaken(envs.data ?? [], groupValue, nameValue));
   const ready =
     data !== undefined &&
     (target === 'existing' ? chosenInto !== '' : !groupProblem && !nameProblem && !taken);
@@ -113,8 +114,12 @@ export function AdoptFileDialog({ found, onDone }: AdoptFileDialogProps) {
       onError: (error) => {
         // A name taken in the group shows at its field; anything else the
         // backend refused is said here, in words.
-        if (error.code === 'already_exists' && taken) {
+        // The group has an environment of that name, as the backend found
+        // (`group / name`), perhaps since the list was fetched.
+        const nameClash = target === 'new' && isEnvNameClash(error);
+        if (error.code === 'already_exists' && (taken || nameClash)) {
           setTouched(true);
+          setServerTaken(nameClash);
           return true;
         }
         const message = bindRefusal(t, error);
@@ -188,14 +193,20 @@ export function AdoptFileDialog({ found, onDone }: AdoptFileDialogProps) {
                   <TextField
                     label={t('envs.adopt.group')}
                     value={groupValue}
-                    onChange={(event) => setGroup(event.target.value)}
+                    onChange={(event) => {
+                      setGroup(event.target.value);
+                      setServerTaken(false);
+                    }}
                     error={touched && groupProblem ? t(`envs.form.${groupProblem}`) : undefined}
                   />
                   <TextField
                     label={t('envs.adopt.name')}
                     value={nameValue}
                     placeholder={t('envs.form.namePlaceholder')}
-                    onChange={(event) => setName(event.target.value)}
+                    onChange={(event) => {
+                      setName(event.target.value);
+                      setServerTaken(false);
+                    }}
                     error={
                       touched
                         ? nameProblem

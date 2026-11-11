@@ -49,9 +49,13 @@ export function FileCompareDialog({ envId, file, onDone }: FileCompareDialogProp
   // A refetch (another round, the window coming back) that finds the file
   // changed must not move what Keep settles without the user seeing it.
   const [shown, setShown] = useState<string | null | undefined>(undefined);
+  // Once a side is being kept, the file changes because of it: no alert.
+  const keeping = useRef(false);
   useEffect(() => {
     if (!result) return;
-    if (shown !== undefined && result.revision !== shown) setChangedSince(true);
+    if (shown !== undefined && result.revision !== shown && !keeping.current) {
+      setChangedSince(true);
+    }
     setShown(result.revision);
   }, [result, shown]);
   const keep = useVaultMutation(
@@ -68,6 +72,7 @@ export function FileCompareDialog({ envId, file, onDone }: FileCompareDialogProp
         onDone();
       },
       onError: (error) => {
+        keeping.current = false;
         // The vault's own conflicts (another computer saved it) are the
         // vault's to explain.
         if (!isFileConflict(error)) return false;
@@ -163,7 +168,10 @@ export function FileCompareDialog({ envId, file, onDone }: FileCompareDialogProp
             !result || comparison.isFetching || (keep.isPending && keep.variables !== 'file')
           }
           loading={keep.isPending && keep.variables === 'file'}
-          onClick={() => keep.mutate('file')}
+          onClick={() => {
+            keeping.current = true;
+            keep.mutate('file');
+          }}
         >
           {t('envs.files.conflict.keepFile')}
         </Button>
@@ -173,7 +181,10 @@ export function FileCompareDialog({ envId, file, onDone }: FileCompareDialogProp
             !result || comparison.isFetching || (keep.isPending && keep.variables !== 'vault')
           }
           loading={keep.isPending && keep.variables === 'vault'}
-          onClick={() => keep.mutate('vault')}
+          onClick={() => {
+            keeping.current = true;
+            keep.mutate('vault');
+          }}
         >
           {t('envs.files.conflict.keepVault')}
         </Button>

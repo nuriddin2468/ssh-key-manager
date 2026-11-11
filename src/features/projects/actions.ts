@@ -5,6 +5,7 @@ import { invalidateAll } from '@/api/queries';
 import type { Project } from '@/bindings/Project';
 import type { ProjectMember } from '@/bindings/ProjectMember';
 import { useVaultMutation } from '@/features/passwords/vault';
+import { refreshSuggestions } from './queries';
 
 interface MemberChange {
   project: Project;
@@ -14,8 +15,8 @@ interface MemberChange {
 
 /**
  * Puts an item into a project or takes it out, with a toast that can undo
- * it. A folder can only be taken out here (it goes in through the folder
- * dialog, `projectsAddFolder`).
+ * it. A new folder goes in through the folder dialog (`projectsAddFolder`);
+ * here only one the project held comes back.
  */
 export function useSetMember() {
   const { t } = useTranslation();
@@ -24,20 +25,18 @@ export function useSetMember() {
       api.projectsSetMember(project.id, member, included),
     {
       onSuccess: (_, { project, member, included }) => {
+        void refreshSuggestions();
         const message = included
           ? t('projects.added', { name: project.name })
           : t('projects.removed', { name: project.name });
-        const canUndo = !(included === false && member.type === 'folder');
+        // Undo puts back exactly what changed, a folder too: the project
+        // held it, so it may come back.
         toast.success(message, {
-          action: canUndo
-            ? {
-                label: t('projects.undo'),
-                onClick: () =>
-                  void api
-                    .projectsSetMember(project.id, member, !included)
-                    .then(() => invalidateAll()),
-              }
-            : undefined,
+          action: {
+            label: t('projects.undo'),
+            onClick: () =>
+              void api.projectsSetMember(project.id, member, !included).then(() => invalidateAll()),
+          },
         });
       },
     },

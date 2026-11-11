@@ -62,6 +62,11 @@ export function hostAliases(hosts: HostEntry[]): Set<string> {
 /** What the library holds, as far as it is loaded: `undefined` while a part isn't. */
 export interface Library {
   hosts?: HostEntry[];
+  /**
+   * `~/.ssh/config` has `Include`s, whose hosts aren't in `hosts`: no host
+   * can then be called gone.
+   */
+  includes?: boolean;
   keys?: KeyView[];
   /** Only while the vault is unlocked. */
   envs?: EnvSummary[];
@@ -111,7 +116,10 @@ export function personal(projects: Project[], library: Library): Members {
   };
 }
 
-/** A project's members that are gone, by what is loaded: nothing is called gone before it is. */
+/**
+ * A project's members that are gone, by what is loaded: nothing is called
+ * gone before it is. `goneFolders` come from `projectsMissingFolders`.
+ */
 export interface Missing {
   hosts: Set<string>;
   keys: Set<string>;
@@ -119,8 +127,8 @@ export interface Missing {
   folders: Set<string>;
 }
 
-export function missing(project: Project, library: Library): Missing {
-  const aliases = library.hosts ? hostAliases(library.hosts) : undefined;
+export function missing(project: Project, library: Library, goneFolders: string[] = []): Missing {
+  const aliases = library.hosts && !library.includes ? hostAliases(library.hosts) : undefined;
   const fingerprints = library.keys ? new Set(library.keys.map((k) => k.fingerprint)) : undefined;
   const groups = library.envs
     ? new Set(library.envs.filter((e) => !e.inTrash).map((e) => e.project))
@@ -129,7 +137,7 @@ export function missing(project: Project, library: Library): Missing {
     hosts: new Set(aliases ? project.hosts.filter((h) => !aliases.has(h)) : []),
     keys: new Set(fingerprints ? project.keys.filter((k) => !fingerprints.has(k)) : []),
     environments: new Set(groups ? project.environments.filter((g) => !groups.has(g)) : []),
-    folders: new Set(project.missingFolders),
+    folders: new Set(goneFolders.filter((folder) => project.folders.includes(folder))),
   };
 }
 

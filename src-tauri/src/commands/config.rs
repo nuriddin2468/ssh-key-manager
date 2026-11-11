@@ -134,6 +134,14 @@ pub async fn write_config_raw(
         }
         fsutil::backup(&state.paths.config, &state.backup_dir)?;
         fsutil::atomic_write(&state.paths.config, text.as_bytes(), 0o600)?;
+        // Renamed hosts move in the projects that hold them when the blocks
+        // still line up one for one; otherwise nothing can say which is which.
+        let (old, new) = (before.hosts(), SshConfig::parse(&text).hosts());
+        if old.len() == new.len() {
+            for (a, b) in old.iter().zip(&new) {
+                super::projects::follow_host_renames(&app, state, &a.patterns, &b.patterns);
+            }
+        }
         config_file(state)
     })
     .await

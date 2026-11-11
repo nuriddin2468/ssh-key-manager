@@ -15,7 +15,6 @@ const project = (patch: Partial<Project>): Project => ({
   keys: [],
   environments: [],
   logins: [],
-  missingFolders: [],
   modified: '2026-11-10T10:00:00Z',
   ...patch,
 });
@@ -99,13 +98,16 @@ describe('gone members', () => {
       keys: ['SHA256:a', 'SHA256:gone'],
       environments: ['shop-api', 'emptied'],
       folders: ['~/code/shop', '~/code/elsewhere'],
-      missingFolders: ['~/code/elsewhere'],
     });
-    const loaded = missing(shop, {
-      hosts: [host(0, ['prod'])],
-      keys: [key('id_a', 'SHA256:a')],
-      envs: [env('shop-api', 'dev'), env('emptied', 'old', true)],
-    });
+    const loaded = missing(
+      shop,
+      {
+        hosts: [host(0, ['prod'])],
+        keys: [key('id_a', 'SHA256:a')],
+        envs: [env('shop-api', 'dev'), env('emptied', 'old', true)],
+      },
+      ['~/code/elsewhere', '~/code/not-in-shop'],
+    );
     expect([...loaded.hosts]).toEqual(['renamed']);
     expect([...loaded.keys]).toEqual(['SHA256:gone']);
     expect([...loaded.environments]).toEqual(['emptied']);
@@ -113,6 +115,9 @@ describe('gone members', () => {
 
     const unknown = missing(shop, {});
     expect(unknown.hosts.size + unknown.keys.size + unknown.environments.size).toBe(0);
+    // Hosts of included files aren't listed: none is called gone then.
+    const included = missing(shop, { hosts: [host(0, ['prod'])], includes: true });
+    expect(included.hosts.size).toBe(0);
   });
 
   it('count every name of a host block', () => {

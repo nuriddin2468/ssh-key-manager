@@ -12,6 +12,7 @@ import { useVaultMutation } from '@/features/passwords/vault';
 import { cn } from '@/lib/cn';
 import { holds, type Library } from './model';
 import { ProjectTile } from './ProjectTile';
+import { refreshSuggestions } from './queries';
 
 /** What the Add menu adds: a kind of the library, or a folder (in a system dialog). */
 export type MemberKind = 'hosts' | 'keys' | 'logins' | 'environments' | 'folder';
@@ -127,7 +128,10 @@ export function AddMembersDialog({
     },
     {
       success: (count) => t('projects.addedMany', { count, name: project.name }),
-      onSuccess: onDone,
+      onSuccess: () => {
+        void refreshSuggestions();
+        onDone();
+      },
     },
   );
 

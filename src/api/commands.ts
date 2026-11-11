@@ -525,6 +525,8 @@ export const api = {
    * Projects proposed from environments, Git folders, ~/.ssh/config and
    * KeePass groups and tags; nothing changes until one is accepted.
    */
+  /** The project's folders not found on this computer (a slow mount counts as found). */
+  projectsMissingFolders: (id: string) => call<string[]>('projects_missing_folders', { id }),
   projectsSuggestions: () => call<ProjectSuggestion[]>('projects_suggestions'),
   /**
    * Creates the suggested project (or adds to the existing one it names)

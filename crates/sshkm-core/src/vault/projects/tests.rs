@@ -292,6 +292,24 @@ fn a_renamed_host_moves_in_every_project_that_holds_it() {
 }
 
 #[test]
+fn a_folder_taken_out_is_one_the_project_held() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "vault");
+    let id = vault.add_project(&input("Shop")).unwrap();
+    let shop = ProjectMember::Folder {
+        path: "~/code/shop".into(),
+    };
+    let other = ProjectMember::Folder {
+        path: "/etc".into(),
+    };
+    assert!(!vault.project_has_held(&id, &shop).unwrap());
+    add(&mut vault, &id, &shop);
+    vault.set_project_member(&id, &shop, false).unwrap();
+    assert!(vault.project_has_held(&id, &shop).unwrap());
+    assert!(!vault.project_has_held(&id, &other).unwrap());
+}
+
+#[test]
 fn members_are_checked() {
     let dir = tempfile::tempdir().unwrap();
     let mut vault = vault(&dir, "vault");

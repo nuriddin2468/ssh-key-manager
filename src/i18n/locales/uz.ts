@@ -47,6 +47,14 @@ const uz = {
     suggested_other: '{{count}} ta taklif',
   },
   projects: {
+    moreProjects_one: 'yana {{count}} ta',
+    moreProjects_other: 'yana {{count}} ta',
+    removeNamed: '{{name}}ni {{project}} loyihasidan olib tashlash',
+    removeGoneTitle: '{{name}} {{project}} loyihasidan olib tashlansinmi?',
+    removeGoneText:
+      'U bu kompyuterda topilmadi, lekin boshqa qurilmalaringizda boʻlishi mumkin. U barcha qurilmalaringizdagi {{project}} loyihasidan olib tashlanadi; darhol bekor qilish mumkin.',
+    removeGoneConfirm: 'Olib tashlash',
+    removeGoneCancel: 'Qoldirish',
     welcomeTitle: 'Kalit yoki xostdan boshlang',
     welcomeText:
       'SSH kalit yarating yoki ulanadigan xostingizni qoʻshing. Ular bir nechta boʻlganda, loyihalar ularni birlashtiradi.',
@@ -1865,7 +1873,7 @@ const uz = {
     },
     leaks: {
       title: 'Sizib chiqishlarni qidirish',
-      lead: 'Ombordagi sirlarni AI vositalari tarixi, shell tarixi va loyihalaringizdan qidiradi. Faqat shu kompyuterdagi fayllarni oʻqiydi, hech narsa yubormaydi.',
+      lead: 'Ombordagi sirlarni AI vositalari tarixi, shell tarixi va kod papkalaringizdan qidiradi. Faqat shu kompyuterdagi fayllarni oʻqiydi, hech narsa yubormaydi.',
       lockedText: 'Tekshirish uchun omborni oching: qidiruv undagi aniq qiymatlar boʻyicha boradi.',
       scan: 'Tekshirish',
       scanAgain: 'Qayta tekshirish',
@@ -2425,6 +2433,7 @@ const uz = {
       openFailed: 'Shellni ishga tushirib boʻlmadi',
       shellMissing:
         'Bu shell endi kompyuterda yoʻq. Sozlamalar → Terminal boʻlimida boshqasini tanlang.',
+      folderMissing: 'Bu papka yoki uning loyihasi endi bu kompyuterda yoʻq.',
       status: {
         connecting: 'ishga tushmoqda…',
         connected: 'ishlamoqda',
@@ -3527,7 +3536,7 @@ const uz = {
       projectHint: 'KeePassXC da bu Environments / guruh papkasi.',
       name: 'Muhit',
       namePlaceholder: 'dev, staging, prod…',
-      taken: '{{project}} loyihasida bu nomli muhit allaqachon bor.',
+      taken: '{{project}} guruhida bu nomli muhit allaqachon bor.',
       useName: '«{{name}}» deb nomlash',
       notes: 'Izohlar',
       notesPlaceholder: 'Qayerda ishlaydi, kimga murojaat qilish, kalitlar qachon almashtirilgan…',

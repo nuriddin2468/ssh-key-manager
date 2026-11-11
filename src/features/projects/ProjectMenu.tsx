@@ -9,7 +9,15 @@ import { useRouter } from '@/app/router';
 import type { Project } from '@/bindings/Project';
 import type { ProjectMember } from '@/bindings/ProjectMember';
 import { Dialog } from '@/components/ui/Dialog';
-import { MenuItem, MenuSeparator, MenuSub } from '@/components/ui/Menu';
+import { IconButton } from '@/components/ui/IconButton';
+import {
+  Menu,
+  MenuContent,
+  MenuItem,
+  MenuSeparator,
+  MenuSub,
+  MenuTrigger,
+} from '@/components/ui/Menu';
 import { cn } from '@/lib/cn';
 import { useSetMember } from './actions';
 import { holds } from './model';
@@ -158,7 +166,13 @@ export function ProjectChips({
   const holding: Project[] = projects.filter((project) => holds(project, member));
   if (holding.length === 0) return null;
   return (
-    <ul aria-label={t('projects.inProjects')} className={cn('flex flex-wrap gap-1', className)}>
+    // Chips open their project, not the row they sit in.
+    // biome-ignore lint/a11y/useKeyWithClickEvents: only stops the row's click
+    <ul
+      aria-label={t('projects.inProjects')}
+      className={cn('flex flex-wrap gap-1', className)}
+      onClick={(event) => event.stopPropagation()}
+    >
       {holding.map((project) => (
         <li key={project.id}>
           <ProjectChip
@@ -168,5 +182,98 @@ export function ProjectChips({
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * The projects holding an item as plain chips (dot and name), for rows that
+ * are buttons themselves; at most two, then "+N".
+ */
+export function ProjectDots({
+  member,
+  className,
+}: {
+  member: ProjectMember | null;
+  className?: string;
+}) {
+  const { t } = useTranslation();
+  const projects = useProjects().data ?? [];
+  if (!member) return null;
+  const holding = projects.filter((project) => holds(project, member));
+  if (holding.length === 0) return null;
+  const shown = holding.slice(0, 2);
+  const more = holding.length - shown.length;
+  return (
+    <span className={cn('flex min-w-0 flex-wrap items-center gap-1', className)}>
+      <span className="sr-only">{t('projects.inProjects')}:</span>
+      {shown.map((project) => (
+        <span
+          key={project.id}
+          className="inline-flex h-[18px] max-w-[140px] items-center gap-1 rounded-full bg-white/[0.06] px-1.5 text-[11px] text-fg-2"
+        >
+          <span
+            aria-hidden="true"
+            className="size-1.5 shrink-0 rounded-full"
+            style={{ background: projectDot(project.color) }}
+          />
+          <span className="truncate">{project.name}</span>
+        </span>
+      ))}
+      {more > 0 ? (
+        <span className="text-[11px] text-subtle">
+          {t('projects.moreProjects', { count: more })}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * "Add to project" for a library row: a small button with the projects to
+ * tick, and "New project…". Nothing without a vault.
+ */
+export function AddToProjectButton({
+  member,
+  name,
+  className,
+}: {
+  member: ProjectMember | null;
+  name: string;
+  className?: string;
+}) {
+  const { t } = useTranslation();
+  const { sub, dialog } = useProjectMenu(member, { flat: true });
+  if (!sub) return null;
+  return (
+    <>
+      <Menu>
+        <MenuTrigger asChild>
+          <IconButton
+            label={t('projects.addToProjectFor', { name })}
+            variant="ghost"
+            className={className}
+            icon={<FolderKanban className="size-4" strokeWidth={1.9} />}
+          />
+        </MenuTrigger>
+        <MenuContent>{sub}</MenuContent>
+      </Menu>
+      {dialog}
+    </>
+  );
+}
+
+/**
+ * [`AddToProjectButton`] beside a row that is a button itself: at the row's
+ * end, shown while the row is hovered or anything in it has focus.
+ */
+export function RowProjectButton({ member, name }: { member: ProjectMember; name: string }) {
+  return (
+    <div className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 opacity-0 transition-opacity group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100">
+      <AddToProjectButton
+        member={member}
+        name={name}
+        className="size-8 rounded-lg bg-[rgb(22_27_39/0.92)] shadow-[0_4px_12px_-4px_rgb(0_0_0/0.6)]"
+      />
+    </div>
   );
 }

@@ -10,6 +10,7 @@ import { TextField } from '@/components/ui/TextField';
 import { useVaultMutation } from '@/features/passwords/vault';
 import { nextColor } from './model';
 import { ColorPicker, ProjectTile } from './ProjectTile';
+import { refreshSuggestions } from './queries';
 
 /** Characters KeePass apps split tags at, and the most a name has. */
 const NAME_CHARS = /[\p{Cc};,:]/u;
@@ -51,7 +52,10 @@ export function ProjectDialog({ project, all, onDone }: ProjectDialogProps) {
         project
           ? t('projects.form.saved', { name: saved.name })
           : t('projects.form.created', { name: saved.name }),
-      onSuccess: (saved) => onDone(saved),
+      onSuccess: (saved) => {
+        void refreshSuggestions();
+        onDone(saved);
+      },
       onError: (error) => {
         if (error.code !== 'already_exists') return false;
         setTakenName(name.trim());

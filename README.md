@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/overview.png" alt="SSH Key Manager: the Overview screen after a health check" width="900">
+  <img src="docs/screenshots/project.png" alt="SSH Key Manager: a project's page, with its hosts, folders, environments, logins, keys and tunnels" width="900">
 </p>
 
 ---
@@ -95,7 +95,9 @@ Builds are not code-signed yet (it's on the [roadmap](#roadmap)), so your system
 
 <sub>Screenshots show sample data.</sub>
 
-**Overview.** One button checks your keys, config, file permissions and hosts file, and tells you, in a sentence, how things stand.
+**Projects.** Group the hosts, keys, logins, environments and folders of one piece of work, then use them from its page: connect, copy a password, run an environment, open a terminal in its folder. The app suggests projects from what it finds; anything in no project is under Personal.
+
+**Audit.** One button checks your keys, config, file permissions and hosts file, and tells you, in a sentence, how things stand.
 
 **Keys**
 - See every key in `~/.ssh` at a glance: its type, fingerprint, whether it has a passphrase, whether it is loaded in the agent, and which servers use it.

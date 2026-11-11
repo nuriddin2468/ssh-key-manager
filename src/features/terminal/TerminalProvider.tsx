@@ -214,20 +214,26 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
           const failure = { reason: 'openFailed' as const, message: errorMessage(t, error) };
           const appError = AppError.from(error);
           const shells = queryClient.getQueryData<ShellInfo[]>(shellsKey);
-          // Not found: the shell, unless the shell is there and it was the environment.
+          // Not found: the shell, unless the shell is there and it was the
+          // environment, or the project's folder.
+          const shellMissing =
+            local?.shell != null && !shells?.some((shell) => shell.id === local.shell);
           const shellGone =
             local !== undefined &&
             appError.code === 'not_found' &&
-            (!local.env ||
-              (local.shell !== null && !shells?.some((shell) => shell.id === local.shell)));
+            ((!local.env && !local.folder) || shellMissing);
+          const folderGone =
+            local?.folder !== undefined && appError.code === 'not_found' && !shellGone;
           // The only input `terminal_open` refuses is the alias.
           const detail = shellGone
             ? t('terminal.local.shellMissing')
-            : appError.code === 'invalid_input' && !local
-              ? t('terminal.failed.aliasRefused', { alias })
-              : appError.code === 'not_found' || appError.code === 'unsupported'
-                ? appError.message
-                : failure.message;
+            : folderGone
+              ? t('terminal.local.folderMissing')
+              : appError.code === 'invalid_input' && !local
+                ? t('terminal.failed.aliasRefused', { alias })
+                : appError.code === 'not_found' || appError.code === 'unsupported'
+                  ? appError.message
+                  : failure.message;
           update(key, (tab) => ({
             ...tab,
             state: { phase: 'failed', failure: { ...failure, message: detail } },

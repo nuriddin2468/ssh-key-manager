@@ -22,7 +22,9 @@ const now = () => `${new Date().toISOString().slice(0, 19)}Z`;
 const NAME_CHARS = /[\p{Cc};,:]/u;
 
 /** Logins by entry title, resolved once the mock vault has its ids. */
-interface MockProject extends Omit<Project, 'logins' | 'missingFolders'> {
+interface MockProject extends Omit<Project, 'logins'> {
+  /** Every folder it held, to let one taken out come back. */
+  heldFolders: Set<string>;
   loginTitles: string[];
   logins: string[];
 }
@@ -45,6 +47,7 @@ function project(
     ...members,
     loginTitles,
     logins: [],
+    heldFolders: new Set(members.folders ?? []),
     modified: '2026-11-02T09:30:00Z',
   };
 }
@@ -99,12 +102,8 @@ function resolveLogins() {
 const MISSING_FOLDERS = new Set(['~/code/shop-web']);
 
 function view(p: MockProject, unlocked: boolean): Project {
-  const { loginTitles: _, ...rest } = p;
-  return {
-    ...rest,
-    logins: unlocked ? [...p.logins] : [],
-    missingFolders: p.folders.filter((folder) => MISSING_FOLDERS.has(folder)),
-  };
+  const { loginTitles: _, heldFolders: _held, ...rest } = p;
+  return { ...rest, logins: unlocked ? [...p.logins] : [] };
 }
 
 /** Moves renamed hosts in the projects that hold them, as `save_host` does. */
@@ -177,6 +176,7 @@ function setMember(
       break;
     case 'folder':
       toggle(p.folders, member.path);
+      p.heldFolders.add(member.path);
       break;
     case 'login':
       if (!isMockEntry(member.id)) return fail('not_found', `entry ${member.id}`);
@@ -359,11 +359,12 @@ export const projectsHandlers: Record<string, Handler> = {
   },
   projects_set_member: ({ id, member, included }) => {
     const m = member as ProjectMember;
-    if (included && m.type === 'folder') {
-      return fail('invalid_input', 'choose the folder in the folder dialog');
-    }
     const p = editable(id);
     if (p instanceof Promise) return p;
+    // Only a folder the project held comes back here (an Undo).
+    if (included && m.type === 'folder' && !p.heldFolders.has(m.path)) {
+      return fail('invalid_input', 'choose the folder in the folder dialog');
+    }
     return setMember(p, m, Boolean(included)) ?? view(p, true);
   },
   projects_suggestions: () => {
@@ -415,6 +416,7 @@ export const projectsHandlers: Record<string, Handler> = {
                 ? m.path
                 : m.id;
       if (!list.includes(value)) list.push(value);
+      if (m.type === 'folder') target.heldFolders.add(value);
     }
     target.modified = now();
     const chosenKeys = new Set(chosen.map(memberKey));
@@ -438,6 +440,8 @@ export const projectsHandlers: Record<string, Handler> = {
     if (!candidates.includes(inPickedFolder)) candidates.push(inPickedFolder);
     return suggestions();
   },
+  projects_missing_folders: ({ id }) =>
+    (projects.find((x) => x.id === id)?.folders ?? []).filter((f) => MISSING_FOLDERS.has(f)),
   projects_open_terminal: ({ id, folder, shell, events }) => {
     const p = projects.find((x) => x.id === id);
     if (!p) return fail('not_found', `project ${id}`);
@@ -461,6 +465,7 @@ export const projectsHandlers: Record<string, Handler> = {
     const p = editable(id);
     if (p instanceof Promise) return p;
     p.folders.push(`~/code/new-folder-${nextFolder}`);
+    p.heldFolders.add(`~/code/new-folder-${nextFolder}`);
     nextFolder += 1;
     p.modified = now();
     return view(p, true);

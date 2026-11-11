@@ -20,7 +20,7 @@ import { useVaultMutation } from '@/features/passwords/vault';
 import { cn } from '@/lib/cn';
 import { nameProblem } from './ProjectDialog';
 import { ColorPicker, ProjectTile } from './ProjectTile';
-import { projectKeys, useProjects, useSuggestions } from './queries';
+import { projectKeys, refreshSuggestions, useProjects, useSuggestions } from './queries';
 
 type Kind = 'hosts' | 'keys' | 'environments' | 'folders' | 'logins';
 const KINDS: Kind[] = ['folders', 'hosts', 'environments', 'logins', 'keys'];
@@ -50,7 +50,7 @@ export function SuggestionsPage() {
   const { t } = useTranslation();
   const dialogs = useDialogs();
   const state = useVaultStatus().data?.state;
-  const suggestions = useSuggestions();
+  const suggestions = useSuggestions({ look: true });
   const [later, setLater] = useState<Set<string>>(new Set());
 
   const lookIn = useVaultMutation(() => api.projectsSuggestInFolder(), {
@@ -60,6 +60,7 @@ export function SuggestionsPage() {
   });
   const restore = useVaultMutation(() => api.projectsRestoreSuggestions(), {
     success: () => t('projects.suggest.restored'),
+    onSuccess: () => void refreshSuggestions(),
   });
 
   const shown = (suggestions.data ?? []).filter((s) => !later.has(s.key));
@@ -194,11 +195,15 @@ function SuggestionCard({
         existing
           ? t('projects.suggest.addedTo', { name: project.name })
           : t('projects.suggest.created', { name: project.name }),
-      onSuccess: (project) => navigate({ page: 'project', id: project.id }),
+      onSuccess: (project) => {
+        void refreshSuggestions();
+        navigate({ page: 'project', id: project.id });
+      },
     },
   );
   const dismiss = useVaultMutation(() => api.projectsDismissSuggestion(suggestion.key), {
     success: () => t('projects.suggest.dismissed', { name: suggestion.name }),
+    onSuccess: () => void refreshSuggestions(),
   });
 
   const label = (kind: Kind, value: string) => {

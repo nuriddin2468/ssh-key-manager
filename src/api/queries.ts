@@ -30,7 +30,11 @@ export const keys = {
 /** Everything derived from files in `~/.ssh`, the hosts file or the agent. */
 export function invalidateAll(): Promise<void> {
   return queryClient.invalidateQueries({
-    predicate: (query) => query.queryKey[0] !== 'environment',
+    // Project suggestions read code folders: they are looked for again only
+    // when the projects change (src/features/projects).
+    predicate: (query) =>
+      query.queryKey[0] !== 'environment' &&
+      !(query.queryKey[0] === 'vault' && query.queryKey[1] === 'project-suggestions'),
   });
 }
 

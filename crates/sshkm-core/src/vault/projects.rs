@@ -164,10 +164,6 @@ pub struct Project {
     /// The vault's logins by entry id, not counting those in the recycle
     /// bin or gone. Empty in the copy kept for while the vault is locked.
     pub logins: Vec<String>,
-    /// Of `folders`, those not found on this computer: filled in by the app
-    /// as it lists projects, empty here.
-    #[serde(default)]
-    pub missing_folders: Vec<String>,
     /// RFC 3339, UTC.
     pub modified: String,
 }
@@ -553,7 +549,6 @@ fn project_view(id: String, stored: &Stored, logins: &BTreeSet<String>) -> Proje
         keys: Vec::new(),
         environments: Vec::new(),
         logins: Vec::new(),
-        missing_folders: Vec::new(),
         modified,
     };
     for member in stored.present() {
@@ -681,6 +676,15 @@ impl Vault {
             ));
         }
         Ok(())
+    }
+
+    /// Whether the project holds `member` or held it and took it out: a
+    /// folder it held may be put back (an Undo), one it never held may not.
+    pub fn project_has_held(&self, id: &str, member: &ProjectMember) -> Result<bool> {
+        Ok(self
+            .live_project(id)?
+            .members
+            .contains_key(&member_key(member)))
     }
 
     /// Puts `member` into the project (`included`) or takes it out.

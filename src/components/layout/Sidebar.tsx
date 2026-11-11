@@ -93,7 +93,7 @@ export function Sidebar() {
   );
 
   const projects = useProjects().data ?? [];
-  const suggestions = useSuggestions().data ?? [];
+  const suggestions = useSuggestions({ look: false }).data;
   const settings = useSettings();
   const [creating, setCreating] = useState(false);
   const mine = personal(projects, {
@@ -110,16 +110,13 @@ export function Sidebar() {
     project.environments.length +
     project.folders.length +
     project.logins.length;
-  const folded = (group: string, pages: Page[]) =>
-    settings.foldedNav.includes(group) && !pages.includes(route.page);
+  const folded = (group: string) => settings.foldedNav.includes(group);
   const fold = (group: string) =>
     updateSettings({
       foldedNav: settings.foldedNav.includes(group)
         ? settings.foldedNav.filter((g) => g !== group)
         : [...settings.foldedNav, group],
     });
-  const LIBRARY: Page[] = ['keys', 'hosts', 'passwords', 'envs', 'known'];
-  const SYSTEM: Page[] = ['terminal', 'agent', 'hostsFile', 'nearby', 'audit'];
   const lockIcon =
     vaultState === 'locked' ? (
       <LockKeyhole
@@ -193,9 +190,13 @@ export function Sidebar() {
               />
             ))}
           </div>
-          {vaultState === 'unlocked' && suggestions.length > 0 ? (
+          {vaultState === 'unlocked' && (suggestions === undefined || suggestions.length > 0) ? (
             <NavItem
-              label={t('nav.suggested', { count: suggestions.length })}
+              label={
+                suggestions === undefined
+                  ? t('nav.suggestions')
+                  : t('nav.suggested', { count: suggestions.length })
+              }
               tile={
                 <span
                   aria-hidden="true"
@@ -212,7 +213,7 @@ export function Sidebar() {
         </NavGroup>
         <NavGroup
           label={t('nav.groupLibrary')}
-          folded={folded('library', LIBRARY)}
+          folded={folded('library')}
           onFold={() => fold('library')}
         >
           {item('keys', t('nav.keys'), 'teal', KeyRound, keys.data?.keys.length)}
@@ -243,7 +244,7 @@ export function Sidebar() {
         </NavGroup>
         <NavGroup
           label={t('nav.groupSystem')}
-          folded={folded('system', SYSTEM)}
+          folded={folded('system')}
           onFold={() => fold('system')}
         >
           <NavItem

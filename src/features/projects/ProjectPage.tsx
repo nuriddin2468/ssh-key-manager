@@ -39,6 +39,7 @@ import { Dialog } from '@/components/ui/Dialog';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { IconButton } from '@/components/ui/IconButton';
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '@/components/ui/Menu';
+import { Spinner } from '@/components/ui/Spinner';
 import { Switch } from '@/components/ui/Switch';
 import { findingTitle } from '@/features/audit/model';
 import { vaultFindingTitle } from '@/features/audit/vaultModel';
@@ -51,9 +52,9 @@ import { AddMembersDialog, type MemberKind } from './AddMembersDialog';
 import { useSetMember } from './actions';
 import { type Library, type Members, missing, personal } from './model';
 import { ProjectDialog } from './ProjectDialog';
-import { useProjectMenu } from './ProjectMenu';
+import { AddToProjectButton } from './ProjectMenu';
 import { PersonalTile, ProjectTile } from './ProjectTile';
-import { useProjects } from './queries';
+import { projectKeys, refreshSuggestions, useProjects } from './queries';
 
 const COPIED = {
   username: 'passwords.copiedUsername',
@@ -89,14 +90,26 @@ export function ProjectPage({ id }: { id?: string }) {
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  // The app opens on the project used last.
+  const gone = Boolean(id && projects.data && !project);
+  const goneFolders = useQuery({
+    queryKey: [...projectKeys.all, 'missing', id ?? ''],
+    queryFn: () => api.projectsMissingFolders(id ?? ''),
+    enabled: Boolean(project && project.folders.length > 0),
+  });
+
+  // The app opens on the project used last; one that is gone is forgotten.
   useEffect(() => {
-    if (!id) updateSettings({ lastProject: 'personal' });
+    if (!id || gone) updateSettings({ lastProject: 'personal' });
     else if (project) updateSettings({ lastProject: project.id });
-  }, [id, project]);
+  }, [id, project, gone]);
+  // Without a vault there are no projects: Personal is all there is.
+  useEffect(() => {
+    if (id && vaultState === 'missing') navigate({ page: 'personal' });
+  }, [id, vaultState, navigate]);
 
   const library: Library = {
     hosts: config.data?.view.hosts,
+    includes: (config.data?.view.includes.length ?? 0) > 0,
     keys: keys.data?.keys,
     envs: vaultState === 'unlocked' ? envs.data : undefined,
     entries: vaultState === 'unlocked' ? entries.data : undefined,
@@ -111,14 +124,28 @@ export function ProjectPage({ id }: { id?: string }) {
     success: () => t('projects.deleted', { name: project?.name ?? '' }),
     onSuccess: () => {
       setDeleting(false);
+      void refreshSuggestions();
       navigate({ page: 'personal' });
     },
   });
   const addFolder = useVaultMutation(() => api.projectsAddFolder(id ?? ''), {
     success: (saved) => (saved ? t('projects.folderAdded') : undefined),
+    onSuccess: () => void refreshSuggestions(),
   });
 
-  if (id && projects.data && !project) {
+  if (id && !projects.data) {
+    // Loading, or between the locked and the unlocked list: not Personal.
+    return (
+      <>
+        <Toolbar />
+        <PageBody className="items-center justify-center">
+          <Spinner />
+        </PageBody>
+      </>
+    );
+  }
+
+  if (gone) {
     return (
       <>
         <Toolbar title={t('projects.goneTitle')} />
@@ -245,6 +272,7 @@ export function ProjectPage({ id }: { id?: string }) {
             project={project}
             members={members}
             library={library}
+            goneFolders={goneFolders.data ?? []}
             locked={locked}
             onAdd={startAdding}
           />
@@ -391,16 +419,18 @@ interface CardsProps {
   project: Project | undefined;
   members: Members;
   library: Library;
+  /** The project's folders not found on this computer. */
+  goneFolders: string[];
   locked: boolean;
   onAdd: (kind: MemberKind) => void;
 }
 
 /** The project's cards, only for the kinds it has. */
-function Cards({ project, members, library, locked, onAdd }: CardsProps) {
+function Cards({ project, members, library, goneFolders, locked, onAdd }: CardsProps) {
   const { t } = useTranslation();
   const dialogs = useDialogs();
   const gone = project
-    ? missing(project, library)
+    ? missing(project, library, goneFolders)
     : {
         hosts: new Set<string>(),
         keys: new Set<string>(),
@@ -561,37 +591,49 @@ function Monogram({ text, className }: { text: string; className?: string }) {
 }
 
 /** "Remove" for a member that is gone, or "Add to project…" on Personal. */
-function RemoveButton({ project, member }: { project: Project; member: ProjectMember }) {
+/**
+ * "Remove" for a member missing on this computer. It may be fine on the
+ * user's other devices, and the project is the same everywhere, so it asks
+ * first; the toast can undo it.
+ */
+function RemoveButton({
+  project,
+  member,
+  name,
+}: {
+  project: Project;
+  member: ProjectMember;
+  name: string;
+}) {
   const { t } = useTranslation();
   const setMember = useSetMember();
-  return (
-    <Button
-      size="sm"
-      variant="ghost"
-      onClick={() => setMember.mutate({ project, member, included: false })}
-    >
-      {t('projects.remove')}
-    </Button>
-  );
-}
-
-function AddToProject({ member, name }: { member: ProjectMember; name: string }) {
-  const { t } = useTranslation();
-  const { sub, dialog } = useProjectMenu(member, { flat: true });
-  if (!sub) return null;
+  const [asking, setAsking] = useState(false);
   return (
     <>
-      <Menu>
-        <MenuTrigger asChild>
-          <IconButton
-            label={t('projects.addToProjectFor', { name })}
-            variant="ghost"
-            icon={<FolderKanban className="size-4" strokeWidth={1.9} />}
-          />
-        </MenuTrigger>
-        <MenuContent>{sub}</MenuContent>
-      </Menu>
-      {dialog}
+      <Button
+        size="sm"
+        variant="ghost"
+        aria-label={t('projects.removeNamed', { name, project: project.name })}
+        onClick={() => setAsking(true)}
+      >
+        {t('projects.remove')}
+      </Button>
+      <ConfirmDialog
+        open={asking}
+        onOpenChange={setAsking}
+        title={t('projects.removeGoneTitle', { name, project: project.name })}
+        description={t('projects.removeGoneText', { project: project.name })}
+        confirmLabel={t('projects.removeGoneConfirm')}
+        cancelLabel={t('projects.removeGoneCancel')}
+        destructive
+        busy={setMember.isPending}
+        onConfirm={() =>
+          setMember.mutate(
+            { project, member, included: false },
+            { onSettled: () => setAsking(false) },
+          )
+        }
+      />
     </>
   );
 }
@@ -644,10 +686,10 @@ function HostsCard({
             }
           >
             {gone.has(alias) && project ? (
-              <RemoveButton project={project} member={member} />
+              <RemoveButton project={project} member={member} name={alias} />
             ) : (
               <>
-                {project ? null : <AddToProject member={member} name={alias} />}
+                {project ? null : <AddToProjectButton member={member} name={alias} />}
                 <Button
                   size="sm"
                   icon={<SquareTerminal className="size-3.5" strokeWidth={2} />}
@@ -721,7 +763,7 @@ function FoldersCard({
             }
           >
             {gone.has(path) ? (
-              <RemoveButton project={project} member={{ type: 'folder', path }} />
+              <RemoveButton project={project} member={{ type: 'folder', path }} name={path} />
             ) : (
               <Button
                 size="sm"
@@ -765,8 +807,11 @@ function EnvironmentsCard({
       count={groups.length > 1 ? groups.length : groups[0]}
     >
       {groups.map((group) => {
-        const envs = (library.envs ?? []).filter((env) => !env.inTrash && env.project === group);
         const member: ProjectMember = { type: 'environment', group };
+        if (!library.envs) {
+          return <Row key={group} mono title={group} subtitle={t('common.loading')} />;
+        }
+        const envs = library.envs.filter((env) => !env.inTrash && env.project === group);
         if (gone.has(group) || envs.length === 0) {
           return (
             <Row
@@ -775,7 +820,7 @@ function EnvironmentsCard({
               title={group}
               subtitle={<Problem text={t('projects.groupGone')} />}
             >
-              {project ? <RemoveButton project={project} member={member} /> : null}
+              {project ? <RemoveButton project={project} member={member} name={group} /> : null}
             </Row>
           );
         }
@@ -804,7 +849,7 @@ function EnvironmentsCard({
                 : t('envs.counts', { count: env.variableCount })
             }
           >
-            {project || index > 0 ? null : <AddToProject member={member} name={group} />}
+            {project || index > 0 ? null : <AddToProjectButton member={member} name={group} />}
             <Button
               size="sm"
               icon={<Play className="size-3" strokeWidth={2.4} />}
@@ -865,7 +910,7 @@ function LoginsCard({
             subtitle={[entry.username, site].filter(Boolean).join(' · ')}
           >
             {project ? null : (
-              <AddToProject member={{ type: 'login', id: entry.id }} name={entry.title} />
+              <AddToProjectButton member={{ type: 'login', id: entry.id }} name={entry.title} />
             )}
             {entry.username ? (
               <IconButton
@@ -937,10 +982,10 @@ function KeysCard({
             }
           >
             {gone.has(fingerprint) && project ? (
-              <RemoveButton project={project} member={member} />
+              <RemoveButton project={project} member={member} name={key?.name ?? short} />
             ) : key ? (
               <>
-                {project ? null : <AddToProject member={member} name={key.name} />}
+                {project ? null : <AddToProjectButton member={member} name={key.name} />}
                 {key.inAgent ? (
                   <span className="inline-flex h-[22px] items-center gap-1.5 rounded-full bg-[rgb(94_234_212/0.1)] px-2 text-[11.5px] text-ok">
                     <span aria-hidden="true" className="size-1.5 rounded-full bg-ok" />

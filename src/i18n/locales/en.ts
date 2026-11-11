@@ -45,6 +45,14 @@ const en = {
     suggested_other: '{{count}} suggested',
   },
   projects: {
+    moreProjects_one: '+{{count}} more',
+    moreProjects_other: '+{{count}} more',
+    removeNamed: 'Remove {{name}} from {{project}}',
+    removeGoneTitle: 'Remove {{name}} from {{project}}?',
+    removeGoneText:
+      'It isn’t found on this computer, but your other devices may still have it. It goes from {{project}} on all your devices; you can undo it right after.',
+    removeGoneConfirm: 'Remove',
+    removeGoneCancel: 'Keep',
     welcomeTitle: 'Start with a key or a host',
     welcomeText:
       'Generate an SSH key or add a host you connect to. Once you have a few, projects group them.',
@@ -1835,7 +1843,7 @@ const en = {
     },
     leaks: {
       title: 'Leak scanner',
-      lead: "Finds your vault's secrets in AI tools' history, the shell history and your projects. Reads files on this computer and sends nothing.",
+      lead: "Finds your vault's secrets in AI tools' history, the shell history and your code folders. Reads files on this computer and sends nothing.",
       lockedText: 'Unlock the vault to scan: the scanner looks for the exact values it keeps.',
       scan: 'Scan',
       scanAgain: 'Scan again',
@@ -2390,6 +2398,7 @@ const en = {
       openFailed: 'Couldn’t start the shell',
       shellMissing:
         'This shell is no longer on this computer. Choose another one in Settings → Terminal.',
+      folderMissing: 'This folder, or its project, is no longer on this computer.',
       status: {
         connecting: 'starting…',
         connected: 'running',

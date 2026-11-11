@@ -69,6 +69,7 @@ import type { PortProbe } from '@/bindings/PortProbe';
 import type { Project } from '@/bindings/Project';
 import type { ProjectInput } from '@/bindings/ProjectInput';
 import type { ProjectMember } from '@/bindings/ProjectMember';
+import type { ProjectSuggestion } from '@/bindings/ProjectSuggestion';
 import type { PromptAnswer } from '@/bindings/PromptAnswer';
 import type { QuickItems } from '@/bindings/QuickItems';
 import type { QuickStatus } from '@/bindings/QuickStatus';
@@ -502,6 +503,21 @@ export const api = {
     call<Project>('projects_set_member', { id, member, included }),
   /** Asks for a folder in a system dialog; `null` if cancelled. */
   projectsAddFolder: (id: string) => call<Project | null>('projects_add_folder', { id }),
+  /**
+   * Projects proposed from environments, Git folders, ~/.ssh/config and
+   * KeePass groups and tags; nothing changes until one is accepted.
+   */
+  projectsSuggestions: () => call<ProjectSuggestion[]>('projects_suggestions'),
+  /**
+   * Creates the suggested project (or adds to the existing one it names)
+   * with the members the user kept; anything not in the suggestion fails.
+   */
+  projectsAcceptSuggestion: (key: string, input: ProjectInput, members: ProjectMember[]) =>
+    call<Project>('projects_accept_suggestion', { key, input, members }),
+  projectsDismissSuggestion: (key: string) => call<void>('projects_dismiss_suggestion', { key }),
+  projectsRestoreSuggestions: () => call<void>('projects_restore_suggestions'),
+  /** Asks for a folder to look into for Git folders; `null` if cancelled. */
+  projectsSuggestInFolder: () => call<ProjectSuggestion[] | null>('projects_suggest_in_folder'),
 
   // Running on with the window closed, and the tray icon
   // (src-tauri/src/commands/background.rs).

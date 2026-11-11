@@ -44,6 +44,8 @@ use super::envs::{self, check_label};
 use super::{Vault, in_group};
 use crate::{Error, Result, fsutil};
 
+pub mod suggest;
+
 const PREFIX: &str = "sshkm.project.";
 /// What a project's logins are tagged with in KeePass, before its name.
 pub const TAG_PREFIX: &str = "project/";
@@ -714,6 +716,69 @@ impl Vault {
         Ok(true)
     }
 
+    /// Makes `suggestion` a project named and colored as `input`, or adds
+    /// to the existing project it names, with the members the user `kept`.
+    /// Each must be one the suggestion offers and one a project takes; all
+    /// are checked before anything changes. Logins it offered that weren't
+    /// kept, and that the project didn't hold already, are recorded as taken
+    /// out, so a `project/` tag on them doesn't bring them in. Returns the
+    /// project's id.
+    pub fn accept_suggestion(
+        &mut self,
+        suggestion: &suggest::ProjectSuggestion,
+        input: &ProjectInput,
+        kept: &[ProjectMember],
+    ) -> Result<String> {
+        for member in kept {
+            if !suggestion.offers(member) {
+                return Err(Error::invalid(format!(
+                    "not part of the suggestion: {member:?}"
+                )));
+            }
+            self.check_project_member(member, true)?;
+        }
+        // Logins the project holds already (added since the suggestion was
+        // made, or by a sync) stay, whatever the suggestion's list says.
+        let held: BTreeSet<String> = match &suggestion.existing {
+            Some(id) => self.project(id)?.logins.into_iter().collect(),
+            None => BTreeSet::new(),
+        };
+        let id = match &suggestion.existing {
+            Some(id) => id.clone(),
+            None => self.add_project(input)?,
+        };
+        for member in kept {
+            self.set_project_member(&id, member, true)?;
+        }
+        let left_out: Vec<&String> = suggestion
+            .logins
+            .iter()
+            .filter(|login| {
+                !held.contains(*login)
+                    && !kept
+                        .iter()
+                        .any(|m| matches!(m, ProjectMember::Login { id } if id == *login))
+            })
+            .collect();
+        if !left_out.is_empty() {
+            let mut stored = self.live_project(&id)?;
+            let t = stored.tick();
+            for login in left_out {
+                let key = format!("login:{login}");
+                let next = match stored.members.get(&key) {
+                    Some(p) if !p.present() => continue,
+                    Some(p) => Presence { a: p.a, r: Some(t) },
+                    None if stored.members.len() >= MAX_STORED_MEMBERS => continue,
+                    None => Presence { a: 0, r: Some(t) },
+                };
+                stored.members.insert(key, next);
+            }
+            self.put_project(&id, &stored)?;
+            self.sync_tags();
+        }
+        Ok(id)
+    }
+
     /// Every record, tombstones too, to send to another own device; those
     /// removed longer ago than [`KEEP_REMOVED_MS`] are left out.
     pub fn project_records(&self) -> Vec<ProjectRecord> {
@@ -989,6 +1054,51 @@ impl Vault {
                 entry.times.last_modification = Some(Times::now());
             }
         }
+    }
+
+    /// The vault's logins outside the recycle bin as suggestions see them:
+    /// their KeePass group and the user's own tags. A `project/<name>` tag
+    /// for a name no record knows counts as the tag `<name>`; the app's own
+    /// `project/` tags don't count.
+    pub fn suggestion_logins(&self) -> Vec<suggest::LoginFacts> {
+        let known: BTreeSet<String> = self
+            .stored_projects()
+            .iter()
+            .flat_map(|(_, stored)| std::iter::once(&stored.name.v).chain(&stored.aka))
+            .map(|name| name.to_lowercase())
+            .collect();
+        self.db
+            .iter_all_entries()
+            .filter(|entry| !envs::is_environment(entry))
+            .filter_map(|entry| {
+                let summary = self.summary(&entry);
+                (!summary.in_trash).then(|| suggest::LoginFacts {
+                    id: summary.id,
+                    group: summary.group,
+                    tags: entry
+                        .tags
+                        .iter()
+                        .map(|t| t.trim())
+                        .filter_map(|t| match t.strip_prefix(TAG_PREFIX) {
+                            Some(name) if known.contains(&name.to_lowercase()) => None,
+                            Some(name) => Some(name.to_owned()),
+                            None => Some(t.to_owned()),
+                        })
+                        .collect(),
+                })
+            })
+            .collect()
+    }
+
+    /// The project groups of the environments outside the recycle bin.
+    pub fn environment_groups(&self) -> Vec<String> {
+        let groups: BTreeSet<String> = self
+            .environments()
+            .into_iter()
+            .filter(|env| !env.in_trash && !env.project.is_empty())
+            .map(|env| env.project)
+            .collect();
+        groups.into_iter().collect()
     }
 
     /// The vault's logins outside the recycle bin, by id.

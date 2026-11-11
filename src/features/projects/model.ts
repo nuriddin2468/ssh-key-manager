@@ -1,15 +1,21 @@
 // What the project pages show: which items are in no project (Personal),
 // which members are gone, and the look of a project's tile.
 
+import type { TFunction } from 'i18next';
 import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { EnvSummary } from '@/bindings/EnvSummary';
+import type { Finding } from '@/bindings/Finding';
 import type { HostEntry } from '@/bindings/HostEntry';
 import type { HostsFileEntry } from '@/bindings/HostsFileEntry';
 import type { KeyView } from '@/bindings/KeyView';
 import type { Project } from '@/bindings/Project';
 import type { ProjectColor } from '@/bindings/ProjectColor';
 import type { ProjectMember } from '@/bindings/ProjectMember';
+import type { Severity } from '@/bindings/Severity';
+import type { VaultFinding } from '@/bindings/VaultFinding';
 import type { Tone } from '@/components/ui/Tile';
+import { IGNORE_PREFIX } from '@/features/audit/vaultModel';
+import { gitService } from '@/features/hosts/model';
 import { normalizeName } from '@/features/hostsFile/model';
 
 /** In the order the color picker shows them. */
@@ -191,6 +197,146 @@ export function memberCounts(members: Members) {
     logins: members.logins.length,
     keys: members.keys.length,
     hostsFile: members.hostsFile.length,
+  };
+}
+
+/** "3 hosts · 2 folders · …": what a project shows, kinds it has only. */
+export function memberSummary(t: TFunction, members: Members, locked: boolean): string {
+  const parts = [
+    members.hosts.length ? t('projects.count.hosts', { count: members.hosts.length }) : null,
+    members.folders.length ? t('projects.count.folders', { count: members.folders.length }) : null,
+    members.environments.length
+      ? t('projects.count.environments', { count: members.environments.length })
+      : null,
+    !locked && members.logins.length
+      ? t('projects.count.logins', { count: members.logins.length })
+      : null,
+    members.keys.length ? t('projects.count.keys', { count: members.keys.length }) : null,
+    members.hostsFile.length
+      ? t('projects.count.hostsFile', { count: members.hostsFile.length })
+      : null,
+  ];
+  return parts.filter(Boolean).join(' · ');
+}
+
+const SEVERITY_RANK: Record<Severity, number> = { critical: 0, warning: 1, info: 2 };
+
+/** Most severe first, in their own order otherwise. */
+export function bySeverity<T extends { severity: Severity }>(items: readonly T[]): T[] {
+  return [...items].sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]);
+}
+
+/** The audit's findings about some of the user's things. */
+export interface Findings {
+  ssh: Finding[];
+  vault: VaultFinding[];
+}
+
+/**
+ * The audit's findings about `members`' hosts, keys and logins, without
+ * those the user set aside on the audit page (`ignored`), most severe first.
+ */
+export function projectFindings(
+  members: Members,
+  library: Library,
+  found: { ssh?: readonly Finding[]; vault?: readonly VaultFinding[] },
+  ignored: ReadonlySet<string>,
+): Findings {
+  const hostIds = new Set(
+    (library.hosts ?? [])
+      .filter((h) => h.patterns.some((p) => members.hosts.includes(p)))
+      .map((h) => h.id),
+  );
+  const keyIds = new Set(
+    (library.keys ?? [])
+      .filter((k) => k.fingerprint !== null && members.keys.includes(k.fingerprint))
+      .map((k) => k.id),
+  );
+  const logins = new Set(members.logins);
+  return {
+    ssh: bySeverity(
+      (found.ssh ?? []).filter(
+        (f) =>
+          !ignored.has(f.id) &&
+          ((f.subject.hostId !== null && hostIds.has(f.subject.hostId)) ||
+            (f.subject.keyId !== null && keyIds.has(f.subject.keyId))),
+      ),
+    ),
+    vault: bySeverity(
+      (found.vault ?? []).filter(
+        (f) => !ignored.has(`${IGNORE_PREFIX}${f.id}`) && logins.has(f.entryId),
+      ),
+    ),
+  };
+}
+
+/** One of a project's problems, as a card on All projects lists them. */
+export type ProjectProblem =
+  | { key: string; severity: Severity; source: 'ssh'; finding: Finding }
+  | { key: string; severity: Severity; source: 'vault'; finding: VaultFinding }
+  /** A member not found on this computer. */
+  | { key: string; severity: 'warning'; source: 'gone'; member: ProjectMember };
+
+/**
+ * What is wrong with a project, worst first: its critical findings and
+ * warnings (suggestions aren't problems), then members missing here.
+ */
+export function projectProblems(findings: Findings, gone: Missing): ProjectProblem[] {
+  const serious = (severity: Severity) => severity !== 'info';
+  const members: ProjectMember[] = [
+    ...[...gone.hosts].map((alias): ProjectMember => ({ type: 'host', alias })),
+    ...[...gone.folders].map((path): ProjectMember => ({ type: 'folder', path })),
+    ...[...gone.environments].map((group): ProjectMember => ({ type: 'environment', group })),
+    ...[...gone.keys].map((fingerprint): ProjectMember => ({ type: 'key', fingerprint })),
+    ...[...gone.hostsFile].map((name): ProjectMember => ({ type: 'hostsFile', name })),
+  ];
+  return bySeverity<ProjectProblem>([
+    ...findings.ssh
+      .filter((f) => serious(f.severity))
+      .map((finding) => ({
+        key: finding.id,
+        severity: finding.severity,
+        source: 'ssh' as const,
+        finding,
+      })),
+    ...findings.vault
+      .filter((f) => serious(f.severity))
+      .map((finding) => ({
+        key: `vault:${finding.id}`,
+        severity: finding.severity,
+        source: 'vault' as const,
+        finding,
+      })),
+    ...members.map((member) => ({
+      key: memberKey(member),
+      severity: 'warning' as const,
+      source: 'gone' as const,
+      member,
+    })),
+  ]);
+}
+
+/**
+ * What a project's card offers at once: a terminal in its first folder on
+ * this computer, and a session to its first host in `~/.ssh/config` that
+ * gives a shell (not GitHub and the like). A folder waits for `goneFolders`
+ * (`undefined` until known), so a missing one is never offered.
+ */
+export function quickActions(
+  members: Members,
+  gone: Missing,
+  goneFolders: readonly string[] | undefined,
+  hosts: readonly HostEntry[] = [],
+): { folder?: string; host?: string } {
+  const shell = (alias: string) => {
+    const host = hosts.find((h) => h.kind === 'host' && h.patterns.includes(alias));
+    return !host || gitService(host) === null;
+  };
+  return {
+    folder: goneFolders
+      ? members.folders.find((folder) => !goneFolders.includes(folder))
+      : undefined,
+    host: members.hosts.find((alias) => !gone.hosts.has(alias) && shell(alias)),
   };
 }
 

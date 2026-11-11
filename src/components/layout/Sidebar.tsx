@@ -3,6 +3,7 @@ import {
   Cpu,
   Globe,
   KeyRound,
+  LayoutGrid,
   LockKeyhole,
   type LucideIcon,
   Network,
@@ -167,6 +168,7 @@ export function Sidebar() {
             ) : undefined
           }
         >
+          {item('projects', t('nav.projects'), 'aurora', LayoutGrid)}
           <NavItem
             label={t('projects.personal')}
             tile={<PersonalTile />}

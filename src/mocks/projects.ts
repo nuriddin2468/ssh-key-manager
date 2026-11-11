@@ -88,6 +88,8 @@ const projects: MockProject[] = [
     ['Router admin', 'legacy-nas'],
   ),
 ];
+// `?projects=none` starts with no projects, as on the first run.
+if (new URLSearchParams(window.location.search).get('projects') === 'none') projects.length = 0;
 
 /** Resolves the sample logins' ids the first time the list is read. */
 function resolveLogins() {

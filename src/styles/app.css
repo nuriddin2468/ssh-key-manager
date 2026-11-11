@@ -150,6 +150,7 @@
  */
 :root,
 [data-section="overview"],
+[data-section="projects"],
 [data-section="project"],
 [data-section="personal"],
 [data-section="suggestions"] {

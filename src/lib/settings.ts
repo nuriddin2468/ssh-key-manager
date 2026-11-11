@@ -11,8 +11,6 @@ export interface Settings {
   autoUpdate: boolean;
   /** The shell local sessions open in (an id from `terminal_shells`); `null` for the system's. */
   defaultShell: string | null;
-  /** The project the app opens on: an id, or `personal` (also the first time). */
-  lastProject: string;
   /** Sidebar groups the user folded, by name (`library`, `system`). */
   foldedNav: string[];
 }
@@ -24,7 +22,6 @@ const DEFAULTS: Settings = {
   ignoredFindings: [],
   autoUpdate: true,
   defaultShell: null,
-  lastProject: 'personal',
   foldedNav: [],
 };
 

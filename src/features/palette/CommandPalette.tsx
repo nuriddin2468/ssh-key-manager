@@ -5,6 +5,7 @@ import {
   FolderKanban,
   Globe,
   KeyRound,
+  LayoutGrid,
   Lock,
   LockOpen,
   type LucideIcon,
@@ -59,6 +60,7 @@ import { buildSections, type Group } from './sections';
 import { shortcutLabel } from './shortcut';
 
 const PAGE_LOOK: Record<Exclude<Page, 'tools' | 'project'>, { icon: LucideIcon; tone: Tone }> = {
+  projects: { icon: LayoutGrid, tone: 'aurora' },
   personal: { icon: User, tone: 'slate' },
   suggestions: { icon: Sparkle, tone: 'aurora' },
   keys: { icon: KeyRound, tone: 'teal' },

@@ -1,8 +1,9 @@
-//! A shell on this computer in the in-app terminal, started with a secret
-//! environment's variables (see `envs_run`). The variables go only into the
-//! shell's environment, from where the programs it starts inherit them:
-//! nothing is written to disk. The shell is the user's own (`$SHELL` as a
-//! login shell; `%ComSpec%` on Windows), started in the home folder.
+//! A shell on this computer in the in-app terminal (`terminal_open_local`),
+//! or one started with a secret environment's variables (`envs_run`). The
+//! variables go only into the shell's environment, from where the programs
+//! it starts inherit them: nothing is written to disk. The shell is one
+//! [`shells`] found, the user's choice or the default, started in the home
+//! folder.
 //!
 //! Such a session starts connected, asks nothing through askpass and stays
 //! out of the connection history.
@@ -11,22 +12,23 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use portable_pty::CommandBuilder;
-use sshkm_core::{ExposeSecret, SecretString};
+use sshkm_core::SecretString;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use super::bridge::{self, Bridge, SaveTarget, Store};
+use super::shells::Shell;
 use super::types::{Phase, SaveOffer, TerminalInfo};
 use super::{Sink, Terminal, Terminals, lock};
 use crate::error::{AppError, AppResult};
 
 impl Terminals {
-    /// Starts the user's shell in a `cols`×`rows` terminal in `home`, with
-    /// `vars` added to its environment. `label` names the session.
+    /// Starts `shell` in a `cols`×`rows` terminal in `home`, with `vars`
+    /// added to its environment. `label` names the session.
     pub fn open_local(
         self: &Arc<Self>,
         label: &str,
+        shell: &Shell,
         vars: &[(String, SecretString)],
         home: &Path,
         size: (u16, u16),
@@ -50,16 +52,13 @@ impl Terminals {
             user: None,
             host: None,
             proxy_jump: None,
+            shell: Some(shell.info.name.clone()),
             started_at: OffsetDateTime::now_utc()
                 .format(&Rfc3339)
                 .unwrap_or_default(),
             phase: Phase::Connected,
         };
-        let mut command = CommandBuilder::new_default_prog();
-        for (name, value) in vars {
-            command.env(name, value.expose_secret());
-        }
-        command.cwd(home);
+        let command = shell.command(vars, home);
         let mut sessions = lock(&self.sessions);
         let terminal = Terminal::spawn(
             info.clone(),
@@ -134,9 +133,11 @@ mod tests {
             ("SSHKM_TEST_TOKEN".to_owned(), SecretString::from("t0k en")),
             ("SSHKM_TEST_PORT".to_owned(), SecretString::from("3000")),
         ];
+        let shell = crate::terminal::shells::find(None).unwrap();
         let info = terminals
             .open_local(
                 "app · dev",
+                &shell,
                 &vars,
                 home.path(),
                 (80, 24),

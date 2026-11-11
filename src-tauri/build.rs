@@ -170,6 +170,8 @@ const COMMANDS: &[&str] = &[
     "terminal_close",
     "terminal_list",
     "terminal_open_external",
+    "terminal_shells",
+    "terminal_open_local",
     "browser_status",
     "browser_set_enabled",
     "browser_answer_pairing",

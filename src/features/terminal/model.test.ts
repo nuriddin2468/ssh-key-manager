@@ -37,6 +37,7 @@ function tab(alias = 'prod-api', change: Partial<Tab> = {}): Tab {
       alias,
       user: 'ubuntu',
       host: '10.0.4.12',
+      shell: null,
       proxyJump: 'bastion',
       startedAt: '2026-11-03T10:00:00Z',
       phase: 'connecting',
@@ -350,5 +351,54 @@ describe('recent hosts', () => {
     storage.setItem('sshkm.terminal.recent', 'not json');
     expect(loadRecent(storage)).toEqual([]);
     expect(loadRecent(undefined)).toEqual([]);
+  });
+});
+
+describe('local shells', () => {
+  const local = (change: Partial<Tab> = {}): Tab => ({
+    ...newTab('Zsh', { shell: null }),
+    info: {
+      id: 2,
+      alias: 'Zsh',
+      user: null,
+      host: null,
+      shell: 'Zsh',
+      proxyJump: null,
+      startedAt: '2026-11-03T10:00:00Z',
+      phase: 'connected',
+    },
+    ...change,
+  });
+
+  it('say what the shell is doing, not what ssh would', () => {
+    expect(statusLine(t, local({ state: { phase: 'connecting' } }))).toBe('Zsh · starting…');
+    expect(
+      statusLine(
+        t,
+        local({ alias: 'app · dev', state: { phase: 'ended', exitCode: 0, durationSecs: 3 } }),
+      ),
+    ).toBe('Zsh · shell exited');
+    expect(failureView(t, local(), { reason: 'openFailed', message: 'no such file' }).title).toBe(
+      'Couldn’t start the shell',
+    );
+    expect(announcement(t, local(), { phase: 'ended', exitCode: 0, durationSecs: 1 })).toBe(
+      'Zsh: shell exited',
+    );
+  });
+
+  it('never show a sign-in banner', () => {
+    const started = applyEvent(
+      local({ state: { phase: 'connecting' } }),
+      {
+        type: 'state',
+        state: {
+          phase: 'connected',
+          signIn: { password: null, oneTimeCode: null, key: null, passphrase: null },
+        },
+      },
+      true,
+    );
+    expect(started.banner).toBeNull();
+    expect(started.state.phase).toBe('connected');
   });
 });

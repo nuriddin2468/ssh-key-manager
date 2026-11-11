@@ -9,6 +9,8 @@ export interface Settings {
   ignoredFindings: string[];
   /** Look for a newer release at startup and every few hours. */
   autoUpdate: boolean;
+  /** The shell local sessions open in (an id from `terminal_shells`); `null` for the system's. */
+  defaultShell: string | null;
 }
 
 const KEY = 'sshkm.settings';
@@ -17,6 +19,7 @@ const DEFAULTS: Settings = {
   defaultLifetime: 3600,
   ignoredFindings: [],
   autoUpdate: true,
+  defaultShell: null,
 };
 
 function load(): Settings {

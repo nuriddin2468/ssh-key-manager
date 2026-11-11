@@ -1,4 +1,4 @@
-import { Plus, SquareTerminal } from 'lucide-react';
+import { Laptop, Plus, SquareTerminal } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
@@ -18,11 +18,13 @@ import { fileChangeError } from '@/features/hosts/fileErrors';
 import { CheckHostKeyDialog } from '@/features/known/CheckHostKeyDialog';
 import type { KnownHostsRemoval } from '@/features/known/removal';
 import { formatRelative } from '@/lib/format';
+import { useSettings } from '@/lib/settings';
 import { HostPicker } from './HostPicker';
 import { hostIdOf, isLive, phaseLabel, type Tab } from './model';
 import { PromptDialog } from './PromptDialog';
 import { panelId, SessionTabs, tabId } from './SessionTabs';
 import { FindBar, LoginBanner, SessionView, StatusBar } from './SessionView';
+import { defaultShell, shellName, useShells } from './shells';
 import { useTerminals } from './TerminalProvider';
 
 /** Connect requests already started, by nonce: each starts one session. */
@@ -33,6 +35,8 @@ export function TerminalPage({ connect, nonce }: { connect?: string; nonce?: num
   const { navigate } = useRouter();
   const terminals = useTerminals();
   const config = useConfig();
+  // Loaded before a shell opens, so its tab has its name at once.
+  useShells();
   const { tabs, active } = terminals;
   const tab = tabs.find((item) => item.key === active) ?? null;
   const [closing, setClosing] = useState<{ tab: Tab; keepTab: boolean } | null>(null);
@@ -99,6 +103,13 @@ export function TerminalPage({ connect, nonce }: { connect?: string; nonce?: num
     <>
       <Toolbar title={t('terminal.title')} meta={t('terminal.meta', { count: tabs.length })}>
         <Button
+          size="sm"
+          icon={<Laptop aria-hidden="true" className="size-4" strokeWidth={2} />}
+          onClick={() => terminals.openLocal()}
+        >
+          {t('terminal.local.open')}
+        </Button>
+        <Button
           variant="primary"
           size="sm"
           icon={<Plus aria-hidden="true" className="size-4" strokeWidth={2.2} />}
@@ -162,6 +173,7 @@ export function TerminalPage({ connect, nonce }: { connect?: string; nonce?: num
         <PageBody className="items-center justify-center">
           <EmptySessions
             onConnect={(alias) => terminals.open(alias)}
+            onOpenShell={() => terminals.openLocal()}
             onAllHosts={() => terminals.setPickerOpen(true)}
           />
         </PageBody>
@@ -173,6 +185,10 @@ export function TerminalPage({ connect, nonce }: { connect?: string; nonce?: num
             onPick={(alias) => {
               terminals.setPickerOpen(false);
               terminals.open(alias);
+            }}
+            onPickShell={(shell) => {
+              terminals.setPickerOpen(false);
+              terminals.openLocal({ shell });
             }}
             onCancel={() => terminals.setPickerOpen(false)}
           />
@@ -201,9 +217,13 @@ export function TerminalPage({ connect, nonce }: { connect?: string; nonce?: num
       <ConfirmDialog
         open={closing !== null}
         onOpenChange={(open) => (open ? undefined : setClosing(null))}
-        title={t('terminal.close.title', { alias: closing?.tab.alias ?? '' })}
-        description={t('terminal.close.text')}
-        confirmLabel={t('terminal.close.confirm')}
+        title={t(closing?.tab.local ? 'terminal.local.close.title' : 'terminal.close.title', {
+          alias: closing?.tab.alias ?? '',
+        })}
+        description={t(closing?.tab.local ? 'terminal.local.close.text' : 'terminal.close.text')}
+        confirmLabel={t(
+          closing?.tab.local ? 'terminal.local.close.confirm' : 'terminal.close.confirm',
+        )}
         destructive
         onConfirm={() => {
           if (closing) {
@@ -262,16 +282,20 @@ function cancelOf(ask: PromptAsk): PromptAnswer {
   return ask.type === 'hostKey' ? { type: 'trust', trust: false } : { type: 'cancel' };
 }
 
-/** No tabs: where to start, with the hosts connected to recently. */
+/** No tabs: where to start, with a shell here and the hosts connected to recently. */
 function EmptySessions({
   onConnect,
+  onOpenShell,
   onAllHosts,
 }: {
   onConnect: (alias: string) => void;
+  onOpenShell: () => void;
   onAllHosts: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const { recent } = useTerminals();
+  const settings = useSettings();
+  const shell = defaultShell(useShells().data, settings.defaultShell);
   return (
     <div className="glass flex w-full max-w-[420px] flex-col items-center gap-3 rounded-[18px] px-[18px] py-[26px] text-center">
       <Tile tone="green" size={52} glow>
@@ -280,6 +304,21 @@ function EmptySessions({
       <h2 className="text-[15px] font-semibold">{t('terminal.empty.title')}</h2>
       <p className="max-w-[300px] text-muted">{t('terminal.empty.text')}</p>
       <div className="mt-1.5 flex w-full flex-col gap-1 text-left">
+        {shell ? (
+          <button
+            type="button"
+            aria-label={t('terminal.local.openNamed', { shell: shellName(t, shell) })}
+            onClick={onOpenShell}
+            className="pressable-soft flex h-[38px] min-w-0 items-center gap-2.5 rounded-[10px] bg-white/[0.04] px-2.5 hover:bg-white/[0.07]"
+          >
+            <Laptop aria-hidden="true" className="size-4 shrink-0 text-subtle" strokeWidth={2} />
+            <span className="truncate">{shellName(t, shell)}</span>
+            <span className="shrink-0 text-subtle">{t('terminal.picker.local')}</span>
+            <span className="ml-auto shrink-0 text-[var(--accent-1)]">
+              {t('terminal.picker.open')}
+            </span>
+          </button>
+        ) : null}
         {recent.length > 0 ? <h3 className="sr-only">{t('terminal.empty.recent')}</h3> : null}
         {recent.slice(0, 5).map((host) => (
           <button

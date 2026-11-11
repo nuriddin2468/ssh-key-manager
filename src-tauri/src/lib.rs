@@ -254,6 +254,8 @@ pub fn run() {
             commands::terminal::terminal_close,
             commands::terminal::terminal_list,
             commands::terminal::terminal_open_external,
+            commands::terminal::terminal_shells,
+            commands::terminal::terminal_open_local,
             commands::browser::browser_status,
             commands::browser::browser_set_enabled,
             commands::browser::browser_answer_pairing,

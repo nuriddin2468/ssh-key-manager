@@ -19,6 +19,10 @@ host: string | null,
  */
 proxyJump: string | null, 
 /**
+ * The shell's name, for a shell on this computer instead of `ssh`.
+ */
+shell: string | null, 
+/**
  * RFC 3339, UTC.
  */
 startedAt: string, phase: Phase, };

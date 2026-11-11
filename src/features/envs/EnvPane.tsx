@@ -30,15 +30,24 @@ import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Dialog } from '@/components/ui/Dialog';
 import { IconButton } from '@/components/ui/IconButton';
-import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '@/components/ui/Menu';
+import {
+  Menu,
+  MenuContent,
+  MenuItem,
+  MenuSeparator,
+  MenuSub,
+  MenuTrigger,
+} from '@/components/ui/Menu';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
 import { SendDialog } from '@/features/nearby/SendDialog';
 import { MASK, REVEAL_MS } from '@/features/passwords/SavedSecret';
 import { toastVaultError, useSecretCall, useVaultMutation } from '@/features/passwords/vault';
+import { defaultShell, shellName, useShells } from '@/features/terminal/shells';
 import { useTerminals } from '@/features/terminal/TerminalProvider';
 import { cn } from '@/lib/cn';
 import { formatRelative } from '@/lib/format';
+import { useSettings } from '@/lib/settings';
 import { CompareDialog } from './CompareDialog';
 import { ExportEnvDialog } from './ExportEnvDialog';
 import { envLabel, isProduction } from './model';
@@ -70,6 +79,8 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
   const { t, i18n } = useTranslation();
   const { navigate } = useRouter();
   const terminals = useTerminals();
+  const shells = useShells().data ?? [];
+  const opensByDefault = defaultShell(shells, useSettings().defaultShell);
   const detail = useEnv(summary.id);
   const [open, setOpen] = useState<Open | null>(null);
   const [removing, setRemoving] = useState<EnvVarInfo | null>(null);
@@ -118,8 +129,12 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
     onSuccess: () => setRemoving(null),
   });
 
-  const run = () => {
-    terminals.openEnv(summary.id, `${summary.project} · ${summary.name}`);
+  /** In `shell`, or the default one. */
+  const run = (shell?: string) => {
+    terminals.openLocal({
+      shell,
+      env: { id: summary.id, label: `${summary.project} · ${summary.name}` },
+    });
     navigate({ page: 'terminal' });
   };
 
@@ -173,6 +188,23 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
                 </>
               ) : (
                 <>
+                  {shells.length > 1 ? (
+                    <>
+                      <MenuSub icon={<SquareTerminal className="size-4" />} label={t('envs.runIn')}>
+                        {shells.map((shell) => (
+                          <MenuItem key={shell.id} onSelect={() => run(shell.id)}>
+                            <span className="flex-1">{shellName(t, shell)}</span>
+                            {shell === opensByDefault ? (
+                              <span className="text-[11.5px] text-subtle">
+                                {t('terminal.picker.default')}
+                              </span>
+                            ) : null}
+                          </MenuItem>
+                        ))}
+                      </MenuSub>
+                      <MenuSeparator />
+                    </>
+                  ) : null}
                   <MenuItem
                     icon={<Pencil className="size-4" />}
                     disabled={!env}
@@ -226,7 +258,7 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
               variant="primary"
               size="sm"
               icon={<SquareTerminal className="size-[15px]" strokeWidth={2} />}
-              onClick={run}
+              onClick={() => run()}
             >
               {t('envs.run')}
             </Button>

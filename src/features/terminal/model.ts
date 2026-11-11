@@ -22,15 +22,20 @@ export type TabState =
   | Exclude<SessionState, { phase: 'failed' }>
   | { phase: 'failed'; failure: Failure | OpenFailure };
 
+/** A shell on this computer, in a tab instead of `ssh`. */
+export interface LocalShell {
+  /** The shell's id from `terminal_shells`; `null` for the default one. */
+  shell: string | null;
+  /** The secret environment whose variables it gets; the tab's `alias` then names it. */
+  env?: string;
+}
+
 export interface Tab {
   /** Stable for the tab's life, across reconnects. */
   key: string;
+  /** The host, or for a local shell its name (or its environment's). */
   alias: string;
-  /**
-   * A shell on this computer with a secret environment's variables (its id),
-   * instead of `ssh`; `alias` then names the environment.
-   */
-  env?: string;
+  local?: LocalShell;
   /** The backend session; `null` while it opens or after it ended. */
   id: number | null;
   info: TerminalInfo | null;
@@ -49,12 +54,12 @@ export interface Tab {
 
 let nextKey = 0;
 
-export function newTab(alias: string, env?: string): Tab {
+export function newTab(alias: string, local?: LocalShell): Tab {
   nextKey += 1;
   return {
     key: `tab-${nextKey}`,
     alias,
-    env,
+    local,
     id: null,
     info: null,
     state: { phase: 'connecting' },
@@ -87,7 +92,7 @@ export function applyEvent(tab: Tab, event: TerminalEvent, showPrompt: boolean):
         prompt: state.phase === 'connecting' ? tab.prompt : null,
         promptOpen: state.phase === 'connecting' && tab.promptOpen,
         // A local shell signs in nowhere.
-        banner: state.phase === 'connected' && !tab.env ? state.signIn : null,
+        banner: state.phase === 'connected' && !tab.local ? state.signIn : null,
         keyChanged: state.phase === 'failed' && state.failure.reason === 'hostKeyChanged',
         id: state.phase === 'ended' || state.phase === 'failed' ? null : tab.id,
       };
@@ -168,9 +173,10 @@ export function signInText(t: TFunction, signIn: SignIn, language: string): stri
   return typed ? t('terminal.banner.signedInTyped') : t('terminal.banner.signedInKey');
 }
 
-/** `ubuntu@10.0.4.12 · via bastion · connected` */
+/** `ubuntu@10.0.4.12 · via bastion · connected`, or `Zsh · running` for a local shell. */
 export function statusLine(t: TFunction, tab: Tab): string {
   const info = tab.info;
+  if (tab.local) return [info?.shell ?? tab.alias, phaseLabel(t, tab)].join(' · ');
   const account = info?.user && info.host ? `${info.user}@${info.host}` : tab.alias;
   const parts = [account];
   if (info?.proxyJump) parts.push(t('terminal.status.via', { jump: info.proxyJump }));
@@ -179,6 +185,7 @@ export function statusLine(t: TFunction, tab: Tab): string {
 }
 
 export function phaseLabel(t: TFunction, tab: Tab): string {
+  if (tab.local) return t(`terminal.local.status.${tab.state.phase}`);
   if (tab.state.phase === 'connecting' && tab.prompt) return t('terminal.status.waiting');
   return t(`terminal.status.${tab.state.phase}`);
 }
@@ -252,7 +259,7 @@ export function failureView(t: TFunction, tab: Tab, failure: Failure | OpenFailu
   };
   if (failure.reason === 'openFailed') {
     return {
-      title: t('terminal.failed.openFailed'),
+      title: t(tab.local ? 'terminal.local.openFailed' : 'terminal.failed.openFailed'),
       detail: failure.message,
       fixes: FIXES.openFailed,
     };
@@ -292,9 +299,13 @@ export function sessionDiagnosis(failure: Failure | OpenFailure): Diagnosis | nu
 export function announcement(t: TFunction, tab: Tab, state: TabState): string | null {
   switch (state.phase) {
     case 'connected':
-      return t('terminal.announce.connected', { alias: tab.alias });
+      return t(tab.local ? 'terminal.local.announce.started' : 'terminal.announce.connected', {
+        alias: tab.alias,
+      });
     case 'ended':
-      return t('terminal.announce.ended', { alias: tab.alias });
+      return t(tab.local ? 'terminal.local.announce.ended' : 'terminal.announce.ended', {
+        alias: tab.alias,
+      });
     case 'failed': {
       const diagnosis = sessionDiagnosis(state.failure);
       return t('terminal.announce.failed', {

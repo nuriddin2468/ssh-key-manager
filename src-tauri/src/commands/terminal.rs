@@ -14,6 +14,7 @@ use tauri::{AppHandle, State};
 
 use super::{Shared, blocking};
 use crate::error::AppResult;
+use crate::terminal::shells::{self, ShellInfo};
 use crate::terminal::types::{OpenOptions, PromptAnswer, TerminalInfo};
 use crate::terminal::{self, Sink};
 
@@ -39,6 +40,42 @@ pub async fn terminal_open(
             &alias,
             (cols, rows),
             &options.unwrap_or_default(),
+            sink,
+        )
+    })
+    .await
+}
+
+/// The shells a local session can run, the default first.
+#[tauri::command]
+pub async fn terminal_shells(state: State<'_, Shared>) -> AppResult<Vec<ShellInfo>> {
+    blocking(&state, move |_| {
+        Ok(shells::list().into_iter().map(|shell| shell.info).collect())
+    })
+    .await
+}
+
+/// Starts a shell on this computer in a `cols`×`rows` terminal: `shell` (an
+/// id from [`terminal_shells`]) or the default one. Output and events arrive
+/// on `events`, as for [`terminal_open`].
+#[tauri::command]
+pub async fn terminal_open_local(
+    state: State<'_, Shared>,
+    shell: Option<String>,
+    cols: u16,
+    rows: u16,
+    events: Channel<InvokeResponseBody>,
+) -> AppResult<TerminalInfo> {
+    let shared = Arc::clone(&state);
+    blocking(&state, move |state| {
+        let shell = shells::find(shell.as_deref())?;
+        let sink: Arc<dyn Sink> = Arc::new(events);
+        shared.terminals.open_local(
+            &shell.info.name,
+            &shell,
+            &[],
+            &state.paths.home,
+            (cols, rows),
             sink,
         )
     })

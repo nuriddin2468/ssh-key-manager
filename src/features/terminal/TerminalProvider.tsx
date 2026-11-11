@@ -2,18 +2,21 @@ import { createContext, type ReactNode, use, useCallback, useMemo, useRef, useSt
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api, type TerminalMessage } from '@/api/commands';
-import { invalidateAll, refreshConnectionHistory } from '@/api/queries';
+import { invalidateAll, queryClient, refreshConnectionHistory } from '@/api/queries';
 import { errorMessage } from '@/api/useAppMutation';
 import { useRouter } from '@/app/router';
 import type { PromptAnswer } from '@/bindings/PromptAnswer';
+import type { ShellInfo } from '@/bindings/ShellInfo';
 import type { TerminalEvent } from '@/bindings/TerminalEvent';
 import { AppError } from '@/lib/ipc';
+import { useSettings } from '@/lib/settings';
 import {
   afterClose,
   announcement,
   applyEvent,
   cycle,
   isLive,
+  type LocalShell,
   loadRecent,
   newTab,
   type RecentHost,
@@ -22,10 +25,18 @@ import {
   type Tab,
 } from './model';
 import { Screen } from './screen';
+import { defaultShell, preferredShellId, shellName, shellsKey } from './shells';
 
 interface OpenOptions {
   /** Ask for the password instead of giving the saved one. */
   askPassword?: boolean;
+}
+
+interface LocalOptions {
+  /** The shell's id from `terminal_shells`; the user's default shell when left out. */
+  shell?: string | null;
+  /** A secret environment whose variables the shell gets; `label` names the tab. */
+  env?: { id: string; label: string };
 }
 
 interface TerminalsValue {
@@ -34,8 +45,8 @@ interface TerminalsValue {
   setActive: (key: string) => void;
   /** Opens a session to `alias` in a new tab and shows it. */
   open: (alias: string, options?: OpenOptions) => void;
-  /** Opens a local shell with the environment's variables in a new tab and shows it. */
-  openEnv: (envId: string, label: string) => void;
+  /** Opens a shell on this computer in a new tab and shows it. */
+  openLocal: (options?: LocalOptions) => void;
   /** Starts the tab's session again, in the same tab. */
   reconnect: (key: string, options?: OpenOptions) => void;
   /** Disconnects (if live) and removes the tab. Ask first for live tabs. */
@@ -71,6 +82,9 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
   const [recent, setRecent] = useState<RecentHost[]>(() => loadRecent(storage));
   const [pickerOpen, setPickerOpen] = useState(false);
   const [message, setMessage] = useState('');
+  const settings = useSettings();
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
 
   const screens = useRef(new Map<string, Screen>());
   /** The backend session behind each tab, set once `terminal_open` returns. */
@@ -147,7 +161,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
   );
 
   const start = useCallback(
-    (key: string, alias: string, options: OpenOptions, env?: string) => {
+    (key: string, alias: string, options: OpenOptions, local?: LocalShell) => {
       const generation = (generations.current.get(key) ?? 0) + 1;
       generations.current.set(key, generation);
       const screen = screens.current.get(key);
@@ -158,8 +172,10 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
           screens.current.get(key)?.write(new Uint8Array(message));
         else onEvent(key, message);
       };
-      const opening = env
-        ? api.envsRun(env, size, onMessage)
+      const opening = local
+        ? local.env
+          ? api.envsRun(local.env, local.shell, size, onMessage)
+          : api.terminalOpenLocal(local.shell, size, onMessage)
         : api.terminalOpen(alias, size, { askPassword: options.askPassword ?? false }, onMessage);
       opening
         .then((info) => {
@@ -173,15 +189,28 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
             id: info.id,
             // Events may have moved it on already.
             info: { ...info, phase: tab.state.phase },
+            // Opened before the list of shells had loaded: now it has a name.
+            alias:
+              tab.local && !tab.local.env && tab.alias === t('terminal.local.shell')
+                ? info.alias
+                : tab.alias,
           }));
         })
         .catch((error: unknown) => {
           if (generations.current.get(key) !== generation) return;
           const failure = { reason: 'openFailed' as const, message: errorMessage(t, error) };
           const appError = AppError.from(error);
+          const shells = queryClient.getQueryData<ShellInfo[]>(shellsKey);
+          // Not found: the shell, unless the shell is there and it was the environment.
+          const shellGone =
+            local !== undefined &&
+            appError.code === 'not_found' &&
+            (!local.env ||
+              (local.shell !== null && !shells?.some((shell) => shell.id === local.shell)));
           // The only input `terminal_open` refuses is the alias.
-          const detail =
-            appError.code === 'invalid_input' && !env
+          const detail = shellGone
+            ? t('terminal.local.shellMissing')
+            : appError.code === 'invalid_input' && !local
               ? t('terminal.failed.aliasRefused', { alias })
               : appError.code === 'not_found' || appError.code === 'unsupported'
                 ? appError.message
@@ -239,15 +268,22 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
     [ensureScreen, start],
   );
 
-  const openEnv = useCallback(
-    (envId: string, label: string) => {
-      const tab = newTab(label, envId);
+  const openLocal = useCallback(
+    (options: LocalOptions = {}) => {
+      const shell =
+        options.shell !== undefined
+          ? options.shell
+          : preferredShellId(settingsRef.current.defaultShell);
+      const known = defaultShell(queryClient.getQueryData<ShellInfo[]>(shellsKey), shell);
+      const label = options.env?.label ?? (known ? shellName(t, known) : t('terminal.local.shell'));
+      const local: LocalShell = { shell, env: options.env?.id };
+      const tab = newTab(label, local);
       ensureScreen(tab.key);
       setTabs((list) => [...list, tab]);
       setActiveKey(tab.key);
-      start(tab.key, label, {}, envId);
+      start(tab.key, label, {}, local);
     },
-    [ensureScreen, start],
+    [ensureScreen, start, t],
   );
 
   const disconnect = useCallback((key: string) => {
@@ -272,7 +308,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
         banner: null,
         keyChanged: false,
       }));
-      start(key, tab.alias, options, tab.env);
+      start(key, tab.alias, options, tab.local);
       screens.current.get(key)?.focus();
     },
     [disconnect, start, update],
@@ -316,7 +352,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
       active,
       setActive: setActiveKey,
       open,
-      openEnv,
+      openLocal,
       reconnect,
       close,
       disconnect,
@@ -334,7 +370,19 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
       pickerOpen,
       setPickerOpen,
     }),
-    [tabs, active, open, openEnv, reconnect, close, disconnect, answer, update, recent, pickerOpen],
+    [
+      tabs,
+      active,
+      open,
+      openLocal,
+      reconnect,
+      close,
+      disconnect,
+      answer,
+      update,
+      recent,
+      pickerOpen,
+    ],
   );
 
   return (

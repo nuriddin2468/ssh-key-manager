@@ -59,6 +59,14 @@ export function hostAliases(hosts: HostEntry[]): Set<string> {
   return aliases;
 }
 
+/**
+ * The name a project holds a new host by: its first pattern that is a name,
+ * not a wildcard (`*.internal`) or a negation. `undefined` for none.
+ */
+export function aliasOf(patterns: readonly string[]): string | undefined {
+  return patterns.find((pattern) => !/[*?!]/.test(pattern));
+}
+
 /** What the library holds, as far as it is loaded: `undefined` while a part isn't. */
 export interface Library {
   hosts?: HostEntry[];

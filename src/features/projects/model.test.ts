@@ -5,6 +5,7 @@ import type { HostEntry } from '@/bindings/HostEntry';
 import type { KeyView } from '@/bindings/KeyView';
 import type { Project } from '@/bindings/Project';
 import {
+  aliasOf,
   cardColumns,
   hostAliases,
   initials,
@@ -160,5 +161,12 @@ describe('cards', () => {
     expect(cardColumns([])).toEqual([[], []]);
     // A long card counts as five rows: the next two still fit beside it.
     expect(cardColumns([40, 2, 2])).toEqual([[0], [1, 2]]);
+  });
+});
+
+describe('a host made from a project', () => {
+  it('joins by its first pattern that is a name', () => {
+    expect(aliasOf(['*.internal', '!bad', 'app', 'api'])).toBe('app');
+    expect(aliasOf(['web?', '*'])).toBeUndefined();
   });
 });

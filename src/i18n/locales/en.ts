@@ -121,6 +121,7 @@ const en = {
     remove: 'Remove',
     unlock: 'Unlock',
     unlockToChange: 'Projects are kept in the vault. Unlock it to change them.',
+    unlockToJoin: '{{name}} is saved. Unlock the vault to add it to {{project}}.',
     lockedTitle: 'Vault locked',
     lockedText: 'Unlock the vault to see this project’s logins and environments.',
     lockedTextPersonal: 'Unlock the vault to see your logins and environments.',

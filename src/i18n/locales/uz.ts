@@ -123,6 +123,7 @@ const uz = {
     remove: 'Olib tashlash',
     unlock: 'Qulfni ochish',
     unlockToChange: 'Loyihalar omborda saqlanadi. Ularni oʻzgartirish uchun omborni oching.',
+    unlockToJoin: '{{name}} saqlandi. Uni {{project}} loyihasiga qoʻshish uchun omborni oching.',
     lockedTitle: 'Ombor qulflangan',
     lockedText: 'Loyihaning loginlari va muhitlarini koʻrish uchun omborni oching.',
     lockedTextPersonal: 'Loginlaringiz va muhitlaringizni koʻrish uchun omborni oching.',

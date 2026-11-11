@@ -17,4 +17,8 @@ color: ProjectColor,
 /**
  * The project of that name, when there is one: the suggestion adds to it.
  */
-existing: string | null, reasons: Array<SuggestionReason>, folders: Array<string>, hosts: Array<string>, keys: Array<string>, environments: Array<string>, logins: Array<string>, };
+existing: string | null, reasons: Array<SuggestionReason>, folders: Array<string>, hosts: Array<string>, keys: Array<string>, environments: Array<string>, logins: Array<string>, 
+/**
+ * Names in the system hosts file.
+ */
+hostsFile: Array<string>, };

@@ -22,8 +22,8 @@ import { nameProblem } from './ProjectDialog';
 import { ColorPicker, ProjectTile } from './ProjectTile';
 import { projectKeys, refreshSuggestions, useProjects, useSuggestions } from './queries';
 
-type Kind = 'hosts' | 'keys' | 'environments' | 'folders' | 'logins';
-const KINDS: Kind[] = ['folders', 'hosts', 'environments', 'logins', 'keys'];
+type Kind = 'hosts' | 'keys' | 'environments' | 'folders' | 'logins' | 'hostsFile';
+const KINDS: Kind[] = ['folders', 'hosts', 'hostsFile', 'environments', 'logins', 'keys'];
 
 function member(kind: Kind, value: string): ProjectMember {
   switch (kind) {
@@ -37,6 +37,8 @@ function member(kind: Kind, value: string): ProjectMember {
       return { type: 'folder', path: value };
     case 'logins':
       return { type: 'login', id: value };
+    case 'hostsFile':
+      return { type: 'hostsFile', name: value };
   }
 }
 
@@ -152,6 +154,8 @@ function reasonText(t: TFunction, reason: SuggestionReason): string {
       return t('projects.suggest.why.keepassGroup', { group: reason.group });
     case 'keepassTag':
       return t('projects.suggest.why.keepassTag', { tag: reason.tag });
+    case 'hostsFile':
+      return t('projects.suggest.why.hostsFile', { host: reason.host });
   }
 }
 

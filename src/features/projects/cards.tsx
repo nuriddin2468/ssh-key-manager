@@ -8,6 +8,7 @@ import {
   FolderPlus,
   KeyRound,
   LockKeyhole,
+  Network,
   Play,
   Plus,
   RectangleEllipsis,
@@ -21,20 +22,25 @@ import { Fragment, type ReactNode, useId, useMemo, useState, useSyncExternalStor
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
-import { useAudit, useConfig, useVaultStatus } from '@/api/queries';
+import { useAudit, useConfig, useHostsFile, useVaultStatus } from '@/api/queries';
 import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
 import type { CopyField } from '@/bindings/CopyField';
 import type { HostEntry } from '@/bindings/HostEntry';
+import type { HostsFileEntry } from '@/bindings/HostsFileEntry';
 import type { Project } from '@/bindings/Project';
 import type { ProjectMember } from '@/bindings/ProjectMember';
 import type { Severity } from '@/bindings/Severity';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { Dialog } from '@/components/ui/Dialog';
 import { IconButton } from '@/components/ui/IconButton';
 import { Switch } from '@/components/ui/Switch';
 import { findingTitle } from '@/features/audit/model';
 import { vaultFindingTitle } from '@/features/audit/vaultModel';
+import { editOf } from '@/features/hostsFile/draft';
+import { normalizeName } from '@/features/hostsFile/model';
+import { ReviewDialog } from '@/features/hostsFile/ReviewDialog';
 import { toastVaultError } from '@/features/passwords/vault';
 import { useTerminals } from '@/features/terminal/TerminalProvider';
 import { cn } from '@/lib/cn';
@@ -44,6 +50,7 @@ import { useSetMember } from './actions';
 import {
   CARD_LIMIT,
   cardColumns,
+  hostsFileEntries,
   type Library,
   type Members,
   type Missing,
@@ -127,6 +134,7 @@ const NOTHING_GONE: Missing = {
   keys: new Set(),
   environments: new Set(),
   folders: new Set(),
+  hostsFile: new Set(),
 };
 
 /**
@@ -144,6 +152,7 @@ export function Cards({ project, members, library, goneFolders, locked, made, on
     locked && (!project || project.environments.length > 0 || project.logins.length === 0);
 
   const hosts = useHostsCard(origin, members.hosts, gone.hosts);
+  const hostsFile = useHostsFileCard(origin, members.hostsFile, gone.hostsFile);
   const folders = useFoldersCard(project, members.folders, gone.folders, locked, library);
   const environments = useEnvironmentsCard(
     origin,
@@ -178,9 +187,17 @@ export function Cards({ project, members, library, goneFolders, locked, made, on
       }
     : null;
 
-  const cards = [hosts, folders, notice, environments, logins, keys, tunnels, findings].filter(
-    (card) => card !== null,
-  );
+  const cards = [
+    hosts,
+    hostsFile,
+    folders,
+    notice,
+    environments,
+    logins,
+    keys,
+    tunnels,
+    findings,
+  ].filter((card) => card !== null);
   const quickAdd =
     project && members.hosts.length === 0 && members.folders.length === 0 ? (
       <div className="flex flex-wrap gap-2">
@@ -489,6 +506,151 @@ function useHostsCard(
       };
     }),
   };
+}
+
+/**
+ * The hosts file's lines for the project's names: name → address, each
+ * turned on or off. A switch changes the file the hosts file's way: the
+ * change is shown, then written with the administrator password, with a
+ * backup.
+ */
+function useHostsFileCard(
+  { project, back }: Origin,
+  names: string[],
+  gone: Set<string>,
+): CardSpec | null {
+  const { t } = useTranslation();
+  const { navigate } = useRouter();
+  const file = useHostsFile();
+  if (names.length === 0) return null;
+  const info = file.data;
+  const section = t('nav.hostsFile');
+  const wanted = new Set(names);
+  const lines = info ? hostsFileEntries(info.view.entries, names) : [];
+  const rows: CardRow[] = [
+    ...names
+      .filter((name) => gone.has(name))
+      .map(
+        (name): CardRow => ({
+          key: `gone:${name}`,
+          problem: true,
+          node: (
+            <Row
+              mono
+              leading={
+                <Network
+                  aria-hidden="true"
+                  className="size-4 shrink-0 text-subtle"
+                  strokeWidth={1.9}
+                />
+              }
+              title={name}
+              subtitle={<Problem text={t('projects.hostsFileGone')} />}
+            >
+              {project ? (
+                <RemoveButton project={project} member={{ type: 'hostsFile', name }} name={name} />
+              ) : null}
+            </Row>
+          ),
+        }),
+      ),
+    ...lines.map((entry): CardRow => {
+      const title = entry.names.filter((name) => wanted.has(normalizeName(name))).join(' ');
+      return {
+        key: `line:${entry.line}`,
+        node: (
+          <Row
+            mono
+            leading={
+              <Network
+                aria-hidden="true"
+                className="size-4 shrink-0 text-subtle"
+                strokeWidth={1.9}
+              />
+            }
+            title={entry.enabled ? title : <span className="text-muted">{title}</span>}
+            open={{
+              label: t('projects.openIn', { name: title, section }),
+              onOpen: () => navigate({ page: 'hostsFile', line: entry.line, back }),
+            }}
+            // Off is said in words too, as in the Hosts file section.
+            subtitle={[entry.enabled ? null : t('hostsFile.off'), `→ ${entry.address}`, entry.group]
+              .filter(Boolean)
+              .join(' · ')}
+            detail={
+              // A warning, as the Hosts file section shows it; the line keeps its place.
+              entry.shadowed.some((name) => wanted.has(normalizeName(name))) ? (
+                <Problem text={t('projects.hostsFileShadowed')} />
+              ) : undefined
+            }
+          >
+            {entry.system || !info || info.readOnly ? null : (
+              <HostsFileSwitch
+                entry={entry}
+                revision={info.revision}
+                // Several lines may list one name: the address tells them apart.
+                name={`${title} → ${entry.address}`}
+              />
+            )}
+          </Row>
+        ),
+      };
+    }),
+  ];
+  return {
+    id: 'hostsFile',
+    icon: <Network className="size-3.5 text-[#A5B4FC]" strokeWidth={2.2} />,
+    title: t('projects.cards.hostsFile'),
+    count: names.length,
+    rows,
+  };
+}
+
+/** Turns a hosts file line on or off through the hosts file's review. */
+function HostsFileSwitch({
+  entry,
+  revision,
+  name,
+}: {
+  entry: HostsFileEntry;
+  revision: string;
+  name: string;
+}) {
+  const { t } = useTranslation();
+  const [reviewing, setReviewing] = useState(false);
+  return (
+    <>
+      <Switch
+        checked={entry.enabled}
+        aria-label={t('hostsFile.toggle', { name })}
+        // It shows the change for review first: screen readers say a dialog opens.
+        aria-haspopup="dialog"
+        onCheckedChange={() => setReviewing(true)}
+      />
+      <Dialog open={reviewing} onOpenChange={setReviewing}>
+        {reviewing ? (
+          <ReviewDialog
+            revision={revision}
+            changes={[
+              {
+                kind: 'set',
+                line: entry.line,
+                entry: { ...editOf(entry), enabled: !entry.enabled },
+              },
+            ]}
+            conflict={false}
+            onApplied={() => setReviewing(false)}
+            onStale={() => {
+              // The line may be another one now: the card shows the file again.
+              toast.error(t('hostsFile.stale'));
+              setReviewing(false);
+            }}
+            onDone={() => setReviewing(false)}
+          />
+        ) : null}
+      </Dialog>
+    </>
+  );
 }
 
 function useFoldersCard(

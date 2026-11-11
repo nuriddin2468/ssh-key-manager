@@ -340,6 +340,18 @@ fn members_are_checked() {
             path: "~/a\nb".into(),
         },
         login_member("not-an-id"),
+        ProjectMember::HostsFile {
+            name: "API.local".into(),
+        },
+        ProjectMember::HostsFile {
+            name: "api.local.".into(),
+        },
+        ProjectMember::HostsFile {
+            name: "two words".into(),
+        },
+        ProjectMember::HostsFile {
+            name: String::new(),
+        },
     ] {
         assert!(!is_valid_member(&bad), "{bad:?}");
         assert!(
@@ -864,4 +876,42 @@ fn the_copy_for_a_locked_vault_has_no_logins_and_belongs_to_one_vault() {
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
     }
+}
+
+#[test]
+fn hosts_file_names_are_members_in_lower_case() {
+    assert_eq!(
+        hosts_file_name(" API.Shop.local. ").as_deref(),
+        Some("api.shop.local")
+    );
+    assert_eq!(hosts_file_name("a b"), None);
+    assert_eq!(hosts_file_name(""), None);
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "vault");
+    let id = vault.add_project(&input("Shop")).unwrap();
+    let member = ProjectMember::HostsFile {
+        name: "api.shop.local".into(),
+    };
+    add(&mut vault, &id, &member);
+    assert_eq!(vault.project(&id).unwrap().hosts_file, ["api.shop.local"]);
+    assert!(
+        vault.project_records()[0]
+            .record
+            .contains("hostsfile:api.shop.local")
+    );
+    assert!(vault.set_project_member(&id, &member, false).unwrap());
+    assert_eq!(vault.project(&id).unwrap().hosts_file, Vec::<String>::new());
+
+    // A copy kept by a version without hosts file names still reads.
+    let path = dir.path().join("projects.json");
+    let json = serde_json::json!({
+        "vaultId": "v",
+        "projects": [{
+            "id": id, "name": "Shop", "color": "blue", "folders": [], "hosts": [],
+            "keys": [], "environments": [], "logins": [], "modified": "2026-11-10T10:00:00Z",
+        }],
+    });
+    std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+    assert_eq!(load_copy(&path, "v")[0].hosts_file, Vec::<String>::new());
 }

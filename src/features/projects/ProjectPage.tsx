@@ -5,6 +5,7 @@ import {
   FolderPlus,
   KeyRound,
   MoreHorizontal,
+  Network,
   Pencil,
   Plus,
   RectangleEllipsis,
@@ -15,7 +16,7 @@ import {
 import { type ReactNode, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
-import { useConfig, useKeys, useVaultEntries, useVaultStatus } from '@/api/queries';
+import { useConfig, useHostsFile, useKeys, useVaultEntries, useVaultStatus } from '@/api/queries';
 import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
 import type { Project } from '@/bindings/Project';
@@ -58,6 +59,7 @@ export function ProjectPage({ id }: { id?: string }) {
   const keys = useKeys();
   const envs = useEnvs();
   const entries = useVaultEntries();
+  const hostsFile = useHostsFile();
   const project = id ? projects.data?.find((p) => p.id === id) : undefined;
   const dialogs = useDialogs();
   const [adding, setAdding] = useState<MemberKind | null>(null);
@@ -92,6 +94,7 @@ export function ProjectPage({ id }: { id?: string }) {
     keys: keys.data?.keys,
     envs: vaultState === 'unlocked' ? envs.data : undefined,
     entries: vaultState === 'unlocked' ? entries.data : undefined,
+    hostsFile: hostsFile.data?.view.entries,
   };
   const members: Members | undefined = id
     ? project
@@ -163,7 +166,8 @@ export function ProjectPage({ id }: { id?: string }) {
       members.keys.length +
       members.environments.length +
       members.logins.length +
-      members.folders.length ===
+      members.folders.length +
+      members.hostsFile.length ===
       0;
 
   const startAdding = (kind: MemberKind) => {
@@ -362,6 +366,9 @@ function summary(t: TFunction, members: Members, locked: boolean) {
       ? t('projects.count.logins', { count: members.logins.length })
       : null,
     members.keys.length ? t('projects.count.keys', { count: members.keys.length }) : null,
+    members.hostsFile.length
+      ? t('projects.count.hostsFile', { count: members.hostsFile.length })
+      : null,
   ];
   return parts.filter(Boolean).join(' · ');
 }
@@ -385,6 +392,7 @@ function AddMenu({
   const key = icon(<KeyRound className="size-[15px]" strokeWidth={1.9} />);
   const login = icon(<RectangleEllipsis className="size-[15px]" strokeWidth={1.9} />);
   const env = icon(<Variable className="size-[15px]" strokeWidth={1.9} />);
+  const network = icon(<Network className="size-[15px]" strokeWidth={1.9} />);
   return (
     <Menu>
       <MenuTrigger asChild>
@@ -408,6 +416,9 @@ function AddMenu({
         </MenuItem>
         <MenuItem icon={env} onSelect={() => onAdd('environments')}>
           {t('projects.addEnvironments')}
+        </MenuItem>
+        <MenuItem icon={network} onSelect={() => onAdd('hostsFile')}>
+          {t('projects.addHostsFile')}
         </MenuItem>
         <MenuItem
           icon={icon(<FolderPlus className="size-[15px]" strokeWidth={1.9} />)}

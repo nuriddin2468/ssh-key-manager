@@ -76,6 +76,12 @@ The foundation for everything below.
    Library section, with a way back to the project; Add also makes a new host, key, login
    or environment in the Library's own dialogs, and it joins the project. In review:
    [#39](https://github.com/nuriddin2468/ssh-key-manager/pull/39).
+5. **Hosts file entries in projects**: a project holds names of the system hosts file
+   (`hostsfile:<name>`, synced like its other members); its page shows their entries, name
+   → address, each turned on or off through the hosts file's own review, admin rights and
+   backups, and flags a name the file no longer has. Added from the Add menu or a Hosts
+   file entry's menu; suggested from the names and domains of the project's hosts. Turning
+   all of a project's entries on or off at once waits for a decision. In review.
 
 ### 3. Managed `.env` files — in progress
 

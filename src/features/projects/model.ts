@@ -4,11 +4,13 @@
 import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { EnvSummary } from '@/bindings/EnvSummary';
 import type { HostEntry } from '@/bindings/HostEntry';
+import type { HostsFileEntry } from '@/bindings/HostsFileEntry';
 import type { KeyView } from '@/bindings/KeyView';
 import type { Project } from '@/bindings/Project';
 import type { ProjectColor } from '@/bindings/ProjectColor';
 import type { ProjectMember } from '@/bindings/ProjectMember';
 import type { Tone } from '@/components/ui/Tile';
+import { normalizeName } from '@/features/hostsFile/model';
 
 /** In the order the color picker shows them. */
 export const PROJECT_COLORS: ProjectColor[] = [
@@ -72,6 +74,8 @@ export interface Library {
   envs?: EnvSummary[];
   /** Only while the vault is unlocked. */
   entries?: EntrySummary[];
+  /** The system hosts file's entries, turned on and off. */
+  hostsFile?: HostsFileEntry[];
 }
 
 /** Members by kind, as a project holds them. */
@@ -81,12 +85,15 @@ export interface Members {
   environments: string[];
   logins: string[];
   folders: string[];
+  /** Names in the system hosts file. */
+  hostsFile: string[];
 }
 
 /**
  * Personal: what no project holds. A host block is in a project when any of
  * its names is; logins are the vault's own (not a host's or a key's saved
- * password), outside the recycle bin.
+ * password), outside the recycle bin. The hosts file is the whole
+ * computer's, block lists and all: its entries show in projects only.
  */
 export function personal(projects: Project[], library: Library): Members {
   const held = (pick: (p: Project) => string[]) => new Set(projects.flatMap(pick));
@@ -113,6 +120,7 @@ export function personal(projects: Project[], library: Library): Members {
       .filter((e) => !e.inTrash && e.kind === 'login' && !logins.has(e.id))
       .map((e) => e.id),
     folders: [],
+    hostsFile: [],
   };
 }
 
@@ -125,6 +133,8 @@ export interface Missing {
   keys: Set<string>;
   environments: Set<string>;
   folders: Set<string>;
+  /** Names no line of the hosts file lists, turned on or off. */
+  hostsFile: Set<string>;
 }
 
 export function missing(project: Project, library: Library, goneFolders: string[] = []): Missing {
@@ -133,12 +143,25 @@ export function missing(project: Project, library: Library, goneFolders: string[
   const groups = library.envs
     ? new Set(library.envs.filter((e) => !e.inTrash).map((e) => e.project))
     : undefined;
+  const listed = library.hostsFile
+    ? new Set(library.hostsFile.flatMap((entry) => entry.names.map(normalizeName)))
+    : undefined;
   return {
     hosts: new Set(aliases ? project.hosts.filter((h) => !aliases.has(h)) : []),
     keys: new Set(fingerprints ? project.keys.filter((k) => !fingerprints.has(k)) : []),
     environments: new Set(groups ? project.environments.filter((g) => !groups.has(g)) : []),
     folders: new Set(goneFolders.filter((folder) => project.folders.includes(folder))),
+    hostsFile: new Set(listed ? project.hostsFile.filter((name) => !listed.has(name)) : []),
   };
+}
+
+/** The hosts file's entries that list one of `names`, in file order. */
+export function hostsFileEntries(
+  entries: readonly HostsFileEntry[],
+  names: readonly string[],
+): HostsFileEntry[] {
+  const wanted = new Set(names);
+  return entries.filter((entry) => entry.names.some((name) => wanted.has(normalizeName(name))));
 }
 
 /** Whether `project` holds `member`. */
@@ -154,6 +177,8 @@ export function holds(project: Project, member: ProjectMember): boolean {
       return project.environments.includes(member.group);
     case 'folder':
       return project.folders.includes(member.path);
+    case 'hostsFile':
+      return project.hostsFile.includes(member.name);
   }
 }
 
@@ -165,6 +190,7 @@ export function memberCounts(members: Members) {
     environments: members.environments.length,
     logins: members.logins.length,
     keys: members.keys.length,
+    hostsFile: members.hostsFile.length,
   };
 }
 
@@ -214,5 +240,7 @@ export function memberKey(member: ProjectMember): string {
       return `env:${member.group}`;
     case 'folder':
       return `folder:${member.path}`;
+    case 'hostsFile':
+      return `hostsfile:${member.name}`;
   }
 }

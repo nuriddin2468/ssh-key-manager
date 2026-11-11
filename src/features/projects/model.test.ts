@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { EnvSummary } from '@/bindings/EnvSummary';
 import type { HostEntry } from '@/bindings/HostEntry';
+import type { HostsFileEntry } from '@/bindings/HostsFileEntry';
 import type { KeyView } from '@/bindings/KeyView';
 import type { Project } from '@/bindings/Project';
 import {
   cardColumns,
   hostAliases,
+  hostsFileEntries,
   initials,
   missing,
   nextColor,
@@ -24,6 +26,7 @@ const project = (patch: Partial<Project>): Project => ({
   keys: [],
   environments: [],
   logins: [],
+  hostsFile: [],
   modified: '2026-11-10T10:00:00Z',
   ...patch,
 });
@@ -86,6 +89,7 @@ describe('Personal', () => {
       environments: ['blog'],
       logins: ['l2'],
       folders: [],
+      hostsFile: [],
     });
   });
 
@@ -96,6 +100,7 @@ describe('Personal', () => {
       environments: [],
       logins: [],
       folders: [],
+      hostsFile: [],
     });
   });
 });
@@ -124,6 +129,7 @@ describe('gone members', () => {
 
     const unknown = missing(shop, {});
     expect(unknown.hosts.size + unknown.keys.size + unknown.environments.size).toBe(0);
+    expect(unknown.hostsFile.size).toBe(0);
     // Hosts of included files aren't listed: none is called gone then.
     const included = missing(shop, { hosts: [host(0, ['prod'])], includes: true });
     expect(included.hosts.size).toBe(0);
@@ -160,5 +166,27 @@ describe('cards', () => {
     expect(cardColumns([])).toEqual([[], []]);
     // A long card counts as five rows: the next two still fit beside it.
     expect(cardColumns([40, 2, 2])).toEqual([[0], [1, 2]]);
+  });
+});
+
+describe('hosts file names', () => {
+  const line = (n: number, address: string, names: string[], enabled = true) =>
+    ({ line: n, address, names, enabled }) as HostsFileEntry;
+  const file = [
+    line(1, '10.0.8.20', ['Staging-API.internal']),
+    line(2, '10.0.8.21', ['staging-api.internal.'], false),
+    line(3, '127.0.0.1', ['app.test', 'api.test']),
+  ];
+
+  it('find every line for a name, turned on or off', () => {
+    expect(hostsFileEntries(file, ['staging-api.internal']).map((e) => e.line)).toEqual([1, 2]);
+    expect(hostsFileEntries(file, ['api.test']).map((e) => e.line)).toEqual([3]);
+    expect(hostsFileEntries(file, [])).toEqual([]);
+  });
+
+  it('are gone when no line lists them, once the file is read', () => {
+    const shop = project({ hostsFile: ['staging-api.internal', 'old.internal'] });
+    expect([...missing(shop, { hostsFile: file }).hostsFile]).toEqual(['old.internal']);
+    expect(missing(shop, {}).hostsFile.size).toBe(0);
   });
 });

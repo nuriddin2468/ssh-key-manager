@@ -12,6 +12,9 @@
 //!   `HostName`s share a domain (`api.acme.com`, `db.acme.com`);
 //! - a top-level group of a KeePass file, and a KeePass tag no project has.
 //!
+//! Names of the system hosts file join a suggestion, or a project, whose SSH
+//! hosts have the same name or `HostName`, or the same domain.
+//!
 //! Members already in a project aren't suggested again; a suggestion named
 //! like an existing project offers to add to that one.
 
@@ -22,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     MAX_MEMBERS, MAX_NAME, Project, ProjectColor, ProjectMember, check_name, folder_text,
-    is_valid_member,
+    hosts_file_name, is_valid_member,
 };
 
 /// Most suggestions offered at once.
@@ -221,6 +224,9 @@ pub struct Sources<'a> {
     pub repositories: &'a [Repository],
     pub projects: &'a [Project],
     pub home: Option<&'a Path>,
+    /// Names in the system hosts file, as [`hosts_file_name`] writes them,
+    /// without the operating system's own and blocked ones.
+    pub hosts_file: &'a [String],
 }
 
 /// Why a project is suggested.
@@ -242,6 +248,8 @@ pub enum SuggestionReason {
     KeepassGroup { group: String },
     /// Logins with this KeePass tag.
     KeepassTag { tag: String },
+    /// Names in the hosts file for this host of the project.
+    HostsFile { host: String },
 }
 
 /// A project the app proposes, for the user to confirm.
@@ -262,6 +270,8 @@ pub struct ProjectSuggestion {
     pub keys: Vec<String>,
     pub environments: Vec<String>,
     pub logins: Vec<String>,
+    /// Names in the system hosts file.
+    pub hosts_file: Vec<String>,
 }
 
 impl ProjectSuggestion {
@@ -291,6 +301,11 @@ impl ProjectSuggestion {
                 .iter()
                 .map(|id| ProjectMember::Login { id: id.clone() }),
         );
+        list.extend(
+            self.hosts_file
+                .iter()
+                .map(|name| ProjectMember::HostsFile { name: name.clone() }),
+        );
         list
     }
 
@@ -302,6 +317,7 @@ impl ProjectSuggestion {
             ProjectMember::Login { id } => self.logins.contains(id),
             ProjectMember::Environment { group } => self.environments.contains(group),
             ProjectMember::Folder { path } => self.folders.contains(path),
+            ProjectMember::HostsFile { name } => self.hosts_file.contains(name),
         }
     }
 
@@ -318,6 +334,7 @@ impl ProjectSuggestion {
         self.environments.clear();
         self.folders.clear();
         self.logins.clear();
+        self.hosts_file.clear();
         for member in valid {
             match member {
                 ProjectMember::Host { alias } => self.hosts.push(alias),
@@ -325,6 +342,7 @@ impl ProjectSuggestion {
                 ProjectMember::Environment { group } => self.environments.push(group),
                 ProjectMember::Folder { path } => self.folders.push(path),
                 ProjectMember::Login { id } => self.logins.push(id),
+                ProjectMember::HostsFile { name } => self.hosts_file.push(name),
             }
         }
     }
@@ -338,6 +356,7 @@ impl ProjectSuggestion {
                 ProjectMember::Login { id } => self.logins.retain(|v| v != id),
                 ProjectMember::Environment { group } => self.environments.retain(|v| v != group),
                 ProjectMember::Folder { path } => self.folders.retain(|v| v != path),
+                ProjectMember::HostsFile { name } => self.hosts_file.retain(|v| v != name),
             }
         }
     }
@@ -348,6 +367,7 @@ impl ProjectSuggestion {
             + self.keys.len()
             + self.environments.len()
             + self.logins.len()
+            + self.hosts_file.len()
     }
 
     fn take(&mut self, other: Self) {
@@ -362,6 +382,7 @@ impl ProjectSuggestion {
             (&mut self.keys, other.keys),
             (&mut self.environments, other.environments),
             (&mut self.logins, other.logins),
+            (&mut self.hosts_file, other.hosts_file),
         ] {
             for value in theirs {
                 if !mine.contains(&value) && mine.len() < MAX_MEMBERS {
@@ -412,6 +433,7 @@ fn candidate(name: &str, reason: SuggestionReason) -> Option<ProjectSuggestion> 
         keys: Vec::new(),
         environments: Vec::new(),
         logins: Vec::new(),
+        hosts_file: Vec::new(),
     })
 }
 
@@ -514,6 +536,7 @@ pub fn suggest(sources: &Sources<'_>, declined: &Declined) -> Vec<ProjectSuggest
             by_key.insert(candidate.key.clone(), candidate);
         }
     }
+    hosts_file(sources, &mut by_key, &mut order);
 
     let taken = Taken::of(sources.projects);
     let mut colors: Vec<ProjectColor> = sources.projects.iter().map(|p| p.color).collect();
@@ -536,9 +559,11 @@ pub fn suggest(sources: &Sources<'_>, declined: &Declined) -> Vec<ProjectSuggest
             if let Some(left_out) = declined.members.get(&suggestion.key) {
                 suggestion.drop_declined(left_out);
             }
-            // Hosts alike only by name or place: two at least.
+            // Hosts alike only by name or place: two at least, or hosts
+            // file names for a project's own hosts.
             let worth = if suggestion.reasons.iter().all(only_hosts) {
                 suggestion.hosts.len() >= 2
+                    || (suggestion.existing.is_some() && !suggestion.hosts_file.is_empty())
             } else {
                 suggestion.members() > 0
             };
@@ -562,6 +587,7 @@ fn only_hosts(reason: &SuggestionReason) -> bool {
         SuggestionReason::ProxyJump { .. }
             | SuggestionReason::NamePrefix { .. }
             | SuggestionReason::Domain { .. }
+            | SuggestionReason::HostsFile { .. }
     )
 }
 
@@ -572,6 +598,7 @@ struct Taken {
     keys: BTreeSet<String>,
     environments: BTreeSet<String>,
     logins: BTreeSet<String>,
+    hosts_file: BTreeSet<String>,
 }
 
 impl Taken {
@@ -588,6 +615,7 @@ impl Taken {
             keys: all(|p| &p.keys),
             environments: all(|p| &p.environments),
             logins: all(|p| &p.logins),
+            hosts_file: all(|p| &p.hosts_file),
         }
     }
 
@@ -599,7 +627,136 @@ impl Taken {
             .environments
             .retain(|v| !self.environments.contains(v));
         suggestion.logins.retain(|v| !self.logins.contains(v));
+        suggestion
+            .hosts_file
+            .retain(|v| !self.hosts_file.contains(v));
     }
+}
+
+/// Adds the hosts file's names to the suggestions, and to the projects, whose
+/// SSH hosts have that name or `HostName` (a [`SuggestionReason::HostsFile`])
+/// or are in that domain (a [`SuggestionReason::Domain`]). A project gets a
+/// suggestion of its own when nothing else suggests adding to it.
+fn hosts_file(
+    sources: &Sources<'_>,
+    by_key: &mut BTreeMap<String, ProjectSuggestion>,
+    order: &mut Vec<String>,
+) {
+    if sources.hosts_file.is_empty() {
+        return;
+    }
+    let facts: BTreeMap<&str, &HostFacts> = sources
+        .hosts
+        .iter()
+        .map(|h| (h.alias.as_str(), h))
+        .collect();
+    // Each suggestion's hosts, with its project's when it adds to one.
+    let mut wanted: Vec<(String, Option<&Project>)> =
+        order.iter().map(|key| (key.clone(), None)).collect();
+    for project in sources.projects {
+        let project_key = key(&project.name);
+        match wanted.iter_mut().find(|(k, _)| *k == project_key) {
+            Some(found) => found.1 = Some(project),
+            None => wanted.push((project_key, Some(project))),
+        }
+    }
+    for (suggestion_key, project) in wanted {
+        let mut aliases: Vec<&str> = by_key
+            .get(&suggestion_key)
+            .map(|s| s.hosts.iter().map(String::as_str).collect())
+            .unwrap_or_default();
+        if let Some(project) = project {
+            aliases.extend(project.hosts.iter().map(String::as_str));
+        }
+        let (reasons, names) = hosts_file_matches(sources.hosts_file, &aliases, &facts);
+        if names.is_empty() {
+            continue;
+        }
+        if !by_key.contains_key(&suggestion_key) {
+            let Some(project) = project else { continue };
+            let Some(mut c) = candidate(&project.name, reasons[0].clone()) else {
+                continue;
+            };
+            // `candidate` reads the name again; the key stays the project's.
+            c.key.clone_from(&suggestion_key);
+            order.push(suggestion_key.clone());
+            by_key.insert(suggestion_key.clone(), c);
+        }
+        if let Some(suggestion) = by_key.get_mut(&suggestion_key) {
+            suggestion.take(ProjectSuggestion {
+                reasons,
+                hosts_file: names,
+                ..candidate_shell(&suggestion_key)
+            });
+        }
+    }
+}
+
+/// An empty suggestion to [`ProjectSuggestion::take`] members from.
+fn candidate_shell(key: &str) -> ProjectSuggestion {
+    ProjectSuggestion {
+        key: key.to_owned(),
+        name: String::new(),
+        color: ProjectColor::default(),
+        existing: None,
+        reasons: Vec::new(),
+        folders: Vec::new(),
+        hosts: Vec::new(),
+        keys: Vec::new(),
+        environments: Vec::new(),
+        logins: Vec::new(),
+        hosts_file: Vec::new(),
+    }
+}
+
+/// The hosts file's names for the SSH hosts `aliases`: the same name as an
+/// alias or its `HostName`, or in the same domain. With the reasons, first
+/// the exact ones.
+fn hosts_file_matches(
+    names: &[String],
+    aliases: &[&str],
+    facts: &BTreeMap<&str, &HostFacts>,
+) -> (Vec<SuggestionReason>, Vec<String>) {
+    let mut exact: BTreeMap<String, String> = BTreeMap::new();
+    let mut domains: BTreeSet<String> = BTreeSet::new();
+    for alias in aliases {
+        let host = facts.get(alias).copied();
+        if host.is_some_and(is_code_host) {
+            continue;
+        }
+        let host_name = host.and_then(|h| h.host_name.as_deref());
+        for name in std::iter::once(*alias).chain(host_name) {
+            if let Some(name) = hosts_file_name(name) {
+                exact
+                    .entry(name.clone())
+                    .or_insert_with(|| (*alias).to_owned());
+                domains.extend(domain(&name));
+            }
+        }
+    }
+    let mut reasons: Vec<SuggestionReason> = Vec::new();
+    let mut by_domain: Vec<SuggestionReason> = Vec::new();
+    let mut found: Vec<String> = Vec::new();
+    for name in names {
+        if let Some(host) = exact.get(name) {
+            let reason = SuggestionReason::HostsFile { host: host.clone() };
+            if !reasons.contains(&reason) {
+                reasons.push(reason);
+            }
+        } else if let Some(domain) = domain(name).filter(|d| domains.contains(d)) {
+            let reason = SuggestionReason::Domain { domain };
+            if !by_domain.contains(&reason) {
+                by_domain.push(reason);
+            }
+        } else {
+            continue;
+        }
+        if found.len() < MAX_MEMBERS && !found.contains(name) {
+            found.push(name.clone());
+        }
+    }
+    reasons.extend(by_domain);
+    (reasons, found)
 }
 
 fn environments(sources: &Sources<'_>, out: &mut Vec<ProjectSuggestion>) {

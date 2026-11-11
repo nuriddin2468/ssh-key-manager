@@ -3,4 +3,4 @@
 /**
  * Something a project can hold, by reference.
  */
-export type ProjectMember = { "type": "host", alias: string, } | { "type": "key", fingerprint: string, } | { "type": "login", id: string, } | { "type": "environment", group: string, } | { "type": "folder", path: string, };
+export type ProjectMember = { "type": "host", alias: string, } | { "type": "key", fingerprint: string, } | { "type": "login", id: string, } | { "type": "environment", group: string, } | { "type": "folder", path: string, } | { "type": "hostsFile", name: string, };

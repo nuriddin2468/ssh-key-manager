@@ -87,6 +87,15 @@ export function isSystemName(name: string): boolean {
 }
 
 /**
+ * A line that lists a name the system needs (`127.0.0.1 localhost app.test`):
+ * the core refuses to change it, so the app leaves it as it is. (`system` is
+ * only set when every name on the line is one.)
+ */
+export function listsSystemName(entry: { names: readonly string[] }): boolean {
+  return entry.names.some(isSystemName);
+}
+
+/**
  * A valid IPv4 or IPv6 address; IPv6 may carry a scope of up to 64 letters,
  * digits, `_`, `.` and `-` (`fe80::1%lo0`). Same rule as `parse_address` in the core.
  */

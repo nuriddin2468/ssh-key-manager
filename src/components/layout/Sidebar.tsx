@@ -31,7 +31,7 @@ import {
   useVaultEntries,
   useVaultStatus,
 } from '@/api/queries';
-import { type Page, type Route, useRouter } from '@/app/router';
+import { type Page, type Route, useFreshNavigate, useRouter } from '@/app/router';
 import type { Project } from '@/bindings/Project';
 import { Logo } from '@/components/Logo';
 import { Dialog } from '@/components/ui/Dialog';
@@ -55,7 +55,8 @@ export const SIDEBAR_INSET = 10;
 
 export function Sidebar() {
   const { t } = useTranslation();
-  const { route, navigate } = useRouter();
+  const { route } = useRouter();
+  const navigate = useFreshNavigate();
   const environment = useEnvironment();
   const keys = useKeys();
   const config = useConfig();

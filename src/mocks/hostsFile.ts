@@ -23,7 +23,7 @@ let lines = [
   '# localhost is used to configure the loopback interface',
   '# when the system is booting.  Do not change this entry.',
   '##',
-  '127.0.0.1\tlocalhost',
+  '127.0.0.1\tlocalhost shop.test',
   '255.255.255.255\tbroadcasthost',
   '::1             localhost',
   '',

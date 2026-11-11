@@ -664,3 +664,37 @@ fn hosts_file_names_join_the_project_their_hosts_are_in() {
     );
     assert_eq!(suggestions, []);
 }
+
+#[test]
+fn left_out_members_are_kept_as_record_keys_and_read_from_any_build() {
+    let mut declined = Declined::default();
+    declined.dismiss("shop");
+    declined.members.insert(
+        "shop".into(),
+        vec!["host:shop-db".into(), "hostsfile:app.test".into()],
+    );
+    let json = serde_json::to_value(&declined).unwrap();
+    assert_eq!(
+        json["members"]["shop"],
+        serde_json::json!(["host:shop-db", "hostsfile:app.test"])
+    );
+    // An earlier build wrote members; a later one may add kinds this one
+    // doesn't know: they are dropped, never the whole settings.
+    let read: Declined = serde_json::from_value(serde_json::json!({
+        "keys": ["shop"],
+        "members": {
+            "shop": [
+                { "type": "host", "alias": "shop-db" },
+                "hostsfile:app.test",
+                { "type": "bucket", "name": "s3://shop" },
+                "bucket:s3://shop"
+            ]
+        }
+    }))
+    .unwrap();
+    assert_eq!(read.keys, ["shop"]);
+    assert_eq!(
+        read.members["shop"],
+        ["host:shop-db", "hostsfile:app.test", "bucket:s3://shop"]
+    );
+}

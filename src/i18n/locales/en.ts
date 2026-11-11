@@ -119,8 +119,10 @@ const en = {
     hostsFileTurnOn_other: 'Turns on {{count}} entries of {{name}}.',
     hostsFileTurnOff_one: 'Turns off {{count}} entry of {{name}}.',
     hostsFileTurnOff_other: 'Turns off {{count}} entries of {{name}}.',
-    hostsFileSharedNote:
-      'Other projects use these names too: {{list}}. The change applies to them as well.',
+    hostsFileOthersNote: 'The same lines also list {{list}}: they change too.',
+    hostsFileSystemLine: 'Shares its line with {{names}}, which the system needs',
+    hostsFileKeptNote: 'Left as they are, as they also list a system name: {{lines}}.',
+    hostsFileReviewHint: 'Shows the change for review first',
     hostsFileSeveralNote:
       'More than one entry will be on for {{names}}; the first in the file wins.',
     hostsFileMissingNote: 'Not in the hosts file, so nothing is added for: {{names}}.',
@@ -155,6 +157,7 @@ const en = {
     remove: 'Remove',
     unlock: 'Unlock',
     unlockToChange: 'Projects are kept in the vault. Unlock it to change them.',
+    unlockToJoin: '{{name}} is saved. Unlock the vault to add it to {{project}}.',
     lockedTitle: 'Vault locked',
     lockedText: 'Unlock the vault to see this project’s logins and environments.',
     lockedTextPersonal: 'Unlock the vault to see your logins and environments.',
@@ -1699,6 +1702,8 @@ const en = {
     flushDns: 'Clear the DNS cache',
     flushDnsHint: 'So apps use the new addresses right away.',
     apply: 'Save with password',
+    previewFailed: 'Can’t show this change: {{error}}',
+    nothingToChange: 'Nothing to change: the file already reads this way.',
     previewStale:
       'The hosts file changed since you started. Discard your changes and make them again.',
     applied: 'Hosts file saved',

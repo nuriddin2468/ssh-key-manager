@@ -9,6 +9,7 @@ import type { Project } from '@/bindings/Project';
 import type { Severity } from '@/bindings/Severity';
 import type { VaultFinding } from '@/bindings/VaultFinding';
 import {
+  aliasOf,
   cardColumns,
   hostAliases,
   hostsFileEntries,
@@ -198,15 +199,24 @@ describe('hosts file names', () => {
   });
 });
 
-describe('switching all of a project’s hosts file entries', () => {
-  const line = (n: number, names: string[], enabled: boolean, system = false) =>
-    ({ line: n, address: `10.0.0.${n}`, names, enabled, system }) as HostsFileEntry;
+describe('switching a project’s hosts file entries', () => {
+  const line = (n: number, names: string[], enabled: boolean, address = `10.0.0.${n}`) =>
+    // `system` as the core sets it: only when every name is the system's.
+    ({
+      line: n,
+      address,
+      names,
+      enabled,
+      system: names.every((name) => name.startsWith('localhost')),
+    }) as HostsFileEntry;
   const file = [
-    line(1, ['localhost', 'app.test'], true, true),
-    line(2, ['app.test'], false),
-    line(3, ['api.test', 'docs.test'], true),
-    line(4, ['api.test'], false),
-    line(5, ['other.test'], false),
+    line(1, ['localhost'], true, '127.0.0.1'),
+    line(2, ['localhost', 'app.test'], true, '127.0.0.1'),
+    line(3, ['app.test'], false),
+    line(4, ['api.test', 'docs.test', 'unrelated.test'], true),
+    line(5, ['api.test'], false),
+    line(6, ['api.test'], false, 'fd00::6'),
+    line(7, ['other.test'], false),
   ];
   const shop = project({
     id: 'p1',
@@ -215,26 +225,35 @@ describe('switching all of a project’s hosts file entries', () => {
   });
   const blog = project({ id: 'p2', name: 'Blog', hostsFile: ['docs.test', 'api.test'] });
 
-  it('changes only entries in the other state, never the system’s or new ones', () => {
+  it('changes only entries in the other state, never a line with a system name', () => {
     const on = planHostsFileSwitch(shop, [shop, blog], file, true);
-    expect(on.entries.map((e) => e.line)).toEqual([2, 3, 4]);
-    expect(on.lines.map((e) => e.line)).toEqual([2, 4]);
+    expect(on.entries.map((e) => e.line)).toEqual([3, 4, 5, 6]);
+    expect(on.kept.map((e) => e.line)).toEqual([2]);
+    expect(on.lines.map((e) => e.line)).toEqual([3, 5, 6]);
     const off = planHostsFileSwitch(shop, [shop, blog], file, false);
-    expect(off.lines.map((e) => e.line)).toEqual([3]);
+    expect(off.lines.map((e) => e.line)).toEqual([4]);
   });
 
-  it('names other projects’ names on a changing line', () => {
+  it('changes one entry for its own switch', () => {
+    expect(planHostsFileSwitch(shop, [shop], file, true, 5).lines.map((e) => e.line)).toEqual([5]);
+    // A line with a system name has no switch: nothing changes on it.
+    expect(planHostsFileSwitch(shop, [shop], file, false, 2).lines).toEqual([]);
+  });
+
+  it('names every other name on a changing line, with the projects that hold it', () => {
     const off = planHostsFileSwitch(shop, [shop, blog], file, false);
-    expect(off.shared).toEqual([
-      { name: 'api.test', projects: ['Blog'] },
+    expect(off.others).toEqual([
       { name: 'docs.test', projects: ['Blog'] },
+      { name: 'unrelated.test', projects: [] },
     ]);
-    expect(planHostsFileSwitch(shop, [shop], file, false).shared).toEqual([]);
+    expect(planHostsFileSwitch(shop, [shop, blog], file, false, 4).others).toHaveLength(2);
   });
 
-  it('warns when a name ends up with several entries on', () => {
-    // app.test: the system line and line 2; api.test: lines 3 and 4.
+  it('warns when a name ends up with several entries on in one address family', () => {
+    // app.test: line 2 stays on and line 3 turns on. api.test: lines 4 and 5
+    // in IPv4; line 6 is IPv6, a family of its own.
     expect(planHostsFileSwitch(shop, [shop], file, true).several).toEqual(['app.test', 'api.test']);
+    expect(planHostsFileSwitch(shop, [shop], file, true, 6).several).toEqual([]);
     expect(planHostsFileSwitch(shop, [shop], file, false).several).toEqual([]);
   });
 });
@@ -320,5 +339,12 @@ describe('a project’s card on All projects', () => {
       folder: undefined,
       host: undefined,
     });
+  });
+});
+
+describe('a host made from a project', () => {
+  it('joins by its first pattern that is a name', () => {
+    expect(aliasOf(['*.internal', '!bad', 'app', 'api'])).toBe('app');
+    expect(aliasOf(['web?', '*'])).toBeUndefined();
   });
 });

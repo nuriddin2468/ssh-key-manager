@@ -47,10 +47,20 @@ export type Page = Route['page'];
 /** Returns true to stop a navigation (it then asks the user itself). */
 type Blocker = (next: Route) => boolean;
 
+interface NavigateOptions {
+  /** Skips the page's guard. */
+  force?: boolean;
+  /**
+   * Opens the route as a section of its own, without the way back to a
+   * project: the sidebar, the menus and the palette (`useFreshNavigate`).
+   */
+  fresh?: boolean;
+}
+
 interface RouterValue {
   route: Route;
-  /** Goes to `route` unless a page blocks it; `force` skips the page's guard. */
-  navigate: (route: Route, options?: { force?: boolean }) => void;
+  /** Goes to `route` unless a page blocks it. */
+  navigate: (route: Route, options?: NavigateOptions) => void;
   setBlocker: (blocker: Blocker | null) => void;
 }
 
@@ -90,18 +100,16 @@ function devRoute(): Route | undefined {
 }
 
 /**
- * `next`, keeping the way back to a project while the user picks other
- * items in the section it opened (another host keeps "‹ Shop"). Opening the
- * section itself, from the sidebar or a shortcut, starts without it.
+ * `next`, keeping the way back to a project while the user stays in the
+ * section it opened: another host, the editor closed, the last item
+ * deleted all keep "‹ Shop". A route with its own `back` (even none)
+ * replaces it; the sidebar, menus and palette drop it (`fresh`).
  */
 export function withBack(current: Route, next: Route): Route {
   if (next.page !== current.page || 'back' in next || !('back' in current) || !current.back) {
     return next;
   }
-  const item = Object.entries(next).some(
-    ([field, value]) => field !== 'page' && value !== undefined,
-  );
-  return item ? ({ ...next, back: current.back } as Route) : next;
+  return { ...next, back: current.back } as Route;
 }
 
 /** Where the app opens, and ⌘1: All projects. */
@@ -112,9 +120,9 @@ export function homeRoute(): Route {
 export function RouterProvider({ initial, children }: { initial?: Route; children: ReactNode }) {
   const [route, setRoute] = useState<Route>(() => initial ?? devRoute() ?? homeRoute());
   const blocker = useRef<Blocker | null>(null);
-  const navigate = useCallback((next: Route, options?: { force?: boolean }) => {
+  const navigate = useCallback((next: Route, options?: NavigateOptions) => {
     if (!options?.force && blocker.current?.(next)) return;
-    setRoute((current) => withBack(current, next));
+    setRoute((current) => (options?.fresh ? next : withBack(current, next)));
   }, []);
   const setBlocker = useCallback((next: Blocker | null) => {
     blocker.current = next;
@@ -127,6 +135,15 @@ export function useRouter(): RouterValue {
   const value = use(RouterContext);
   if (!value) throw new Error('useRouter must be used inside <RouterProvider>');
   return value;
+}
+
+/**
+ * `navigate` for the sidebar, the menus and the palette: what they open
+ * starts without the way back to a project.
+ */
+export function useFreshNavigate(): (route: Route) => void {
+  const { navigate } = useRouter();
+  return useCallback((next: Route) => navigate(next, { fresh: true }), [navigate]);
 }
 
 /**

@@ -88,7 +88,14 @@ import {
 } from './draft';
 import { EntryDialog, GroupDialog } from './EntryDialog';
 import { LookupDialog } from './LookupDialog';
-import { isExpired, isSystemName, isValidName, KIND_STYLE, normalizeName } from './model';
+import {
+  isExpired,
+  isSystemName,
+  isValidName,
+  KIND_STYLE,
+  listsSystemName,
+  normalizeName,
+} from './model';
 import { type ReceivedNote, ReviewDialog } from './ReviewDialog';
 import { useEntryDrag } from './useEntryDrag';
 
@@ -1071,7 +1078,8 @@ function EntryLine({
   const name = entry.names[0] ?? entry.address;
   // A line joins a project by its first name of its own, as the file has it.
   const projectName =
-    base && status !== 'new' && !base.system && base.kind !== 'blocked'
+    // A line that lists a system name can't be switched: none of its names join.
+    base && status !== 'new' && !listsSystemName(base) && base.kind !== 'blocked'
       ? base.names.map(normalizeName).find((n) => isValidName(n) && !isSystemName(n))
       : undefined;
   const projectMember: ProjectMember | null = projectName

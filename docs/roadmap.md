@@ -84,7 +84,9 @@ The foundation for everything below.
    backups, and flags a name the file no longer has. Added from the Add menu or a Hosts
    file entry's menu; suggested from the names and domains of the project's hosts. One
    switch turns all of a project's entries on or off: one review that names what else it
-   touches, one password, Undo through the backup. In review:
+   touches, one password, Undo through the backup. Lines that also list a system name
+   (`127.0.0.1 localhost app.test`) are left as they are. Not yet: a name renamed in the
+   Hosts file section isn't followed; the project flags the old one as gone. In review:
    [#41](https://github.com/nuriddin2468/ssh-key-manager/pull/41).
 6. **All projects, the home screen**: the app opens on it and ⌘1 comes back (it was the
    project used last). A card per project, Personal first: what it holds, its problems

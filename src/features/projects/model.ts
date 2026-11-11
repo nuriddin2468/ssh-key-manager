@@ -16,7 +16,7 @@ import type { VaultFinding } from '@/bindings/VaultFinding';
 import type { Tone } from '@/components/ui/Tile';
 import { IGNORE_PREFIX } from '@/features/audit/vaultModel';
 import { gitService } from '@/features/hosts/model';
-import { normalizeName } from '@/features/hostsFile/model';
+import { listsSystemName, normalizeName } from '@/features/hostsFile/model';
 
 /** In the order the color picker shows them. */
 export const PROJECT_COLORS: ProjectColor[] = [
@@ -65,6 +65,14 @@ export function hostAliases(hosts: HostEntry[]): Set<string> {
     for (const pattern of host.patterns) if (!pattern.startsWith('!')) aliases.add(pattern);
   }
   return aliases;
+}
+
+/**
+ * The name a project holds a new host by: its first pattern that is a name,
+ * not a wildcard (`*.internal`) or a negation. `undefined` for none.
+ */
+export function aliasOf(patterns: readonly string[]): string | undefined {
+  return patterns.find((pattern) => !/[*?!]/.test(pattern));
 }
 
 /** What the library holds, as far as it is loaded: `undefined` while a part isn't. */
@@ -391,21 +399,27 @@ export function memberKey(member: ProjectMember): string {
   }
 }
 
-/** What switching all of a project's hosts file entries on or off does. */
+/** What switching a project's hosts file entries on or off does. */
 export interface HostsFilePlan {
-  /** The project's entries, not the system's, the switch acts on. */
+  /** The project's entries a switch acts on: not those listing a system name. */
   entries: HostsFileEntry[];
+  /** The project's entries left as they are: they list a system name too. */
+  kept: HostsFileEntry[];
   /** Those not already in the state asked for: the ones that change. */
   lines: HostsFileEntry[];
-  /** Names on a changing line that other projects hold, with those projects' names. */
-  shared: { name: string; projects: string[] }[];
-  /** Names that will have more than one entry on: the first in the file wins. */
+  /**
+   * Names the project doesn't hold on a changing line, which change with it,
+   * with the other projects that hold them.
+   */
+  others: { name: string; projects: string[] }[];
+  /** Names that will have more than one entry on in an address family: the first wins. */
   several: string[];
 }
 
 /**
- * Plans turning all of `project`'s hosts file entries `on` (or off): only
- * entries in the other state change; names the file doesn't have add
+ * Plans turning `project`'s hosts file entries `on` (or off): all of them,
+ * or the one on `line`. Only entries in the other state change; lines that
+ * list a system name stay as they are; names the file doesn't have add
  * nothing; what else the change touches is named for the review.
  */
 export function planHostsFileSwitch(
@@ -413,34 +427,48 @@ export function planHostsFileSwitch(
   projects: Project[],
   file: readonly HostsFileEntry[],
   on: boolean,
+  line?: number,
 ): HostsFilePlan {
-  const entries = hostsFileEntries(file, project.hostsFile).filter((entry) => !entry.system);
-  const lines = entries.filter((entry) => entry.enabled !== on);
-  const shared = new Map<string, string[]>();
-  for (const line of lines) {
-    for (const name of line.names.map(normalizeName)) {
-      for (const other of projects) {
-        if (other.id === project.id || !other.hostsFile.includes(name)) continue;
-        const holders = shared.get(name) ?? [];
-        if (!holders.includes(other.name)) holders.push(other.name);
-        shared.set(name, holders);
-      }
+  const mine = hostsFileEntries(file, project.hostsFile).filter((entry) => !entry.system);
+  const entries = mine.filter((entry) => !listsSystemName(entry));
+  const kept = mine.filter(listsSystemName);
+  const lines = entries.filter(
+    (entry) => entry.enabled !== on && (line === undefined || entry.line === line),
+  );
+  const held = new Set(project.hostsFile);
+  const others = new Map<string, string[]>();
+  for (const changing of lines) {
+    for (const name of changing.names.map(normalizeName)) {
+      if (held.has(name) || others.has(name)) continue;
+      others.set(
+        name,
+        projects
+          .filter((other) => other.id !== project.id && other.hostsFile.includes(name))
+          .map((other) => other.name),
+      );
     }
   }
-  const several = on
-    ? project.hostsFile.filter(
-        (name) =>
-          file.filter(
+  // Resolvers use the first entry on for a name in each family, IPv4 and IPv6.
+  const changingNames = new Set(lines.flatMap((entry) => entry.names.map(normalizeName)));
+  const onAfter = file.filter((entry) => (lines.includes(entry) ? on : entry.enabled));
+  const several = project.hostsFile.filter(
+    (name) =>
+      on &&
+      changingNames.has(name) &&
+      [false, true].some(
+        (ipv6) =>
+          onAfter.filter(
             (entry) =>
-              (entry.enabled || lines.includes(entry)) &&
+              entry.address.includes(':') === ipv6 &&
               entry.names.some((n) => normalizeName(n) === name),
           ).length > 1,
-      )
-    : [];
+      ),
+  );
   return {
     entries,
+    kept,
     lines,
-    shared: [...shared].map(([name, holders]) => ({ name, projects: holders })),
+    others: [...others].map(([name, holders]) => ({ name, projects: holders })),
     several,
   };
 }

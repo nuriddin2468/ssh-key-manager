@@ -35,6 +35,7 @@ import { EntryEditor } from '@/features/passwords/EntryEditor';
 import { useVaultMutation } from '@/features/passwords/vault';
 import { updateSettings } from '@/lib/settings';
 import { AddMembersDialog, type MemberKind } from './AddMembersDialog';
+import { useJoinMade } from './actions';
 import { Cards } from './cards';
 import { holds, type Library, type Members, memberKey, personal } from './model';
 import { ProjectDialog } from './ProjectDialog';
@@ -114,16 +115,13 @@ export function ProjectPage({ id }: { id?: string }) {
     success: (saved) => (saved ? t('projects.folderAdded') : undefined),
     onSuccess: () => void refreshSuggestions(),
   });
-  // What was just made joins the project; the dialog's own toast says it.
-  const join = useVaultMutation(
-    (member: ProjectMember) => api.projectsSetMember(id ?? '', member, true),
-    { onSuccess: () => void refreshSuggestions() },
-  );
+  const join = useJoinMade();
   // Marks what was made (`memberKey`, or `envs:<id>`) and puts it in the project.
   const remember = (made: string) => setMade((current) => new Set(current).add(made));
-  const joinMade = (into: Project, member: ProjectMember) => {
-    remember(memberKey(member));
-    if (!holds(into, member)) join.mutate(member);
+  const joinMade = (into: Project, name: string, ...made: ProjectMember[]) => {
+    for (const member of made) remember(memberKey(member));
+    const members = made.filter((member) => !holds(into, member));
+    if (members.length > 0) join.mutate({ into, members, name });
   };
 
   if (id && !projects.data) {
@@ -180,10 +178,15 @@ export function ProjectPage({ id }: { id?: string }) {
   };
 
   const openNew = (kind: NewKind, into: Project) => {
-    if (kind === 'host') dialogs.addHostFor((alias) => joinMade(into, { type: 'host', alias }));
-    else if (kind === 'key') {
-      dialogs.generateKeyFor((key) => {
-        if (key.fingerprint) joinMade(into, { type: 'key', fingerprint: key.fingerprint });
+    if (kind === 'host') {
+      dialogs.addHostFor((alias) => joinMade(into, alias, { type: 'host', alias }));
+    } else if (kind === 'key') {
+      // The dialog can add a host for the key too: it joins with it.
+      dialogs.generateKeyFor((key, alias) => {
+        const made: ProjectMember[] = [];
+        if (key.fingerprint) made.push({ type: 'key', fingerprint: key.fingerprint });
+        if (alias) made.push({ type: 'host', alias });
+        joinMade(into, key.name, ...made);
       });
     } else setCreating(kind);
   };
@@ -311,7 +314,7 @@ export function ProjectPage({ id }: { id?: string }) {
                 entry={null}
                 onDone={(savedId) => {
                   setCreating(null);
-                  if (savedId) joinMade(project, { type: 'login', id: savedId });
+                  if (savedId) joinMade(project, '', { type: 'login', id: savedId });
                 }}
               />
             ) : null}
@@ -322,7 +325,7 @@ export function ProjectPage({ id }: { id?: string }) {
                 defaultProject={project.environments[0] ?? project.name}
                 onSaved={(saved) => {
                   remember(`envs:${saved.id}`);
-                  joinMade(project, { type: 'environment', group: saved.project });
+                  joinMade(project, saved.name, { type: 'environment', group: saved.project });
                 }}
                 onDone={() => setCreating(null)}
               />

@@ -26,7 +26,7 @@ import { useSettings } from '@/lib/settings';
 import { useRouter } from './router';
 
 type Open =
-  | { kind: 'generate'; onCreated?: (key: KeyView) => void }
+  | { kind: 'generate'; onCreated?: (key: KeyView, hostAlias?: string) => void }
   | { kind: 'addHost'; onSaved?: (alias: string) => void }
   | { kind: 'passphrase'; key: KeyView; suggest: boolean }
   | { kind: 'unlock'; key: KeyView; lifetime: number | null; onUnlocked?: () => void }
@@ -39,8 +39,11 @@ interface VaultUnlock {
 
 interface DialogsValue {
   generateKey: () => void;
-  /** Generates a key and hands it to `onCreated`, staying on the current page. */
-  generateKeyFor: (onCreated: (key: KeyView) => void) => void;
+  /**
+   * Generates a key and hands it to `onCreated`, staying on the current page;
+   * with the host the dialog can add too, its alias.
+   */
+  generateKeyFor: (onCreated: (key: KeyView, hostAlias?: string) => void) => void;
   addHost: () => void;
   /** Adds a host and hands its name to `onSaved`, staying on the current page. */
   addHostFor: (onSaved: (alias: string) => void) => void;

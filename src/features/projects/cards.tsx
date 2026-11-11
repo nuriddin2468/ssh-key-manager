@@ -19,7 +19,16 @@ import {
   User,
   Variable,
 } from 'lucide-react';
-import { Fragment, type ReactNode, useId, useMemo, useState, useSyncExternalStore } from 'react';
+import {
+  Fragment,
+  type ReactNode,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
@@ -50,6 +59,7 @@ import { fileManagerName } from '@/lib/platform';
 import { useSettings } from '@/lib/settings';
 import type { MemberKind } from './AddMembersDialog';
 import { useSetMember } from './actions';
+import { type Fold, useFolds } from './folds';
 import {
   CARD_LIMIT,
   cardColumns,
@@ -151,6 +161,7 @@ export function Cards({ project, members, library, goneFolders, locked, made, on
   const { t } = useTranslation();
   const dialogs = useDialogs();
   const wide = useWide();
+  const fold = useFolds();
   const gone = project ? missing(project, library, goneFolders) : NOTHING_GONE;
   const origin: Origin = { project, back: project ? project.id : 'personal', made };
   const lockedNotice =
@@ -229,7 +240,7 @@ export function Cards({ project, members, library, goneFolders, locked, made, on
     return (
       <div className="flex flex-col gap-3">
         {cards.map((card) => (
-          <Card key={card.id} card={card} />
+          <Card key={card.id} card={card} {...fold(card.id)} />
         ))}
         {quickAdd}
       </div>
@@ -244,7 +255,7 @@ export function Cards({ project, members, library, goneFolders, locked, made, on
         {columns.map((column, side) => (
           <div key={side === 0 ? 'left' : 'right'} className="flex min-w-0 flex-col gap-3">
             {column.map((card) => (
-              <Card key={card.id} card={card} />
+              <Card key={card.id} card={card} {...fold(card.id)} />
             ))}
           </div>
         ))}
@@ -254,16 +265,22 @@ export function Cards({ project, members, library, goneFolders, locked, made, on
   );
 }
 
-function Card({ card }: { card: CardSpec }) {
+function Card({ card, all, refocus, onToggle }: { card: CardSpec } & Fold) {
   const { t } = useTranslation();
   const headingId = useId();
   const listId = useId();
-  const [all, setAll] = useState(false);
+  const section = useRef<HTMLElement>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on mount only
+  useEffect(() => {
+    if (!refocus || document.activeElement !== document.body) return;
+    section.current?.querySelector<HTMLButtonElement>('[aria-controls]')?.focus();
+  }, []);
   const rows = problemsFirst(card.rows);
   const folds = rows.length > CARD_LIMIT;
   const shown = folds && !all ? rows.slice(0, CARD_LIMIT) : rows;
   return (
     <section
+      ref={section}
       aria-labelledby={headingId}
       className="glass flex min-w-0 flex-col rounded-2xl px-3 pt-2.5 pb-1.5"
     >
@@ -297,7 +314,7 @@ function Card({ card }: { card: CardSpec }) {
               strokeWidth={2.2}
             />
           }
-          onClick={() => setAll((current) => !current)}
+          onClick={onToggle}
         >
           {all ? t('projects.showFewer') : t('projects.showAll', { total: rows.length })}
         </Button>

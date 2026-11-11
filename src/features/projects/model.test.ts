@@ -6,6 +6,7 @@ import type { HostsFileEntry } from '@/bindings/HostsFileEntry';
 import type { KeyView } from '@/bindings/KeyView';
 import type { Project } from '@/bindings/Project';
 import {
+  aliasOf,
   cardColumns,
   hostAliases,
   hostsFileEntries,
@@ -230,5 +231,12 @@ describe('switching all of a project’s hosts file entries', () => {
     // app.test: the system line and line 2; api.test: lines 3 and 4.
     expect(planHostsFileSwitch(shop, [shop], file, true).several).toEqual(['app.test', 'api.test']);
     expect(planHostsFileSwitch(shop, [shop], file, false).several).toEqual([]);
+  });
+});
+
+describe('a host made from a project', () => {
+  it('joins by its first pattern that is a name', () => {
+    expect(aliasOf(['*.internal', '!bad', 'app', 'api'])).toBe('app');
+    expect(aliasOf(['web?', '*'])).toBeUndefined();
   });
 });

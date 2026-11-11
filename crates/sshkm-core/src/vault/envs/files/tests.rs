@@ -123,7 +123,9 @@ impl Fixture {
 
     fn bind(&mut self, path: &str) -> EnvFile {
         let env = self.env.clone();
-        self.vault.bind_env_file(&env, &self.file(path), &self.ctx).unwrap()
+        self.vault
+            .bind_env_file(&env, &self.file(path), &self.ctx)
+            .unwrap()
     }
 
     /// One round, as the app does it: pull, save, push.
@@ -184,7 +186,10 @@ fn kinds_come_from_names_until_set() {
         assert_eq!(EnvKind::from_name(name), kind, "{name}");
     }
     let mut f = Fixture::new();
-    assert_eq!(f.vault.environment(&f.env).unwrap().summary.kind, EnvKind::Local);
+    assert_eq!(
+        f.vault.environment(&f.env).unwrap().summary.kind,
+        EnvKind::Local
+    );
     f.vault.set_env_kind(&f.env, EnvKind::Remote).unwrap();
     assert_eq!(f.vault.env_files(&f.env).unwrap().0, EnvKind::Remote);
     // A remote one gets no file.
@@ -202,7 +207,10 @@ fn kinds_come_from_names_until_set() {
         notes: String::new(),
     };
     f.vault.update_environment(&f.env, &input).unwrap();
-    assert_eq!(f.vault.environment(&f.env).unwrap().summary.kind, EnvKind::Local);
+    assert_eq!(
+        f.vault.environment(&f.env).unwrap().summary.kind,
+        EnvKind::Local
+    );
     input.name = "dev".into();
     f.vault.update_environment(&f.env, &input).unwrap();
 }
@@ -221,7 +229,9 @@ fn file_names_and_paths_are_checked() {
         assert_eq!(check_env_file(&f.file(path)).unwrap().path, path);
     }
     assert_eq!(
-        check_env_file(&f.file(r"apps\web\.env.local")).unwrap().path,
+        check_env_file(&f.file(r"apps\web\.env.local"))
+            .unwrap()
+            .path,
         "apps/web/.env.local"
     );
     for path in [
@@ -325,7 +335,7 @@ fn edits_of_the_file_go_to_the_vault_and_can_be_undone() {
         read(&path),
         "# mine\nPORT=4000\nNEW_SECRET_KEY=sk-123456789\nDEBUG=true\n"
     );
-    assert!(synced.written.is_empty());
+    assert_eq!(synced.written, []);
     let undo = change.undo.clone();
 
     f.vault.undo_env_file_change(&undo).unwrap();
@@ -366,7 +376,10 @@ fn a_change_in_the_vault_rewrites_only_its_lines_in_every_file() {
     let root = f.path(".env");
     let text = "\u{feff}# The API\r\n\r\nexport PORT = 3000 # dev port\r\nAPI_TOKEN=\"tok-1\"\r\nnot a variable\r\n";
     fs::write(&root, text).unwrap();
-    assert!(f.sync().changes.is_empty(), "same variables, nothing to take");
+    assert!(
+        f.sync().changes.is_empty(),
+        "same variables, nothing to take"
+    );
 
     f.set("API_TOKEN", "tok 2", true);
     let synced = f.sync();
@@ -535,7 +548,7 @@ fn unreadable_lines_change_nothing_either_way() {
     fs::write(&path, broken).unwrap();
     let synced = f.sync();
     assert!(matches!(synced.files[0].state, FileState::Invalid { .. }));
-    assert!(synced.changes.is_empty());
+    assert_eq!(synced.changes, []);
     assert_eq!(f.values().len(), 2);
     f.set("PORT", "1", false);
     f.sync();
@@ -543,6 +556,33 @@ fn unreadable_lines_change_nothing_either_way() {
     // A word without `=` is not a problem.
     fs::write(&path, "PORT=1\nAPI_TOKEN=tok-1\njust a note\n").unwrap();
     assert_eq!(f.sync().files[0].state, FileState::InSync);
+}
+
+#[test]
+fn a_file_left_without_variables_asks_first() {
+    let mut f = Fixture::new();
+    f.bind(".env");
+    f.sync();
+    let path = f.path(".env");
+    // An editor that writes in place, caught halfway, or everything deleted.
+    fs::write(&path, "").unwrap();
+    let synced = f.sync();
+    assert_eq!(synced.files[0].state, FileState::Conflict);
+    assert_eq!(f.values().len(), 2);
+    assert_eq!(read(&path), "");
+    // The editor finishes: nothing was lost.
+    fs::write(&path, "PORT=3000\nAPI_TOKEN=tok-1\n").unwrap();
+    assert_eq!(f.sync().files[0].state, FileState::InSync);
+    // Emptied on purpose, and kept.
+    fs::write(&path, "# nothing here\n").unwrap();
+    let env = f.env.clone();
+    let file = f.file(".env");
+    f.sync_preferring(Some(Preference {
+        env_id: &env,
+        file: &file,
+        keep: KeepSide::File,
+    }));
+    assert_eq!(f.values(), []);
 }
 
 #[test]
@@ -602,7 +642,7 @@ fn a_file_can_be_deleted_only_when_the_vault_has_all_of_it() {
     assert!(f.vault.delete_env_file(&env, &file, &f.ctx).unwrap());
     assert!(!path.exists());
     assert!(f.vault.unbind_env_file(&env, &file).unwrap());
-    assert!(f.vault.env_files(&env).unwrap().1.is_empty());
+    assert_eq!(f.vault.env_files(&env).unwrap().1, []);
 }
 
 #[test]
@@ -718,7 +758,11 @@ fn nothing_is_written_into_the_ssh_folder_or_over_the_vault() {
     let text = projects::folder_text(&parent, None).unwrap();
     let project = f.project.clone();
     f.vault
-        .set_project_member(&project, &ProjectMember::Folder { path: text.clone() }, true)
+        .set_project_member(
+            &project,
+            &ProjectMember::Folder { path: text.clone() },
+            true,
+        )
         .unwrap();
     let env = f.env.clone();
     let file = EnvFile {
@@ -760,13 +804,17 @@ fn the_overview_finds_unmanaged_files_templates_and_cloud_folders() {
         .map(|file| file.file.path.as_str())
         .collect();
     assert_eq!(unmanaged, ["apps/web/.env.local"]);
-    assert_eq!(overview.unmanaged[0].location, f.path("apps/web/.env.local"));
+    assert_eq!(
+        overview.unmanaged[0].location,
+        f.path("apps/web/.env.local")
+    );
     assert!(!overview.truncated);
-    let path = f
+    let (path, parsed) = f
         .vault
         .unmanaged_env_file(&f.project, &f.file("apps/web/.env.local"), &f.ctx)
         .unwrap();
-    assert_eq!(read(&path), "X=1\n");
+    assert_eq!(path, f.path("apps/web/.env.local"));
+    assert_eq!(parsed.vars[0].name, "X");
     assert!(
         f.vault
             .unmanaged_env_file(&f.project, &f.file(".env.example"), &f.ctx)
@@ -798,8 +846,9 @@ fn fields_of_later_versions_are_kept() {
     let id = parse_id(&f.env).unwrap();
     {
         let mut entry = f.vault.db.entry_mut(id).unwrap();
-        let json = r#"{"kind":"local","files":[{"folder":"F","path":".env","level":2}],"future":true}"#
-            .replace('F', &f.folder_text.replace('\\', "\\\\"));
+        let json =
+            r#"{"kind":"local","files":[{"folder":"F","path":".env","level":2}],"future":true}"#
+                .replace('F', &f.folder_text.replace('\\', "\\\\"));
         entry.custom_data.insert(
             FILES_DATA.to_owned(),
             CustomDataItem {

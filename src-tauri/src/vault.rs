@@ -116,6 +116,9 @@ pub struct VaultRuntime {
     session: AtomicU64,
     /// For [`UNLOCKED_EVENT`]; set when the timer starts.
     app: OnceLock<AppHandle>,
+    /// Told after every change saved and every unlock: the managed `.env`
+    /// files follow the vault ([`crate::env_files`]).
+    after_change: OnceLock<Box<dyn Fn() + Send + Sync>>,
 }
 
 #[derive(Default)]
@@ -205,6 +208,19 @@ impl VaultRuntime {
             clipboard: Mutex::new(ClipboardState::default()),
             session: AtomicU64::new(0),
             app: OnceLock::new(),
+            after_change: OnceLock::new(),
+        }
+    }
+
+    /// Calls `hook` after every change saved here and every unlock, from
+    /// then on. It runs while the vault is held, so it must only signal.
+    pub fn on_change(&self, hook: impl Fn() + Send + Sync + 'static) {
+        let _ = self.after_change.set(Box::new(hook));
+    }
+
+    fn changed(&self) {
+        if let Some(hook) = self.after_change.get() {
+            hook();
         }
     }
 
@@ -292,6 +308,7 @@ impl VaultRuntime {
         if let Some(app) = self.app.get() {
             let _ = app.emit(UNLOCKED_EVENT, ());
         }
+        self.changed();
     }
 
     /// Locks the vault, telling the UI why. Does nothing if it is locked.
@@ -467,10 +484,37 @@ impl VaultRuntime {
                     return Err(error.into());
                 }
                 self.remember_projects(vault);
+                self.changed();
                 Ok(result)
             },
             on_changed,
         )
+    }
+
+    /// Runs `work` on the unlocked vault with a way to save it, without a
+    /// backup and without telling [`Self::on_change`]'s hook: for keeping
+    /// the managed `.env` files in step, which saves edits of files (the
+    /// entry's history keeps what they replaced) and then writes files.
+    /// Counts as activity only when the user asked for it (`activity`).
+    pub fn with_files<T>(
+        &self,
+        app: &AppHandle,
+        backup_dir: &Path,
+        activity: bool,
+        work: impl FnOnce(&mut Vault, &dyn Fn(&mut Vault) -> AppResult<()>) -> AppResult<T>,
+    ) -> AppResult<T> {
+        self.access(app, activity, |vault| {
+            let save = |vault: &mut Vault| -> AppResult<()> {
+                if let Err(error) = vault.save_without_backup(backup_dir) {
+                    // Reload what is on disk, whatever happened to the write.
+                    let _ = vault.refresh();
+                    return Err(error.into());
+                }
+                self.remember_projects(vault);
+                Ok(())
+            };
+            work(vault, &save)
+        })
     }
 
     /// Copies `text` so that clipboard history and cloud clipboards skip it,

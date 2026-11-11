@@ -4,10 +4,10 @@
 //! Found by where the services keep their folders: iCloud Drive
 //! (`~/Library/Mobile Documents`, and Desktop and Documents when they are
 //! in iCloud), the File Provider folders of macOS (`~/Library/CloudStorage`:
-//! Dropbox, OneDrive, Google Drive and others), `~/Dropbox` and the folders
-//! Dropbox's own `info.json` names, `~/OneDrive` and the folders Windows
-//! names in `OneDrive*` variables, `~/iCloudDrive` on Windows, and Google
-//! Drive's `My Drive`.
+//! Dropbox, `OneDrive`, Google Drive and others), `~/Dropbox` and the
+//! folders Dropbox's own `info.json` names, `~/OneDrive` and the folders
+//! Windows names in `OneDrive*` variables, `~/iCloudDrive` on Windows, and
+//! Google Drive's `My Drive`.
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -204,10 +204,7 @@ mod tests {
             service(&["Dropbox (Acme)", "app", ".env"]),
             Some(CloudService::Dropbox)
         );
-        assert_eq!(
-            service(&["elsewhere", ".env"]),
-            Some(CloudService::Dropbox)
-        );
+        assert_eq!(service(&["elsewhere", ".env"]), Some(CloudService::Dropbox));
         assert_eq!(service(&["Desktop", ".env"]), None);
     }
 

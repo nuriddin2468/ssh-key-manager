@@ -79,6 +79,15 @@ real `~/.ssh`. Its modules:
     marked by the entry's custom data. It reads `.env` files, guesses secrets, writes
     the export formats and compares two environments by value without returning
     values.
+    - `envs::document` edits a `.env` file in place, as `config` does `~/.ssh/config`:
+      an unchanged file comes out byte for byte, and a change touches only the lines
+      of the variables it changes, keeping comments, order, quoting and `export`.
+    - `envs::files` writes `local` environments to files in their projects' folders
+      and keeps the two in step: a keyed revision per file and computer says which
+      side changed; the file's edits go to the vault (with Undo from the entry's
+      history), the vault's to the file; both changed is a conflict for the user.
+      `files::disk` finds, reads and writes the files without following links or
+      leaving the project's folder; `files::cloud` knows the cloud services' folders.
 
 - `browser`: what the browser extension may see of the vault.
   - `origin` matches a login's address to a page: the same registrable domain (Public
@@ -148,6 +157,12 @@ translates.
   - An interactive session (the terminal) hands host-key questions, secrets asked again
     and other accounts' prompts to its responder too, saying which they are; other yes/no
     questions still get "no".
+- **Managed `.env` files.** `src-tauri/src/env_files.rs` runs a round of keeping files
+  in step after every change of the vault (here, an unlock, or its file changed by
+  another computer) and after a bound file changes: it watches the folders of the
+  bound files for their names, so editors that save by renaming are seen. A round
+  saves the files' edits to the vault first, then writes files, and tells the UI with
+  `env-files-changed`. The revisions are kept in `env-files.json`.
 - **Terminal.** `src-tauri/src/terminal/`: one pseudo-terminal per session (`portable-pty`,
   ConPTY on Windows) running `ssh -o ConnectTimeout=10 -- <alias>`, or the user's own
   shell with a secret environment's variables in its environment (`local.rs`).

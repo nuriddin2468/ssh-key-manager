@@ -83,8 +83,7 @@ pub fn replace_private(path: &Path, bytes: &[u8]) -> Result<()> {
 /// The private write of [`atomic_write_private`] to `target` as it is.
 #[cfg(windows)]
 fn write_private_at(target: &Path, bytes: &[u8]) -> Result<()> {
-    let target = target.to_path_buf();
-    let (dir, prefix) = temp_location(&target);
+    let (dir, prefix) = temp_location(target);
     let created = tempfile::Builder::new()
         .prefix(&prefix)
         .suffix(".sshkm-tmp")
@@ -101,8 +100,8 @@ fn write_private_at(target: &Path, bytes: &[u8]) -> Result<()> {
     let written = file.write_all(bytes).and_then(|()| file.sync_all());
     drop(file);
     written.map_err(|e| Error::io(e, &tmp))?;
-    tmp.persist(&target)
-        .map_err(|e| Error::io(e.error, &target))?;
+    tmp.persist(target)
+        .map_err(|e| Error::io(e.error, target))?;
     Ok(())
 }
 
@@ -456,7 +455,12 @@ mod tests {
             std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
             replace_private(&path, b"NEW=2\n").unwrap();
             assert_eq!(fs::read_to_string(&elsewhere).unwrap(), "keep");
-            assert!(!fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
+            assert!(
+                !fs::symlink_metadata(&path)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
             assert_eq!(fs::read(&path).unwrap(), b"NEW=2\n");
         }
         #[cfg(windows)]

@@ -111,8 +111,7 @@ pub fn parse(text: &str) -> ParsedEnv {
             .filter(|problem| cut_line.is_none_or(|cut| problem.line < cut)),
     );
     parsed.problems.sort_by_key(|problem| problem.line);
-    let mut assignments: Vec<Option<Assignment>> =
-        scan.assignments.into_iter().map(Some).collect();
+    let mut assignments: Vec<Option<Assignment>> = scan.assignments.into_iter().map(Some).collect();
     parsed.vars = effective
         .into_iter()
         .filter_map(|index| assignments[index].take())
@@ -228,29 +227,31 @@ pub(super) fn scan(text: &str) -> Scan {
             continue;
         }
         let after = &rest[equals + 1..];
-        let (value, raw, quote) = match after.trim_start().chars().next() {
-            Some(quote @ ('"' | '\'' | '`')) => {
-                let open = after.len() - after.trim_start().len();
-                match quoted(text, &after[open + 1..], quote, &lines, &mut next) {
-                    Ok((value, end)) => (value, offset(text, &after[open..])..end, Some(quote)),
-                    Err(kind) => {
-                        if kind == ProblemKind::Unterminated && scan.unterminated_at.is_none() {
-                            scan.unterminated_at = Some(lines[first].start);
-                        }
-                        scan.problems.push(problem(kind));
-                        continue;
+        let opening = after
+            .trim_start()
+            .chars()
+            .next()
+            .filter(|c| matches!(c, '"' | '\'' | '`'));
+        let (value, raw, quote) = if let Some(quote) = opening {
+            let open = after.len() - after.trim_start().len();
+            match quoted(text, &after[open + 1..], quote, &lines, &mut next) {
+                Ok((value, end)) => (value, offset(text, &after[open..])..end, Some(quote)),
+                Err(kind) => {
+                    if kind == ProblemKind::Unterminated && scan.unterminated_at.is_none() {
+                        scan.unterminated_at = Some(lines[first].start);
                     }
+                    scan.problems.push(problem(kind));
+                    continue;
                 }
             }
-            _ => {
-                let value = unquoted(after);
-                let at = if value.is_empty() {
-                    offset(text, after)
-                } else {
-                    offset(text, value)
-                };
-                (Zeroizing::new(value.to_owned()), at..at + value.len(), None)
-            }
+        } else {
+            let value = unquoted(after);
+            let at = if value.is_empty() {
+                offset(text, after)
+            } else {
+                offset(text, value)
+            };
+            (Zeroizing::new(value.to_owned()), at..at + value.len(), None)
         };
         if value.len() > MAX_FIELD_LEN || value.contains('\0') {
             scan.problems.push(ParseProblem {

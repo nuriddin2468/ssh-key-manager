@@ -29,7 +29,8 @@
 //! A file the app wrote and someone deleted is reported, not written again;
 //! one never written on this computer is written. A file whose lines can't
 //! all be read (a quote that never closes, a value too long) changes
-//! nothing either way until it is fixed, so a typo can't empty the vault.
+//! nothing either way until it is fixed, so a typo can't empty the vault;
+//! nor does a file left without a variable, which is a conflict.
 //! Values never reach errors or logs.
 
 mod cloud;
@@ -51,11 +52,12 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 pub use self::cloud::{CloudRoots, CloudService};
-pub use self::disk::{find_env_files, ignore_in_git};
 use self::disk::{Disk, Target};
+pub use self::disk::{find_env_files, ignore_in_git};
 use super::document::EnvDocument;
 use super::dotenv::{self, ParseProblem, ParsedEnv, ProblemKind};
 use super::{EnvComparison, EnvVariable, is_environment, looks_secret, variables_of};
+pub use crate::leaks::GitState;
 use crate::vault::projects::{self, Project};
 use crate::vault::{Vault, in_group, parse_id};
 use crate::{Error, Result, fsutil};
@@ -311,19 +313,15 @@ pub struct ExampleCheck {
     pub missing: Vec<String>,
 }
 
-/// Whether Git would take a file along.
+/// What Git makes of a file, and the top folder of its working tree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
-pub enum GitState {
-    /// Not in a Git working tree.
-    Outside,
-    /// The working tree ignores it.
-    Ignored,
-    /// The working tree doesn't ignore it: committing would take it along.
-    NotIgnored { repository: PathBuf },
-    /// It is committed already: ignoring it doesn't take it out.
-    Tracked { repository: PathBuf },
+pub struct GitInfo {
+    /// Untracked means the next `git add .` takes it along; tracked means
+    /// ignoring it doesn't take it out.
+    pub state: GitState,
+    pub repository: Option<PathBuf>,
 }
 
 /// A file of an environment for the management center.
@@ -340,8 +338,8 @@ pub struct EnvFileReport {
     pub cloud: Option<CloudService>,
     /// What a template next to it sets that the environment lacks.
     pub example: Option<ExampleCheck>,
-    /// Whether Git would take it along; `None` when not looked at.
-    pub git: Option<GitState>,
+    /// What Git makes of it; `None` when not looked at.
+    pub git: Option<GitInfo>,
 }
 
 /// A `.env` file in a project's folder that no environment is written to.
@@ -354,7 +352,7 @@ pub struct UnmanagedEnvFile {
     pub file: EnvFile,
     pub location: PathBuf,
     pub cloud: Option<CloudService>,
-    pub git: Option<GitState>,
+    pub git: Option<GitInfo>,
 }
 
 /// The management center: every file of every environment, or of one
@@ -503,7 +501,9 @@ pub fn is_env_file_name(name: &str) -> bool {
     let lower = name.to_lowercase();
     let env_like = lower == ".env"
         || lower.starts_with(".env.")
-        || (lower.len() > 4 && lower.ends_with(".env"))
+        || Path::new(&lower)
+            .extension()
+            .is_some_and(|extension| extension == "env")
         || lower == ".dev.vars";
     env_like && !is_template_name(&lower)
 }
@@ -578,10 +578,13 @@ fn revision(key: &[u8; 32], vars: &[(&str, &str)]) -> String {
 
 /// Which key a [`SyncState`] was made with: the start of its hash.
 fn key_id(key: &[u8; 32]) -> String {
+    use std::fmt::Write as _;
     Sha256::digest(key)[..8]
         .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+        .fold(String::new(), |mut out, b| {
+            let _ = write!(out, "{b:02x}");
+            out
+        })
 }
 
 /// Lines whose loss would remove variables from the vault: a quote that
@@ -604,6 +607,14 @@ fn blocking(parsed: &ParsedEnv) -> Option<Vec<ParseProblem>> {
         .cloned()
         .collect();
     (!problems.is_empty()).then_some(problems)
+}
+
+/// A file without a variable left, of an environment that has some: what
+/// an editor that writes in place leaves for a moment, or a mistake. It
+/// would remove every variable, so the user says so first, as for a
+/// conflict.
+fn emptied(file: &ParsedEnv, vault: &[EnvVariable]) -> bool {
+    file.vars.is_empty() && !vault.is_empty()
 }
 
 /// The variables an environment has after taking a file's: the file's
@@ -679,7 +690,6 @@ impl Vault {
     pub fn set_env_kind(&mut self, id: &str, kind: EnvKind) -> Result<()> {
         let entry = self.env_entry(id)?;
         let mut data = files_data(&entry)?;
-        drop(entry);
         if kind == EnvKind::Remote && !data.files.is_empty() {
             return Err(Error::invalid(
                 "a remote environment has no files: remove its files first",
@@ -696,7 +706,12 @@ impl Vault {
     /// here or through another folder that is the same on disk, and for one
     /// that can never be written ([`RefusedReason`]). Returns the binding as
     /// kept.
-    pub fn bind_env_file(&mut self, id: &str, file: &EnvFile, ctx: &FilesContext) -> Result<EnvFile> {
+    pub fn bind_env_file(
+        &mut self,
+        id: &str,
+        file: &EnvFile,
+        ctx: &FilesContext,
+    ) -> Result<EnvFile> {
         let file = check_env_file(file)?;
         let entry = self.env_entry(id)?;
         let mut data = files_data(&entry)?;
@@ -709,7 +724,6 @@ impl Vault {
             ));
         }
         let group = self.env_summary(&entry).project;
-        drop(entry);
         let projects = self.projects();
         if !holds(&projects, &group, &file.folder) {
             return Err(Error::invalid(
@@ -766,7 +780,6 @@ impl Vault {
     pub fn unbind_env_file(&mut self, id: &str, file: &EnvFile) -> Result<bool> {
         let entry = self.env_entry(id)?;
         let mut data = files_data(&entry)?;
-        drop(entry);
         let before = data.files.len();
         data.files.retain(|stored| stored.file() != *file);
         if data.files.len() == before {
@@ -872,7 +885,7 @@ impl Vault {
             }
             let base = state.base(&id, &bound.state_key());
             let wanted = prefer.is_some_and(|p| p.keeps(&bound, KeepSide::File));
-            if !wanted && base != Some(vault_rev.as_str()) {
+            if !wanted && (base != Some(vault_rev.as_str()) || emptied(&parsed, &vault)) {
                 continue;
             }
             let (after, edit) = take_file(&vault, &parsed);
@@ -1095,7 +1108,7 @@ impl Vault {
         }
         if keep_vault || base == Some(file_rev.as_str()) {
             write(Some(text.as_str()))
-        } else if base == Some(vault_rev.as_str()) {
+        } else if base == Some(vault_rev.as_str()) && !emptied(&parsed, &vault) {
             (FileState::FileChanged, None)
         } else {
             (FileState::Conflict, None)
@@ -1194,11 +1207,17 @@ impl Vault {
                     .environment(&status.env_id)
                     .map(|env| env.variables.into_iter().map(|var| var.name).collect())
                     .unwrap_or_default();
-                let missing = names.into_iter().filter(|name| !have.contains(name)).collect();
+                let missing = names
+                    .into_iter()
+                    .filter(|name| !have.contains(name))
+                    .collect();
                 Some(ExampleCheck { file, missing })
             });
             overview.files.push(EnvFileReport {
-                cloud: status.location.as_deref().and_then(|path| cloud.service(path)),
+                cloud: status
+                    .location
+                    .as_deref()
+                    .and_then(|path| cloud.service(path)),
                 status,
                 projects,
                 example,
@@ -1252,14 +1271,16 @@ impl Vault {
         overview
     }
 
-    /// Checks that `file` is a `.env` file in a folder of the project
-    /// `project`, to take under management, and returns where it is.
+    /// Reads the `.env` file `file` in a folder of the project `project`,
+    /// to take it under management, as a binding's file is read: without
+    /// following a link, a regular file only. Returns where it is and what
+    /// it holds.
     pub fn unmanaged_env_file(
         &self,
         project: &str,
         file: &EnvFile,
         ctx: &FilesContext,
-    ) -> Result<PathBuf> {
+    ) -> Result<(PathBuf, ParsedEnv)> {
         let file = check_env_file(file)?;
         let project = self.project(project)?;
         if !project.folders.contains(&file.folder) {
@@ -1268,7 +1289,7 @@ impl Vault {
         let target = disk::locate(&file, ctx, &self.paths)
             .map_err(|_| Error::invalid("the file can't be reached"))?;
         match disk::read(&target.real) {
-            Disk::Text(_) => Ok(target.real),
+            Disk::Text(text) => Ok((target.display, dotenv::parse(&text))),
             Disk::Missing => Err(Error::NotFound(target.display.display().to_string())),
             Disk::Refused(_) | Disk::Failed(_) => Err(Error::invalid("the file can't be read")),
         }
@@ -1280,7 +1301,7 @@ impl Vault {
             .into_iter()
             .filter(|project| {
                 project.environments.iter().any(|g| g == group)
-                    && project.folders.iter().any(|f| *f == file.folder)
+                    && project.folders.contains(&file.folder)
             })
             .map(|project| project.id)
             .collect()

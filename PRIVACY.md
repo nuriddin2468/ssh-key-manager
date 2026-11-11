@@ -117,6 +117,10 @@ The app keeps your data on your computer:
   encrypted vault. A `.env` file you import is only read; a file you export is
   written where you choose, in plain text, and a shell you run with an environment
   gets its values in memory only.
+- A local environment you write to files in a project's folders is kept in step with
+  them: those files hold its values in plain text, as `.env` files do. To know which
+  side changed, the app keeps `env-files.json` in its data folder: for each file, a
+  hash of its variables made with a key kept in the vault, never a value.
 
 It goes online only:
 

@@ -6,6 +6,7 @@ pub mod browser;
 mod commands;
 mod confirm;
 mod device_unlock;
+mod env_files;
 mod error;
 #[cfg(target_os = "linux")]
 mod gpu;
@@ -255,6 +256,18 @@ pub fn run() {
             commands::envs::envs_export,
             commands::envs::envs_export_anyway,
             commands::envs::envs_run,
+            commands::env_files::envs_set_kind,
+            commands::env_files::envs_files_status,
+            commands::env_files::envs_files_bind,
+            commands::env_files::envs_files_unbind,
+            commands::env_files::envs_files_sync,
+            commands::env_files::envs_files_resolve,
+            commands::env_files::envs_files_compare,
+            commands::env_files::envs_files_undo,
+            commands::env_files::envs_files_overview,
+            commands::env_files::envs_files_ignore,
+            commands::env_files::envs_files_adopt_preview,
+            commands::env_files::envs_files_adopt,
             commands::projects::projects_list,
             commands::projects::projects_create,
             commands::projects::projects_update,
@@ -387,6 +400,9 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     state.vault.start_timer(app.handle().clone());
     device_unlock::watch_screen_lock(Arc::clone(&state.vault), app.handle().clone());
     vault_watcher::start(app.handle(), &state.vault.paths());
+    let env_files = Arc::new(env_files::EnvFiles::new(&data_dir));
+    app.manage(Arc::clone(&env_files));
+    env_files.start(app.handle(), &state);
     app.manage(state);
     bridge.start_if_enabled(app.handle());
     browser::unlock::watch(app.handle());

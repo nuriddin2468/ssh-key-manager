@@ -5,13 +5,14 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use sshkm_core::vault::VaultPaths;
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::env_files::EnvFiles;
 use crate::watcher::{QUIET, debounce, is_change};
 
 pub const EVENT: &str = "vault-changed";
@@ -57,6 +58,10 @@ impl VaultWatcher {
         let emitter = app.clone();
         match watch(folder, names, move || {
             let _ = emitter.emit(EVENT, ());
+            // Another computer's change may be one the managed files follow.
+            if let Some(files) = emitter.try_state::<Arc<EnvFiles>>() {
+                files.request();
+            }
         }) {
             Ok(watcher) => {
                 *current = Some(Watching {

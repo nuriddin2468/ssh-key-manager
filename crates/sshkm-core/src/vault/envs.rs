@@ -24,7 +24,9 @@ mod tests;
 use std::path::{Path, PathBuf};
 
 use keepass::Database;
-use keepass::db::{CustomDataItem, CustomDataValue, Entry, EntryRef, GroupId, Times, Value, fields};
+use keepass::db::{
+    CustomDataItem, CustomDataValue, Entry, EntryRef, GroupId, Times, Value, fields,
+};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
@@ -438,9 +440,13 @@ pub fn read_file(path: &Path) -> Result<ParsedEnv> {
 /// What an import of the file shows: names, suggested secrets and the lines
 /// that can't be read, without values.
 pub fn preview_file(path: &Path) -> Result<EnvImportPreview> {
-    let parsed = read_file(path)?;
+    Ok(preview_parsed(path, read_file(path)?))
+}
+
+/// What an import of `parsed`, read from the file at `path`, shows.
+pub fn preview_parsed(path: &Path, parsed: ParsedEnv) -> EnvImportPreview {
     let (suggested_project, suggested_name) = suggested_names(path);
-    Ok(EnvImportPreview {
+    EnvImportPreview {
         suggested_project,
         suggested_name,
         variables: parsed
@@ -455,7 +461,7 @@ pub fn preview_file(path: &Path) -> Result<EnvImportPreview> {
             })
             .collect(),
         problems: parsed.problems,
-    })
+    }
 }
 
 /// The variables of `parsed` that `choices` name, with the secret flags

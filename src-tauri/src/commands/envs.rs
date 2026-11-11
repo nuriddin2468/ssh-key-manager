@@ -438,12 +438,14 @@ fn pending_export() -> std::sync::MutexGuard<'static, Option<(String, EnvFormat,
 /// The Git working tree `path` would be in, unless `git check-ignore` says
 /// the file is ignored there. Without `git`, a working tree counts as not
 /// ignoring it.
-fn unignored_in_git(path: &Path) -> Option<PathBuf> {
+pub(crate) fn unignored_in_git(path: &Path) -> Option<PathBuf> {
     let folder = path.parent()?;
     let repository = envs::git_work_tree(folder)?;
     let mut command = process::command("git");
+    // A working tree's own config could name a program to run as its file
+    // system monitor; asking what it ignores needs none.
     command
-        .arg("-C")
+        .args(["-c", "core.fsmonitor=false", "-C"])
         .arg(folder)
         .args(["check-ignore", "-q", "--"])
         .arg(path.file_name()?);

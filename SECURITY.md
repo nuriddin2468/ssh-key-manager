@@ -121,6 +121,28 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     so sourcing the file runs nothing a value holds. When the file would be inside a
     Git working tree that doesn't ignore it (`git check-ignore`; without `git`, any
     working tree counts), nothing is written until you confirm in the app.
+  - **Managed `.env` files.** A `local` environment can be written to files in the
+    folders of the projects that hold it; a `remote` one never is. The interface names
+    a file only as a project folder and a path in it. The app takes plain names ending
+    in a `.env` file's name, never a template to commit (`.env.example`), resolves
+    links on the way and refuses a file whose folder isn't that project folder or one
+    inside it (by file identity), a file that is a link, a pipe or a device, and
+    anything in `~/.ssh` or over the vault's files. A file is written by renaming a
+    new private file over it (mode 0600, or the private access list on Windows), so a
+    link put in its place is replaced, never written through; it is read without
+    following links, as a regular file only. A missing folder is never created.
+  - Managed files and the vault are kept in step both ways. Per file, each computer
+    keeps a keyed hash of the variables both last agreed on (`env-files.json` in the
+    app's data folder; the key is in the vault, so the hashes say nothing without it).
+    An edit of the file goes to the vault and can be undone, and the entry's history
+    keeps the previous version; these saves skip the vault's backup, so an editor
+    saving often doesn't push out the backups of real changes. A change in the vault
+    rewrites only the lines of the variables that changed. When both changed, nothing
+    changes until you keep one side; a file whose lines can't all be read (a quote that
+    never closes) changes nothing either way. Values never reach the interface, errors
+    or logs. Whether Git ignores or has committed a file is asked of `git` with
+    `core.fsmonitor` off, so a repository's own settings can't make it run a program;
+    a line goes into `.gitignore` only when you ask.
   - **Run in terminal** starts your own shell (`$SHELL` as a login shell, or
     `%ComSpec%` on Windows) in the in-app terminal with the variables added to its
     environment. Nothing is written to disk, but the shell and everything it starts

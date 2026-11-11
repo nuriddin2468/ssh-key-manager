@@ -3,15 +3,18 @@
 // read), exports (a `.env` lands in a Git working tree, to show the
 // warning) and a local shell that knows the variables. Values never leave
 // this file except through reveal and copy, as with the real backend.
+// The files environments are written to live in envFiles.ts.
 
 import type { CopyResult } from '@/bindings/CopyResult';
 import type { EnvComparison } from '@/bindings/EnvComparison';
 import type { EnvDetail } from '@/bindings/EnvDetail';
 import type { EnvExport } from '@/bindings/EnvExport';
+import type { EnvFile } from '@/bindings/EnvFile';
 import type { EnvFormat } from '@/bindings/EnvFormat';
 import type { EnvImported } from '@/bindings/EnvImported';
 import type { EnvImportPick } from '@/bindings/EnvImportPick';
 import type { EnvInput } from '@/bindings/EnvInput';
+import type { EnvKind } from '@/bindings/EnvKind';
 import type { EnvSummary } from '@/bindings/EnvSummary';
 import type { EnvVarInput } from '@/bindings/EnvVarInput';
 import type { ImportChoice } from '@/bindings/ImportChoice';
@@ -26,14 +29,14 @@ import { vaultHandlers } from './vault';
 
 type Handler = (args: Record<string, unknown>) => unknown;
 
-interface Variable {
+export interface Variable {
   name: string;
   value: string;
   secret: boolean;
   note: string;
 }
 
-interface Env {
+export interface Env {
   id: string;
   project: string;
   name: string;
@@ -41,6 +44,9 @@ interface Env {
   inTrash: boolean;
   modified: string;
   vars: Variable[];
+  /** Set by the user; otherwise from the name, as the backend does. */
+  kind: EnvKind | null;
+  files: EnvFile[];
 }
 
 const fail = (code: string, message: string) => Promise.reject({ code, message });
@@ -64,20 +70,33 @@ function env(project: string, name: string, vars: Variable[], extra: Partial<Env
     inTrash: false,
     modified: daysAgo(nextId),
     vars,
+    kind: null,
+    files: [],
     ...extra,
   };
 }
 
 const envs: Env[] = [
-  env('shop-api', 'dev', [
-    v('NODE_ENV', 'development'),
-    v('PORT', '3000', false, 'API server'),
-    v('DATABASE_URL', 'postgres://shop:dev-pass@localhost:5432/shop', true),
-    v('REDIS_URL', 'redis://localhost:6379/0'),
-    v('STRIPE_SECRET_KEY', 'sk_test_51Hx0dev', true),
-    v('LOG_LEVEL', 'debug'),
-    v('FEATURE_FLAGS', 'checkout-v2,search'),
-  ]),
+  env(
+    'shop-api',
+    'dev',
+    [
+      v('NODE_ENV', 'development'),
+      v('PORT', '3000', false, 'API server'),
+      v('DATABASE_URL', 'postgres://shop:dev-pass@localhost:5432/shop', true),
+      v('REDIS_URL', 'redis://localhost:6379/0'),
+      v('STRIPE_SECRET_KEY', 'sk_test_51Hx0dev', true),
+      v('LOG_LEVEL', 'debug'),
+      v('FEATURE_FLAGS', 'checkout-v2,search'),
+    ],
+    {
+      kind: 'local',
+      files: [
+        { folder: '~/code/shop-api', path: '.env' },
+        { folder: '~/code/shop-api', path: 'apps/worker/.env.local' },
+      ],
+    },
+  ),
   env('shop-api', 'staging', [
     v('NODE_ENV', 'production'),
     v('PORT', '8080', false, 'API server'),
@@ -111,10 +130,12 @@ const envs: Env[] = [
     ],
     { notes: 'Hetzner, eu-central. Rotate the Stripe key with the payments team.' },
   ),
-  env('marketing-site', 'dev', [
-    v('NEXT_PUBLIC_API_URL', 'http://localhost:3000'),
-    v('CMS_TOKEN', 'cms-dev-0a9f', true),
-  ]),
+  env(
+    'marketing-site',
+    'dev',
+    [v('NEXT_PUBLIC_API_URL', 'http://localhost:3000'), v('CMS_TOKEN', 'cms-dev-0a9f', true)],
+    { kind: 'local', files: [{ folder: '~/code/marketing-site', path: '.env.local' }] },
+  ),
   env('marketing-site', 'prod', [
     v('NEXT_PUBLIC_API_URL', 'https://api.shop.example'),
     v('CMS_TOKEN', 'cms-prod-77c1', true),
@@ -141,6 +162,28 @@ function find(id: unknown): Env | undefined {
   return envs.find((item) => item.id === id);
 }
 
+/** The kind the backend gives: as set, else `local` for local / dev / development. */
+export function kindOf(item: Env): EnvKind {
+  return (
+    item.kind ??
+    (['local', 'dev', 'development'].includes(item.name.toLowerCase()) ? 'local' : 'remote')
+  );
+}
+
+/** The sample environments, for envFiles.ts. */
+export const mockEnvs = () => envs;
+export const mockEnv = (id: unknown) => find(id);
+/** An environment's detail as `envs_get` gives it. */
+export const mockEnvDetail = (item: Env) => detail(item);
+/** Adds an environment as `envs_create` does, for taking a file under management. */
+export function addMockEnv(project: string, name: string, vars: Variable[]): Env {
+  const item = env(project, name, vars, { modified: new Date().toISOString(), kind: 'local' });
+  envs.push(item);
+  return item;
+}
+export const mockVariable = v;
+export const touchMockEnv = (item: Env) => touch(item);
+
 function requireUnlocked(): Promise<never> | undefined {
   const state = (vaultHandlers.vault_status?.({}) as VaultStatus | undefined)?.state;
   if (state !== 'unlocked') return fail('vault_locked', 'the vault is locked');
@@ -153,6 +196,7 @@ function summary(item: Env): EnvSummary {
     id: item.id,
     project: item.project,
     name: item.name,
+    kind: kindOf(item),
     variableCount: item.vars.length,
     secretCount: item.vars.filter((variable) => variable.secret).length,
     inTrash: item.inTrash,
@@ -170,6 +214,7 @@ function detail(item: Env): EnvDetail {
       note,
       empty: value === '',
     })),
+    files: item.files.map((file) => ({ ...file })),
   };
 }
 
@@ -234,6 +279,10 @@ function parse(text: string) {
 
 const looksSecret = (name: string, value: string) =>
   looksSecretName(name) || /^(whsec_|sk_live_|sk_test_)|:\/\/[^/@]*:[^/@]+@/.test(value);
+
+/** The sample `.env` reader and secret guess, for envFiles.ts. */
+export const parseMockDotenv = parse;
+export const mockLooksSecret = looksSecret;
 
 const FILE_NAMES: Record<EnvFormat, (item: Env) => string> = {
   dotenv: () => '.env',
@@ -306,6 +355,17 @@ export const envsHandlers: Record<string, Handler> = {
     const next = v(change.name, value, change.secret, change.note);
     if (index === -1) item.vars.push(next);
     else item.vars[index] = next;
+    touch(item);
+    return detail(item);
+  },
+  envs_set_kind: async ({ id, kind }): Promise<EnvDetail> => {
+    await requireUnlocked();
+    const item = find(id);
+    if (!item) return fail('not_found', `environment ${id}`);
+    if (kind === 'remote' && item.files.length > 0) {
+      return fail('invalid_input', 'a remote environment has no files: remove its files first');
+    }
+    item.kind = kind as EnvKind;
     touch(item);
     return detail(item);
   },

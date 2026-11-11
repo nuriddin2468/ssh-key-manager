@@ -21,6 +21,7 @@ import { auditChecksHandlers, configSettingsFindings } from './auditChecks';
 import { backgroundHandlers } from './background';
 import { browserHandlers } from './browser';
 import { diagnosed, diagnoseHandlers, diagnoseHostSpecs } from './diagnose';
+import { envFilesHandlers } from './envFiles';
 import { envsHandlers } from './envs';
 import { historyHandlers, recordCheck } from './history';
 import { hostsFileFindings, hostsFileHandlers } from './hostsFile';
@@ -516,6 +517,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   ...vaultLinkHandlers({ keys: () => keys, hosts, agent: agentLoaded }),
   ...vaultFilesHandlers,
   ...envsHandlers,
+  ...envFilesHandlers,
   ...projectsHandlers,
   ...browserHandlers,
   ...backgroundHandlers,

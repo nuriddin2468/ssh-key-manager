@@ -1,13 +1,17 @@
-import { FilePlus2, MoreHorizontal, Unlink } from 'lucide-react';
+import { FilePlus2, GitBranch, MoreHorizontal, Unlink } from 'lucide-react';
 import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import { api } from '@/api/commands';
 import { useRouter } from '@/app/router';
 import type { EnvFile } from '@/bindings/EnvFile';
+import type { EnvFileReport } from '@/bindings/EnvFileReport';
 import type { EnvFileStatus } from '@/bindings/EnvFileStatus';
 import type { EnvSummary } from '@/bindings/EnvSummary';
+import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Checkbox } from '@/components/ui/Checkbox';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import {
   Dialog,
   DialogBody,
@@ -23,18 +27,22 @@ import { cn } from '@/lib/cn';
 import { envLabel } from '../model';
 import { announceSynced } from './announce';
 import { BindFileDialog } from './BindFileDialog';
+import { isFileConflict } from './errors';
 import { FileCompareDialog } from './FileCompareDialog';
 import {
   bindingPath,
+  cloudBadge,
   fileName,
   needsAction,
   sameFile,
+  stateDetail,
   stateLabel,
   stateLook,
   stateText,
   TONE_CLASSES,
 } from './model';
-import { useFileStatuses } from './queries';
+import { refreshFileReports, useFileRisks, useFileStatuses } from './queries';
+import { useMakeLocal } from './useMakeLocal';
 
 type Open = { kind: 'bind' } | { kind: 'compare'; file: EnvFile };
 
@@ -46,20 +54,30 @@ interface FilesSectionProps {
 
 /**
  * Where an environment is written: its files and where each stands against
- * the vault, with the action a file needs. A remote environment gets none.
+ * the vault, with Git and cloud folders that would take its values along,
+ * and the action a file needs. A remote environment gets none.
  */
 export function FilesSection({ env, files }: FilesSectionProps) {
   const { t } = useTranslation();
   const headingId = useId();
   const statuses = useFileStatuses();
+  const risks = useFileRisks();
   const [open, setOpen] = useState<Open | null>(null);
   const [stopping, setStopping] = useState<EnvFile | null>(null);
+  const [ignoring, setIgnoring] = useState<EnvFile | null>(null);
   const label = envLabel(env);
-  const makeLocal = useVaultMutation(() => api.envsSetKind(env.id, 'local'), {
-    success: () => t('envs.kind.nowLocal', { name: label }),
+  const makeLocal = useMakeLocal(env);
+  const ignore = useVaultMutation((file: EnvFile) => api.envsFilesIgnore(env.id, file), {
+    success: (_, file) => t('envs.center.ignored', { file: fileName(file) }),
+    onSuccess: () => {
+      setIgnoring(null);
+      void refreshFileReports();
+    },
   });
   const statusOf = (file: EnvFile): EnvFileStatus | undefined =>
     statuses.data?.find((status) => status.envId === env.id && sameFile(status.file, file));
+  const reportOf = (file: EnvFile): EnvFileReport | undefined =>
+    risks.data?.find((report) => report.envId === env.id && sameFile(report.file, file));
 
   if (env.inTrash) return null;
 
@@ -88,12 +106,7 @@ export function FilesSection({ env, files }: FilesSectionProps) {
       {env.kind === 'remote' && files.length === 0 ? (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.025] px-3 py-2">
           <p className="min-w-0 flex-1 text-[12.5px] text-muted">{t('envs.files.remoteNote')}</p>
-          <Button
-            variant="ghost"
-            size="sm"
-            loading={makeLocal.isPending}
-            onClick={() => makeLocal.mutate(undefined)}
-          >
+          <Button variant="ghost" size="sm" loading={makeLocal.pending} onClick={makeLocal.start}>
             {t('envs.kind.makeLocal')}
           </Button>
         </div>
@@ -112,7 +125,10 @@ export function FilesSection({ env, files }: FilesSectionProps) {
               envId={env.id}
               file={file}
               status={statusOf(file)}
+              statusFailed={statuses.isError}
+              report={reportOf(file)}
               onCompare={() => setOpen({ kind: 'compare', file })}
+              onIgnore={() => setIgnoring(file)}
               onStop={() => setStopping(file)}
             />
           ))}
@@ -132,6 +148,18 @@ export function FilesSection({ env, files }: FilesSectionProps) {
         ) : null}
       </Dialog>
       <StopDialog envId={env.id} file={stopping} onDone={() => setStopping(null)} />
+      <ConfirmDialog
+        open={ignoring !== null}
+        onOpenChange={(next) => (next ? undefined : setIgnoring(null))}
+        title={t('envs.center.ignoreTitle', { file: ignoring ? fileName(ignoring) : '' })}
+        description={t('envs.center.ignoreText', {
+          repository: (ignoring && reportOf(ignoring)?.git?.repository) ?? '',
+        })}
+        confirmLabel={t('envs.center.ignoreConfirm')}
+        busy={ignore.isPending}
+        onConfirm={() => ignoring && ignore.mutate(ignoring)}
+      />
+      {makeLocal.dialog}
     </section>
   );
 }
@@ -140,12 +168,26 @@ interface FileRowProps {
   envId: string;
   file: EnvFile;
   status: EnvFileStatus | undefined;
+  /** The states couldn't be fetched. */
+  statusFailed: boolean;
+  /** What Git and cloud folders make of it, once known. */
+  report: EnvFileReport | undefined;
   onCompare: () => void;
+  onIgnore: () => void;
   onStop: () => void;
 }
 
-/** One file: where it is, where it stands, and the action it needs. */
-function FileRow({ envId, file, status, onCompare, onStop }: FileRowProps) {
+/** One file: where it is, where it stands, what would take it along, and the action it needs. */
+function FileRow({
+  envId,
+  file,
+  status,
+  statusFailed,
+  report,
+  onCompare,
+  onIgnore,
+  onStop,
+}: FileRowProps) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const state = status?.state;
@@ -154,7 +196,14 @@ function FileRow({ envId, file, status, onCompare, onStop }: FileRowProps) {
   const name = bindingPath(file);
   const writeAgain = useVaultMutation(() => api.envsFilesResolve(envId, file, 'vault', null), {
     onSuccess: (synced) => announceSynced(t, synced, navigate),
+    onError: (error) => {
+      // It came back meanwhile: then it is a comparison, not a write.
+      if (!isFileConflict(error)) return false;
+      toast.warning(t('envs.files.errors.fileBack', { file: fileName(file) }));
+      return true;
+    },
   });
+  const git = report?.git?.state;
   const Icon = look?.icon;
   return (
     <li className="flex items-center gap-2.5 rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-2">
@@ -167,16 +216,29 @@ function FileRow({ envId, file, status, onCompare, onStop }: FileRowProps) {
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span
           className="selectable truncate font-mono text-[12.5px] text-fg"
-          title={status?.location ?? `${file.folder}/${file.path}`}
+          title={status?.location ?? name}
         >
           <span className="text-subtle">{file.folder}/</span>
           {file.path}
         </span>
-        <span className={cn('text-[12px]', tone.text)}>
-          {state ? stateLabel(t, state) : t('common.loading')}
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className={cn('text-[12px]', statusFailed && !state ? 'text-warning' : tone.text)}>
+            {state
+              ? stateLabel(t, state)
+              : statusFailed
+                ? t('envs.files.statusFailed')
+                : t('common.loading')}
+          </span>
+          {git === 'untracked' ? (
+            <Badge tone="warning">{t('envs.center.gitUntracked')}</Badge>
+          ) : null}
+          {git === 'tracked' ? <Badge tone="critical">{t('envs.center.gitTracked')}</Badge> : null}
+          {report?.cloud ? <Badge tone="warning">{cloudBadge(t, report.cloud)}</Badge> : null}
         </span>
         {state && needsAction(state) ? (
-          <span className="text-[12px] leading-[17px] text-muted">{stateText(t, state)}</span>
+          <span className="text-[12px] leading-[17px] text-muted" title={stateDetail(state)}>
+            {stateText(t, state)}
+          </span>
         ) : null}
       </span>
       {state?.type === 'conflict' ? (
@@ -206,6 +268,11 @@ function FileRow({ envId, file, status, onCompare, onStop }: FileRowProps) {
           />
         </MenuTrigger>
         <MenuContent align="end">
+          {git === 'untracked' ? (
+            <MenuItem icon={<GitBranch className="size-4" />} onSelect={onIgnore}>
+              {t('envs.center.ignore')}
+            </MenuItem>
+          ) : null}
           <MenuItem icon={<Unlink className="size-4" />} onSelect={onStop}>
             {t('envs.files.stop')}
           </MenuItem>
@@ -225,9 +292,11 @@ interface StopDialogProps {
 function StopDialog({ envId, file, onDone }: StopDialogProps) {
   const { t } = useTranslation();
   const [deleteFile, setDeleteFile] = useState(false);
+  const [notDeleted, setNotDeleted] = useState(false);
   const name = file ? fileName(file) : '';
   const close = () => {
     setDeleteFile(false);
+    setNotDeleted(false);
     onDone();
   };
   const stop = useVaultMutation(
@@ -237,7 +306,17 @@ function StopDialog({ envId, file, onDone }: StopDialogProps) {
         deleteFile
           ? t('envs.files.unbind.deleted', { file: name })
           : t('envs.files.unbind.done', { file: name }),
-      onSuccess: close,
+      onSuccess: () => {
+        void refreshFileReports();
+        close();
+      },
+      onError: (error) => {
+        // The file holds values the vault lacks: nothing was changed.
+        if (!isFileConflict(error)) return false;
+        setNotDeleted(true);
+        setDeleteFile(false);
+        return true;
+      },
     },
   );
   return (
@@ -253,6 +332,14 @@ function StopDialog({ envId, file, onDone }: StopDialogProps) {
           description={t('envs.files.unbind.text')}
         />
         <DialogBody>
+          {notDeleted ? (
+            <p
+              role="alert"
+              className="rounded-xl border border-warning-solid/30 bg-warning-solid/[0.08] px-3 py-2 text-[12.5px] text-fg-2"
+            >
+              {t('envs.files.errors.notDeleted', { file: name })}
+            </p>
+          ) : null}
           <div className="flex flex-col gap-1">
             <Checkbox
               checked={deleteFile}

@@ -68,18 +68,28 @@ export function stateLabel(t: TFunction, state: FileState): string {
   }
 }
 
-/** A sentence on what the state means and what happens next. */
+/**
+ * A sentence on what the state means and what to do next. A failure's own
+ * message, in English from the backend, is for `title`: see [`stateDetail`].
+ */
 export function stateText(t: TFunction, state: FileState): string {
   switch (state.type) {
     case 'invalid': {
       const lines = state.problems.map((problem) => problem.line);
       return t('envs.files.explain.invalid', { count: lines.length, lines: lines.join(', ') });
     }
-    case 'failed':
-      return state.message;
+    case 'inactive':
+      return t(`envs.files.explain.inactive.${state.reason}`);
+    case 'refused':
+      return t(`envs.files.explain.refused.${state.reason}`);
     default:
       return t(`envs.files.explain.${state.type}`);
   }
+}
+
+/** What the backend said about a failure (paths, never values), if anything. */
+export function stateDetail(state: FileState): string | undefined {
+  return state.type === 'failed' ? state.message : undefined;
 }
 
 /** The file's path as the binding names it: its project folder and the path in it. */
@@ -145,9 +155,34 @@ export function cloudName(t: TFunction, service: CloudService): string {
   return t(`envs.center.services.${service}`);
 }
 
+/** The badge for a file in a cloud folder. */
+export function cloudBadge(t: TFunction, service: CloudService): string {
+  return service === 'other'
+    ? t('envs.center.cloudBadgeOther')
+    : t('envs.center.cloudBadge', { service: cloudName(t, service) });
+}
+
+/** What a cloud folder means for a file. */
+export function cloudText(t: TFunction, service: CloudService): string {
+  return service === 'other'
+    ? t('envs.center.cloudTextOther')
+    : t('envs.center.cloudText', { service: cloudName(t, service) });
+}
+
 /** The statuses of one environment's files, in its bindings' order. */
 export function filesOf(statuses: EnvFileStatus[] | undefined, envId: string): EnvFileStatus[] {
   return (statuses ?? []).filter((status) => status.envId === envId);
+}
+
+const TEMPLATE_WORDS = ['example', 'sample', 'template', 'dist', 'defaults', 'tmpl'];
+
+/** `.env.example`, `.env.local.sample`, `example.env`: a template to commit, never written. */
+export function isTemplateName(name: string): boolean {
+  const last = name.split(/[/\\]/).at(-1) ?? name;
+  return last
+    .toLowerCase()
+    .split('.')
+    .some((part) => TEMPLATE_WORDS.includes(part));
 }
 
 /** Names of a `.env` file people use most. */

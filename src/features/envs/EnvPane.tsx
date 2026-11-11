@@ -56,6 +56,7 @@ import { useSettings } from '@/lib/settings';
 import { CompareDialog } from './CompareDialog';
 import { ExportEnvDialog } from './ExportEnvDialog';
 import { FilesSection } from './files/FilesSection';
+import { useMakeLocal } from './files/useMakeLocal';
 import { envLabel, isProduction } from './model';
 import { useEnv } from './queries';
 import { VariableDialog } from './VariableDialog';
@@ -137,6 +138,8 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
     success: (_, kind) =>
       t(kind === 'local' ? 'envs.kind.nowLocal' : 'envs.kind.nowRemote', { name: label }),
   });
+  // Production asks first: its values would be on this disk.
+  const makeLocal = useMakeLocal(summary);
   const removeVar = useVaultMutation((name: string) => api.envsRemoveVar(summary.id, name), {
     success: (_, name) => t('envs.varRemoved', { name }),
     onSuccess: () => setRemoving(null),
@@ -168,6 +171,7 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
               <Badge tone={summary.kind === 'local' ? 'accent' : 'neutral'}>
                 <span title={t(`envs.kind.${summary.kind}Hint`)}>
                   {t(`envs.kind.${summary.kind}`)}
+                  <span className="sr-only">: {t(`envs.kind.${summary.kind}Hint`)}</span>
                 </span>
               </Badge>
               {production ? <Badge tone="warning">{t('envs.production')}</Badge> : null}
@@ -253,7 +257,7 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
                   ) : (
                     <MenuItem
                       icon={<MonitorSmartphone className="size-4" />}
-                      onSelect={() => setKind.mutate('local')}
+                      onSelect={makeLocal.start}
                     >
                       {t('envs.kind.makeLocal')}
                     </MenuItem>
@@ -278,6 +282,7 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
             </MenuContent>
           </Menu>
           {projectMenu.dialog}
+          {makeLocal.dialog}
         </div>
         <ProjectChips member={projectMember} />
         {env?.notes ? (

@@ -23,8 +23,8 @@ import { EnvDialog } from './EnvDialog';
 import { EnvList } from './EnvList';
 import { EnvPane } from './EnvPane';
 import { FilesCenter } from './files/FilesCenter';
-import { needsAction } from './files/model';
-import { useFileStatuses } from './files/queries';
+import { needsAction, needsAttention, sameFile } from './files/model';
+import { useFileRisks, useFileStatuses } from './files/queries';
 import { ImportEnvDialog } from './ImportEnvDialog';
 import { groupByProject, trashed } from './model';
 import { useEnvs } from './queries';
@@ -95,7 +95,15 @@ function EnvBrowser({ envId, view, project }: EnvsPageProps) {
   const { navigate } = useRouter();
   const envs = useEnvs();
   const statuses = useFileStatuses();
-  const attention = (statuses.data ?? []).filter((status) => needsAction(status.state)).length;
+  const risks = useFileRisks();
+  // As the Files view's "Needs attention" counts: a state to act on, Git or
+  // a cloud folder that would take the values along, missing names.
+  const attention = (statuses.data ?? []).filter((status) => {
+    const report = risks.data?.find(
+      (item) => item.envId === status.envId && sameFile(item.file, status.file),
+    );
+    return report ? needsAttention({ ...report, state: status.state }) : needsAction(status.state);
+  }).length;
   const showFiles = view === 'files';
   const setView = (next: EnvsView) =>
     navigate(next === 'files' ? { page: 'envs', view: 'files', project } : { page: 'envs', envId });
@@ -168,64 +176,68 @@ function EnvBrowser({ envId, view, project }: EnvsPageProps) {
               onProject={(next) => navigate({ page: 'envs', view: 'files', project: next })}
             />
           </div>
-        ) : envs.isPending ? (
-          <div className="grid flex-1 place-items-center text-subtle">
-            <Spinner className="size-6" />
-          </div>
-        ) : all.length === 0 ? (
-          <EmptyState
-            className="my-auto"
-            icon={
-              <Tile tone="lime" size={52} glow>
-                <Variable className="size-6" strokeWidth={2} />
-              </Tile>
-            }
-            title={t('envs.emptyTitle')}
-            description={t('envs.emptyText')}
-            action={
-              <div className="flex flex-wrap justify-center gap-2">
-                <Button
-                  variant="primary"
-                  icon={<FileUp className="size-4" strokeWidth={2} />}
-                  onClick={() => setDialog({ kind: 'import' })}
-                >
-                  {t('envs.importEnv')}
-                </Button>
-                <Button
-                  icon={<Plus className="size-4" strokeWidth={2.25} />}
-                  onClick={() => setDialog({ kind: 'new' })}
-                >
-                  {t('envs.newEnv')}
-                </Button>
-              </div>
-            }
-          />
         ) : (
           <div
             id={viewPanelId('envs')}
             role="tabpanel"
             aria-label={t('envs.views.envs')}
-            className="flex min-h-0 flex-1 items-stretch gap-4"
+            className="flex min-h-0 flex-1 flex-col"
           >
-            <EnvList
-              groups={groups}
-              trash={inTrash}
-              selectedId={selected?.id}
-              query={query}
-              onSelect={select}
-            />
-            {selected ? (
-              <EnvPane
-                key={selected.id}
-                summary={selected}
-                all={all}
-                onEdit={(env) => setDialog({ kind: 'edit', env })}
-                onGone={() => select(undefined)}
-                onImport={() => setDialog({ kind: 'import', into: selected })}
+            {envs.isPending ? (
+              <div className="grid flex-1 place-items-center text-subtle">
+                <Spinner className="size-6" />
+              </div>
+            ) : all.length === 0 ? (
+              <EmptyState
+                className="my-auto"
+                icon={
+                  <Tile tone="lime" size={52} glow>
+                    <Variable className="size-6" strokeWidth={2} />
+                  </Tile>
+                }
+                title={t('envs.emptyTitle')}
+                description={t('envs.emptyText')}
+                action={
+                  <div className="flex flex-wrap justify-center gap-2">
+                    <Button
+                      variant="primary"
+                      icon={<FileUp className="size-4" strokeWidth={2} />}
+                      onClick={() => setDialog({ kind: 'import' })}
+                    >
+                      {t('envs.importEnv')}
+                    </Button>
+                    <Button
+                      icon={<Plus className="size-4" strokeWidth={2.25} />}
+                      onClick={() => setDialog({ kind: 'new' })}
+                    >
+                      {t('envs.newEnv')}
+                    </Button>
+                  </div>
+                }
               />
             ) : (
-              <div className="glass grid min-w-0 flex-1 place-items-center rounded-2xl px-6 text-center text-subtle">
-                {t('envs.noMatches')}
+              <div className="flex min-h-0 flex-1 items-stretch gap-4">
+                <EnvList
+                  groups={groups}
+                  trash={inTrash}
+                  selectedId={selected?.id}
+                  query={query}
+                  onSelect={select}
+                />
+                {selected ? (
+                  <EnvPane
+                    key={selected.id}
+                    summary={selected}
+                    all={all}
+                    onEdit={(env) => setDialog({ kind: 'edit', env })}
+                    onGone={() => select(undefined)}
+                    onImport={() => setDialog({ kind: 'import', into: selected })}
+                  />
+                ) : (
+                  <div className="glass grid min-w-0 flex-1 place-items-center rounded-2xl px-6 text-center text-subtle">
+                    {t('envs.noMatches')}
+                  </div>
+                )}
               </div>
             )}
           </div>

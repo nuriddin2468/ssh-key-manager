@@ -2,6 +2,9 @@
 // that went to the vault, with Undo, and each file that came into conflict.
 // From the `env-files-changed` event and from the results of the user's own
 // actions (Sync now, keeping a side), so the browser preview shows them too.
+// In the app both arrive for one round: each edit is told once (by the
+// revision it led to) and each conflict once while it lasts, under a toast
+// id of its own, so whichever comes second changes nothing.
 
 import { isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -13,9 +16,12 @@ import { api } from '@/api/commands';
 import { invalidateAll, queryClient } from '@/api/queries';
 import type { Route } from '@/app/router';
 import { useRouter } from '@/app/router';
+import type { EnvFile } from '@/bindings/EnvFile';
 import type { EnvFileChange } from '@/bindings/EnvFileChange';
 import type { EnvFilesSynced } from '@/bindings/EnvFilesSynced';
 import { toastVaultError } from '@/features/passwords/vault';
+import { AppError } from '@/lib/ipc';
+import { isFileConflict } from './errors';
 import { fileName } from './model';
 
 const EVENT = 'env-files-changed';
@@ -32,6 +38,20 @@ export const TOAST_ACTION_CLASSES = {
 let toldConflicts = new Set<string>();
 
 const conflictKey = (envId: string, folder: string, path: string) => `${envId}\n${folder}\n${path}`;
+/** Edits already told of, by the revision they led to. */
+const toldEdits: string[] = [];
+/** Edits remembered; older ones are long gone from the screen. */
+const MAX_TOLD = 200;
+
+/** The toast of a file's conflict: one per file, whoever tells it. */
+export function conflictToastId(envId: string, file: EnvFile): string {
+  return `env-file-conflict:${conflictKey(envId, file.folder, file.path)}`;
+}
+
+/** Notes that a conflict was told of already, by a dialog of its own. */
+export function markConflictTold(envId: string, file: EnvFile): void {
+  toldConflicts.add(conflictKey(envId, file.folder, file.path));
+}
 
 function names(list: string[]): string {
   const shown = list.slice(0, SHOWN_NAMES).join(', ');
@@ -49,13 +69,25 @@ export function changeSummary(t: TFunction, change: EnvFileChange): string {
     .join(' · ');
 }
 
-async function undo(t: TFunction, change: EnvFileChange) {
+/**
+ * Undoes an edit of a file that went to the vault. The environment may have
+ * changed since, or the earlier version left its history: those say so.
+ */
+export async function undoChange(t: TFunction, change: EnvFileChange): Promise<void> {
+  const env = `${change.group} / ${change.envName}`;
   try {
     await api.envsFilesUndo(change.undo);
     await invalidateAll();
-    toast.success(t('envs.files.undone', { env: `${change.group} / ${change.envName}` }));
+    toast.success(t('envs.files.undone', { env }));
   } catch (error) {
-    toastVaultError(t, error);
+    const appError = AppError.from(error);
+    if (isFileConflict(appError)) {
+      toast.error(t('envs.files.errors.undoChanged', { env }));
+    } else if (appError.code === 'not_found') {
+      toast.error(t('envs.files.errors.undoGone'));
+    } else {
+      toastVaultError(t, appError);
+    }
   }
 }
 
@@ -78,6 +110,7 @@ export function announceSynced(
       continue;
     }
     toast.warning(t('envs.files.conflictToast', { file: fileName(status.file) }), {
+      id: conflictToastId(status.envId, status.file),
       description: `${status.group} / ${status.envName}`,
       duration: 10_000,
       action: {
@@ -88,15 +121,19 @@ export function announceSynced(
     });
   }
   for (const change of synced.changes) {
+    if (toldEdits.includes(change.undo.after)) continue;
+    toldEdits.push(change.undo.after);
+    if (toldEdits.length > MAX_TOLD) toldEdits.shift();
     toast.success(
       t('envs.files.saved', {
         file: fileName(change.file),
         env: `${change.group} / ${change.envName}`,
       }),
       {
+        id: `env-file-edit:${change.undo.after}`,
         description: changeSummary(t, change),
         duration: 10_000,
-        action: { label: t('envs.undo'), onClick: () => void undo(t, change) },
+        action: { label: t('envs.undo'), onClick: () => void undoChange(t, change) },
         classNames: TOAST_ACTION_CLASSES,
       },
     );

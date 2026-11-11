@@ -3613,6 +3613,9 @@ const en = {
       nowLocal: '{{name}} is local now',
       nowRemote: '{{name}} is remote now',
       stopFilesFirst: 'Stop writing its files first',
+      prodTitle: 'Make {{name}} local?',
+      prodText:
+        '{{name}} looks like production. A local environment can be written to .env files on this computer, values included. Keep production values off this disk unless you need them here.',
     },
     views: {
       label: 'Show',
@@ -3623,6 +3626,39 @@ const en = {
     },
     files: {
       title: 'Files',
+      statusFailed: 'Couldn’t check the files',
+      errors: {
+        undoChanged:
+          '{{env}} changed again since, so this edit can’t be undone. Change the values in the environment instead.',
+        undoGone:
+          'This edit can’t be undone anymore: its earlier version is no longer in the environment’s history.',
+        notDeleted:
+          '{{file}} holds values the vault doesn’t have, so it wasn’t deleted. Stop writing without deleting it, or compare it first.',
+        fileBack: '{{file}} is back. Compare it with the vault to choose which values to keep.',
+        template:
+          'That’s a template to commit, like .env.example. Choose the file the app should write values to.',
+        notEnvName: 'Use a .env file’s name, like .env or apps/web/.env.local.',
+        link: 'That file is a symbolic link, and the app never writes through one. Choose another file.',
+        notAFile: 'That’s a folder, a pipe or a device, not a file.',
+        outside: 'A link on the way leads out of the project’s folder. Choose a file inside it.',
+        protected:
+          'The app never writes there: it’s in the SSH folder or one of the vault’s own files.',
+        notInProject: 'That folder isn’t in a project that holds this environment.',
+        otherEnv: 'Another environment writes that file already.',
+      },
+      risk: {
+        title: 'Before {{file}} is written',
+        description: 'Its values will be on disk in plain text there.',
+        gitUntracked:
+          'Git doesn’t ignore this file in {{repository}}. Committing the folder would take its values along.',
+        gitTracked:
+          'This file is committed to Git in {{repository}}. Values written into it go into the next commit unless it’s removed with git rm --cached.',
+        cloud: '{{service}} copies this folder to its servers, values included.',
+        cloudOther: 'A cloud service copies this folder to its servers, values included.',
+        ignoreAndWrite: 'Add to .gitignore and write',
+        writeAnyway: 'Write anyway',
+        back: 'Choose another file',
+      },
       add: 'Add file…',
       remoteNote: 'Remote environments aren’t written to files. Use Run in terminal instead.',
       emptyText:
@@ -3665,9 +3701,22 @@ const en = {
           'Line {{lines}} can’t be read. Fix it in the file: until then nothing changes either way, so a typo can’t remove variables.',
         invalid_other:
           'Lines {{lines}} can’t be read. Fix them in the file: until then nothing changes either way, so a typo can’t remove variables.',
-        inactive: 'The file stays as it is.',
-        refused:
-          'The app won’t read or write it, so nothing outside the project’s folder is touched.',
+        inactive: {
+          remote: 'The file stays as it is. Make the environment local to write it again.',
+          inTrash: 'The file stays as it is. Restore the environment to write it again.',
+          notInProject:
+            'The file stays as it is. Add the folder back to a project that holds this environment, or stop writing to the file.',
+        },
+        refused: {
+          link: 'It’s a symbolic link, and the app never writes through one. Replace it with a regular file or stop writing to it.',
+          notAFile: 'It’s a folder, a pipe or a device, not a file. Stop writing to it.',
+          outside:
+            'A link on the way leads out of the project’s folder, so the app doesn’t touch it. Stop writing to it.',
+          protected:
+            'It’s in the SSH folder or it’s one of the vault’s own files, where the app never writes. Stop writing to it.',
+          name: 'This binding came from another computer or app version and names a file the app doesn’t write. Stop writing to it.',
+        },
+        failed: 'Check that you can read and write the file and its folder, then sync again.',
       },
       compare: 'Compare…',
       compareLabel: 'Compare {{file}} with the vault',
@@ -3762,6 +3811,8 @@ const en = {
       ignored: 'Git ignores {{file}} now',
       cloudBadge: 'In {{service}}',
       cloudText: '{{service}} copies this folder to its servers, values included.',
+      cloudBadgeOther: 'In a cloud folder',
+      cloudTextOther: 'A cloud service copies this folder to its servers, values included.',
       services: {
         iCloudDrive: 'iCloud Drive',
         dropbox: 'Dropbox',

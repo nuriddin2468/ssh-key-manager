@@ -58,7 +58,16 @@ describe('managed files model', () => {
       ],
     };
     expect(stateText(t, invalid)).toBe('envs.files.explain.invalid {"count":2,"lines":"3, 7"}');
-    expect(stateText(t, { type: 'failed', message: 'disk full' })).toBe('disk full');
+    // The backend's English message goes to `title`; the text is localized.
+    expect(stateText(t, { type: 'failed', message: 'disk full' })).toBe(
+      'envs.files.explain.failed',
+    );
+    expect(stateText(t, { type: 'inactive', reason: 'notInProject' })).toBe(
+      'envs.files.explain.inactive.notInProject',
+    );
+    expect(stateText(t, { type: 'refused', reason: 'protected' })).toBe(
+      'envs.files.explain.refused.protected',
+    );
   });
 
   it('asks for the user only where something needs them', () => {

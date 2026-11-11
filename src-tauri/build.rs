@@ -183,6 +183,8 @@ const COMMANDS: &[&str] = &[
     "envs_files_ignore",
     "envs_files_adopt_preview",
     "envs_files_adopt",
+    "envs_files_check",
+    "envs_files_risks",
     "projects_list",
     "projects_create",
     "projects_update",

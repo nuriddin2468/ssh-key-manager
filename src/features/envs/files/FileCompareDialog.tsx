@@ -15,7 +15,8 @@ import { Tile } from '@/components/ui/Tile';
 import { useVaultMutation } from '@/features/passwords/vault';
 import { Group } from '../CompareDialog';
 import { announceSynced } from './announce';
-import { bindingPath, fileName } from './model';
+import { isFileConflict } from './errors';
+import { bindingPath, fileName, sameFile } from './model';
 
 interface FileCompareDialogProps {
   envId: string;
@@ -45,18 +46,31 @@ export function FileCompareDialog({ envId, file, onDone }: FileCompareDialogProp
     refetchOnWindowFocus: false,
   });
   const result = comparison.data;
+  // A refetch (another round, the window coming back) that finds the file
+  // changed must not move what Keep settles without the user seeing it.
+  const [shown, setShown] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (!result) return;
+    if (shown !== undefined && result.revision !== shown) setChangedSince(true);
+    setShown(result.revision);
+  }, [result, shown]);
   const keep = useVaultMutation(
     (side: KeepSide) => api.envsFilesResolve(envId, file, side, result?.revision ?? null),
     {
       onSuccess: (synced, side) => {
         announceSynced(t, synced, navigate);
-        if (side === 'vault') {
+        const written = synced.written.some(
+          (status) => status.envId === envId && sameFile(status.file, file),
+        );
+        if (side === 'vault' && written) {
           toast.success(t('envs.files.conflict.keptVault', { file: fileName(file) }));
         }
         onDone();
       },
       onError: (error) => {
-        if (error.code !== 'conflict') return false;
+        // The vault's own conflicts (another computer saved it) are the
+        // vault's to explain.
+        if (!isFileConflict(error)) return false;
         setChangedSince(true);
         void comparison.refetch();
         return true;
@@ -145,7 +159,9 @@ export function FileCompareDialog({ envId, file, onDone }: FileCompareDialogProp
         </Button>
         <Button
           size="lg"
-          disabled={!result || comparison.isFetching}
+          disabled={
+            !result || comparison.isFetching || (keep.isPending && keep.variables !== 'file')
+          }
           loading={keep.isPending && keep.variables === 'file'}
           onClick={() => keep.mutate('file')}
         >
@@ -153,7 +169,9 @@ export function FileCompareDialog({ envId, file, onDone }: FileCompareDialogProp
         </Button>
         <Button
           size="lg"
-          disabled={!result || comparison.isFetching}
+          disabled={
+            !result || comparison.isFetching || (keep.isPending && keep.variables !== 'vault')
+          }
           loading={keep.isPending && keep.variables === 'vault'}
           onClick={() => keep.mutate('vault')}
         >

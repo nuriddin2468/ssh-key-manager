@@ -3672,6 +3672,9 @@ const uz = {
       nowLocal: '{{name}} endi mahalliy',
       nowRemote: '{{name}} endi masofaviy',
       stopFilesFirst: 'Avval uning fayllariga yozishni toʻxtating',
+      prodTitle: '{{name}} mahalliy qilinsinmi?',
+      prodText:
+        '{{name}} productionga oʻxshaydi. Mahalliy muhitni shu kompyuterdagi .env fayllarga qiymatlari bilan yozish mumkin. Kerak boʻlmasa, production qiymatlarini bu diskda saqlamang.',
     },
     views: {
       label: 'Koʻrsatish',
@@ -3682,6 +3685,40 @@ const uz = {
     },
     files: {
       title: 'Fayllar',
+      statusFailed: 'Fayllarni tekshirib boʻlmadi',
+      errors: {
+        undoChanged:
+          '{{env}} shundan beri yana oʻzgardi, shuning uchun bu tahrirni bekor qilib boʻlmaydi. Qiymatlarni muhitda oʻzgartiring.',
+        undoGone:
+          'Bu tahrirni endi bekor qilib boʻlmaydi: uning avvalgi versiyasi muhit tarixida qolmagan.',
+        notDeleted:
+          '{{file}}da omborda yoʻq qiymatlar bor, shuning uchun u oʻchirilmadi. Oʻchirmasdan yozishni toʻxtating yoki avval solishtiring.',
+        fileBack:
+          '{{file}} yana paydo boʻldi. Qaysi qiymatlarni qoldirishni tanlash uchun uni ombor bilan solishtiring.',
+        template:
+          'Bu commit qilinadigan shablon, masalan .env.example. Ilova qiymatlarni yozadigan faylni tanlang.',
+        notEnvName: '.env fayl nomini ishlating, masalan .env yoki apps/web/.env.local.',
+        link: 'Bu fayl ramziy havola, ilova esa hech qachon havola orqali yozmaydi. Boshqa fayl tanlang.',
+        notAFile: 'Bu fayl emas, papka, kanal yoki qurilma.',
+        outside:
+          'Yoʻldagi havola loyiha papkasidan tashqariga olib boradi. Uning ichidagi faylni tanlang.',
+        protected: 'Ilova u yerga yozmaydi: bu SSH papkasi yoki ombor fayllaridan biri.',
+        notInProject: 'Bu papka shu muhit bor loyihada emas.',
+        otherEnv: 'Bu faylni allaqachon boshqa muhit yozadi.',
+      },
+      risk: {
+        title: '{{file}} yozilishidan oldin',
+        description: 'Uning qiymatlari u yerda diskda ochiq matnda boʻladi.',
+        gitUntracked:
+          'Git {{repository}}da bu faylni eʼtiborsiz qoldirmaydi. Papkani commit qilish uning qiymatlarini ham olib ketadi.',
+        gitTracked:
+          'Bu fayl {{repository}}da Gitga commit qilingan. Unga yozilgan qiymatlar, git rm --cached bilan olib tashlanmasa, keyingi commitga tushadi.',
+        cloud: '{{service}} bu papkani qiymatlari bilan birga oʻz serverlariga koʻchiradi.',
+        cloudOther: 'Bulut xizmati bu papkani qiymatlari bilan birga oʻz serverlariga koʻchiradi.',
+        ignoreAndWrite: '.gitignore ga qoʻshib yozish',
+        writeAnyway: 'Baribir yozish',
+        back: 'Boshqa fayl tanlash',
+      },
       add: 'Fayl qoʻshish…',
       remoteNote:
         'Masofaviy muhitlar fayllarga yozilmaydi. «Terminalda ishga tushirish»dan foydalaning.',
@@ -3725,9 +3762,23 @@ const uz = {
           '{{lines}}-qatorni oʻqib boʻlmaydi. Uni faylda tuzating: shungacha hech tomonda hech narsa oʻzgarmaydi, xato oʻzgaruvchilarni oʻchirib yubormaydi.',
         invalid_other:
           '{{lines}}-qatorlarni oʻqib boʻlmaydi. Ularni faylda tuzating: shungacha hech tomonda hech narsa oʻzgarmaydi, xato oʻzgaruvchilarni oʻchirib yubormaydi.',
-        inactive: 'Fayl oʻz holicha qoladi.',
-        refused:
-          'Ilova uni oʻqimaydi ham, yozmaydi ham, shuning uchun loyiha papkasidan tashqaridagi hech narsaga tegilmaydi.',
+        inactive: {
+          remote: 'Fayl oʻz holicha qoladi. Uni qayta yozish uchun muhitni mahalliy qiling.',
+          inTrash: 'Fayl oʻz holicha qoladi. Uni qayta yozish uchun muhitni tiklang.',
+          notInProject:
+            'Fayl oʻz holicha qoladi. Papkani shu muhit bor loyihaga qaytaring yoki faylga yozishni toʻxtating.',
+        },
+        refused: {
+          link: 'Bu ramziy havola, ilova esa hech qachon havola orqali yozmaydi. Uni oddiy fayl bilan almashtiring yoki yozishni toʻxtating.',
+          notAFile: 'Bu fayl emas, papka, kanal yoki qurilma. Unga yozishni toʻxtating.',
+          outside:
+            'Yoʻldagi havola loyiha papkasidan tashqariga olib boradi, shuning uchun ilova unga tegmaydi. Unga yozishni toʻxtating.',
+          protected:
+            'U SSH papkasida yoki ombor fayllaridan biri — ilova u yerga yozmaydi. Unga yozishni toʻxtating.',
+          name: 'Bu bogʻlanish boshqa kompyuter yoki versiyadan kelgan va ilova yozmaydigan faylni nomlaydi. Unga yozishni toʻxtating.',
+        },
+        failed:
+          'Fayl va uning papkasini oʻqish va yozish mumkinligini tekshiring, soʻng qayta moslashtiring.',
       },
       compare: 'Solishtirish…',
       compareLabel: '{{file}}ni ombor bilan solishtirish',
@@ -3824,6 +3875,9 @@ const uz = {
       ignored: 'Git endi {{file}}ni eʼtiborsiz qoldiradi',
       cloudBadge: '{{service}}da',
       cloudText: '{{service}} bu papkani qiymatlari bilan birga oʻz serverlariga koʻchiradi.',
+      cloudBadgeOther: 'Bulutli papkada',
+      cloudTextOther:
+        'Bulut xizmati bu papkani qiymatlari bilan birga oʻz serverlariga koʻchiradi.',
       services: {
         iCloudDrive: 'iCloud Drive',
         dropbox: 'Dropbox',

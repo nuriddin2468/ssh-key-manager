@@ -20,7 +20,9 @@ import { useProjects } from '@/features/projects/queries';
 import { Problems } from '../ImportEnvDialog';
 import { envLabel, labelProblem, nameTaken } from '../model';
 import { useEnvs } from '../queries';
+import { bindRefusal } from './errors';
 import { fileName } from './model';
+import { refreshFileReports } from './queries';
 
 type Target = 'new' | 'existing';
 
@@ -61,6 +63,7 @@ export function AdoptFileDialog({ found, onDone }: AdoptFileDialogProps) {
   const [name, setName] = useState<string | null>(null);
   const [secrets, setSecrets] = useState<Record<string, boolean>>({});
   const [touched, setTouched] = useState(false);
+  const [refusal, setRefusal] = useState<string | null>(null);
   const file = fileName(found.file);
 
   const data = preview.data;
@@ -103,10 +106,20 @@ export function AdoptFileDialog({ found, onDone }: AdoptFileDialogProps) {
           env: env ? envLabel(env) : `${groupValue.trim()} / ${nameValue.trim()}`,
         });
       },
-      onSuccess: onDone,
+      onSuccess: () => {
+        void refreshFileReports();
+        onDone();
+      },
       onError: (error) => {
-        if (error.code !== 'already_exists') return false;
-        setTouched(true);
+        // A name taken in the group shows at its field; anything else the
+        // backend refused is said here, in words.
+        if (error.code === 'already_exists' && taken) {
+          setTouched(true);
+          return true;
+        }
+        const message = bindRefusal(t, error);
+        if (!message) return false;
+        setRefusal(message);
         return true;
       },
     },
@@ -253,6 +266,11 @@ export function AdoptFileDialog({ found, onDone }: AdoptFileDialogProps) {
                   </table>
                 </div>
               )}
+              {refusal ? (
+                <p role="alert" className="text-[12.5px] text-critical">
+                  {refusal}
+                </p>
+              ) : null}
               {data.problems.length > 0 ? (
                 <Problems problems={data.problems} title={t('envs.adopt.problems')} />
               ) : null}

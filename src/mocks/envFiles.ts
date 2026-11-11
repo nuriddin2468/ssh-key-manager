@@ -5,7 +5,9 @@
 // round takes the edit to the vault, to show Undo), and to
 // `apps/worker/.env.local`, which is in conflict with the vault;
 // marketing-site / dev to `.env.local`, which Git doesn't ignore and which
-// lacks a name its `.env.example` has. A few `.env` files in the projects'
+// lacks a name its `.env.example` has, and to `apps/blog/.env`, which was
+// deleted (Write again). Binding a file under shop-api finds a working tree
+// that doesn't ignore it, to show the warning first. A few `.env` files in the projects'
 // folders are unmanaged, to take under management. Files exist only here:
 // their variables are kept with each binding.
 
@@ -13,6 +15,7 @@ import type { CloudService } from '@/bindings/CloudService';
 import type { EnvDetail } from '@/bindings/EnvDetail';
 import type { EnvFile } from '@/bindings/EnvFile';
 import type { EnvFileChange } from '@/bindings/EnvFileChange';
+import type { EnvFileCheck } from '@/bindings/EnvFileCheck';
 import type { EnvFileComparison } from '@/bindings/EnvFileComparison';
 import type { EnvFileReport } from '@/bindings/EnvFileReport';
 import type { EnvFileStatus } from '@/bindings/EnvFileStatus';
@@ -132,6 +135,16 @@ function seed() {
       cloud: 'dropbox',
       example: { file: '.env.example', missing: ['PLAUSIBLE_DOMAIN'] },
     });
+    const blog = marketing.files[1];
+    if (blog) {
+      disk.set(key(marketing.id, blog), {
+        vars: null,
+        state: 'missing',
+        git: repository(blog),
+        cloud: null,
+        example: null,
+      });
+    }
   }
 }
 
@@ -309,7 +322,64 @@ function unmanagedFor(file: EnvFile) {
   );
 }
 
+/** The files with Git and cloud folders, as the backend reports them. */
+async function reports(project: unknown, all: Project[]): Promise<EnvFileReport[]> {
+  const wanted = (ids: string[]) => project == null || ids.includes(String(project));
+  const out: EnvFileReport[] = [];
+  for (const status of await statuses()) {
+    const ids = all
+      .filter(
+        (p) => p.environments.includes(status.group) && p.folders.includes(status.file.folder),
+      )
+      .map((p) => p.id);
+    if (!wanted(ids)) continue;
+    const found = disk.get(key(status.envId, status.file));
+    out.push({
+      ...status,
+      projects: ids,
+      cloud: status.location ? (found?.cloud ?? null) : null,
+      example: status.location ? (found?.example ?? null) : null,
+      git: status.location ? (found?.git ?? null) : null,
+    });
+  }
+  return out;
+}
+
 export const envFilesHandlers: Record<string, Handler> = {
+  envs_files_check: async ({ id, file }): Promise<EnvFileCheck> => {
+    await requireUnlocked();
+    seed();
+    const item = await findEnv(id);
+    const checked = await checkFile(file as EnvFile);
+    if (kindOf(item) === 'remote') {
+      return fail('invalid_input', 'a remote environment has no files: make it local first');
+    }
+    if (!holds(await projects(), item.project, checked.folder)) {
+      return fail('invalid_input', "the folder isn't in a project that holds the environment");
+    }
+    if (item.files.some((x) => x.folder === checked.folder && x.path === checked.path)) {
+      return fail('already_exists', checked.path);
+    }
+    const here = !checked.path.includes('/');
+    return {
+      file: checked,
+      location: here ? locate(checked) : null,
+      // shop-api's working tree doesn't ignore new files yet.
+      git: here
+        ? {
+            state: checked.folder.includes('shop-api') ? 'untracked' : 'ignored',
+            repository: expand(checked.folder),
+          }
+        : null,
+      cloud: null,
+    };
+  },
+  envs_files_risks: async ({ id }): Promise<EnvFileReport[]> => {
+    await requireUnlocked();
+    seed();
+    const all = await reports(null, await projects());
+    return id == null ? all : all.filter((report) => report.envId === id);
+  },
   envs_files_status: async (): Promise<EnvFileStatus[]> => {
     await requireUnlocked();
     return statuses();
@@ -334,7 +404,9 @@ export const envFilesHandlers: Record<string, Handler> = {
     disk.set(key(item.id, checked), {
       vars: varsOf(item),
       state: checked.path.includes('/') ? 'folderMissing' : 'inSync',
-      git: repository(checked),
+      git: checked.folder.includes('shop-api')
+        ? { state: 'untracked', repository: expand(checked.folder) }
+        : repository(checked),
       cloud: null,
       example: null,
     });
@@ -417,23 +489,7 @@ export const envFilesHandlers: Record<string, Handler> = {
     seed();
     const all = await projects();
     const wanted = (ids: string[]) => project == null || ids.includes(String(project));
-    const files: EnvFileReport[] = [];
-    for (const status of await statuses()) {
-      const ids = all
-        .filter(
-          (p) => p.environments.includes(status.group) && p.folders.includes(status.file.folder),
-        )
-        .map((p) => p.id);
-      if (!wanted(ids)) continue;
-      const found = disk.get(key(status.envId, status.file));
-      files.push({
-        ...status,
-        projects: ids,
-        cloud: status.location ? (found?.cloud ?? null) : null,
-        example: status.location ? (found?.example ?? null) : null,
-        git: status.location ? (found?.git ?? null) : null,
-      });
-    }
+    const files = await reports(project, all);
     const unmanaged = all
       .filter((p) => wanted([p.id]))
       .flatMap((p) =>

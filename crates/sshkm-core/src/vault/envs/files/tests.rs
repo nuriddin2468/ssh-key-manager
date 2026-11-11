@@ -283,6 +283,36 @@ fn file_names_and_paths_are_checked() {
 }
 
 #[test]
+fn a_binding_is_checked_before_it_is_made() {
+    let mut f = Fixture::new();
+    let env = f.env.clone();
+    let (file, location) = f
+        .vault
+        .check_env_file_binding(&env, &f.file(r"apps\web\.env.local"), &f.ctx)
+        .unwrap();
+    assert_eq!(file.path, "apps/web/.env.local");
+    // The folder isn't there yet: nothing to show, nothing made.
+    assert_eq!(location, None);
+    let (_, location) = f
+        .vault
+        .check_env_file_binding(&env, &f.file(".env"), &f.ctx)
+        .unwrap();
+    assert_eq!(location, Some(f.path(".env")));
+    assert!(!f.path(".env").exists());
+    assert_eq!(f.vault.env_files(&env).unwrap().1, []);
+    f.bind(".env");
+    let again = f
+        .vault
+        .check_env_file_binding(&env, &f.file(".env"), &f.ctx);
+    assert_eq!(again.unwrap_err().code(), crate::ErrorCode::AlreadyExists);
+    assert!(
+        f.vault
+            .check_env_file_binding(&env, &f.file(".env.example"), &f.ctx)
+            .is_err()
+    );
+}
+
+#[test]
 fn only_folders_of_a_project_that_holds_the_environment() {
     let mut f = Fixture::new();
     let other = f.dir.path().join("other");

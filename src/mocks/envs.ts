@@ -139,7 +139,14 @@ const envs: Env[] = [
     'marketing-site',
     'dev',
     [v('NEXT_PUBLIC_API_URL', 'http://localhost:3000'), v('CMS_TOKEN', 'cms-dev-0a9f', true)],
-    { kind: 'local', files: [{ folder: '~/code/marketing-site', path: '.env.local' }] },
+    {
+      kind: 'local',
+      files: [
+        { folder: '~/code/marketing-site', path: '.env.local' },
+        // Deleted after it was written, to try Write again.
+        { folder: '~/code/marketing-site', path: 'apps/blog/.env' },
+      ],
+    },
   ),
   env('marketing-site', 'prod', [
     v('NEXT_PUBLIC_API_URL', 'https://api.shop.example'),

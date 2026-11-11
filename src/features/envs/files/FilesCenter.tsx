@@ -22,21 +22,25 @@ import { useProjects } from '@/features/projects/queries';
 import { cn } from '@/lib/cn';
 import { AdoptFileDialog } from './AdoptFileDialog';
 import { announceSynced } from './announce';
+import { isFileConflict } from './errors';
 import { FileCompareDialog } from './FileCompareDialog';
 import {
   bindingPath,
   type CenterFilter,
-  cloudName,
+  cloudBadge,
+  cloudText,
   fileName,
   matchesFilter,
   missingNames,
   needsAttention,
+  sameFile,
+  stateDetail,
   stateLabel,
   stateLook,
   stateText,
   TONE_CLASSES,
 } from './model';
-import { useFilesOverview } from './queries';
+import { refreshFileReports, useFileStatuses, useFilesOverview } from './queries';
 
 const ALL = '__all__';
 const FILTERS: CenterFilter[] = ['all', 'attention', 'git', 'cloud', 'example'];
@@ -70,7 +74,18 @@ export function FilesCenter({ project, onProject }: FilesCenterProps) {
   const filesHeading = useId();
   const unmanagedHeading = useId();
 
-  const files = overview.data?.files ?? [];
+  const statuses = useFileStatuses();
+  // The overview is fetched when asked; states follow every round.
+  const files = useMemo(
+    () =>
+      (overview.data?.files ?? []).map((report) => {
+        const live = statuses.data?.find(
+          (status) => status.envId === report.envId && sameFile(status.file, report.file),
+        );
+        return live ? { ...report, state: live.state, location: live.location } : report;
+      }),
+    [overview.data, statuses.data],
+  );
   const unmanaged = overview.data?.unmanaged ?? [];
   // What needs the user first; the rest keeps the backend's order.
   const shown = useMemo(
@@ -85,6 +100,7 @@ export function FilesCenter({ project, onProject }: FilesCenterProps) {
 
   const sync = useVaultMutation(() => api.envsFilesSync(), {
     onSuccess: (synced) => {
+      void refreshFileReports();
       announceSynced(t, synced, navigate);
       if (synced.written.length > 0) {
         toast.success(t('envs.files.written', { count: synced.written.length }));
@@ -100,7 +116,10 @@ export function FilesCenter({ project, onProject }: FilesCenterProps) {
     (report: EnvFileReport) => api.envsFilesIgnore(report.envId, report.file),
     {
       success: (_, report) => t('envs.center.ignored', { file: fileName(report.file) }),
-      onSuccess: () => setIgnoring(null),
+      onSuccess: () => {
+        setIgnoring(null);
+        void refreshFileReports();
+      },
     },
   );
 
@@ -263,7 +282,14 @@ function FileReportRow({ report, onCompare, onIgnore }: FileReportRowProps) {
   const missing = missingNames(report);
   const writeAgain = useVaultMutation(
     () => api.envsFilesResolve(report.envId, report.file, 'vault', null),
-    { onSuccess: (synced) => announceSynced(t, synced, navigate) },
+    {
+      onSuccess: (synced) => announceSynced(t, synced, navigate),
+      onError: (error) => {
+        if (!isFileConflict(error)) return false;
+        toast.warning(t('envs.files.errors.fileBack', { file: fileName(report.file) }));
+        return true;
+      },
+    },
   );
   return (
     <li
@@ -289,7 +315,9 @@ function FileReportRow({ report, onCompare, onIgnore }: FileReportRowProps) {
           </span>
         </div>
         {report.state.type === 'inSync' ? null : (
-          <p className="text-[12.5px] text-muted">{stateText(t, report.state)}</p>
+          <p className="text-[12.5px] text-muted" title={stateDetail(report.state)}>
+            {stateText(t, report.state)}
+          </p>
         )}
         <p
           className="selectable truncate font-mono text-[11.5px] text-subtle"
@@ -326,12 +354,8 @@ function FileReportRow({ report, onCompare, onIgnore }: FileReportRowProps) {
             ) : null}
             {report.cloud ? (
               <Flag
-                badge={
-                  <Badge tone="warning">
-                    {t('envs.center.cloudBadge', { service: cloudName(t, report.cloud) })}
-                  </Badge>
-                }
-                text={t('envs.center.cloudText', { service: cloudName(t, report.cloud) })}
+                badge={<Badge tone="warning">{cloudBadge(t, report.cloud)}</Badge>}
+                text={cloudText(t, report.cloud)}
               />
             ) : null}
             {missing.length > 0 && report.example ? (
@@ -443,11 +467,7 @@ function UnmanagedRow({ found, projectName, onAdopt }: UnmanagedRowProps) {
       {found.git?.state === 'tracked' ? (
         <Badge tone="critical">{t('envs.center.gitTracked')}</Badge>
       ) : null}
-      {found.cloud ? (
-        <Badge tone="warning">
-          {t('envs.center.cloudBadge', { service: cloudName(t, found.cloud) })}
-        </Badge>
-      ) : null}
+      {found.cloud ? <Badge tone="warning">{cloudBadge(t, found.cloud)}</Badge> : null}
       <Button size="sm" aria-label={t('envs.center.adoptLabel', { file: name })} onClick={onAdopt}>
         {t('envs.center.adopt')}
       </Button>

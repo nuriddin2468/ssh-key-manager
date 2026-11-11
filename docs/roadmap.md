@@ -81,7 +81,8 @@ The foundation for everything below.
    → address, each turned on or off through the hosts file's own review, admin rights and
    backups, and flags a name the file no longer has. Added from the Add menu or a Hosts
    file entry's menu; suggested from the names and domains of the project's hosts. Turning
-   all of a project's entries on or off at once waits for a decision. In review.
+   all of a project's entries on or off at once waits for a decision. In review:
+   [#41](https://github.com/nuriddin2468/ssh-key-manager/pull/41).
 
 ### 3. Managed `.env` files — in progress
 

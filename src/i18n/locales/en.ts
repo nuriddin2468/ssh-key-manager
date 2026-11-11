@@ -105,6 +105,8 @@ const en = {
       open: 'Open {{name}}',
       empty: 'Nothing added yet',
       noProblems: 'No problems',
+      envFiles_one: '{{count}} .env file needs attention',
+      envFiles_other: '{{count}} .env files need attention',
       moreProblems_one: '+{{count}} more',
       moreProblems_other: '+{{count}} more',
     },

@@ -134,6 +134,44 @@ export function needsAttention(report: EnvFileReport): boolean {
   );
 }
 
+/**
+ * A file's report with the state it has now: states refresh with the
+ * environments, reports only now and then. A file without a report yet
+ * (just bound) goes by its state alone.
+ */
+export function liveReport(
+  status: EnvFileStatus,
+  reports: readonly EnvFileReport[] | undefined,
+): EnvFileReport {
+  const report = reports?.find(
+    (item) => item.envId === status.envId && sameFile(item.file, status.file),
+  );
+  return report
+    ? { ...report, state: status.state }
+    : { ...status, projects: [], cloud: null, example: null, git: null };
+}
+
+/**
+ * A project's files that need the user: the reports know the projects that
+ * hold each file's folder, the states (once known) what each file is now
+ * and which are still written to.
+ */
+export function projectFilesNeedingAttention(
+  projectId: string,
+  statuses: readonly EnvFileStatus[] | undefined,
+  reports: readonly EnvFileReport[] | undefined,
+): EnvFileReport[] {
+  return (reports ?? []).flatMap((report) => {
+    if (!report.projects.includes(projectId)) return [];
+    if (!statuses) return needsAttention(report) ? [report] : [];
+    const status = statuses.find(
+      (item) => item.envId === report.envId && sameFile(item.file, report.file),
+    );
+    const live = status ? { ...report, state: status.state } : null;
+    return live && needsAttention(live) ? [live] : [];
+  });
+}
+
 export type CenterFilter = 'all' | 'attention' | 'git' | 'cloud' | 'example';
 
 export function matchesFilter(report: EnvFileReport, filter: CenterFilter): boolean {

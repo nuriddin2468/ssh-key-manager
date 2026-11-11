@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { EnvFileReport } from '@/bindings/EnvFileReport';
 import type { EnvFileStatus } from '@/bindings/EnvFileStatus';
 import { cn } from '@/lib/cn';
-import { needsAttention, type StateTone, sameFile } from './model';
+import { liveReport, needsAttention, type StateTone } from './model';
 import { useFileRisks, useFileStatuses } from './queries';
 
 /** One line on where an environment's files stand, and its tone. */
@@ -28,14 +28,7 @@ export function fileLine(
 ): FileLine | null {
   const mine = (statuses ?? []).filter((status) => status.envId === envId);
   if (mine.length === 0) return null;
-  const attention = mine.filter((status) => {
-    const report = risks?.find((item) => item.envId === envId && sameFile(item.file, status.file));
-    return needsAttention(
-      report
-        ? { ...report, state: status.state }
-        : { ...status, projects: [], cloud: null, example: null, git: null },
-    );
-  }).length;
+  const attention = mine.filter((status) => needsAttention(liveReport(status, risks))).length;
   if (attention > 0) {
     return {
       text: t('envs.files.line.attention', { count: attention }),

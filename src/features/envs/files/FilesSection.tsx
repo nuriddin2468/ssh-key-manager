@@ -33,6 +33,7 @@ import {
   bindingPath,
   cloudBadge,
   fileName,
+  missingNames,
   needsAction,
   sameFile,
   stateDetail,
@@ -204,6 +205,7 @@ function FileRow({
     },
   });
   const git = report?.git?.state;
+  const missing = report ? missingNames(report) : [];
   const Icon = look?.icon;
   return (
     <li className="flex items-center gap-2.5 rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-2">
@@ -234,10 +236,22 @@ function FileRow({
           ) : null}
           {git === 'tracked' ? <Badge tone="critical">{t('envs.center.gitTracked')}</Badge> : null}
           {report?.cloud ? <Badge tone="warning">{cloudBadge(t, report.cloud)}</Badge> : null}
+          {missing.length > 0 ? (
+            <Badge tone="info">{t('envs.center.exampleBadge', { count: missing.length })}</Badge>
+          ) : null}
         </span>
         {state && needsAction(state) ? (
           <span className="text-[12px] leading-[17px] text-muted" title={stateDetail(state)}>
             {stateText(t, state)}
+          </span>
+        ) : null}
+        {missing.length > 0 && report?.example ? (
+          // Which names, as the Files view lists them: the user adds them here.
+          <span className="text-[12px] leading-[17px] text-muted">
+            {t('envs.center.exampleText', { file: report.example.file })}{' '}
+            <span className="selectable font-mono text-[11.5px] text-fg-2">
+              {missing.join(', ')}
+            </span>
           </span>
         ) : null}
       </span>

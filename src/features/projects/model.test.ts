@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { EntrySummary } from '@/bindings/EntrySummary';
+import type { EnvFileReport } from '@/bindings/EnvFileReport';
 import type { EnvSummary } from '@/bindings/EnvSummary';
 import type { Finding } from '@/bindings/Finding';
 import type { HostEntry } from '@/bindings/HostEntry';
@@ -334,6 +335,35 @@ describe('a project’s card on All projects', () => {
       'host:old',
       'folder:~/a',
     ]);
+  });
+
+  it('counts its .env files that need the user as one problem, critical when Git tracks one', () => {
+    const mine = projectFindings(shop, library, found, new Set(['ignored']));
+    const gone = missing(shop, library, ['~/a']);
+    const file = (path: string, git: EnvFileReport['git']): EnvFileReport => ({
+      projects: ['p1'],
+      cloud: null,
+      example: null,
+      git,
+      envId: 'env-1',
+      group: 'shop-api',
+      envName: 'dev',
+      file: { folder: '~/code/shop', path },
+      location: null,
+      state: { type: 'conflict' },
+    });
+    const untracked = file('.env', { state: 'untracked', repository: '/code/shop' });
+    const problems = projectProblems(mine, gone, [untracked, file('.env.local', null)]);
+    const files = problems.find((p) => p.source === 'files');
+    expect(files?.severity).toBe('warning');
+    expect(files?.source === 'files' && files.files).toHaveLength(2);
+    // After the critical findings and with the warnings, before members missing here.
+    expect(problems.map((p) => p.key).indexOf('env-files')).toBe(4);
+    const tracked = file('.env', { state: 'tracked', repository: '/code/shop' });
+    expect(
+      projectProblems(mine, gone, [tracked]).find((p) => p.key === 'env-files')?.severity,
+    ).toBe('critical');
+    expect(projectProblems(mine, gone, []).some((p) => p.key === 'env-files')).toBe(false);
   });
 
   it('offers its first folder on this computer and its first host in ~/.ssh/config with a shell', () => {

@@ -107,6 +107,8 @@ const uz = {
       open: 'Ochish: {{name}}',
       empty: 'Hozircha hech narsa qoʻshilmagan',
       noProblems: 'Muammo yoʻq',
+      envFiles_one: '{{count}} ta .env fayl eʼtibor talab qiladi',
+      envFiles_other: '{{count}} ta .env fayl eʼtibor talab qiladi',
       moreProblems_one: 'yana {{count}} ta',
       moreProblems_other: 'yana {{count}} ta',
     },

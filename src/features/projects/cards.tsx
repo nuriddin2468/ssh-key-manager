@@ -50,6 +50,7 @@ import { MixedSwitch, Switch } from '@/components/ui/Switch';
 import { findingTitle } from '@/features/audit/model';
 import { useVaultAudit } from '@/features/audit/queries';
 import { vaultFindingTitle } from '@/features/audit/vaultModel';
+import { FileStateLine } from '@/features/envs/files/FileStateLine';
 import { editOf } from '@/features/hostsFile/draft';
 import { isSystemName, listsSystemName, normalizeName } from '@/features/hostsFile/model';
 import { ReviewDialog, type ReviewNote } from '@/features/hostsFile/ReviewDialog';
@@ -377,7 +378,10 @@ function Row({
           <div className={text}>{title}</div>
         ) : null}
         {subtitle ? <div className="truncate text-[11.5px] text-subtle">{subtitle}</div> : null}
-        {detail ? <div className="truncate text-[11.5px] text-subtle">{detail}</div> : null}
+        {detail ? (
+          // Room for a link's focus ring, which `truncate` would clip; the text stays put.
+          <div className="-m-1 truncate p-1 text-[11.5px] text-subtle">{detail}</div>
+        ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-1.5">{children}</div>
     </li>
@@ -990,6 +994,14 @@ function useEnvironmentsCard(
                     secrets: env.secretCount,
                   })
                 : t('envs.counts', { count: env.variableCount })
+            }
+            // Where its .env files stand; one that needs the user leads to them.
+            detail={
+              <FileStateLine
+                envId={env.id}
+                label={label}
+                onOpen={() => navigate({ page: 'envs', envId: env.id, back })}
+              />
             }
           >
             {project || index > 0 ? null : <AddToProjectButton member={member} name={group} />}

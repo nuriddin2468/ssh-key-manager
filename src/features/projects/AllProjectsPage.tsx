@@ -35,6 +35,8 @@ import { IconButton } from '@/components/ui/IconButton';
 import { findingTitle } from '@/features/audit/model';
 import { useOpenFindingCounts, useVaultAudit } from '@/features/audit/queries';
 import { vaultFindingTitle } from '@/features/audit/vaultModel';
+import { projectFilesNeedingAttention } from '@/features/envs/files/model';
+import { useFileRisks, useFileStatuses } from '@/features/envs/files/queries';
 import { useEnvs } from '@/features/envs/queries';
 import { useTerminals } from '@/features/terminal/TerminalProvider';
 import { cn } from '@/lib/cn';
@@ -427,6 +429,15 @@ function problemText(
       about: library.entries?.find((e) => e.id === problem.finding.entryId)?.title,
     };
   }
+  if (problem.source === 'files') {
+    const [only] = problem.files;
+    return {
+      title: t('projects.home.envFiles', { count: problem.files.length }),
+      // One file: which; several: the project's page tells them apart.
+      about: problem.files.length === 1 ? only?.file.path : undefined,
+      mono: true,
+    };
+  }
   const { member } = problem;
   switch (member.type) {
     case 'host':
@@ -488,6 +499,9 @@ function ProjectCard({
     onError: (error) => toastError(t, error),
   });
 
+  const fileStatuses = useFileStatuses();
+  const fileRisks = useFileRisks();
+
   const name = project ? project.name : t('projects.personal');
   const counts = memberSummary(t, members, locked);
   const problems = projectProblems(
@@ -498,12 +512,18 @@ function ProjectCard({
       ignored,
     ),
     gone,
+    // Files are written only to a project's folders: Personal has none.
+    project && !locked
+      ? projectFilesNeedingAttention(project.id, fileStatuses.data, fileRisks.data)
+      : [],
   );
   const quick = quickActions(members, gone, goneFolders, library.hosts);
   // "No problems" only once everything was checked: the audits, the
-  // folders on this computer, ~/.ssh/config, the keys and the hosts file.
+  // folders on this computer, ~/.ssh/config, the keys, the hosts file and,
+  // with the vault open, the .env files.
   const checked =
     audit.data !== undefined &&
+    !fileRisks.isLoading &&
     vaultAudit.data !== undefined &&
     goneFolders !== undefined &&
     library.hosts !== undefined &&

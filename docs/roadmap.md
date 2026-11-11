@@ -90,7 +90,7 @@ The foundation for everything below.
    [#41](https://github.com/nuriddin2468/ssh-key-manager/pull/41).
 6. **All projects, the home screen**: the app opens on it and ⌘1 comes back (it was the
    project used last). A card per project, Personal first: what it holds, its problems
-   (audit findings, members missing on this computer; `.env` file states with step 3)
+   (audit findings, members missing on this computer, `.env` files that need attention)
    and quick actions — a terminal in its first folder on this computer, that folder in
    Finder, Explorer or Files, a session to its first host with a shell. Above the cards:
    Audit's numbers (or "No issues found"), one Unlock prompt while the vault is locked,
@@ -98,14 +98,16 @@ The foundation for everything below.
    there are no keys. In review:
    [#42](https://github.com/nuriddin2468/ssh-key-manager/pull/42).
 
-### 3. Managed `.env` files — in progress
+### 3. Managed `.env` files — done
 
 Environments get files, inside projects. Core, commands and mocks (local or remote,
 bindings, safe writes, lossless editing, two-way sync, the management center's data):
 [#38](https://github.com/nuriddin2468/ssh-key-manager/pull/38). The UI (file bindings in
-the Environments pane, the Files view, Undo, conflicts) in review:
-[#40](https://github.com/nuriddin2468/ssh-key-manager/pull/40); the file-state line on the
-project page follows 2.4.
+the Environments pane, the Files view, Undo, conflicts):
+[#40](https://github.com/nuriddin2468/ssh-key-manager/pull/40). The file-state line under
+each environment on a project's page, `.env` files that need attention among a project's
+problems on All projects, and the review's leftovers:
+[#43](https://github.com/nuriddin2468/ssh-key-manager/pull/43).
 
 - Bindings: environment → file(s) in the project's folders (`.env`, `.env.local`,
   `.env.development.local`…; several in a monorepo).

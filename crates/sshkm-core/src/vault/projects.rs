@@ -372,12 +372,14 @@ impl Stored {
         self.aka.push(name.to_owned());
     }
 
-    /// The members in the project, of every kind this version knows.
+    /// The members in the project, of every kind this version knows, in the
+    /// order they were added (then by key): a project's first folder and
+    /// first host are the ones the user added first.
     fn present(&self) -> impl Iterator<Item = ProjectMember> + '_ {
-        self.members
-            .iter()
-            .filter(|(_, p)| p.present())
-            .filter_map(|(key, _)| parse_member(key))
+        let mut present: Vec<(&String, &Presence)> =
+            self.members.iter().filter(|(_, p)| p.present()).collect();
+        present.sort_by(|(a_key, a), (b_key, b)| a.a.cmp(&b.a).then_with(|| a_key.cmp(b_key)));
+        present.into_iter().filter_map(|(key, _)| parse_member(key))
     }
 
     fn count(&self, kind: &str) -> usize {

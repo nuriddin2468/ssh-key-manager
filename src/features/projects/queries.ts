@@ -29,7 +29,7 @@ export function useProjects() {
  * What the app proposes; only while the vault is unlocked. Looking means
  * reading code folders, so it happens when the suggestions page asks
  * (`look`), is kept for a few minutes, and isn't part of `invalidateAll`;
- * elsewhere (the sidebar) only what was found already shows.
+ * elsewhere (the sidebar, All projects) only what was found already shows.
  */
 export function useSuggestions({ look }: { look: boolean }) {
   const unlocked = useVaultStatus().data?.state === 'unlocked';

@@ -85,6 +85,13 @@ const en = {
     home: {
       count_one: '{{count}} project',
       count_other: '{{count}} projects',
+      lockedUnknown: 'The vault is locked. Unlock it to see your projects.',
+      lookTitle: 'Find projects you already have',
+      lookText:
+        'The app can look through your environments, code folders, ~/.ssh/config and vault. Nothing changes until you accept a suggestion.',
+      look: 'Look for projects',
+      reviewSuggestions_one: 'Review {{count}} suggested project',
+      reviewSuggestions_other: 'Review {{count}} suggested projects',
       locked:
         'The vault is locked. Logins, environments and their problems show once you unlock it.',
       suggestTitle_one: '{{count}} suggested project',

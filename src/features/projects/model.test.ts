@@ -14,6 +14,7 @@ import {
   hostAliases,
   hostsFileEntries,
   initials,
+  memberSummary,
   missing,
   nextColor,
   personal,
@@ -337,9 +338,19 @@ describe('a project’s card on All projects', () => {
 
   it('offers its first folder on this computer and its first host in ~/.ssh/config with a shell', () => {
     const gone = missing(shop, library, ['~/a']);
-    expect(quickActions(shop, gone, ['~/a'])).toEqual({ folder: '~/b', host: 'prod' });
-    // Until the folders are checked, none is offered.
-    expect(quickActions(shop, gone, undefined)).toEqual({ folder: undefined, host: 'prod' });
+    expect(quickActions(shop, gone, ['~/a'], library.hosts)).toEqual({
+      folder: '~/b',
+      host: 'prod',
+    });
+    // Until the folders are checked, or the hosts read, none is offered.
+    expect(quickActions(shop, gone, undefined, library.hosts)).toEqual({
+      folder: undefined,
+      host: 'prod',
+    });
+    expect(quickActions(shop, missing(shop, {}), ['~/a'], undefined)).toEqual({
+      folder: '~/b',
+      host: undefined,
+    });
     // GitHub and the like give no shell.
     const code = project({ hosts: ['github.com', 'gl', 'prod'] });
     const hosts = [
@@ -349,7 +360,7 @@ describe('a project’s card on All projects', () => {
     ];
     expect(quickActions(code, missing(code, { hosts }), [], hosts).host).toBe('prod');
     const empty = project({ hosts: ['old'] });
-    expect(quickActions(empty, missing(empty, library), [])).toEqual({
+    expect(quickActions(empty, missing(empty, library), [], library.hosts)).toEqual({
       folder: undefined,
       host: undefined,
     });
@@ -360,5 +371,19 @@ describe('a host made from a project', () => {
   it('joins by its first pattern that is a name', () => {
     expect(aliasOf(['*.internal', '!bad', 'app', 'api'])).toBe('app');
     expect(aliasOf(['web?', '*'])).toBeUndefined();
+  });
+});
+
+describe('a project’s counts', () => {
+  const t = ((key: string, options?: { count: number }) =>
+    `${options?.count} ${key.split('.').pop()}`) as unknown as import('i18next').TFunction;
+  const shop = project({ hosts: ['a', 'b'], environments: ['shop'], logins: ['l1'], keys: ['k'] });
+
+  it('name only the kinds it has', () => {
+    expect(memberSummary(t, shop, false)).toBe('2 hosts · 1 environments · 1 logins · 1 keys');
+  });
+
+  it('leave out environments and logins while the vault is locked', () => {
+    expect(memberSummary(t, shop, true)).toBe('2 hosts · 1 keys');
   });
 });

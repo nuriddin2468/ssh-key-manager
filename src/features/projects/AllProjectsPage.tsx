@@ -85,7 +85,9 @@ export function AllProjectsPage() {
   const envs = useEnvs();
   const entries = useVaultEntries();
   const hostsFile = useHostsFile();
-  const suggestions = useSuggestions({ look: true }).data;
+  // What was found already: looking reads code folders, and waits for the
+  // Suggestions page (or a click on "Look for projects").
+  const suggestions = useSuggestions({ look: false }).data;
   const [creating, setCreating] = useState(false);
 
   const library: Library = {
@@ -100,15 +102,23 @@ export function AllProjectsPage() {
   const mine = personal(list, library);
   const personalSize =
     mine.hosts.length + mine.keys.length + mine.environments.length + mine.logins.length;
-  const firstRun = list.length === 0 && (projects.data !== undefined || vaultState === 'missing');
+  // No projects: only known with the vault open, or without one. Locked, a
+  // device may have no copy of them yet (the vault came by sync or import).
+  const firstRun =
+    list.length === 0 &&
+    ((projects.data !== undefined && vaultState === 'unlocked') || vaultState === 'missing');
+  const unknown = locked && projects.data !== undefined && list.length === 0;
   const noKeys = keys.data !== undefined && keys.data.keys.length === 0;
 
   // A project's folders missing on this computer: the project page asks the same.
   const withFolders = list.filter((project) => project.folders.length > 0);
+  // Checked now and then, not on every focus: a hung mount stalls the check.
   const goneFolders = useQueries({
     queries: withFolders.map((project) => ({
       queryKey: [...projectKeys.all, 'missing', project.id],
       queryFn: () => api.projectsMissingFolders(project.id),
+      staleTime: 5 * 60_000,
+      refetchOnWindowFocus: false,
     })),
   });
   const goneFor = (project: Project): string[] | undefined => {
@@ -132,7 +142,7 @@ export function AllProjectsPage() {
         meta={list.length > 0 ? t('projects.home.count', { count: list.length }) : undefined}
       >
         {/* On the first run the intro has it. */}
-        {!firstRun && (vaultState === 'unlocked' || vaultState === 'locked') ? (
+        {projects.data && !firstRun && (vaultState === 'unlocked' || vaultState === 'locked') ? (
           <Button
             size="sm"
             icon={<Plus className="size-4" strokeWidth={2.2} />}
@@ -154,7 +164,7 @@ export function AllProjectsPage() {
         {locked ? (
           <Banner
             icon={<LockKeyhole className="size-4" strokeWidth={2} />}
-            text={t('projects.home.locked')}
+            text={unknown ? t('projects.home.lockedUnknown') : t('projects.home.locked')}
             action={
               <Button size="sm" variant="primary" onClick={() => dialogs.unlockVault()}>
                 {t('projects.unlock')}
@@ -169,38 +179,59 @@ export function AllProjectsPage() {
             title={t('projects.home.suggestTitle', { count: suggestions.length })}
             text={t('projects.suggest.intro')}
             action={
-              <Button size="sm" variant="soft" onClick={() => navigate({ page: 'suggestions' })}>
+              <Button
+                size="sm"
+                variant="soft"
+                aria-label={t('projects.home.reviewSuggestions', { count: suggestions.length })}
+                onClick={() => navigate({ page: 'suggestions' })}
+              >
                 {t('projects.home.review')}
               </Button>
             }
           />
+        ) : firstRun && vaultState === 'unlocked' && suggestions === undefined ? (
+          // Nobody looked yet: the Suggestions page looks, when asked.
+          <Banner
+            tone="ok"
+            icon={<Sparkles className="size-4" strokeWidth={2} />}
+            title={t('projects.home.lookTitle')}
+            text={t('projects.home.lookText')}
+            action={
+              <Button size="sm" variant="soft" onClick={() => navigate({ page: 'suggestions' })}>
+                {t('projects.home.look')}
+              </Button>
+            }
+          />
         ) : null}
-        <ul className="grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))] items-stretch gap-3">
-          {personalSize > 0 || !firstRun ? (
-            <ProjectCard
-              members={mine}
-              library={library}
-              gone={NOTHING_GONE}
-              goneFolders={[]}
-              locked={locked}
-              loading={!config.data || !keys.data}
-            />
-          ) : null}
-          {list.map((project) => {
-            const folders = goneFor(project);
-            return (
+        {/* Locked without a copy of the projects: nothing to show but Unlock. */}
+        {unknown ? null : (
+          <ul className="grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))] items-stretch gap-3">
+            {personalSize > 0 || !firstRun ? (
               <ProjectCard
-                key={project.id}
-                project={project}
-                members={project}
+                members={mine}
                 library={library}
-                gone={missing(project, library, folders)}
-                goneFolders={folders}
+                gone={NOTHING_GONE}
+                goneFolders={[]}
                 locked={locked}
+                loading={!config.data || !keys.data}
               />
-            );
-          })}
-        </ul>
+            ) : null}
+            {list.map((project) => {
+              const folders = goneFor(project);
+              return (
+                <ProjectCard
+                  key={project.id}
+                  project={project}
+                  members={project}
+                  library={library}
+                  gone={missing(project, library, folders)}
+                  goneFolders={folders}
+                  locked={locked}
+                />
+              );
+            })}
+          </ul>
+        )}
       </PageBody>
       <Dialog open={creating} onOpenChange={setCreating}>
         {creating ? (
@@ -469,6 +500,15 @@ function ProjectCard({
     gone,
   );
   const quick = quickActions(members, gone, goneFolders, library.hosts);
+  // "No problems" only once everything was checked: the audits, the
+  // folders on this computer, ~/.ssh/config, the keys and the hosts file.
+  const checked =
+    audit.data !== undefined &&
+    vaultAudit.data !== undefined &&
+    goneFolders !== undefined &&
+    library.hosts !== undefined &&
+    library.keys !== undefined &&
+    (members.hostsFile.length === 0 || library.hostsFile !== undefined);
   const shown = problems.slice(0, PROBLEM_LIMIT);
   const open = () => navigate(project ? { page: 'project', id: project.id } : { page: 'personal' });
 
@@ -499,7 +539,8 @@ function ProjectCard({
                     </span>{' '}
                   </Fragment>
                 ))
-              : loading
+              : // Locked, its logins and environments don't show: say nothing.
+                loading || locked
                 ? '\u00a0'
                 : project
                   ? t('projects.home.empty')
@@ -508,7 +549,9 @@ function ProjectCard({
         </div>
         <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-faint" strokeWidth={2} />
       </div>
-      {counts === '' ? null : shown.length > 0 ? (
+      {counts === '' ? null : !checked ? (
+        <p aria-hidden="true" className="min-h-6" />
+      ) : shown.length > 0 ? (
         <ul className="flex flex-col gap-0.5">
           {shown.map((problem) => {
             const text = problemText(t, problem, library);
@@ -558,7 +601,8 @@ function ProjectCard({
         </p>
       )}
       {quick.folder || quick.host ? (
-        <div className="relative z-10 mt-auto flex flex-wrap items-center gap-1.5 border-t border-white/[0.045] pt-2.5">
+        // Only the buttons sit above the card's link: the rest of the row opens it.
+        <div className="mt-auto flex flex-wrap items-center gap-1.5 border-t border-white/[0.045] pt-2.5">
           {project && quick.folder ? (
             <FolderActions
               path={quick.folder}
@@ -575,7 +619,7 @@ function ProjectCard({
           {quick.host ? (
             <Button
               size="sm"
-              className="min-w-0"
+              className="relative z-10 min-w-0"
               icon={<SquareTerminal className="size-3.5" strokeWidth={2} />}
               onClick={() => {
                 terminals.open(quick.host ?? '');
@@ -606,6 +650,7 @@ function FolderActions({
     <>
       <Button
         size="sm"
+        className="relative z-10"
         icon={<SquareTerminal className="size-3.5" strokeWidth={2} />}
         aria-label={t('projects.openTerminalIn', { name: path })}
         onClick={() => onTerminal(path)}
@@ -616,6 +661,7 @@ function FolderActions({
         label={t('projects.showFolderIn', { name: path, app: fileManagerName })}
         tooltip={t('keys.showIn', { app: fileManagerName })}
         variant="ghost"
+        className="relative z-10"
         icon={<FolderOpen className="size-4" strokeWidth={1.9} />}
         onClick={onReveal}
       />

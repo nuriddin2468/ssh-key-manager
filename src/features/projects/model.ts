@@ -213,7 +213,8 @@ export function memberSummary(t: TFunction, members: Members, locked: boolean): 
   const parts = [
     members.hosts.length ? t('projects.count.hosts', { count: members.hosts.length }) : null,
     members.folders.length ? t('projects.count.folders', { count: members.folders.length }) : null,
-    members.environments.length
+    // Environments and logins show once the vault is unlocked.
+    !locked && members.environments.length
       ? t('projects.count.environments', { count: members.environments.length })
       : null,
     !locked && members.logins.length
@@ -327,24 +328,26 @@ export function projectProblems(findings: Findings, gone: Missing): ProjectProbl
 /**
  * What a project's card offers at once: a terminal in its first folder on
  * this computer, and a session to its first host in `~/.ssh/config` that
- * gives a shell (not GitHub and the like). A folder waits for `goneFolders`
- * (`undefined` until known), so a missing one is never offered.
+ * gives a shell (not GitHub and the like); members come in the order they
+ * were added. Each waits until it is known: a folder for `goneFolders`, a
+ * host for `hosts` (both `undefined` until loaded), so a missing one or a
+ * git host is never offered, even for a moment.
  */
 export function quickActions(
   members: Members,
   gone: Missing,
   goneFolders: readonly string[] | undefined,
-  hosts: readonly HostEntry[] = [],
+  hosts: readonly HostEntry[] | undefined,
 ): { folder?: string; host?: string } {
   const shell = (alias: string) => {
-    const host = hosts.find((h) => h.kind === 'host' && h.patterns.includes(alias));
+    const host = hosts?.find((h) => h.kind === 'host' && h.patterns.includes(alias));
     return !host || gitService(host) === null;
   };
   return {
     folder: goneFolders
       ? members.folders.find((folder) => !goneFolders.includes(folder))
       : undefined,
-    host: members.hosts.find((alias) => !gone.hosts.has(alias) && shell(alias)),
+    host: hosts ? members.hosts.find((alias) => !gone.hosts.has(alias) && shell(alias)) : undefined,
   };
 }
 

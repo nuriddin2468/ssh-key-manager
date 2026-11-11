@@ -87,6 +87,13 @@ const uz = {
     home: {
       count_one: '{{count}} ta loyiha',
       count_other: '{{count}} ta loyiha',
+      lockedUnknown: 'Ombor qulflangan. Loyihalaringizni koʻrish uchun uni oching.',
+      lookTitle: 'Mavjud loyihalaringizni toping',
+      lookText:
+        'Ilova muhitlar, kod papkalari, ~/.ssh/config va omborni koʻrib chiqishi mumkin. Taklifni qabul qilmaguningizcha hech narsa oʻzgarmaydi.',
+      look: 'Loyihalarni qidirish',
+      reviewSuggestions_one: '{{count}} ta taklif qilingan loyihani koʻrib chiqish',
+      reviewSuggestions_other: '{{count}} ta taklif qilingan loyihani koʻrib chiqish',
       locked:
         'Ombor qulflangan. Loginlar, muhitlar va ularning muammolari ombor ochilgach koʻrinadi.',
       suggestTitle_one: '{{count}} ta taklif qilingan loyiha',

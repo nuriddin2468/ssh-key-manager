@@ -25,7 +25,9 @@ import type { EnvComparison } from '@/bindings/EnvComparison';
 import type { EnvDetail } from '@/bindings/EnvDetail';
 import type { EnvExport } from '@/bindings/EnvExport';
 import type { EnvFile } from '@/bindings/EnvFile';
+import type { EnvFileCheck } from '@/bindings/EnvFileCheck';
 import type { EnvFileComparison } from '@/bindings/EnvFileComparison';
+import type { EnvFileReport } from '@/bindings/EnvFileReport';
 import type { EnvFileStatus } from '@/bindings/EnvFileStatus';
 import type { EnvFilesOverview } from '@/bindings/EnvFilesOverview';
 import type { EnvFilesSynced } from '@/bindings/EnvFilesSynced';
@@ -550,6 +552,11 @@ export const api = {
     call<EnvFilesOverview>('envs_files_overview', { project }),
   /** Adds the file to its working tree's `.gitignore`, after the user said to. */
   envsFilesIgnore: (id: string, file: EnvFile) => call<GitInfo>('envs_files_ignore', { id, file }),
+  /** What writing to `file` would mean (Git, cloud folder), before binding it. */
+  envsFilesCheck: (id: string, file: EnvFile) =>
+    call<EnvFileCheck>('envs_files_check', { id, file }),
+  /** The files of one environment (or all) with Git and cloud folders, no folder walk. */
+  envsFilesRisks: (id: string | null) => call<EnvFileReport[]>('envs_files_risks', { id }),
   /** The variables of a `.env` file found in a project's folder, without values. */
   envsFilesAdoptPreview: (project: string, file: EnvFile) =>
     call<EnvImportPreview>('envs_files_adopt_preview', { project, file }),

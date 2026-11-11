@@ -7,10 +7,12 @@ import {
   FileDown,
   FileUp,
   Lock,
+  MonitorSmartphone,
   MoreHorizontal,
   Pencil,
   Plus,
   Send,
+  Server,
   SquareTerminal,
   Trash2,
   Undo2,
@@ -23,6 +25,7 @@ import { api } from '@/api/commands';
 import { invalidateAll } from '@/api/queries';
 import { useRouter } from '@/app/router';
 import type { EnvDetail } from '@/bindings/EnvDetail';
+import type { EnvKind } from '@/bindings/EnvKind';
 import type { EnvSummary } from '@/bindings/EnvSummary';
 import type { EnvVarInfo } from '@/bindings/EnvVarInfo';
 import type { ProjectMember } from '@/bindings/ProjectMember';
@@ -52,6 +55,8 @@ import { formatRelative } from '@/lib/format';
 import { useSettings } from '@/lib/settings';
 import { CompareDialog } from './CompareDialog';
 import { ExportEnvDialog } from './ExportEnvDialog';
+import { FilesSection } from './files/FilesSection';
+import { useMakeLocal } from './files/useMakeLocal';
 import { envLabel, isProduction } from './model';
 import { useEnv } from './queries';
 import { VariableDialog } from './VariableDialog';
@@ -129,6 +134,12 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
       onGone();
     },
   });
+  const setKind = useVaultMutation((kind: EnvKind) => api.envsSetKind(summary.id, kind), {
+    success: (_, kind) =>
+      t(kind === 'local' ? 'envs.kind.nowLocal' : 'envs.kind.nowRemote', { name: label }),
+  });
+  // Production asks first: its values would be on this disk.
+  const makeLocal = useMakeLocal(summary);
   const removeVar = useVaultMutation((name: string) => api.envsRemoveVar(summary.id, name), {
     success: (_, name) => t('envs.varRemoved', { name }),
     onSuccess: () => setRemoving(null),
@@ -157,6 +168,12 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
             <p className="truncate text-[12.5px] text-muted">{summary.project}</p>
             <h2 className="selectable flex min-w-0 items-center gap-2 text-[17px] leading-6 font-semibold">
               <span className="truncate">{summary.name}</span>
+              <Badge tone={summary.kind === 'local' ? 'accent' : 'neutral'}>
+                <span title={t(`envs.kind.${summary.kind}Hint`)}>
+                  {t(`envs.kind.${summary.kind}`)}
+                  <span className="sr-only">: {t(`envs.kind.${summary.kind}Hint`)}</span>
+                </span>
+              </Badge>
               {production ? <Badge tone="warning">{t('envs.production')}</Badge> : null}
               {inTrash ? (
                 <Badge tone="warning" pill>
@@ -220,6 +237,31 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
                   <MenuItem icon={<FileUp className="size-4" />} onSelect={onImport}>
                     {t('envs.importInto')}
                   </MenuItem>
+                  {summary.kind === 'local' ? (
+                    <MenuItem
+                      icon={<Server className="size-4" />}
+                      disabled={(env?.files.length ?? 0) > 0}
+                      onSelect={() => setKind.mutate('remote')}
+                    >
+                      {(env?.files.length ?? 0) > 0 ? (
+                        <span className="flex flex-col">
+                          <span>{t('envs.kind.makeRemote')}</span>
+                          <span className="text-[11.5px] text-subtle">
+                            {t('envs.kind.stopFilesFirst')}
+                          </span>
+                        </span>
+                      ) : (
+                        t('envs.kind.makeRemote')
+                      )}
+                    </MenuItem>
+                  ) : (
+                    <MenuItem
+                      icon={<MonitorSmartphone className="size-4" />}
+                      onSelect={makeLocal.start}
+                    >
+                      {t('envs.kind.makeLocal')}
+                    </MenuItem>
+                  )}
                   <MenuItem
                     icon={<Send className="size-4" />}
                     onSelect={() => setOpen({ kind: 'send' })}
@@ -240,6 +282,7 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
             </MenuContent>
           </Menu>
           {projectMenu.dialog}
+          {makeLocal.dialog}
         </div>
         <ProjectChips member={projectMember} />
         {env?.notes ? (
@@ -297,6 +340,7 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
       </header>
 
       <div className="relative flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 pt-4 pb-5">
+        {env ? <FilesSection env={summary} files={env.files} /> : null}
         <div className="flex items-center gap-2">
           <h3 className="text-[13px] font-semibold">
             {t('envs.variables')}

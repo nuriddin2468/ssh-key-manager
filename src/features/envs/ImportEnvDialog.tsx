@@ -382,10 +382,10 @@ function VariableChoices({ preview, choices, onChange }: VariableChoicesProps) {
 }
 
 /** The lines that gave no variable, by number: their text may be a secret. */
-function Problems({ problems }: { problems: ParseProblem[] }) {
+export function Problems({ problems, title }: { problems: ParseProblem[]; title?: string }) {
   const { t } = useTranslation();
   return (
-    <Callout tone="warning" icon={TriangleAlert} title={t('envs.import.problemsTitle')}>
+    <Callout tone="warning" icon={TriangleAlert} title={title ?? t('envs.import.problemsTitle')}>
       <ul className="flex flex-col gap-0.5">
         {problems.map((problem) => (
           <li key={`${problem.line}-${problem.kind}`}>

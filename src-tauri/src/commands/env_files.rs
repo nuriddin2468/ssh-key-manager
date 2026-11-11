@@ -9,15 +9,17 @@
 //! on disk. Values stay on this side: the page gets names, states and
 //! revisions (keyed hashes) only.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::Serialize;
 use sshkm_core::ErrorCode;
 use sshkm_core::paths::home_dir;
 use sshkm_core::vault::envs::files::{
-    self as managed, CloudRoots, EnvFile, EnvFileComparison, EnvFileStatus, EnvFilesOverview,
-    EnvFilesSynced, EnvKind, EnvUndo, GitInfo, GitState, KeepSide, Preference,
+    self as managed, CloudRoots, CloudService, EnvFile, EnvFileComparison, EnvFileReport,
+    EnvFileStatus, EnvFilesOverview, EnvFilesSynced, EnvKind, EnvUndo, GitInfo, GitState, KeepSide,
+    Preference,
 };
 use sshkm_core::vault::envs::{
     self, EnvDetail, EnvImportPreview, EnvInput, ImportChoice, looks_secret,
@@ -32,6 +34,21 @@ use crate::error::{AppError, AppResult};
 use crate::process;
 
 type Files<'a> = State<'a, Arc<EnvFiles>>;
+
+/// What writing to a file would mean, before it is bound.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = crate::types::BINDINGS))]
+pub struct EnvFileCheck {
+    /// The binding as it would be kept.
+    pub file: EnvFile,
+    /// The file on this computer, if its folder is here.
+    pub location: Option<PathBuf>,
+    /// What Git makes of it there; `None` without a folder here.
+    pub git: Option<GitInfo>,
+    /// The cloud service that copies its folder, if one does.
+    pub cloud: Option<CloudService>,
+}
 
 /// Makes an environment local (it can have files) or remote. A remote one
 /// has none, so its files are to be removed first.
@@ -283,6 +300,59 @@ pub async fn envs_files_ignore(
             .ok_or_else(|| AppError::invalid("the file isn't in a Git working tree"))?;
         managed::ignore_in_git(&repository, &location)?;
         Ok(git_state(&location))
+    })
+    .await
+}
+
+/// What writing an environment to `file` would mean, before it is bound:
+/// where the file would be, whether Git would take it along and whether a
+/// cloud service copies its folder. Checks the binding as binding does.
+#[tauri::command]
+pub async fn envs_files_check(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    id: String,
+    file: EnvFile,
+) -> AppResult<EnvFileCheck> {
+    blocking(&state, move |state| {
+        let ctx = context(state);
+        let (file, location) = state.vault.with(&app, |vault| {
+            Ok(vault.check_env_file_binding(&id, &file, &ctx)?)
+        })?;
+        let cloud = CloudRoots::detect(home_dir().as_deref());
+        Ok(EnvFileCheck {
+            cloud: location.as_deref().and_then(|path| cloud.service(path)),
+            git: location.as_deref().map(git_state),
+            location,
+            file,
+        })
+    })
+    .await
+}
+
+/// The files of one environment (`id`) or of every one, with Git and cloud
+/// folders looked at, without looking through the projects' folders for
+/// others: for the Environments pane.
+#[tauri::command]
+pub async fn envs_files_risks(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    files: Files<'_>,
+    id: Option<String>,
+) -> AppResult<Vec<EnvFileReport>> {
+    let files = Arc::clone(&files);
+    blocking(&state, move |state| {
+        let ctx = context(state);
+        let kept = files.state();
+        let cloud = CloudRoots::detect(home_dir().as_deref());
+        let mut reports = state.vault.with_quietly(&app, |vault| {
+            Ok(vault.env_files_overview(&ctx, &kept, &cloud, None).files)
+        })?;
+        reports.retain(|report| id.as_ref().is_none_or(|id| report.status.env_id == *id));
+        for report in &mut reports {
+            report.git = report.status.location.as_deref().map(git_state);
+        }
+        Ok(reports)
     })
     .await
 }

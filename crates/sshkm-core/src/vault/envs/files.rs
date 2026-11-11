@@ -926,9 +926,33 @@ impl Vault {
         file: &EnvFile,
         ctx: &FilesContext,
     ) -> Result<EnvFile> {
-        let file = check_env_file(file)?;
+        let (file, _) = self.check_env_file_binding(id, file, ctx)?;
         let entry = self.env_entry(id)?;
         let mut data = files_data(&entry)?;
+        data.kind = Some(EnvKind::Local.as_str().to_owned());
+        data.files.push(StoredFile {
+            folder: file.folder.clone(),
+            path: file.path.clone(),
+            rest: Map::new(),
+        });
+        self.ensure_revision_key();
+        self.put_files_data(id, &data)?;
+        Ok(file)
+    }
+
+    /// Checks that `file` can be bound to the environment `id`, as
+    /// [`Self::bind_env_file`] does, without binding it: to tell the user
+    /// what writing there means first. Returns the binding as it would be
+    /// kept and the file on this computer, if its folder is here.
+    pub fn check_env_file_binding(
+        &self,
+        id: &str,
+        file: &EnvFile,
+        ctx: &FilesContext,
+    ) -> Result<(EnvFile, Option<PathBuf>)> {
+        let file = check_env_file(file)?;
+        let entry = self.env_entry(id)?;
+        let data = files_data(&entry)?;
         if in_group(entry.parent().id(), self.db.meta.recyclebin_uuid, &self.db) {
             return Err(Error::invalid("restore the environment first"));
         }
@@ -952,7 +976,7 @@ impl Vault {
                 "an environment is written to at most {MAX_FILES} files"
             )));
         }
-        match disk::locate(&file, ctx, &self.paths) {
+        let location = match disk::locate(&file, ctx, &self.paths) {
             Ok(target) => {
                 let others = self.bound();
                 let taken = others.iter().any(|other| {
@@ -965,6 +989,7 @@ impl Vault {
                         target.display.display()
                     )));
                 }
+                Some(target.display)
             }
             Err(FileState::Refused { reason }) => {
                 return Err(Error::invalid(match reason {
@@ -977,17 +1002,9 @@ impl Vault {
             }
             // A folder that isn't on this computer is fine: the binding is
             // for every computer of the user's.
-            Err(_) => {}
-        }
-        data.kind = Some(EnvKind::Local.as_str().to_owned());
-        data.files.push(StoredFile {
-            folder: file.folder.clone(),
-            path: file.path.clone(),
-            rest: Map::new(),
-        });
-        self.ensure_revision_key();
-        self.put_files_data(id, &data)?;
-        Ok(file)
+            Err(_) => None,
+        };
+        Ok((file, location))
     }
 
     /// Stops writing `file` with the environment. The file stays as it is.

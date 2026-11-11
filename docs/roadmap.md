@@ -101,8 +101,11 @@ The foundation for everything below.
 ### 3. Managed `.env` files — in progress
 
 Environments get files, inside projects. Core, commands and mocks (local or remote,
-bindings, safe writes, lossless editing, two-way sync, the management center's data) in
-review: [#38](https://github.com/nuriddin2468/ssh-key-manager/pull/38); the UI follows.
+bindings, safe writes, lossless editing, two-way sync, the management center's data):
+[#38](https://github.com/nuriddin2468/ssh-key-manager/pull/38). The UI (file bindings in
+the Environments pane, the Files view, Undo, conflicts) in review:
+[#40](https://github.com/nuriddin2468/ssh-key-manager/pull/40); the file-state line on the
+project page follows 2.4.
 
 - Bindings: environment → file(s) in the project's folders (`.env`, `.env.local`,
   `.env.development.local`…; several in a monorepo).

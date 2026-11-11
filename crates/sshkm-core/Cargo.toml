@@ -65,6 +65,11 @@ uuid = "1.18.1"
 zeroize = "1.9.1"
 zxcvbn = { version = "3.1.1", default-features = false }
 
+[target.'cfg(unix)'.dependencies]
+# Opening a managed `.env` file without following a link or waiting on a
+# pipe (vault/envs/files/disk.rs). Already in the build.
+libc = "0.2.191"
+
 [target.'cfg(windows)'.dependencies]
 # Creates a CSV export with its access list in place (perms/private_file.rs).
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem"] }

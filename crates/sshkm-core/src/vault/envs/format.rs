@@ -193,34 +193,56 @@ fn comment(out: &mut String, note: &str) {
 
 /// A `.env` value: bare when it is only safe characters, else in the
 /// quotes every loader reads the same way, escaping only as a last resort.
-fn dotenv_value(out: &mut String, value: &str) {
+/// Values are literal, so one with `$`, `` ` ``, `\` or `"` goes in single
+/// quotes, which nothing expands or unescapes (Docker Compose, python-dotenv
+/// and dotenv-expand expand `$` in double quotes, a shell also runs
+/// `` ` ``, and Node's dotenv doesn't unescape `\\` or `\"`), unless it
+/// has a `'`, a line break or ends with `\` (which Node takes as escaping
+/// the closing quote).
+pub(super) fn dotenv_value(out: &mut String, value: &str) {
     let bare = value
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || "_-./:@%+,=".contains(c));
-    let line_break = value.contains(['\n', '\r']);
     if bare {
         out.push_str(value);
-    } else if !line_break && !value.contains(['"', '\\']) {
+    } else if fits_double(value) {
         out.push('"');
         out.push_str(value);
         out.push('"');
-    } else if !line_break && !value.contains('\'') {
+    } else if fits_single(value) {
         out.push('\'');
         out.push_str(value);
         out.push('\'');
     } else {
-        out.push('"');
-        for c in value.chars() {
-            match c {
-                '\\' => out.push_str("\\\\"),
-                '"' => out.push_str("\\\""),
-                '\n' => out.push_str("\\n"),
-                '\r' => out.push_str("\\r"),
-                other => out.push(other),
-            }
-        }
-        out.push('"');
+        escaped_double(out, value);
     }
+}
+
+/// `value` reads back the same in double quotes everywhere: nothing in it
+/// is expanded, unescaped or ends the line.
+pub(super) fn fits_double(value: &str) -> bool {
+    !value.contains(['\n', '\r', '"', '\\', '$', '`'])
+}
+
+/// `value` reads back the same in single quotes everywhere.
+pub(super) fn fits_single(value: &str) -> bool {
+    !value.contains(['\n', '\r', '\'']) && !value.ends_with('\\')
+}
+
+/// `"…"` with `\`, `"` and line breaks escaped: the last resort, which
+/// some loaders read differently.
+pub(super) fn escaped_double(out: &mut String, value: &str) {
+    out.push('"');
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            other => out.push(other),
+        }
+    }
+    out.push('"');
 }
 
 /// A JSON string, which YAML reads the same in double quotes.
@@ -329,7 +351,7 @@ mod tests {
              # primary database\n\
              DATABASE_URL=postgres://app:p@ss@db/app\n\
              GREETING=\"it's \\\"quoted\\\"\"\n\
-             REF=\"${HOME}/app\"\n\
+             REF='${HOME}/app'\n\
              ON=yes\n\
              KEY=\"-----BEGIN KEY-----\\nabc\\n-----END KEY-----\"\n\
              EMPTY=\n"
@@ -347,10 +369,23 @@ mod tests {
             .collect();
         assert_eq!(read, wanted);
 
-        // Single quotes where double ones would need escapes.
+        // Single quotes where double ones would need escapes, or would be
+        // expanded.
         let text = render_text(EnvFormat::Dotenv, &[var("PATTERN", "a\\d+\"", "")]);
         assert_eq!(text, "PATTERN='a\\d+\"'\n");
         assert_eq!(dotenv::parse(&text).vars[0].value.as_str(), "a\\d+\"");
+        for (value, written) in [
+            ("pa$word", "'pa$word'"),
+            ("C:\\new", "'C:\\new'"),
+            ("run `x`", "'run `x`'"),
+            ("two words", "\"two words\""),
+            ("it's $5", "\"it's $5\""),
+            ("ends\\", "\"ends\\\\\""),
+        ] {
+            let text = render_text(EnvFormat::Dotenv, &[var("V", value, "")]);
+            assert_eq!(text, format!("V={written}\n"), "{value:?}");
+            assert_eq!(dotenv::parse(&text).vars[0].value.as_str(), value);
+        }
     }
 
     #[test]

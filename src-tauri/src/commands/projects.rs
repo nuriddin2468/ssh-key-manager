@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use serde::{Deserialize, Serialize};
 use sshkm_core::config::{HostEntry, HostKind, SshConfig};
 use sshkm_core::paths::home_dir;
-use sshkm_core::vault::envs::EnvSummary;
+use sshkm_core::vault::envs::{EnvKind, EnvSummary};
 use sshkm_core::vault::projects::suggest::{self, Declined, HostFacts, ProjectSuggestion};
 use sshkm_core::vault::projects::{self, Project, ProjectInput, ProjectMember};
 use sshkm_core::{ErrorCode, SecretString, fsutil, keys};
@@ -555,13 +555,19 @@ fn terminal_folder(project: &Project, folder: &str, home: Option<&Path>) -> AppR
         .ok_or_else(|| AppError::not_found(format!("{folder} on this computer")))
 }
 
-/// The project's `local` environment: in the first of its environment
-/// groups, in the project's order, that has one outside the recycle bin.
+/// The project's local environment: a local one (its kind, not its name)
+/// outside the recycle bin, in the first of the project's environment groups,
+/// in the project's order, that has one; the one named `local` if there are
+/// several. A remote environment never goes into a shell on this computer.
 fn local_environment<'a>(project: &Project, envs: &'a [EnvSummary]) -> Option<&'a EnvSummary> {
     project.environments.iter().find_map(|group| {
-        envs.iter().find(|env| {
-            !env.in_trash && env.project == *group && env.name.eq_ignore_ascii_case("local")
-        })
+        let mut local = envs
+            .iter()
+            .filter(|env| !env.in_trash && env.project == *group && env.kind == EnvKind::Local);
+        let first = local.clone().next();
+        local
+            .find(|env| env.name.eq_ignore_ascii_case("local"))
+            .or(first)
     })
 }
 
@@ -771,6 +777,7 @@ mod tests {
             id: id.into(),
             project: group.into(),
             name: name.into(),
+            kind: EnvKind::from_name(name),
             variable_count: 0,
             secret_count: 0,
             in_trash,
@@ -824,6 +831,24 @@ mod tests {
         let api_first = project(&[], &["api", "web"]);
         assert_eq!(local_environment(&api_first, &envs).unwrap().id, "a-local");
         assert!(local_environment(&project(&[], &["other"]), &envs).is_none());
+    }
+
+    /// The kind decides, not the name: a `local` the user made remote never
+    /// goes into the shell, and a `dev` that is local does when there's no
+    /// `local`.
+    #[test]
+    fn the_local_environment_is_one_whose_kind_is_local() {
+        let mut remote_local = env("w-local", "web", "local", false);
+        remote_local.kind = EnvKind::Remote;
+        let envs = [
+            remote_local,
+            env("w-dev", "web", "dev", false),
+            env("w-prod", "web", "prod", false),
+        ];
+        let shop = project(&[], &["web"]);
+        assert_eq!(local_environment(&shop, &envs).unwrap().id, "w-dev");
+        let only_remote = [env("w-prod", "web", "prod", false)];
+        assert!(local_environment(&shop, &only_remote).is_none());
     }
 
     fn hosts(text: &str) -> Vec<HostEntry> {

@@ -24,18 +24,27 @@ import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { EnvComparison } from '@/bindings/EnvComparison';
 import type { EnvDetail } from '@/bindings/EnvDetail';
 import type { EnvExport } from '@/bindings/EnvExport';
+import type { EnvFile } from '@/bindings/EnvFile';
+import type { EnvFileComparison } from '@/bindings/EnvFileComparison';
+import type { EnvFileStatus } from '@/bindings/EnvFileStatus';
+import type { EnvFilesOverview } from '@/bindings/EnvFilesOverview';
+import type { EnvFilesSynced } from '@/bindings/EnvFilesSynced';
 import type { EnvFormat } from '@/bindings/EnvFormat';
 import type { EnvImported } from '@/bindings/EnvImported';
 import type { EnvImportPick } from '@/bindings/EnvImportPick';
+import type { EnvImportPreview } from '@/bindings/EnvImportPreview';
 import type { EnvInput } from '@/bindings/EnvInput';
 import type { Environment } from '@/bindings/Environment';
+import type { EnvKind } from '@/bindings/EnvKind';
 import type { EnvSummary } from '@/bindings/EnvSummary';
+import type { EnvUndo } from '@/bindings/EnvUndo';
 import type { EnvVarInput } from '@/bindings/EnvVarInput';
 import type { Exported } from '@/bindings/Exported';
 import type { FixAction } from '@/bindings/FixAction';
 import type { GeneratedSecret } from '@/bindings/GeneratedSecret';
 import type { GenerateKeyRequest } from '@/bindings/GenerateKeyRequest';
 import type { GenerateOptions } from '@/bindings/GenerateOptions';
+import type { GitInfo } from '@/bindings/GitInfo';
 import type { HistoryScan } from '@/bindings/HistoryScan';
 import type { HistoryStatus } from '@/bindings/HistoryStatus';
 import type { HostEdit } from '@/bindings/HostEdit';
@@ -50,6 +59,7 @@ import type { ImportOutcome } from '@/bindings/ImportOutcome';
 import type { ImportPasswords } from '@/bindings/ImportPasswords';
 import type { ImportPick } from '@/bindings/ImportPick';
 import type { ImportTarget } from '@/bindings/ImportTarget';
+import type { KeepSide } from '@/bindings/KeepSide';
 import type { KeyFileFormat } from '@/bindings/KeyFileFormat';
 import type { KeyFileInfo } from '@/bindings/KeyFileInfo';
 import type { KeyInstall } from '@/bindings/KeyInstall';
@@ -506,6 +516,45 @@ export const api = {
       rows: size.rows,
       events: isTauri() ? new Channel<TerminalMessage>(onMessage) : onMessage,
     }),
+
+  // Managed `.env` files (src-tauri/src/commands/env_files.rs). A file is
+  // named by a binding (a project folder and a path in it), never by a path
+  // on disk; the page gets names and states, never values. Each round that
+  // changes something is also told through the `env-files-changed` event
+  // (`EnvFilesSynced`), with the edits that went to the vault, for Undo.
+  /** Makes an environment local (it can have files) or remote (it can't). */
+  envsSetKind: (id: string, kind: EnvKind) => call<EnvDetail>('envs_set_kind', { id, kind }),
+  /** Where every file of every environment stands, changing nothing. */
+  envsFilesStatus: () => call<EnvFileStatus[]>('envs_files_status'),
+  /** Writes the environment to `file` from now on; writes it at once unless it differs. */
+  envsFilesBind: (id: string, file: EnvFile) =>
+    call<EnvFileStatus>('envs_files_bind', { id, file }),
+  /** Stops writing to `file`; `deleteFile` deletes it, only if the vault has all of it. */
+  envsFilesUnbind: (id: string, file: EnvFile, deleteFile: boolean) =>
+    call<EnvDetail>('envs_files_unbind', { id, file, deleteFile }),
+  envsFilesSync: () => call<EnvFilesSynced>('envs_files_sync'),
+  /**
+   * Settles a conflict with the `revision` the compare dialog showed (`null` writes a missing
+   * file again with `vault`); fails with `conflict` if the file changed since.
+   */
+  envsFilesResolve: (id: string, file: EnvFile, keep: KeepSide, seen: string | null) =>
+    call<EnvFilesSynced>('envs_files_resolve', { id, file, keep, seen }),
+  /** The vault (left) against one of its files (right), by name, and the file's revision. */
+  envsFilesCompare: (id: string, file: EnvFile) =>
+    call<EnvFileComparison>('envs_files_compare', { id, file }),
+  /** Undoes an edit of a file that went to the vault, unless the environment changed since. */
+  envsFilesUndo: (undo: EnvUndo) => call<EnvDetail>('envs_files_undo', { undo }),
+  /** The management center, of every project (`null`) or one. */
+  envsFilesOverview: (project: string | null) =>
+    call<EnvFilesOverview>('envs_files_overview', { project }),
+  /** Adds the file to its working tree's `.gitignore`, after the user said to. */
+  envsFilesIgnore: (id: string, file: EnvFile) => call<GitInfo>('envs_files_ignore', { id, file }),
+  /** The variables of a `.env` file found in a project's folder, without values. */
+  envsFilesAdoptPreview: (project: string, file: EnvFile) =>
+    call<EnvImportPreview>('envs_files_adopt_preview', { project, file }),
+  /** Imports every variable of the file into `target` and writes it from then on. */
+  envsFilesAdopt: (project: string, file: EnvFile, target: ImportTarget, choices: ImportChoice[]) =>
+    call<EnvImported>('envs_files_adopt', { project, file, target, choices }),
 
   // Projects in the vault (src-tauri/src/commands/projects.rs). While the
   // vault is locked the list comes from a copy without secrets: its

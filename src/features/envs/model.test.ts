@@ -18,6 +18,7 @@ function env(id: string, project: string, name: string, inTrash = false): EnvSum
     id,
     project,
     name,
+    kind: name === 'dev' ? 'local' : 'remote',
     variableCount: 2,
     secretCount: 1,
     inTrash,

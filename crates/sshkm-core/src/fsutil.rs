@@ -58,10 +58,87 @@ pub fn atomic_write(path: &Path, bytes: &[u8], new_file_mode: u32) -> Result<()>
 #[cfg(windows)]
 pub(crate) fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     let target = resolve_symlinks(path)?;
-    let (dir, prefix) = temp_location(&target);
+    let (_, prefix) = temp_location(&target);
+    write_private_at(&target, bytes, &prefix, ".sshkm-tmp", true).map(drop)
+}
+
+/// What the temporary file of [`replace_private`] for a file named `name`
+/// is called between its prefix and suffix: `.env.sshkm-Ab12Cd.tmp`, so
+/// that the rules that keep `.env*` files out of Git and backups keep it
+/// out too.
+const PRIVATE_TEMP: (&str, &str) = (".sshkm-", ".tmp");
+
+/// Whether `name` is a temporary file [`replace_private`] makes for the file
+/// named `of`, which a crash may have left behind.
+pub fn is_private_temp(name: &str, of: &str) -> bool {
+    name.strip_prefix(of)
+        .and_then(|rest| rest.strip_prefix(PRIVATE_TEMP.0))
+        .is_some_and(|rest| rest.len() > PRIVATE_TEMP.1.len() && rest.ends_with(PRIVATE_TEMP.1))
+}
+
+/// Replaces `path` with a new file that holds `bytes` and that only this
+/// user can read: mode 0600 on Unix; on Windows an access list for nobody
+/// but the user, `SYSTEM` and `Administrators`, set as the file is made,
+/// as [`atomic_write_private`] does. Unlike [`atomic_write`], a symbolic
+/// link at `path` is never followed: the new file is renamed over whatever
+/// is there, a link included. Without `overwrite`, nothing is written if
+/// something is at `path` by then, and the call returns `false`.
+pub fn replace_private(path: &Path, bytes: &[u8], overwrite: bool) -> Result<bool> {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let prefix = format!("{name}{}", PRIVATE_TEMP.0);
+    #[cfg(windows)]
+    {
+        write_private_at(path, bytes, &prefix, PRIVATE_TEMP.1, overwrite)
+    }
+    #[cfg(not(windows))]
+    {
+        let (dir, _) = temp_location(path);
+        let mut tmp = tempfile::Builder::new()
+            .prefix(&prefix)
+            .suffix(PRIVATE_TEMP.1)
+            .tempfile_in(dir)
+            .map_err(|e| Error::io(e, dir))?;
+        // tempfile makes it 0600; set again in case a umask or ACL differs.
+        set_mode(tmp.path(), 0o600)?;
+        tmp.write_all(bytes).map_err(|e| Error::io(e, tmp.path()))?;
+        tmp.as_file()
+            .sync_all()
+            .map_err(|e| Error::io(e, tmp.path()))?;
+        let persisted = if overwrite {
+            tmp.persist(path).map(drop)
+        } else {
+            tmp.persist_noclobber(path).map(drop)
+        };
+        match persisted {
+            Ok(()) => {}
+            Err(e) if !overwrite && e.error.kind() == io::ErrorKind::AlreadyExists => {
+                return Ok(false);
+            }
+            Err(e) => return Err(Error::io(e.error, path)),
+        }
+        sync_parent(path);
+        Ok(true)
+    }
+}
+
+/// The private write of [`atomic_write_private`] to `target` as it is,
+/// through a temporary file named `<prefix>…<suffix>`. Returns `false`
+/// when `overwrite` is off and something is at `target`.
+#[cfg(windows)]
+fn write_private_at(
+    target: &Path,
+    bytes: &[u8],
+    prefix: &str,
+    suffix: &str,
+    overwrite: bool,
+) -> Result<bool> {
+    let (dir, _) = temp_location(target);
     let created = tempfile::Builder::new()
-        .prefix(&prefix)
-        .suffix(".sshkm-tmp")
+        .prefix(prefix)
+        .suffix(suffix)
         .make_in(dir, crate::perms::create_private);
     let (mut file, tmp) = match created {
         Ok(created) => created.into_parts(),
@@ -75,9 +152,16 @@ pub(crate) fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     let written = file.write_all(bytes).and_then(|()| file.sync_all());
     drop(file);
     written.map_err(|e| Error::io(e, &tmp))?;
-    tmp.persist(&target)
-        .map_err(|e| Error::io(e.error, &target))?;
-    Ok(())
+    let persisted = if overwrite {
+        tmp.persist(target)
+    } else {
+        tmp.persist_noclobber(target)
+    };
+    match persisted {
+        Ok(()) => Ok(true),
+        Err(e) if !overwrite && e.error.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(Error::io(e.error, target)),
+    }
 }
 
 /// Writes a new file atomically and fails with [`Error::AlreadyExists`] if
@@ -407,6 +491,56 @@ mod tests {
                 .is_symlink()
         );
         assert_eq!(fs::read_to_string(&real).unwrap(), "new");
+    }
+
+    #[test]
+    fn private_replacements_are_owner_only_and_never_follow_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".env");
+        fs::write(&path, "OLD=1\n").unwrap();
+        assert!(replace_private(&path, b"NEW=1\n", true).unwrap());
+        assert_eq!(fs::read(&path).unwrap(), b"NEW=1\n");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        // Without overwriting, a file that is there stays.
+        assert!(!replace_private(&path, b"OTHER=1\n", false).unwrap());
+        assert_eq!(fs::read(&path).unwrap(), b"NEW=1\n");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        let new = dir.path().join("app.env");
+        assert!(replace_private(&new, b"A=1\n", false).unwrap());
+        assert_eq!(fs::read(&new).unwrap(), b"A=1\n");
+        // The temporary file is named like the file, for `.env*` rules.
+        assert!(is_private_temp(".env.sshkm-Ab12Cd.tmp", ".env"));
+        assert!(is_private_temp("app.env.sshkm-x.tmp", "app.env"));
+        assert!(!is_private_temp(".env.local", ".env"));
+        assert!(!is_private_temp(".env.sshkm-.tmp", ".env"));
+        assert!(!is_private_temp(".env.sshkm-x.tmp", ".env.local"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            let elsewhere = dir.path().join("elsewhere");
+            fs::write(&elsewhere, "keep").unwrap();
+            fs::remove_file(&path).unwrap();
+            std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+            replace_private(&path, b"NEW=2\n", true).unwrap();
+            assert_eq!(fs::read_to_string(&elsewhere).unwrap(), "keep");
+            assert!(
+                !fs::symlink_metadata(&path)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(fs::read(&path).unwrap(), b"NEW=2\n");
+        }
+        #[cfg(windows)]
+        {
+            use crate::perms::{PermKind, check};
+            let report = check(&path, PermKind::PrivateKey);
+            assert!(report.ok, "{report:?}");
+        }
     }
 
     #[test]

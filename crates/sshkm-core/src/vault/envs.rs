@@ -14,7 +14,9 @@
 //! copies one: [`EnvDetail`] holds names, flags and notes only.
 
 mod detect;
+mod document;
 pub mod dotenv;
+pub mod files;
 mod format;
 #[cfg(test)]
 mod tests;
@@ -22,13 +24,17 @@ mod tests;
 use std::path::{Path, PathBuf};
 
 use keepass::Database;
-use keepass::db::{CustomDataItem, CustomDataValue, EntryRef, GroupId, Times, Value, fields};
+use keepass::db::{
+    CustomDataItem, CustomDataValue, Entry, EntryRef, GroupId, Times, Value, fields,
+};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 pub use self::detect::looks_secret;
+pub use self::document::EnvDocument;
 pub use self::dotenv::{ParseProblem, ParsedEnv, ProblemKind};
+pub use self::files::{EnvFile, EnvKind};
 pub use self::format::{EnvFormat, render};
 use super::export::{checked_target, write_private};
 use super::{Vault, check_field, duplicate, in_group, parse_id, rfc3339};
@@ -69,6 +75,8 @@ pub struct EnvSummary {
     pub project: String,
     /// `dev`, `staging`, `prod`…: the entry's title.
     pub name: String,
+    /// Local (it can have files) or remote.
+    pub kind: EnvKind,
     /// How many variables it has.
     pub variable_count: u32,
     /// How many of them are secret.
@@ -101,6 +109,8 @@ pub struct EnvDetail {
     pub summary: EnvSummary,
     pub notes: String,
     pub variables: Vec<EnvVarInfo>,
+    /// The files it is written to.
+    pub files: Vec<EnvFile>,
 }
 
 /// A new environment, or the new names of one.
@@ -272,7 +282,7 @@ fn var_name(field: &str) -> Option<&str> {
     }
 }
 
-fn stored(entry: &EntryRef<'_>) -> Stored {
+fn stored(entry: &Entry) -> Stored {
     match entry
         .custom_data
         .get(MARKER)
@@ -285,7 +295,7 @@ fn stored(entry: &EntryRef<'_>) -> Stored {
 
 /// The variables of an environment entry with their values: in the order
 /// kept in its marker, then those added elsewhere (KeePassXC) by name.
-pub(super) fn variables_of(entry: &EntryRef<'_>) -> Vec<EnvVariable> {
+pub(super) fn variables_of(entry: &Entry) -> Vec<EnvVariable> {
     let stored = stored(entry);
     let mut found: Vec<(&str, &Value<String>)> = entry
         .fields
@@ -430,9 +440,13 @@ pub fn read_file(path: &Path) -> Result<ParsedEnv> {
 /// What an import of the file shows: names, suggested secrets and the lines
 /// that can't be read, without values.
 pub fn preview_file(path: &Path) -> Result<EnvImportPreview> {
-    let parsed = read_file(path)?;
+    Ok(preview_parsed(path, read_file(path)?))
+}
+
+/// What an import of `parsed`, read from the file at `path`, shows.
+pub fn preview_parsed(path: &Path, parsed: ParsedEnv) -> EnvImportPreview {
     let (suggested_project, suggested_name) = suggested_names(path);
-    Ok(EnvImportPreview {
+    EnvImportPreview {
         suggested_project,
         suggested_name,
         variables: parsed
@@ -447,7 +461,7 @@ pub fn preview_file(path: &Path) -> Result<EnvImportPreview> {
             })
             .collect(),
         problems: parsed.problems,
-    })
+    }
 }
 
 /// The variables of `parsed` that `choices` name, with the secret flags
@@ -512,17 +526,20 @@ impl Vault {
                     note: var.note,
                 })
                 .collect(),
+            files: files::files_of(&entry),
         })
     }
 
     /// The variables of an environment with their values.
     pub fn env_variables(&self, id: &str) -> Result<Vec<EnvVariable>> {
-        Ok(variables_of(&self.env_entry(id)?))
+        let entry = self.env_entry(id)?;
+        Ok(variables_of(&entry))
     }
 
     /// One variable's value.
     pub fn env_value(&self, id: &str, name: &str) -> Result<SecretString> {
-        variables_of(&self.env_entry(id)?)
+        let entry = self.env_entry(id)?;
+        variables_of(&entry)
             .into_iter()
             .find(|var| var.name == name)
             .map(|var| var.value)
@@ -572,27 +589,31 @@ impl Vault {
         if target.is_none() && name == current.summary.name && notes == current.notes {
             return Ok(());
         }
-        let mut entry = self
-            .db
-            .entry_mut(parse_id(id)?)
-            .ok_or_else(|| Error::NotFound(format!("environment {id}")))?;
-        let mut tracked = entry.track_changes();
-        if name != current.summary.name {
-            tracked.set(fields::TITLE, Value::unprotected(name));
-        }
-        if notes != current.notes {
-            if notes.is_empty() {
-                tracked.fields.remove(fields::NOTES);
-            } else {
-                tracked.set(fields::NOTES, Value::unprotected(notes));
+        let entry_id = parse_id(id)?;
+        {
+            let mut entry = self
+                .db
+                .entry_mut(entry_id)
+                .ok_or_else(|| Error::NotFound(format!("environment {id}")))?;
+            let mut tracked = entry.track_changes();
+            if name != current.summary.name {
+                tracked.set(fields::TITLE, Value::unprotected(name));
             }
+            if notes != current.notes {
+                if notes.is_empty() {
+                    tracked.fields.remove(fields::NOTES);
+                } else {
+                    tracked.set(fields::NOTES, Value::unprotected(notes));
+                }
+            }
+            if let Some(group) = target {
+                tracked
+                    .move_to(group)
+                    .map_err(|_| Error::NotFound(GROUP.into()))?;
+            }
+            tracked.times.last_modification = Some(Times::now());
         }
-        if let Some(group) = target {
-            tracked
-                .move_to(group)
-                .map_err(|_| Error::NotFound(GROUP.into()))?;
-        }
-        tracked.times.last_modification = Some(Times::now());
+        self.settle_history(entry_id, true);
         Ok(())
     }
 
@@ -800,6 +821,7 @@ impl Vault {
             id: entry.id().uuid().to_string(),
             project,
             name: entry.get(fields::TITLE).unwrap_or_default().to_owned(),
+            kind: files::kind_of(entry),
             variable_count: count(vars.len()),
             secret_count: count(vars.iter().filter(|var| var.secret).count()),
             in_trash,
@@ -851,42 +873,106 @@ impl Vault {
         if same_variables(&before, &after) {
             return Ok(());
         }
-        let mut entry = self
-            .db
-            .entry_mut(entry_id)
-            .ok_or_else(|| Error::NotFound(format!("environment {id}")))?;
-        let mut tracked = entry.track_changes();
-        for var in &before {
-            if !after.iter().any(|kept| kept.name == var.name) {
-                tracked.fields.remove(&field_name(&var.name));
-            }
+        {
+            let mut entry = self
+                .db
+                .entry_mut(entry_id)
+                .ok_or_else(|| Error::NotFound(format!("environment {id}")))?;
+            let mut tracked = entry.track_changes();
+            write_variables(&mut tracked, &before, &after);
         }
-        for var in &after {
-            let value = var.value.expose_secret();
-            tracked.set(
-                field_name(&var.name),
-                if var.secret {
-                    Value::protected(value)
-                } else {
-                    Value::unprotected(value)
-                },
-            );
-        }
-        let stored = Stored {
-            vars: after
-                .iter()
-                .map(|var| StoredVar {
-                    name: var.name.clone(),
-                    note: var.note.clone(),
-                })
-                .collect(),
-        };
-        tracked
-            .custom_data
-            .insert(MARKER.to_owned(), marker(&stored));
-        tracked.times.last_modification = Some(Times::now());
+        self.settle_history(entry_id, true);
         Ok(())
     }
+
+    /// Puts an entry's earlier versions in the order KeePass keeps them,
+    /// oldest first by when each was made, after a change here: the
+    /// `keepass` crate puts the version a change keeps in front, so it is
+    /// moved to the end first (`added`), where KeePass and KeePassXC add
+    /// theirs. Then keeps no more than the database's `HistoryMaxItems` says
+    /// (10 when it says nothing, none at 0, all at -1), the newest, as
+    /// KeePass does on saving: an editor saving a managed file often would
+    /// otherwise add a full copy each time.
+    fn settle_history(&mut self, entry_id: keepass::db::EntryId, added: bool) {
+        let max = match self.db.meta.history_max_items {
+            None => Some(10),
+            Some(max) if max < 0 => None,
+            Some(max) => Some(usize::try_from(max).unwrap_or(usize::MAX)),
+        };
+        let Some(mut entry) = self.db.entry_mut(entry_id) else {
+            return;
+        };
+        let Some(before) = entry.history.as_ref().map(|h| h.get_entries().clone()) else {
+            return;
+        };
+        let mut versions = before.clone();
+        if added && !versions.is_empty() {
+            let kept = versions.remove(0);
+            versions.push(kept);
+        }
+        // Stable: of two made the same second, the later in place stays
+        // later.
+        versions.sort_by_key(|version| version.times.last_modification);
+        if let Some(max) = max
+            && versions.len() > max
+        {
+            versions.drain(..versions.len() - max);
+        }
+        if versions == before {
+            return;
+        }
+        let mut settled = keepass::db::History::default();
+        // Each one added goes in front.
+        for version in versions.into_iter().rev() {
+            settled.add_entry(version);
+        }
+        entry.history = Some(settled);
+    }
+}
+
+/// An entry's earlier versions, newest first by when each was made; of two
+/// made the same second, the later in place (KeePass keeps them oldest
+/// first).
+pub(super) fn history_newest_first(entry: &Entry) -> Vec<&Entry> {
+    let mut versions: Vec<&Entry> = entry
+        .history
+        .as_ref()
+        .map(|history| history.get_entries().iter().rev().collect())
+        .unwrap_or_default();
+    versions.sort_by_key(|version| std::cmp::Reverse(version.times.last_modification));
+    versions
+}
+
+/// Writes `after` over the variables `before` of an entry, with the marker
+/// keeping their order and notes.
+fn write_variables(entry: &mut Entry, before: &[EnvVariable], after: &[EnvVariable]) {
+    for var in before {
+        if !after.iter().any(|kept| kept.name == var.name) {
+            entry.fields.remove(&field_name(&var.name));
+        }
+    }
+    for var in after {
+        let value = var.value.expose_secret();
+        entry.set(
+            field_name(&var.name),
+            if var.secret {
+                Value::protected(value)
+            } else {
+                Value::unprotected(value)
+            },
+        );
+    }
+    let stored = Stored {
+        vars: after
+            .iter()
+            .map(|var| StoredVar {
+                name: var.name.clone(),
+                note: var.note.clone(),
+            })
+            .collect(),
+    };
+    entry.custom_data.insert(MARKER.to_owned(), marker(&stored));
+    entry.times.last_modification = Some(Times::now());
 }
 
 /// The child group of `parent` named exactly `name`, made if needed.

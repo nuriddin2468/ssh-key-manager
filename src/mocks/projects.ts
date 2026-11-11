@@ -11,7 +11,7 @@ import type { ProjectInput } from '@/bindings/ProjectInput';
 import type { ProjectMember } from '@/bindings/ProjectMember';
 import type { ProjectSuggestion } from '@/bindings/ProjectSuggestion';
 import type { TerminalEvent } from '@/bindings/TerminalEvent';
-import { mockEnvironment } from './envs';
+import { mockLocalEnvironment } from './envs';
 import { findShell, openLocalShell } from './terminal';
 import { isMockEntry, isMockVaultUnlocked, mockEntryId } from './vault';
 
@@ -451,7 +451,7 @@ export const projectsHandlers: Record<string, Handler> = {
     const found = findShell(shell);
     if (!found) return fail('not_found', 'this shell isn’t on this computer anymore');
     const local = isMockVaultUnlocked()
-      ? p.environments.map((group) => mockEnvironment(group, 'local')).find(Boolean)
+      ? p.environments.map((group) => mockLocalEnvironment(group)).find(Boolean)
       : undefined;
     return openLocalShell(
       `${p.name} · ${path.split('/').pop() ?? path}`,

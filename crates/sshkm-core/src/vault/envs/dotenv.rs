@@ -14,6 +14,8 @@
 //! the loaders. Lines that can't be read are reported by number, never with
 //! their text, which may be a secret.
 
+use std::ops::Range;
+
 use serde::Serialize;
 use zeroize::Zeroizing;
 
@@ -79,78 +81,201 @@ pub struct ParsedEnv {
 
 /// Reads the text of a `.env` file.
 pub fn parse(text: &str) -> ParsedEnv {
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let lines: Vec<&str> = text
-        .split('\n')
-        .map(|line| line.strip_suffix('\r').unwrap_or(line))
-        .collect();
+    let scan = scan(text);
+    let (effective, cut) = effective(&scan.assignments);
     let mut parsed = ParsedEnv::default();
+    // The names set again, with the line they were first set on.
+    for (index, assignment) in scan.assignments.iter().enumerate() {
+        if cut.is_some_and(|cut| index >= cut) {
+            break;
+        }
+        if !effective.contains(&index) {
+            parsed.problems.push(ParseProblem {
+                line: assignment.line,
+                kind: ProblemKind::Replaced,
+                name: Some(assignment.name.clone()),
+            });
+        }
+    }
+    let cut_line = cut.map(|cut| scan.assignments[cut].line);
+    if let Some(line) = cut_line {
+        parsed.problems.push(ParseProblem {
+            line,
+            kind: ProblemKind::TooMany,
+            name: None,
+        });
+    }
+    parsed.problems.extend(
+        scan.problems
+            .into_iter()
+            .filter(|problem| cut_line.is_none_or(|cut| problem.line < cut)),
+    );
+    parsed.problems.sort_by_key(|problem| problem.line);
+    let mut assignments: Vec<Option<Assignment>> = scan.assignments.into_iter().map(Some).collect();
+    parsed.vars = effective
+        .into_iter()
+        .filter_map(|index| assignments[index].take())
+        .map(|assignment| ParsedVar {
+            name: assignment.name,
+            value: assignment.value,
+            line: assignment.line,
+        })
+        .collect();
+    parsed
+}
+
+/// A line (or lines) of the file that sets a variable, and where it is.
+pub(super) struct Assignment {
+    pub name: String,
+    pub value: Zeroizing<String>,
+    /// Where it starts, from 1.
+    pub line: u32,
+    /// The bytes of the whole assignment in the text: from the start of its
+    /// first line to past the line break of its last one.
+    pub span: Range<usize>,
+    /// The bytes of the value as written, quotes included. For an empty
+    /// value without quotes, the empty range right after `=`.
+    pub raw: Range<usize>,
+    /// The quote the value is in, if any.
+    pub quote: Option<char>,
+}
+
+/// What [`scan`] finds: every assignment in order, names set again
+/// included, and the lines that set nothing.
+pub(super) struct Scan {
+    pub assignments: Vec<Assignment>,
+    pub problems: Vec<ParseProblem>,
+    /// Where the line with the first quote that never closes starts: it
+    /// takes the rest of the file, so nothing can be added after it.
+    pub unterminated_at: Option<usize>,
+}
+
+/// Which of `assignments` count, in their order: of a name set twice the
+/// later one, as the loaders read it, and no more than [`MAX_VARIABLES`].
+/// The second value is the index of the assignment past that limit, where
+/// reading stops.
+pub(super) fn effective(assignments: &[Assignment]) -> (Vec<usize>, Option<usize>) {
+    let mut kept: Vec<usize> = Vec::new();
+    for (index, assignment) in assignments.iter().enumerate() {
+        if let Some(at) = kept
+            .iter()
+            .position(|&other| assignments[other].name == assignment.name)
+        {
+            kept.remove(at);
+        }
+        if kept.len() == MAX_VARIABLES {
+            return (kept, Some(index));
+        }
+        kept.push(index);
+    }
+    (kept, None)
+}
+
+/// A line of the text without its line break, and where it is.
+struct Line<'a> {
+    text: &'a str,
+    start: usize,
+    /// Past its line break.
+    end: usize,
+}
+
+/// Reads every assignment of the text with where it is, for [`parse`] and
+/// for editing the file in place.
+pub(super) fn scan(text: &str) -> Scan {
+    let body = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let base = text.len() - body.len();
+    let mut lines = Vec::new();
+    let mut start = 0;
+    for piece in body.split('\n') {
+        let end = start + piece.len();
+        let broken = end < body.len();
+        lines.push(Line {
+            text: piece.strip_suffix('\r').unwrap_or(piece),
+            start: base + start,
+            end: base + end + usize::from(broken),
+        });
+        start = end + 1;
+    }
+    let mut scan = Scan {
+        assignments: Vec::new(),
+        problems: Vec::new(),
+        unterminated_at: None,
+    };
     let mut next = 0;
     while next < lines.len() {
-        let line = number(next);
-        let text = lines[next];
+        let first = next;
+        let line = number(first);
+        let current = lines[first].text;
         next += 1;
         let problem = |kind| ParseProblem {
             line,
             kind,
             name: None,
         };
-        let trimmed = text.trim_start();
+        let trimmed = current.trim_start();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
         let rest = strip_export(trimmed);
         let Some(equals) = rest.find('=') else {
-            parsed.problems.push(problem(ProblemKind::NoEquals));
+            scan.problems.push(problem(ProblemKind::NoEquals));
             continue;
         };
         let name = rest[..equals].trim();
         if !is_valid_name(name) {
-            parsed.problems.push(problem(ProblemKind::BadName));
+            scan.problems.push(problem(ProblemKind::BadName));
             continue;
         }
         let after = &rest[equals + 1..];
-        let value = match after.trim_start().chars().next() {
-            Some(quote @ ('"' | '\'' | '`')) => {
-                let start = after.len() - after.trim_start().len() + 1;
-                match quoted(&after[start..], quote, &lines, &mut next) {
-                    Ok(value) => value,
-                    Err(kind) => {
-                        parsed.problems.push(problem(kind));
-                        continue;
+        let opening = after
+            .trim_start()
+            .chars()
+            .next()
+            .filter(|c| matches!(c, '"' | '\'' | '`'));
+        let (value, raw, quote) = if let Some(quote) = opening {
+            let open = after.len() - after.trim_start().len();
+            match quoted(text, &after[open + 1..], quote, &lines, &mut next) {
+                Ok((value, end)) => (value, offset(text, &after[open..])..end, Some(quote)),
+                Err(kind) => {
+                    if kind == ProblemKind::Unterminated && scan.unterminated_at.is_none() {
+                        scan.unterminated_at = Some(lines[first].start);
                     }
+                    scan.problems.push(problem(kind));
+                    continue;
                 }
             }
-            _ => Zeroizing::new(unquoted(after).to_owned()),
+        } else {
+            let value = unquoted(after);
+            let at = if value.is_empty() {
+                offset(text, after)
+            } else {
+                offset(text, value)
+            };
+            (Zeroizing::new(value.to_owned()), at..at + value.len(), None)
         };
         if value.len() > MAX_FIELD_LEN || value.contains('\0') {
-            parsed.problems.push(ParseProblem {
+            scan.problems.push(ParseProblem {
                 line,
                 kind: ProblemKind::TooLong,
                 name: Some(name.to_owned()),
             });
             continue;
         }
-        if let Some(index) = parsed.vars.iter().position(|var| var.name == name) {
-            let earlier = parsed.vars.remove(index);
-            parsed.problems.push(ParseProblem {
-                line: earlier.line,
-                kind: ProblemKind::Replaced,
-                name: Some(earlier.name),
-            });
-        }
-        if parsed.vars.len() == MAX_VARIABLES {
-            parsed.problems.push(problem(ProblemKind::TooMany));
-            break;
-        }
-        parsed.vars.push(ParsedVar {
+        scan.assignments.push(Assignment {
             name: name.to_owned(),
             value,
             line,
+            span: lines[first].start..lines[next - 1].end,
+            raw,
+            quote,
         });
     }
-    parsed.problems.sort_by_key(|problem| problem.line);
-    parsed
+    scan
+}
+
+/// Where `part`, a piece of `text`, starts in it.
+fn offset(text: &str, part: &str) -> usize {
+    part.as_ptr() as usize - text.as_ptr() as usize
 }
 
 fn number(index: usize) -> u32 {
@@ -178,27 +303,30 @@ fn unquoted(after: &str) -> &str {
 }
 
 /// A quoted value starting right after its opening `quote`, perhaps going
-/// on over the following lines (`next` moves past them). After the closing
-/// quote only spaces and a comment may follow.
+/// on over the following lines (`next` moves past them), and where its
+/// closing quote ends in `text`. After the closing quote only spaces and a
+/// comment may follow.
 fn quoted(
+    text: &str,
     first: &str,
     quote: char,
-    lines: &[&str],
+    lines: &[Line<'_>],
     next: &mut usize,
-) -> Result<Zeroizing<String>, ProblemKind> {
+) -> Result<(Zeroizing<String>, usize), ProblemKind> {
     let mut body = Zeroizing::new(String::new());
     let mut current = first;
-    let rest = loop {
-        if let Some(end) = closing(current, quote) {
-            body.push_str(&current[..end]);
-            break &current[end + quote.len_utf8()..];
+    let (rest, end) = loop {
+        if let Some(close) = closing(current, quote) {
+            body.push_str(&current[..close]);
+            let past = close + quote.len_utf8();
+            break (&current[past..], offset(text, current) + past);
         }
         body.push_str(current);
         let Some(line) = lines.get(*next) else {
             return Err(ProblemKind::Unterminated);
         };
         body.push('\n');
-        current = line;
+        current = line.text;
         *next += 1;
         if body.len() > MAX_FIELD_LEN {
             return Err(ProblemKind::TooLong);
@@ -208,7 +336,7 @@ fn quoted(
     if !rest.is_empty() && !rest.starts_with('#') {
         return Err(ProblemKind::TrailingText);
     }
-    Ok(if quote == '"' { unescape(&body) } else { body })
+    Ok((if quote == '"' { unescape(&body) } else { body }, end))
 }
 
 /// Where `quote` closes in `text`; in double quotes, `\"` doesn't close.

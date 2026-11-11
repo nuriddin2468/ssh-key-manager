@@ -121,6 +121,41 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     so sourcing the file runs nothing a value holds. When the file would be inside a
     Git working tree that doesn't ignore it (`git check-ignore`; without `git`, any
     working tree counts), nothing is written until you confirm in the app.
+  - **Managed `.env` files.** A `local` environment can be written to files in the
+    folders of the projects that hold it; a `remote` one never is. The interface names
+    a file only as a project folder and a path in it. The app takes plain names ending
+    in a `.env` file's name, never a template to commit (`.env.example`), resolves
+    links on the way and refuses a file whose folder isn't that project folder or one
+    inside it (by file identity), a file that is a link, a pipe or a device, and
+    anything in `~/.ssh` or over the vault's files. A binding is checked again each
+    time it is used, so one that arrives from another computer or an edited database
+    is held to the same rules. A file is written by renaming a new private file over
+    it (mode 0600, or the private access list on Windows; the temporary file is named
+    `<file>.sshkm-….tmp`, so `.env*` ignore rules cover it, and one a crash leaves is
+    removed on the next round), so a link put in its place is replaced, never written
+    through; a file that isn't there is only ever created, never written over. It is
+    read without following links, as a regular file only, and written only if its
+    folder is still the one it was found in. A missing folder is never created.
+  - Managed files and the vault are kept in step both ways. Per file, each computer
+    keeps a keyed hash of the variables both last agreed on (`env-files.json` in the
+    app's data folder; the key is in the vault, so the hashes say nothing without it).
+    The revision is kept with the identity of the file's folder, so a folder swapped
+    for another (a link put in its place) is a conflict, not an edit. An edit of the
+    file goes to the vault and can be undone, and the entry's history keeps the
+    previous version (trimmed to the database's history limit, 10 by default); these
+    saves skip the vault's backup, so an editor saving often doesn't push out the
+    backups of real changes. A variable whose line is deleted and written again gets
+    back its secret flag and note from the history. A change in the vault rewrites
+    only the lines of the variables that changed, in quotes every loader reads the
+    same (single quotes for a value with `$`, `` ` ``, `\` or `"`). When both
+    changed, nothing changes until you keep one side, as you saw it in the compare
+    dialog: a file changed since is left alone. A file whose lines can't all be read
+    (a quote that never closes, a line naming a variable without `=`), or that would
+    remove half its variables or more at once, changes nothing until you say so.
+    Values never reach the interface, errors or logs; the compare dialog compares only
+    an environment's own files. Whether Git ignores or has committed a file is asked of `git` with
+    `core.fsmonitor` off, so a repository's own settings can't make it run a program;
+    a line goes into `.gitignore` only when you ask.
   - **Run in terminal** starts your own shell (`$SHELL` as a login shell, or
     `%ComSpec%` on Windows) in the in-app terminal with the variables added to its
     environment. Nothing is written to disk, but the shell and everything it starts

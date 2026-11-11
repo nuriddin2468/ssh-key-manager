@@ -1,11 +1,13 @@
 import {
   CircleCheck,
+  CircleDashed,
   FileCog,
   KeyRound,
   LockKeyhole,
   type LucideIcon,
   Network,
   RectangleEllipsis,
+  ScanSearch,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { Severity } from '@/bindings/Severity';
@@ -19,6 +21,7 @@ export const AREA_LOOK: Record<Area, { tone: Tone; Icon: LucideIcon }> = {
   config: { tone: 'blue', Icon: FileCog },
   hostsFile: { tone: 'indigo', Icon: Network },
   passwords: { tone: 'pink', Icon: RectangleEllipsis },
+  leaks: { tone: 'orange', Icon: ScanSearch },
 };
 
 const SEVERITY_TEXT: Record<Severity, string> = {
@@ -36,6 +39,8 @@ interface AreaCardsProps {
   items: readonly AuditItem[];
   /** Checks that didn't run: the vault's while it is locked, the breach check while it is off. */
   notRun: ReadonlySet<CheckId>;
+  /** Areas that wait for the vault to be unlocked. */
+  lockedAreas: ReadonlySet<Area>;
   selected: Area | null;
   onSelect: (area: Area | null) => void;
 }
@@ -44,7 +49,15 @@ interface AreaCardsProps {
  * One card per area with how its checks went. A card filters the findings
  * below to its area; choosing it again shows them all.
  */
-export function AreaCards({ areas, results, items, notRun, selected, onSelect }: AreaCardsProps) {
+export function AreaCards({
+  areas,
+  results,
+  items,
+  notRun,
+  lockedAreas,
+  selected,
+  onSelect,
+}: AreaCardsProps) {
   const { t } = useTranslation();
   return (
     <fieldset className="m-0 grid min-w-0 grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-2.5 border-0 p-0">
@@ -53,8 +66,10 @@ export function AreaCards({ areas, results, items, notRun, selected, onSelect }:
         const { tone, Icon } = AREA_LOOK[area];
         const checks = CHECKS.filter((check) => check.area === area);
         const ran = checks.filter((check) => !notRun.has(check.id));
-        // Only a locked vault keeps a whole area from running.
+        // A locked vault keeps a whole area from running; the leak scanner
+        // runs when the user starts it.
         const locked = ran.length === 0;
+        const waiting = locked && !lockedAreas.has(area);
         const failing = ran
           .map((check) => results.get(check.id))
           .filter((result) => result && result.count > 0);
@@ -95,7 +110,12 @@ export function AreaCards({ areas, results, items, notRun, selected, onSelect }:
                 locked ? 'text-subtle' : worst ? SEVERITY_TEXT[worst] : 'text-ok',
               )}
             >
-              {locked ? (
+              {waiting ? (
+                <>
+                  <CircleDashed aria-hidden="true" className="size-3.5" strokeWidth={2} />
+                  {t('audit.areaNotScanned')}
+                </>
+              ) : locked ? (
                 <>
                   <LockKeyhole aria-hidden="true" className="size-3.5" strokeWidth={2} />
                   {t('audit.areaLocked')}

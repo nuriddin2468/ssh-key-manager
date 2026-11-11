@@ -91,10 +91,15 @@ Environments get files, inside projects.
 
 ### 4. Protection
 
-1. **Leak scanner** (can start before step 2 lands): the vault knows the exact values, so
-   it finds them without false positives — in staged files (a pre-commit check), shell
-   history, stray `.env` files and AI tools' session history (Claude Code, Cursor…). In
-   Audit.
+1. **Leak scanner — in review** ([#36](https://github.com/nuriddin2468/ssh-key-manager/pull/36)): the vault knows the exact values, so it
+   finds them without false positives — secret variables and entry passwords, as they are,
+   escaped in JSON, percent-encoded or in base64, a private key by its lines; values too
+   short or plain to mean anything are skipped. In AI tools' session history (Claude Code,
+   Codex, Gemini CLI, Continue, Cline, Roo Code, Aider), the shell history, and folders the
+   user picks: what Git would commit there, and `.env` files anywhere. In Audit, with
+   rotation as the advice, Show file, and Redact in place for AI session files. No
+   pre-commit check while there is no CLI. Cursor's chats (SQLite) aren't read yet.
+   `crates/sshkm-core/src/leaks`, `src-tauri/src/commands/leaks.rs`.
 2. **Level 2** (file only while unlocked), exclusion from backups where the system allows
    it (Time Machine, Dropbox), agents' ignore rules added with consent, and **shared
    secrets**: one value used by several environments, so changing a key once updates

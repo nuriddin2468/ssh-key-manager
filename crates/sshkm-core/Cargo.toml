@@ -11,6 +11,9 @@ publish = false
 
 [dependencies]
 aes-gcm = "0.10.3"
+# The leak scanner looks for every secret at once; the version regex already
+# brings in, so this adds no crate to the build.
+aho-corasick = "1.1.5"
 # Reading the logins browsers keep (vault/import/browser): AES-CBC, and
 # Triple DES for older Firefox profiles. The versions aes-gcm and ssh-key use.
 aes = "0.8.4"

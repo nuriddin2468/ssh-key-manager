@@ -57,6 +57,9 @@ import type { KeyLoginCheck } from '@/bindings/KeyLoginCheck';
 import type { KeysView } from '@/bindings/KeysView';
 import type { KeyView } from '@/bindings/KeyView';
 import type { KnownHostsFile } from '@/bindings/KnownHostsFile';
+import type { LeakFinding } from '@/bindings/LeakFinding';
+import type { LeakRedaction } from '@/bindings/LeakRedaction';
+import type { LeakStatus } from '@/bindings/LeakStatus';
 import type { LineOptions } from '@/bindings/LineOptions';
 import type { MyDevice } from '@/bindings/MyDevice';
 import type { NameLookup } from '@/bindings/NameLookup';
@@ -263,6 +266,21 @@ export const api = {
   breachStatus: () => call<BreachStatus>('breach_status'),
   breachSetEnabled: (enabled: boolean) => call<BreachStatus>('breach_set_enabled', { enabled }),
   breachCheck: () => call<BreachStatus>('breach_check'),
+
+  // The leak scanner (src-tauri/src/commands/leaks.rs): values stay in Rust;
+  // the page gets progress and findings that name a secret, a file and a line.
+  leaksStatus: () => call<LeakStatus>('leaks_status'),
+  leaksSetSources: (ai: boolean, history: boolean) =>
+    call<LeakStatus>('leaks_set_sources', { ai, history }),
+  /** Opens a system folder dialog; the folders picked there are added. */
+  leaksAddFolders: () => call<LeakStatus>('leaks_add_folders'),
+  leaksRemoveFolder: (folder: string) => call<LeakStatus>('leaks_remove_folder', { folder }),
+  /** Fails with `vault_locked` while the vault is locked. */
+  leaksStart: () => call<LeakStatus>('leaks_start'),
+  leaksCancel: () => call<void>('leaks_cancel'),
+  leaksFindings: () => call<LeakFinding[]>('leaks_findings'),
+  /** Replaces the secret in the AI session files of these findings, in place. */
+  leaksRedact: (ids: string[]) => call<LeakRedaction>('leaks_redact', { ids }),
 
   vaultStatus: () => call<VaultStatus>('vault_status'),
   /** Returns the recovery key, to be shown once. */

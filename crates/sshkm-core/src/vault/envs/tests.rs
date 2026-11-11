@@ -602,3 +602,76 @@ fn finds_the_git_work_tree() {
     assert_eq!(git_work_tree(&nested), Some(repo.clone()));
     assert_eq!(git_work_tree(&repo), Some(repo));
 }
+
+#[test]
+fn the_leak_scanner_gets_secret_variables_and_passwords() {
+    use crate::leaks::LeakSecret;
+    let mut fx = Fixture::new();
+    let id = fx.vault.add_environment(&env("shop", "prod")).unwrap();
+    for (name, value, secret) in [
+        ("STRIPE_KEY", "tok-9fQ2xLm7Rt4Wb8Kp", true),
+        ("PORT", "8080", false),
+        ("EMPTY_SECRET", "", true),
+    ] {
+        fx.vault
+            .set_env_variable(&id, None, &input(name, Some(value), secret, ""))
+            .unwrap();
+    }
+    let gone = fx.vault.add_environment(&env("shop", "old")).unwrap();
+    fx.vault
+        .set_env_variable(
+            &gone,
+            None,
+            &input("OLD_KEY", Some("Zt7#qL0p!vX2"), true, ""),
+        )
+        .unwrap();
+    fx.vault.trash_environment(&gone).unwrap();
+    let login = fx
+        .vault
+        .add_entry(&EntryInput {
+            title: "GitLab".into(),
+            password: Some(s("Hn4$wQ8!zR2#pL6")),
+            ..EntryInput::default()
+        })
+        .unwrap();
+    fx.vault
+        .add_entry(&EntryInput {
+            title: "No password".into(),
+            ..EntryInput::default()
+        })
+        .unwrap();
+
+    let known = fx.vault.known_secrets();
+    let secrets: Vec<&LeakSecret> = known.iter().map(|k| &k.secret).collect();
+    assert_eq!(known.len(), 2, "{secrets:?}");
+    assert!(secrets.contains(&&LeakSecret::Variable {
+        env_id: id.clone(),
+        project: "shop".into(),
+        environment: "prod".into(),
+        name: "STRIPE_KEY".into(),
+    }));
+    assert!(secrets.contains(&&LeakSecret::Password {
+        entry_id: login,
+        title: "GitLab".into(),
+        entry_kind: crate::vault::EntryKind::Login,
+    }));
+    // Their Debug output names them only.
+    let debug = format!("{known:?}");
+    assert!(!debug.contains("9fQ2xLm7") && !debug.contains("Hn4$"));
+
+    // One of them alone, by its key; none for a plain, trashed or unknown one.
+    for known in &known {
+        let one = fx.vault.known_secret(&known.secret.key()).unwrap();
+        assert_eq!(one.secret, known.secret);
+        assert_eq!(one.value.expose_secret(), known.value.expose_secret());
+    }
+    for key in [
+        format!("var:{id}:PORT"),
+        format!("var:{id}:EMPTY_SECRET"),
+        format!("var:{gone}:OLD_KEY"),
+        "entry:00000000-0000-0000-0000-000000000000".to_owned(),
+        "nonsense".to_owned(),
+    ] {
+        assert!(fx.vault.known_secret(&key).is_none(), "{key}");
+    }
+}

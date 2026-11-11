@@ -6,6 +6,7 @@ import type { HostEntry } from '@/bindings/HostEntry';
 import type { KeyView } from '@/bindings/KeyView';
 import type { Severity } from '@/bindings/Severity';
 import type { VaultFinding } from '@/bindings/VaultFinding';
+import type { LeakGroup, LeakKind } from './leakModel';
 import { IGNORE_PREFIX } from './vaultModel';
 
 export const SEVERITY_ORDER: Severity[] = ['critical', 'warning', 'info'];
@@ -137,9 +138,9 @@ export function findingSubject(
 }
 
 /** The parts of the setup the audit looks at; each finding belongs to one. */
-export type Area = 'keys' | 'config' | 'hostsFile' | 'passwords';
+export type Area = 'keys' | 'config' | 'hostsFile' | 'passwords' | 'leaks';
 
-export const AREAS: Area[] = ['keys', 'config', 'hostsFile', 'passwords'];
+export const AREAS: Area[] = ['keys', 'config', 'hostsFile', 'passwords', 'leaks'];
 
 type SshKind = Finding['kind']['kind'];
 type VaultKind = VaultFinding['kind']['kind'];
@@ -170,22 +171,28 @@ export const CHECKS = [
   { id: 'old', area: 'passwords', kinds: ['oldPassword'] },
   { id: 'links', area: 'passwords', kinds: ['keyNotFound', 'hostNotFound'] },
   { id: 'passwordLogin', area: 'passwords', kinds: ['passwordLogin'] },
+  { id: 'leaksAi', area: 'leaks', kinds: ['leakAi'] },
+  { id: 'leaksRepositories', area: 'leaks', kinds: ['leakRepository'] },
+  { id: 'leaksFiles', area: 'leaks', kinds: ['leakLocalFile'] },
+  { id: 'leaksHistory', area: 'leaks', kinds: ['leakHistory'] },
 ] as const satisfies readonly {
   id: string;
   area: Area;
-  kinds: readonly (SshKind | VaultKind)[];
+  kinds: readonly (SshKind | VaultKind | LeakKind)[];
 }[];
 
 export type CheckId = (typeof CHECKS)[number]['id'];
 
 /** Every kind of finding belongs to a check: a new kind fails to compile until it has one. */
-type Unchecked = Exclude<SshKind | VaultKind, (typeof CHECKS)[number]['kinds'][number]>;
+type Unchecked = Exclude<SshKind | VaultKind | LeakKind, (typeof CHECKS)[number]['kinds'][number]>;
 export const EVERY_KIND_CHECKED: [Unchecked] extends [never] ? true : Unchecked = true;
 
-/** One finding on the page, from `~/.ssh` or the vault. */
-export type AuditItem =
-  | { source: 'ssh'; ignoreId: string; area: Area; severity: Severity; finding: Finding }
-  | { source: 'vault'; ignoreId: string; area: Area; severity: Severity; finding: VaultFinding };
+/** One finding on the page: from `~/.ssh`, the vault, or the leak scanner. */
+export type AuditItem = { ignoreId: string; area: Area; severity: Severity; kind: string } & (
+  | { source: 'ssh'; finding: Finding }
+  | { source: 'vault'; finding: VaultFinding }
+  | { source: 'leak'; group: LeakGroup }
+);
 
 const AREA_OF: Record<string, Area> = Object.fromEntries(
   CHECKS.flatMap((check) => check.kinds.map((kind) => [kind, check.area])),
@@ -197,6 +204,7 @@ export function sshItem(finding: Finding): AuditItem {
     ignoreId: finding.id,
     area: AREA_OF[finding.kind.kind] ?? 'keys',
     severity: finding.severity,
+    kind: finding.kind.kind,
     finding,
   };
 }
@@ -207,7 +215,19 @@ export function vaultItem(finding: VaultFinding): AuditItem {
     ignoreId: `${IGNORE_PREFIX}${finding.id}`,
     area: 'passwords',
     severity: finding.severity,
+    kind: finding.kind.kind,
     finding,
+  };
+}
+
+export function leakItem(group: LeakGroup): AuditItem {
+  return {
+    source: 'leak',
+    ignoreId: group.ignoreId,
+    area: 'leaks',
+    severity: group.severity,
+    kind: group.kind,
+    group,
   };
 }
 
@@ -235,7 +255,7 @@ export function checkResults(
   const results = new Map<CheckId, { count: number; worst: Severity | null }>();
   for (const check of CHECKS) {
     const kinds: readonly string[] = check.kinds;
-    const found = items.filter((item) => kinds.includes(item.finding.kind.kind));
+    const found = items.filter((item) => kinds.includes(item.kind));
     results.set(check.id, { count: found.length, worst: worstSeverity(found) });
   }
   return results;

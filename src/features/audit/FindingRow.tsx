@@ -1,4 +1,5 @@
 import { AlertOctagon, AlertTriangle, Info } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Severity } from '@/bindings/Severity';
 import { Button } from '@/components/ui/Button';
@@ -35,6 +36,10 @@ interface FindingRowProps {
   onAction?: () => void;
   onIgnore?: () => void;
   onRestore?: () => void;
+  /** More buttons, before the main action. */
+  extraActions?: ReactNode;
+  /** More below the text, across the row: e.g. the files a leak is in. */
+  children?: ReactNode;
 }
 
 /** One audit finding: severity, what and where, and what to do about it. */
@@ -49,6 +54,8 @@ export function FindingRow({
   onAction,
   onIgnore,
   onRestore,
+  extraActions,
+  children,
 }: FindingRowProps) {
   const { t } = useTranslation();
   const style = SEVERITY_STYLE[severity];
@@ -88,6 +95,7 @@ export function FindingRow({
             <Button variant="ghost" size="sm" className="text-subtle" onClick={onIgnore}>
               {t('audit.ignore')}
             </Button>
+            {extraActions}
             {actionLabel ? (
               <Button size="sm" loading={busy} onClick={onAction}>
                 {actionLabel}
@@ -96,6 +104,7 @@ export function FindingRow({
           </>
         )}
       </span>
+      {children ? <div className="basis-full pl-[50px] max-[560px]:pl-0">{children}</div> : null}
     </div>
   );
 }

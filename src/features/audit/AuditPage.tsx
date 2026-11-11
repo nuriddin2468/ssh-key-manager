@@ -33,6 +33,9 @@ import { AuditSummary } from './AuditSummary';
 import { BreachCheckAction, BreachSwitch, breachKey, useBreachStatus } from './BreachCheck';
 import { ChecksList } from './ChecksList';
 import { FindingRow } from './FindingRow';
+import { LeakRow } from './LeakRow';
+import { LeakScanCard, leakKeys, useLeakStatus } from './LeakScan';
+import { isLeakIgnoreEntry, leakIgnoreKey, splitIgnored } from './leakModel';
 import {
   AREAS,
   type Area,
@@ -45,6 +48,7 @@ import {
   findingSubject,
   findingText,
   findingTitle,
+  leakItem,
   SEVERITY_ORDER,
   sshItem,
   vaultItem,
@@ -81,6 +85,13 @@ export function AuditPage() {
   });
   const entries = useVaultEntries();
   const breach = useBreachStatus();
+  const leakStatus = useLeakStatus();
+  // Keyed by the state too: locking drops the findings.
+  const leakFindings = useQuery({
+    queryKey: [...leakKeys.findings, vaultState],
+    queryFn: api.leaksFindings,
+    enabled: vaultState === 'unlocked',
+  });
   // Reading the vault may start a breach check of new passwords.
   useEffect(() => {
     if (vaultAudit.dataUpdatedAt) void queryClient.invalidateQueries({ queryKey: breachKey });
@@ -103,22 +114,38 @@ export function AuditPage() {
   const vault = vaultAudit.data;
   const hasVault = vault !== undefined && vault.state !== 'missing';
   const locked = vault?.state === 'locked';
-  const areas = AREAS.filter((a) => a !== 'passwords' || hasVault);
+  const areas = AREAS.filter((a) => (a !== 'passwords' && a !== 'leaks') || hasVault);
+  const lockedAreas = new Set<Area>(locked ? ['passwords', 'leaks'] : []);
   const ignored = new Set(settings.ignoredFindings);
-  const all = bySeverity([
+  const others = [
     ...(audit.data?.findings ?? []).map(sshItem),
     ...(vault?.findings ?? []).map(vaultItem),
+  ];
+  const leaks = splitIgnored(locked ? [] : (leakFindings.data ?? []), ignored);
+  const open = bySeverity([
+    ...others.filter((item) => !ignored.has(item.ignoreId)),
+    ...leaks.open.map(leakItem),
   ]);
-  const open = all.filter((item) => !ignored.has(item.ignoreId));
-  const hidden = all.filter((item) => ignored.has(item.ignoreId));
+  const hidden = bySeverity([
+    ...others.filter((item) => ignored.has(item.ignoreId)),
+    ...leaks.hidden.map(leakItem),
+  ]);
   const counts = { critical: 0, warning: 0, info: 0 };
   for (const item of open) counts[item.severity] += 1;
   const results = checkResults(open);
+  const leakSettings = leakStatus?.settings;
+  const leakSkipped: Record<string, boolean> = {
+    leaksAi: !leakSettings?.ai,
+    leaksHistory: !leakSettings?.history,
+    leaksRepositories: !leakSettings?.folders.length,
+    leaksFiles: !leakSettings?.folders.length,
+  };
   const notRun = new Set<CheckId>(
     CHECKS.filter(
       (check) =>
-        (locked && check.area === 'passwords') ||
-        (check.id === 'breached' && !(breach?.enabled && breach.checkedAt)),
+        (locked && lockedAreas.has(check.area)) ||
+        (check.id === 'breached' && !(breach?.enabled && breach.checkedAt)) ||
+        (check.area === 'leaks' && (!leakStatus?.scannedAt || leakSkipped[check.id])),
     ).map((check) => check.id),
   );
   const ran = CHECKS.filter((check) => areas.includes(check.area) && !notRun.has(check.id));
@@ -141,11 +168,13 @@ export function AuditPage() {
     { success: (fixed) => t('audit.fixedAuto', { count: fixed }) },
   );
 
-  const setIgnored = (id: string, value: boolean) =>
+  /** Adds `add` to the ignored findings after taking out what `drop` matches. */
+  const setIgnored = (add: string[], drop: (entry: string) => boolean) =>
     updateSettings({
-      ignoredFindings: value
-        ? [...settings.ignoredFindings, id]
-        : settings.ignoredFindings.filter((other) => other !== id),
+      ignoredFindings: [
+        ...settings.ignoredFindings.filter((entry) => !drop(entry)),
+        ...add.filter((id) => !ignored.has(id)),
+      ],
     });
 
   const scope =
@@ -164,8 +193,26 @@ export function AuditPage() {
     : '';
 
   const row = (item: AuditItem, muted: boolean) => {
-    const ignore = muted ? undefined : () => setIgnored(item.ignoreId, true);
-    const restore = muted ? () => setIgnored(item.ignoreId, false) : undefined;
+    // A leak is ignored file by file, up to the occurrences seen now.
+    const findings = item.source === 'leak' ? item.group.findings : [];
+    const about = (entry: string) =>
+      item.source === 'leak'
+        ? findings.some((finding) => isLeakIgnoreEntry(entry, finding))
+        : entry === item.ignoreId;
+    const keys = item.source === 'leak' ? findings.map(leakIgnoreKey) : [item.ignoreId];
+    const ignore = muted ? undefined : () => setIgnored(keys, about);
+    const restore = muted ? () => setIgnored([], about) : undefined;
+    if (item.source === 'leak') {
+      return (
+        <LeakRow
+          key={item.ignoreId}
+          group={item.group}
+          muted={muted}
+          onIgnore={ignore}
+          onRestore={restore}
+        />
+      );
+    }
     if (item.source === 'ssh') {
       const finding = item.finding;
       return (
@@ -257,6 +304,7 @@ export function AuditPage() {
               results={results}
               items={open}
               notRun={notRun}
+              lockedAreas={lockedAreas}
               selected={area}
               onSelect={(next) => {
                 setArea(next);
@@ -264,10 +312,18 @@ export function AuditPage() {
               }}
             />
 
+            {leakStatus && areas.includes('leaks') && (area === null || area === 'leaks') ? (
+              <LeakScanCard status={leakStatus} locked={locked} />
+            ) : null}
+
             {open.length > 0 || locked || area !== null ? (
               <section aria-labelledby="audit-findings-h" className="flex flex-col gap-2.5">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                  <h2 id="audit-findings-h" className="text-[14px] leading-5 font-semibold">
+                  <h2
+                    id="audit-findings-h"
+                    tabIndex={-1}
+                    className="text-[14px] leading-5 font-semibold outline-none"
+                  >
                     {area === null ? t('audit.findingsTitle') : t(`audit.areas.${area}`)}
                   </h2>
                   {inAreas.length > 0 ? (
@@ -344,7 +400,7 @@ export function AuditPage() {
             <ChecksList
               areas={areas}
               results={results}
-              locked={locked}
+              lockedAreas={lockedAreas}
               notRun={notRun}
               extras={{ breached: <BreachCheckAction status={breach} /> }}
               footers={{ passwords: <BreachSwitch layout="card" /> }}

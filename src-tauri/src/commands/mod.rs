@@ -16,6 +16,7 @@ pub mod hosts_file;
 pub mod key_rotation;
 pub mod keys;
 pub mod known_hosts;
+pub mod leaks;
 pub mod nearby;
 pub mod projects;
 pub mod quick;

@@ -24,6 +24,7 @@ import { diagnosed, diagnoseHandlers, diagnoseHostSpecs } from './diagnose';
 import { envsHandlers } from './envs';
 import { historyHandlers, recordCheck } from './history';
 import { hostsFileFindings, hostsFileHandlers } from './hostsFile';
+import { leaksHandlers } from './leaks';
 import { nearbyHandlers } from './nearby';
 import { paletteHandlers } from './palette';
 import { projectsHandlers } from './projects';
@@ -537,6 +538,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   ...nearbyHandlers,
   ...shellHistoryHandlers(hosts),
   ...historyHandlers,
+  ...leaksHandlers,
   ...auditChecksHandlers({
     specs: () => hostSpecs,
     configFile,

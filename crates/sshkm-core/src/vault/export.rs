@@ -211,6 +211,18 @@ type Identity = (u64, u64);
 type Identity = PathBuf;
 
 impl FileId {
+    /// The identity as text, to keep in a file.
+    pub(in crate::vault) fn token(&self) -> String {
+        #[cfg(unix)]
+        {
+            format!("{}:{}", self.0.0, self.0.1)
+        }
+        #[cfg(not(unix))]
+        {
+            self.0.to_string_lossy().to_lowercase()
+        }
+    }
+
     pub(in crate::vault) fn of(path: &Path) -> Option<Self> {
         #[cfg(unix)]
         {

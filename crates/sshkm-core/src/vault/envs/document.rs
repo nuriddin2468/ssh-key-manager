@@ -6,12 +6,12 @@
 //! breaks (`\n` or `\r\n`), a missing final line break and a byte order
 //! mark all stay as they are.
 //!
-//! - A changed value is written in its own quotes where they can hold it:
-//!   a value in `"…"` stays in double quotes, one in `'…'` or `` `…` ``
-//!   in its quotes unless the new value has that quote or a line break it
-//!   didn't have; a value without quotes stays without them while it is
-//!   only safe characters. A value that spanned several lines keeps doing
-//!   so.
+//! - A changed value is written in its own quotes where every loader reads
+//!   it back the same: a value in `"…"` moves to `'…'` when it has `$`,
+//!   `` ` ``, `\` or `"`, which loaders expand or unescape differently; one
+//!   in `'…'` or `` `…` `` keeps them unless it has that quote; one without
+//!   quotes stays without them while it is only safe characters. A value
+//!   that spanned several lines keeps doing so.
 //! - A variable the file should no longer have loses its lines, every line
 //!   that sets it.
 //! - A new variable goes at the end, as `NAME=value`.
@@ -26,7 +26,7 @@ use std::ops::Range;
 use zeroize::Zeroizing;
 
 use super::dotenv::{self, ParsedEnv};
-use super::format::dotenv_value;
+use super::format::{dotenv_value, escaped_double, fits_double, fits_single};
 use crate::{Error, Result};
 
 /// The text of a `.env` file, to read and to change in place.
@@ -161,49 +161,43 @@ fn line_break(text: &str) -> &'static str {
 }
 
 /// `value` as written in place of a value that was in `quote` (none for a
-/// bare one) and spanned several lines or not.
+/// bare one) and spanned several lines or not. It keeps its quotes where
+/// they read it back the same in every loader ([`dotenv_value`] says
+/// which do); a value that spanned lines keeps doing so.
 fn raw_value(value: &str, quote: Option<char>, multiline: bool, eol: &str) -> Zeroizing<String> {
     let mut out = Zeroizing::new(String::with_capacity(value.len() + 2));
-    match quote {
-        None => dotenv_value(&mut out, value),
-        Some('"') => double_quoted(&mut out, value, multiline, eol),
-        Some(quote) => {
-            let fits = !value.contains(quote)
-                && !value.contains('\r')
-                && (multiline || !value.contains('\n'));
-            if fits {
-                out.push(quote);
-                for c in value.chars() {
-                    if c == '\n' {
-                        out.push_str(eol);
-                    } else {
-                        out.push(c);
-                    }
-                }
-                out.push(quote);
+    // A line break kept as it is, in a value written over several lines.
+    let lines = |value: &str| multiline && value.contains('\n') && !value.contains('\r');
+    let quoted = |out: &mut String, quote: char| {
+        out.push(quote);
+        for c in value.chars() {
+            if c == '\n' {
+                out.push_str(eol);
             } else {
-                double_quoted(&mut out, value, multiline, eol);
+                out.push(c);
             }
         }
+        out.push(quote);
+    };
+    let single_line = !value.contains(['\n', '\r']);
+    match quote {
+        None => dotenv_value(&mut out, value),
+        Some('"') if fits_double(value) => quoted(&mut out, '"'),
+        Some('"') if lines(value) && fits_double(&value.replace('\n', "")) => {
+            quoted(&mut out, '"');
+        }
+        Some(quote @ ('\'' | '`'))
+            if !value.contains(quote)
+                && !value.ends_with('\\')
+                && (single_line || lines(value)) =>
+        {
+            quoted(&mut out, quote);
+        }
+        _ if fits_single(value) => quoted(&mut out, '\''),
+        _ if lines(value) && fits_single(&value.replace('\n', "")) => quoted(&mut out, '\''),
+        _ => escaped_double(&mut out, value),
     }
     out
-}
-
-/// `"…"`, with `\` and `"` escaped, a carriage return as `\r`, and a line
-/// break as is in a value written over several lines, else as `\n`.
-fn double_quoted(out: &mut String, value: &str, lines: bool, eol: &str) {
-    out.push('"');
-    for c in value.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\r' => out.push_str("\\r"),
-            '\n' if lines => out.push_str(eol),
-            '\n' => out.push_str("\\n"),
-            other => out.push(other),
-        }
-    }
-    out.push('"');
 }
 
 #[cfg(test)]
@@ -316,12 +310,15 @@ mod tests {
         let cases = [
             ("V=\"old\"\n", "new value", "V=\"new value\"\n"),
             ("V=\"old\"\n", "say \"hi\"\\", "V=\"say \\\"hi\\\"\\\\\"\n"),
+            ("V=\"old\"\n", "pa$word", "V='pa$word'\n"),
+            ("V=\"old\"\n", "C:\\new", "V='C:\\new'\n"),
+            ("V=old\n", "pa$word", "V='pa$word'\n"),
             ("V=\"old\"\n", "a\nb", "V=\"a\\nb\"\n"),
             ("V='old'\n", "a b", "V='a b'\n"),
             ("V='old'\n", "it's", "V=\"it's\"\n"),
             ("V='old'\n", "a\nb", "V=\"a\\nb\"\n"),
             ("V='one\ntwo'\n", "a\nb\nc", "V='a\nb\nc'\n"),
-            ("V=`old`\n", "a`b", "V=\"a`b\"\n"),
+            ("V=`old`\n", "a`b", "V='a`b'\n"),
             ("V=old # note\n", "new", "V=new # note\n"),
             ("V=old # note\n", "a b", "V=\"a b\" # note\n"),
             ("V= # note\n", "x", "V=x # note\n"),

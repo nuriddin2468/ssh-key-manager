@@ -145,6 +145,24 @@ impl Fixture {
             .env_files_push(&self.ctx, &mut self.state, pulled, prefer)
     }
 
+    /// Settles `path` keeping `side`, as the compare dialog does: with the
+    /// revision of the file it showed.
+    fn keep(&mut self, path: &str, side: KeepSide) -> EnvFilesSynced {
+        let env = self.env.clone();
+        let file = self.file(path);
+        let seen = self
+            .vault
+            .compare_env_file(&env, &file, &self.ctx)
+            .unwrap()
+            .revision;
+        self.sync_preferring(Some(Preference {
+            env_id: &env,
+            file: &file,
+            keep: side,
+            seen: seen.as_deref(),
+        }))
+    }
+
     fn values(&self) -> Vec<(String, String, bool)> {
         self.vault
             .env_variables(&self.env)
@@ -439,19 +457,13 @@ fn both_sides_changed_is_a_conflict_until_one_is_kept() {
         .vault
         .compare_env_file(&f.env, &f.file(".env"), &f.ctx)
         .unwrap();
-    assert_eq!(comparison.changed, ["PORT"]);
-    assert_eq!(comparison.same, ["API_TOKEN"]);
+    assert_eq!(comparison.comparison.changed, ["PORT"]);
+    assert_eq!(comparison.comparison.same, ["API_TOKEN"]);
     // Still a conflict on the next round.
     assert_eq!(f.sync().files[0].state, FileState::Conflict);
 
     // Keeping the file.
-    let env = f.env.clone();
-    let file = f.file(".env");
-    let synced = f.sync_preferring(Some(Preference {
-        env_id: &env,
-        file: &file,
-        keep: KeepSide::File,
-    }));
+    let synced = f.keep(".env", KeepSide::File);
     assert_eq!(synced.changes.len(), 1);
     assert_eq!(f.values()[0].1, "4000");
     assert_eq!(f.states(), [FileState::InSync]);
@@ -460,11 +472,7 @@ fn both_sides_changed_is_a_conflict_until_one_is_kept() {
     fs::write(&path, "PORT=1\nAPI_TOKEN=tok-1\n").unwrap();
     f.set("PORT", "2", false);
     assert_eq!(f.states(), [FileState::Conflict]);
-    f.sync_preferring(Some(Preference {
-        env_id: &env,
-        file: &file,
-        keep: KeepSide::Vault,
-    }));
+    f.keep(".env", KeepSide::Vault);
     assert_eq!(read(&path), "PORT=2\nAPI_TOKEN=tok-1\n");
     assert_eq!(f.states(), [FileState::InSync]);
 }
@@ -510,13 +518,7 @@ fn a_deleted_file_is_reported_and_written_again_only_when_asked() {
     f.set("PORT", "4000", false);
     assert_eq!(f.sync().files[0].state, FileState::Missing);
     assert!(!path.exists());
-    let env = f.env.clone();
-    let file = f.file(".env");
-    f.sync_preferring(Some(Preference {
-        env_id: &env,
-        file: &file,
-        keep: KeepSide::Vault,
-    }));
+    f.keep(".env", KeepSide::Vault);
     assert_eq!(read(&path), "PORT=4000\nAPI_TOKEN=tok-1\n");
 }
 
@@ -575,13 +577,7 @@ fn a_file_left_without_variables_asks_first() {
     assert_eq!(f.sync().files[0].state, FileState::InSync);
     // Emptied on purpose, and kept.
     fs::write(&path, "# nothing here\n").unwrap();
-    let env = f.env.clone();
-    let file = f.file(".env");
-    f.sync_preferring(Some(Preference {
-        env_id: &env,
-        file: &file,
-        keep: KeepSide::File,
-    }));
+    f.keep(".env", KeepSide::File);
     assert_eq!(f.values(), []);
 }
 
@@ -650,8 +646,8 @@ fn a_new_key_starts_over_without_losing_anything() {
     let mut f = Fixture::new();
     f.bind(".env");
     f.sync();
-    // Another vault's state, or one made with a key the vault no longer has.
-    f.state.key = "0000".into();
+    // The revisions are lost, or were made with a key the vault no longer has.
+    f.state = SyncState::default();
     fs::write(f.path(".env"), "PORT=1\nAPI_TOKEN=tok-1\n").unwrap();
     assert_eq!(f.sync().files[0].state, FileState::Conflict);
     assert_eq!(f.values()[0].1, "3000");
@@ -784,9 +780,13 @@ fn the_overview_finds_unmanaged_files_templates_and_cloud_folders() {
     f.bind(".env");
     f.sync();
     let cloud = CloudRoots::new(vec![(f.folder.clone(), CloudService::Dropbox)]);
-    let overview = f
+    let mut overview = f
         .vault
         .env_files_overview(&f.ctx, &f.state, &cloud, Some(&f.project));
+    (overview.unmanaged, overview.truncated) = f
+        .vault
+        .unmanaged_search(&f.ctx, Some(&f.project))
+        .run(&f.ctx, &cloud);
     assert_eq!(overview.files.len(), 1);
     let report = &overview.files[0];
     assert_eq!(report.projects, [f.project.clone()]);
@@ -824,7 +824,12 @@ fn the_overview_finds_unmanaged_files_templates_and_cloud_folders() {
     let none = f
         .vault
         .env_files_overview(&f.ctx, &f.state, &cloud, Some("nope"));
-    assert!(none.files.is_empty() && none.unmanaged.is_empty());
+    assert_eq!(none.files, []);
+    let (found, _) = f
+        .vault
+        .unmanaged_search(&f.ctx, Some("nope"))
+        .run(&f.ctx, &cloud);
+    assert_eq!(found, []);
 }
 
 #[test]
@@ -892,4 +897,353 @@ fn nothing_shows_a_value() {
     let synced = f.sync();
     let shown = format!("{synced:?}{:?}", serde_json::to_string(&synced).unwrap());
     assert!(!shown.contains("tok-secret-77") && !shown.contains("tok-1"));
+}
+
+/// Adds `DB_HOST`, secret, with a note, and binds `.env`, in step.
+fn with_db_host() -> Fixture {
+    let mut f = Fixture::new();
+    let env = f.env.clone();
+    f.vault
+        .set_env_variable(
+            &env,
+            None,
+            &EnvVarInput {
+                name: "DB_HOST".into(),
+                value: Some(s("db.internal")),
+                secret: true,
+                note: "read replica".into(),
+            },
+        )
+        .unwrap();
+    f.bind(".env");
+    f.sync();
+    f
+}
+
+fn db_host(f: &Fixture) -> Option<(bool, String)> {
+    f.vault
+        .environment(&f.env)
+        .unwrap()
+        .variables
+        .into_iter()
+        .find(|var| var.name == "DB_HOST")
+        .map(|var| (var.secret, var.note))
+}
+
+#[test]
+fn a_line_being_typed_keeps_its_variable() {
+    let mut f = with_db_host();
+    let path = f.path(".env");
+    let text = read(&path);
+    // Saved while `DB_HOST=` is retyped, or with a name Node's dotenv takes
+    // and a shell doesn't, or halfway through the name.
+    for broken in [
+        text.replace("DB_HOST=", "DB_HOST "),
+        text.replace("DB_HOST=", "export db-host="),
+        text.replace("DB_HOST=db.internal", "DB_HO"),
+    ] {
+        fs::write(&path, &broken).unwrap();
+        let synced = f.sync();
+        assert!(
+            matches!(synced.files[0].state, FileState::Invalid { .. }),
+            "{:?}",
+            synced.files[0].state
+        );
+        assert_eq!(synced.changes, []);
+        assert_eq!(db_host(&f), Some((true, "read replica".into())));
+        assert_eq!(read(&path), broken);
+    }
+    fs::write(&path, &text).unwrap();
+    assert_eq!(f.sync().files[0].state, FileState::InSync);
+}
+
+#[test]
+fn a_variable_deleted_and_written_again_keeps_its_flag_and_note() {
+    let mut f = with_db_host();
+    let path = f.path(".env");
+    let text = read(&path);
+    fs::write(&path, text.replace("DB_HOST=db.internal\n", "")).unwrap();
+    assert_eq!(f.sync().changes[0].removed, ["DB_HOST"]);
+    assert_eq!(db_host(&f), None);
+    fs::write(&path, &text).unwrap();
+    assert_eq!(f.sync().changes[0].added, ["DB_HOST"]);
+    assert_eq!(db_host(&f), Some((true, "read replica".into())));
+}
+
+#[test]
+fn removing_half_the_variables_at_once_asks_first() {
+    let mut f = Fixture::new();
+    f.set("C", "3", false);
+    f.set("D", "4", false);
+    f.bind(".env");
+    f.sync();
+    let path = f.path(".env");
+    // A script that writes the file a line at a time, caught halfway.
+    fs::write(&path, "PORT=3000\nAPI_TOKEN=tok-1\n").unwrap();
+    let synced = f.sync();
+    assert_eq!(synced.files[0].state, FileState::Conflict);
+    assert_eq!(f.values().len(), 4);
+    fs::write(&path, "PORT=3000\nAPI_TOKEN=tok-1\nC=3\nD=4\n").unwrap();
+    assert_eq!(f.sync().files[0].state, FileState::InSync);
+    // One at a time is an ordinary edit.
+    fs::write(&path, "PORT=3000\nAPI_TOKEN=tok-1\nC=3\n").unwrap();
+    assert_eq!(f.sync().changes[0].removed, ["D"]);
+}
+
+#[test]
+fn stored_bindings_are_checked_whenever_they_are_used() {
+    let mut f = Fixture::new();
+    f.bind(".env");
+    fs::create_dir_all(f.path(".git/hooks")).unwrap();
+    let id = parse_id(&f.env).unwrap();
+    let folder = f.folder_text.replace('\\', "\\\\");
+    let foreign = [
+        ".git/hooks/notes.txt",
+        ".zshenv",
+        "..\\\\..\\\\x.env",
+        "apps\\\\.env",
+        "C:\\\\x.env",
+        "/etc/x.env",
+        "./.env",
+    ];
+    {
+        let files: Vec<String> = foreign
+            .iter()
+            .map(|path| format!(r#"{{"folder":"{folder}","path":"{path}"}}"#))
+            .collect();
+        let json = format!(r#"{{"kind":"local","files":[{}]}}"#, files.join(","));
+        let mut entry = f.vault.db.entry_mut(id).unwrap();
+        entry.custom_data.insert(
+            FILES_DATA.to_owned(),
+            CustomDataItem {
+                value: Some(CustomDataValue::String(json)),
+                last_modification_time: None,
+            },
+        );
+    }
+    let synced = f.sync();
+    assert_eq!(synced.files.len(), foreign.len());
+    for status in &synced.files {
+        assert_eq!(
+            status.state,
+            FileState::Refused {
+                reason: RefusedReason::Name
+            },
+            "{}",
+            status.file.path
+        );
+    }
+    assert!(!f.path(".git/hooks/notes.txt").exists());
+    assert!(!f.path(".zshenv").exists());
+    assert!(!f.dir.path().join("x.env").exists());
+    let env = f.env.clone();
+    for status in &synced.files {
+        assert!(
+            f.vault
+                .compare_env_file(&env, &status.file, &f.ctx)
+                .is_err()
+        );
+        assert!(f.vault.delete_env_file(&env, &status.file, &f.ctx).is_err());
+    }
+}
+
+#[test]
+fn only_the_environments_own_files_are_compared() {
+    let f = Fixture::new();
+    let elsewhere = f.dir.path().join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    fs::write(
+        elsewhere.join("credentials"),
+        "aws_secret_access_key=tok-1\n",
+    )
+    .unwrap();
+    for file in [
+        EnvFile {
+            folder: projects::folder_text(&elsewhere, None).unwrap(),
+            path: "credentials".into(),
+        },
+        // In the project's folder, but not bound.
+        f.file(".env.local"),
+    ] {
+        let compared = f.vault.compare_env_file(&f.env, &file, &f.ctx);
+        assert_eq!(compared.unwrap_err().code(), crate::ErrorCode::NotFound);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_folder_swapped_for_a_link_is_no_edit() {
+    let mut f = Fixture::new();
+    fs::create_dir_all(f.path("apps/web")).unwrap();
+    fs::create_dir_all(f.path("apps/other")).unwrap();
+    fs::write(f.path("apps/other/.env"), "SOMETHING_ELSE=1\n").unwrap();
+    f.bind(".env");
+    f.bind("apps/web/.env");
+    f.sync();
+    fs::remove_dir_all(f.path("apps/web")).unwrap();
+    std::os::unix::fs::symlink(f.path("apps/other"), f.path("apps/web")).unwrap();
+    let synced = f.sync();
+    assert_eq!(synced.changes, []);
+    let web = synced
+        .files
+        .iter()
+        .find(|status| status.file.path == "apps/web/.env")
+        .unwrap();
+    assert_eq!(web.state, FileState::Conflict);
+    assert_eq!(
+        f.values(),
+        owned(&[("PORT", "3000", false), ("API_TOKEN", "tok-1", true)])
+    );
+    assert_eq!(read(&f.path(".env")), "PORT=3000\nAPI_TOKEN=tok-1\n");
+    assert_eq!(read(&f.path("apps/other/.env")), "SOMETHING_ELSE=1\n");
+}
+
+#[test]
+fn a_conflict_is_settled_only_as_it_was_compared() {
+    let mut f = Fixture::new();
+    f.bind(".env");
+    f.sync();
+    let path = f.path(".env");
+    fs::write(&path, "PORT=1\nAPI_TOKEN=tok-1\n").unwrap();
+    f.set("PORT", "2", false);
+    let env = f.env.clone();
+    let file = f.file(".env");
+    let seen = f
+        .vault
+        .compare_env_file(&env, &file, &f.ctx)
+        .unwrap()
+        .revision;
+    // Edited again while the dialog was open.
+    fs::write(&path, "PORT=1\nAPI_TOKEN=tok-1\nNEW=typed later\n").unwrap();
+    for keep in [KeepSide::Vault, KeepSide::File] {
+        let synced = f.sync_preferring(Some(Preference {
+            env_id: &env,
+            file: &file,
+            keep,
+            seen: seen.as_deref(),
+        }));
+        assert_eq!(synced.files[0].state, FileState::Conflict);
+        assert_eq!(synced.changes, []);
+    }
+    assert_eq!(read(&path), "PORT=1\nAPI_TOKEN=tok-1\nNEW=typed later\n");
+    assert_eq!(f.values()[0].1, "2");
+    // Nor without a revision, while the file is there.
+    let synced = f.sync_preferring(Some(Preference {
+        env_id: &env,
+        file: &file,
+        keep: KeepSide::Vault,
+        seen: None,
+    }));
+    assert_eq!(synced.files[0].state, FileState::Conflict);
+}
+
+#[test]
+fn history_keeps_only_the_latest_versions() {
+    let mut f = Fixture::new();
+    f.bind(".env");
+    f.sync();
+    for n in 0..15 {
+        fs::write(f.path(".env"), format!("PORT={n}\nAPI_TOKEN=tok-1\n")).unwrap();
+        f.sync();
+    }
+    let id = parse_id(&f.env).unwrap();
+    let kept = f
+        .vault
+        .db
+        .entry(id)
+        .unwrap()
+        .history
+        .as_ref()
+        .map_or(0, |history| history.get_entries().len());
+    assert_eq!(kept, 10);
+    // The newest are the ones kept.
+    let newest = f.vault.db.entry(id).unwrap().history.clone().unwrap();
+    let port = |version: &Entry| {
+        variables_of(version)
+            .into_iter()
+            .find(|var| var.name == "PORT")
+            .map(|var| var.value.expose_secret().to_owned())
+    };
+    assert_eq!(port(&newest.get_entries()[0]).as_deref(), Some("13"));
+}
+
+#[test]
+fn values_are_written_so_every_loader_reads_them_as_they_are() {
+    let mut f = Fixture::new();
+    fs::write(f.path(".env"), "PORT=3000\nAPI_TOKEN=\"tok-1\"\n").unwrap();
+    f.bind(".env");
+    f.sync();
+    f.set("PASSWORD", "pa$word", true);
+    f.set("API_TOKEN", "C:\\new", true);
+    f.sync();
+    assert_eq!(
+        read(&f.path(".env")),
+        "PORT=3000\nAPI_TOKEN='C:\\new'\nPASSWORD='pa$word'\n"
+    );
+}
+
+#[test]
+fn temporary_files_a_crash_left_are_swept() {
+    let mut f = Fixture::new();
+    f.bind(".env");
+    let leftover = f.path(".env.sshkm-Ab12Cd.tmp");
+    fs::write(&leftover, "API_TOKEN=tok-1\n").unwrap();
+    fs::write(f.path(".env.local"), "X=1\n").unwrap();
+    f.sync();
+    assert!(!leftover.exists());
+    assert!(f.path(".env.local").exists());
+    assert!(!is_env_file_name(".env.sshkm-Ab12Cd.tmp"));
+}
+
+#[test]
+fn revisions_made_with_another_vaults_key_are_kept() {
+    let mut f = Fixture::new();
+    f.bind(".env");
+    f.sync();
+    fs::remove_file(f.path(".env")).unwrap();
+    // Another vault on this computer, used in between.
+    let mut other = Fixture::new();
+    other.state = f.state.clone();
+    other.bind(".env");
+    other.sync();
+    // Back to the first: the file it wrote and someone deleted stays gone.
+    f.state = other.state.clone();
+    assert_eq!(f.sync().files[0].state, FileState::Missing);
+    assert!(!f.path(".env").exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn reparse_points_are_never_read() {
+    let mut f = Fixture::new();
+    let outside = f.dir.path().join("secret.env");
+    fs::write(&outside, "KEEP=1\n").unwrap();
+    // Making a link needs a right not every account has.
+    if std::os::windows::fs::symlink_file(&outside, f.path(".env")).is_err() {
+        return;
+    }
+    assert!(matches!(
+        disk::read(&f.path(".env")),
+        Disk::Refused(RefusedReason::Link)
+    ));
+    let env = f.env.clone();
+    assert!(
+        f.vault
+            .bind_env_file(&env, &f.file(".env"), &f.ctx)
+            .is_err()
+    );
+    fs::remove_file(f.path(".env")).unwrap();
+    f.bind(".env");
+    f.sync();
+    fs::remove_file(f.path(".env")).unwrap();
+    std::os::windows::fs::symlink_file(&outside, f.path(".env")).unwrap();
+    f.set("PORT", "1", false);
+    let synced = f.sync();
+    assert_eq!(
+        synced.files[0].state,
+        FileState::Refused {
+            reason: RefusedReason::Link
+        }
+    );
+    assert_eq!(read(&outside), "KEEP=1\n");
 }

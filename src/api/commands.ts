@@ -25,6 +25,7 @@ import type { EnvComparison } from '@/bindings/EnvComparison';
 import type { EnvDetail } from '@/bindings/EnvDetail';
 import type { EnvExport } from '@/bindings/EnvExport';
 import type { EnvFile } from '@/bindings/EnvFile';
+import type { EnvFileComparison } from '@/bindings/EnvFileComparison';
 import type { EnvFileStatus } from '@/bindings/EnvFileStatus';
 import type { EnvFilesOverview } from '@/bindings/EnvFilesOverview';
 import type { EnvFilesSynced } from '@/bindings/EnvFilesSynced';
@@ -43,7 +44,7 @@ import type { FixAction } from '@/bindings/FixAction';
 import type { GeneratedSecret } from '@/bindings/GeneratedSecret';
 import type { GenerateKeyRequest } from '@/bindings/GenerateKeyRequest';
 import type { GenerateOptions } from '@/bindings/GenerateOptions';
-import type { GitState } from '@/bindings/GitState';
+import type { GitInfo } from '@/bindings/GitInfo';
 import type { HistoryScan } from '@/bindings/HistoryScan';
 import type { HistoryStatus } from '@/bindings/HistoryStatus';
 import type { HostEdit } from '@/bindings/HostEdit';
@@ -532,19 +533,22 @@ export const api = {
   envsFilesUnbind: (id: string, file: EnvFile, deleteFile: boolean) =>
     call<EnvDetail>('envs_files_unbind', { id, file, deleteFile }),
   envsFilesSync: () => call<EnvFilesSynced>('envs_files_sync'),
-  /** Settles a conflict (or writes a missing file again with `vault`). */
-  envsFilesResolve: (id: string, file: EnvFile, keep: KeepSide) =>
-    call<EnvFilesSynced>('envs_files_resolve', { id, file, keep }),
-  /** The vault (left) against the file (right), by name, for the compare dialog. */
+  /**
+   * Settles a conflict with the `revision` the compare dialog showed (`null` writes a missing
+   * file again with `vault`); fails with `conflict` if the file changed since.
+   */
+  envsFilesResolve: (id: string, file: EnvFile, keep: KeepSide, seen: string | null) =>
+    call<EnvFilesSynced>('envs_files_resolve', { id, file, keep, seen }),
+  /** The vault (left) against one of its files (right), by name, and the file's revision. */
   envsFilesCompare: (id: string, file: EnvFile) =>
-    call<EnvComparison>('envs_files_compare', { id, file }),
+    call<EnvFileComparison>('envs_files_compare', { id, file }),
   /** Undoes an edit of a file that went to the vault, unless the environment changed since. */
   envsFilesUndo: (undo: EnvUndo) => call<EnvDetail>('envs_files_undo', { undo }),
   /** The management center, of every project (`null`) or one. */
   envsFilesOverview: (project: string | null) =>
     call<EnvFilesOverview>('envs_files_overview', { project }),
   /** Adds the file to its working tree's `.gitignore`, after the user said to. */
-  envsFilesIgnore: (id: string, file: EnvFile) => call<GitState>('envs_files_ignore', { id, file }),
+  envsFilesIgnore: (id: string, file: EnvFile) => call<GitInfo>('envs_files_ignore', { id, file }),
   /** The variables of a `.env` file found in a project's folder, without values. */
   envsFilesAdoptPreview: (project: string, file: EnvFile) =>
     call<EnvImportPreview>('envs_files_adopt_preview', { project, file }),

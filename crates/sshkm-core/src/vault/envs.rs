@@ -869,42 +869,77 @@ impl Vault {
         if same_variables(&before, &after) {
             return Ok(());
         }
-        let mut entry = self
-            .db
-            .entry_mut(entry_id)
-            .ok_or_else(|| Error::NotFound(format!("environment {id}")))?;
-        let mut tracked = entry.track_changes();
-        for var in &before {
-            if !after.iter().any(|kept| kept.name == var.name) {
-                tracked.fields.remove(&field_name(&var.name));
-            }
+        {
+            let mut entry = self
+                .db
+                .entry_mut(entry_id)
+                .ok_or_else(|| Error::NotFound(format!("environment {id}")))?;
+            let mut tracked = entry.track_changes();
+            write_variables(&mut tracked, &before, &after);
         }
-        for var in &after {
-            let value = var.value.expose_secret();
-            tracked.set(
-                field_name(&var.name),
-                if var.secret {
-                    Value::protected(value)
-                } else {
-                    Value::unprotected(value)
-                },
-            );
-        }
-        let stored = Stored {
-            vars: after
-                .iter()
-                .map(|var| StoredVar {
-                    name: var.name.clone(),
-                    note: var.note.clone(),
-                })
-                .collect(),
-        };
-        tracked
-            .custom_data
-            .insert(MARKER.to_owned(), marker(&stored));
-        tracked.times.last_modification = Some(Times::now());
+        self.trim_history(entry_id);
         Ok(())
     }
+
+    /// Keeps no more earlier versions of an entry than the database's
+    /// `HistoryMaxItems` says (10 when it says nothing; none is kept at 0;
+    /// all at -1), the newest ones, as KeePass does on saving: an editor
+    /// saving a managed file often would otherwise add a full copy each
+    /// time.
+    fn trim_history(&mut self, entry_id: keepass::db::EntryId) {
+        let max = match self.db.meta.history_max_items {
+            None => 10,
+            Some(max) if max < 0 => return,
+            Some(max) => usize::try_from(max).unwrap_or(usize::MAX),
+        };
+        let Some(mut entry) = self.db.entry_mut(entry_id) else {
+            return;
+        };
+        let kept: Vec<Entry> = match entry.history.as_ref() {
+            Some(history) if history.get_entries().len() > max => {
+                history.get_entries()[..max].to_vec()
+            }
+            _ => return,
+        };
+        let mut trimmed = keepass::db::History::default();
+        // Newest first: each one added goes in front.
+        for version in kept.into_iter().rev() {
+            trimmed.add_entry(version);
+        }
+        entry.history = Some(trimmed);
+    }
+}
+
+/// Writes `after` over the variables `before` of an entry, with the marker
+/// keeping their order and notes.
+fn write_variables(entry: &mut Entry, before: &[EnvVariable], after: &[EnvVariable]) {
+    for var in before {
+        if !after.iter().any(|kept| kept.name == var.name) {
+            entry.fields.remove(&field_name(&var.name));
+        }
+    }
+    for var in after {
+        let value = var.value.expose_secret();
+        entry.set(
+            field_name(&var.name),
+            if var.secret {
+                Value::protected(value)
+            } else {
+                Value::unprotected(value)
+            },
+        );
+    }
+    let stored = Stored {
+        vars: after
+            .iter()
+            .map(|var| StoredVar {
+                name: var.name.clone(),
+                note: var.note.clone(),
+            })
+            .collect(),
+    };
+    entry.custom_data.insert(MARKER.to_owned(), marker(&stored));
+    entry.times.last_modification = Some(Times::now());
 }
 
 /// The child group of `parent` named exactly `name`, made if needed.

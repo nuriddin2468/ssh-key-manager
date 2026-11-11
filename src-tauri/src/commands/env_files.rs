@@ -13,13 +13,14 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use sshkm_core::ErrorCode;
 use sshkm_core::paths::home_dir;
 use sshkm_core::vault::envs::files::{
-    self as managed, CloudRoots, EnvFile, EnvFileStatus, EnvFilesOverview, EnvFilesSynced, EnvKind,
-    EnvUndo, GitInfo, GitState, KeepSide, Preference,
+    self as managed, CloudRoots, EnvFile, EnvFileComparison, EnvFileStatus, EnvFilesOverview,
+    EnvFilesSynced, EnvKind, EnvUndo, GitInfo, GitState, KeepSide, Preference,
 };
 use sshkm_core::vault::envs::{
-    self, EnvComparison, EnvDetail, EnvImportPreview, EnvInput, ImportChoice, looks_secret,
+    self, EnvDetail, EnvImportPreview, EnvInput, ImportChoice, looks_secret,
 };
 use sshkm_core::vault::projects::ProjectMember;
 use tauri::{AppHandle, State};
@@ -133,7 +134,10 @@ pub async fn envs_files_sync(
 
 /// Settles a file in conflict: `file` keeps the file's variables (they go
 /// to the vault, with Undo), `vault` writes the vault's into the file,
-/// which also writes a missing file again.
+/// which also writes a missing file again. `seen` is the revision the
+/// compare dialog showed (`envs_files_compare`): a file that changed since
+/// is left alone and the call fails with `conflict`, so nothing the user
+/// didn't see is lost. A missing file needs none.
 #[tauri::command]
 pub async fn envs_files_resolve(
     app: AppHandle,
@@ -142,28 +146,42 @@ pub async fn envs_files_resolve(
     id: String,
     file: EnvFile,
     keep: KeepSide,
+    seen: Option<String>,
 ) -> AppResult<EnvFilesSynced> {
     let files = Arc::clone(&files);
     blocking(&state, move |state| {
+        let ctx = context(state);
+        let now = state
+            .vault
+            .with(&app, |vault| Ok(vault.compare_env_file(&id, &file, &ctx)?))?
+            .revision;
+        if now.is_some() && now != seen {
+            return Err(AppError::new(
+                ErrorCode::Conflict,
+                "the file changed since it was compared",
+            ));
+        }
         let prefer = Preference {
             env_id: &id,
             file: &file,
             keep,
+            seen: seen.as_deref(),
         };
         files.sync(&app, state, Some(prefer), true)
     })
     .await
 }
 
-/// How an environment's variables (left) and its file's (right) differ,
-/// by name, for the compare dialog.
+/// How an environment's variables (left) and one of its files' (right)
+/// differ, by name, for the compare dialog, with the file's revision to
+/// settle the conflict with.
 #[tauri::command]
 pub async fn envs_files_compare(
     app: AppHandle,
     state: State<'_, Shared>,
     id: String,
     file: EnvFile,
-) -> AppResult<EnvComparison> {
+) -> AppResult<EnvFileComparison> {
     blocking(&state, move |state| {
         let ctx = context(state);
         state
@@ -212,10 +230,14 @@ pub async fn envs_files_overview(
         let ctx = context(state);
         let kept = files.state();
         let cloud = CloudRoots::detect(home_dir().as_deref());
-        let mut overview = state.vault.with_quietly(&app, |vault| {
-            Ok(vault.env_files_overview(&ctx, &kept, &cloud, project.as_deref()))
+        let (mut overview, search) = state.vault.with_quietly(&app, |vault| {
+            Ok((
+                vault.env_files_overview(&ctx, &kept, &cloud, project.as_deref()),
+                vault.unmanaged_search(&ctx, project.as_deref()),
+            ))
         })?;
-        // Git runs once the vault is free again.
+        // Folders are looked through and Git asked once the vault is free.
+        (overview.unmanaged, overview.truncated) = search.run(&ctx, &cloud);
         for report in &mut overview.files {
             report.git = report.status.location.as_deref().map(git_state);
         }
@@ -342,12 +364,20 @@ pub async fn envs_files_adopt(
             Ok(EnvImported { id, counts })
         })?;
         // The vault holds the file's variables now, and perhaps more: the
-        // file gets those too, keeping its own lines.
+        // file gets those too, keeping its own lines, unless it changed
+        // since it was read.
         let file = managed::check_env_file(&file)?;
+        let seen = state
+            .vault
+            .with(&app, |vault| {
+                Ok(vault.compare_env_file(&imported.id, &file, &ctx)?)
+            })?
+            .revision;
         let prefer = Preference {
             env_id: &imported.id,
             file: &file,
             keep: KeepSide::Vault,
+            seen: seen.as_deref(),
         };
         files.sync(&app, state, Some(prefer), true)?;
         Ok(imported)

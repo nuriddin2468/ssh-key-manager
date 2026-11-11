@@ -3,4 +3,4 @@
 /**
  * Why a file is never written or read.
  */
-export type RefusedReason = "link" | "notAFile" | "outside" | "protected";
+export type RefusedReason = "link" | "notAFile" | "outside" | "protected" | "name";

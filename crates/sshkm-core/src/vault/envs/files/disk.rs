@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use zeroize::Zeroizing;
 
-use super::{EnvFile, FileState, FilesContext, RefusedReason, is_env_file_name};
+use super::{EnvFile, FileState, FilesContext, RefusedReason, check_env_file, is_env_file_name};
 use crate::leaks::sources::SKIP_DIRS;
 use crate::vault::VaultPaths;
 use crate::vault::envs::MAX_FILE_SIZE;
@@ -46,6 +46,21 @@ pub(super) struct Target {
     pub identity: Identity,
 }
 
+impl Target {
+    /// The identity of the file's folder as text, kept with a revision.
+    pub fn dir_token(&self) -> String {
+        self.identity.0.token()
+    }
+}
+
+/// Where a binding's file is on this computer, as its project's folder
+/// names it, if that folder is a full path here; nothing is checked.
+pub(super) fn display(file: &EnvFile, ctx: &FilesContext) -> Option<PathBuf> {
+    let mut path = projects::folder_path(&file.folder, ctx.home.as_deref())?;
+    path.extend(file.path.split('/'));
+    Some(path)
+}
+
 /// What reading a file gave.
 pub(super) enum Disk {
     Missing,
@@ -65,6 +80,13 @@ pub(super) fn locate(
     let failed = |error: &io::Error, path: &Path| FileState::Failed {
         message: Error::io(clone_error(error), path).to_string(),
     };
+    // A binding is checked again whenever it is used: one that came from
+    // elsewhere may name anything.
+    if check_env_file(file).ok().as_ref() != Some(file) {
+        return Err(FileState::Refused {
+            reason: RefusedReason::Name,
+        });
+    }
     let Some(folder) = projects::folder_path(&file.folder, ctx.home.as_deref()) else {
         return Err(FileState::FolderMissing);
     };
@@ -102,6 +124,12 @@ pub(super) fn locate(
         });
     };
     let real = dir.join(name);
+    if real.parent() != Some(dir.as_path()) || real.file_name() != Some(std::ffi::OsStr::new(name))
+    {
+        return Err(FileState::Refused {
+            reason: RefusedReason::Name,
+        });
+    }
     match fs::symlink_metadata(&real) {
         Ok(meta) if meta.file_type().is_symlink() => {
             return Err(FileState::Refused {
@@ -166,7 +194,8 @@ pub(super) fn read(path: &Path) -> Disk {
 
 /// Writes `bytes` to the target, readable by its owner only, by renaming a
 /// new file over it, unless it no longer holds `expected` (`None`: unless
-/// it exists now). Returns whether it wrote.
+/// it exists now) or its folder is no longer the one it was found in.
+/// Returns whether it wrote.
 pub(super) fn write(target: &Target, expected: Option<&[u8]>, bytes: &[u8]) -> Result<bool> {
     let current = match read(&target.real) {
         Disk::Missing => None,
@@ -174,11 +203,42 @@ pub(super) fn write(target: &Target, expected: Option<&[u8]>, bytes: &[u8]) -> R
         Disk::Refused(reason) => return Err(refused(reason, &target.display)),
         Disk::Failed(message) => return Err(Error::invalid(message)),
     };
-    if current.as_ref().map(|text| text.as_bytes()) != expected {
+    if current.as_ref().map(|text| text.as_bytes()) != expected || !same_folder(target) {
         return Ok(false);
     }
-    fsutil::replace_private(&target.real, bytes)?;
-    Ok(true)
+    fsutil::replace_private(&target.real, bytes, expected.is_some())
+}
+
+/// The target's folder is still the folder it was found in, and no link
+/// leads to it.
+fn same_folder(target: &Target) -> bool {
+    target.real.parent().is_some_and(|dir| {
+        FileId::of(dir).as_ref() == Some(&target.identity.0)
+            && fs::canonicalize(dir).is_ok_and(|real| real == dir)
+    })
+}
+
+/// Removes the temporary files of the target's writes that a crash left
+/// next to it: they hold its values in plain text.
+pub(super) fn sweep(target: &Target) {
+    let (Some(dir), Some(name)) = (
+        target.real.parent(),
+        target.real.file_name().and_then(|name| name.to_str()),
+    ) else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(std::result::Result::ok) {
+        let leftover = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|found| fsutil::is_private_temp(found, name));
+        if leftover && entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// Deletes the target, a regular file.
@@ -202,6 +262,7 @@ fn refused(reason: RefusedReason, path: &Path) -> Error {
             RefusedReason::NotAFile => "is not a regular file",
             RefusedReason::Outside => "is outside the project's folder",
             RefusedReason::Protected => "is where the app never writes",
+            RefusedReason::Name => "is not a file the app writes",
         }
     ))
 }
@@ -254,10 +315,10 @@ fn clone_error(error: &io::Error) -> io::Error {
 }
 
 /// The `.env` files in `folder` and the folders in it, down to a few
-/// levels, leaving out dependencies and builds ([`SKIP_DIRS`]), links and
-/// templates: their paths in the folder with `/` between parts. The second
-/// value says the search stopped early.
-pub fn find_env_files(folder: &Path) -> (Vec<String>, bool) {
+/// levels, leaving out dependencies and builds ([`SKIP_DIRS`]), the
+/// folders in `skip`, links and templates: their paths in the folder with
+/// `/` between parts. The second value says the search stopped early.
+pub fn find_env_files(folder: &Path, skip: &[PathBuf]) -> (Vec<String>, bool) {
     let mut found = Vec::new();
     let mut seen = 0usize;
     let mut pending: Vec<(PathBuf, Vec<String>)> = vec![(folder.to_path_buf(), Vec::new())];
@@ -286,13 +347,15 @@ pub fn find_env_files(folder: &Path) -> (Vec<String>, bool) {
         entries.sort();
         for (name, is_dir) in entries {
             if is_dir {
+                let path = dir.join(&name);
                 if prefix.len() < MAX_DEPTH
                     && !SKIP_DIRS.contains(&name.as_str())
                     && !name.eq_ignore_ascii_case(".git")
+                    && !skip.contains(&path)
                 {
                     let mut next = prefix.clone();
                     next.push(name.clone());
-                    pending.push((dir.join(&name), next));
+                    pending.push((path, next));
                 }
             } else if is_env_file_name(&name) {
                 let mut parts = prefix.clone();
@@ -393,6 +456,31 @@ fn ignore_pattern(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_search_leaves_out_private_folders_and_leftovers() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        for folder in ["code/shop", "Documents/old", "node_modules/x"] {
+            fs::create_dir_all(home.join(folder)).unwrap();
+        }
+        for file in [
+            "code/shop/.env",
+            "code/shop/.env.sshkm-Ab12Cd.tmp",
+            "code/shop/.env.example",
+            "Documents/old/.env",
+            "node_modules/x/.env",
+        ] {
+            fs::write(home.join(file), "A=1\n").unwrap();
+        }
+        let skip = [home.join("Documents")];
+        let (found, truncated) = find_env_files(home, &skip);
+        assert_eq!(found, ["code/shop/.env"]);
+        assert!(!truncated);
+        // Searching from inside one of them goes on as asked.
+        let (found, _) = find_env_files(&home.join("Documents"), &skip);
+        assert_eq!(found, ["old/.env"]);
+    }
 
     #[test]
     fn patterns_name_one_file() {

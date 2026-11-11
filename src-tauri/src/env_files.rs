@@ -15,7 +15,7 @@
 //! (to offer Undo) and every file's state.
 
 use std::collections::BTreeSet;
-use std::ffi::OsString;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -27,6 +27,7 @@ use sshkm_core::paths::home_dir;
 use sshkm_core::vault::envs::files::{
     EnvFileStatus, EnvFilesSynced, FilesContext, Preference, SyncState,
 };
+use sshkm_core::vault::projects;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::error::AppResult;
@@ -51,9 +52,19 @@ pub struct EnvFiles {
 struct Watch {
     watcher: Option<RecommendedWatcher>,
     folders: BTreeSet<PathBuf>,
-    /// The names of the bound files; a change to any other name is not
-    /// one of theirs.
-    names: Arc<Mutex<BTreeSet<OsString>>>,
+    /// What changes count.
+    wanted: Arc<Mutex<Wanted>>,
+}
+
+/// What a change has to touch to count.
+#[derive(Default)]
+struct Wanted {
+    /// The names of the bound files ([`name_key`]); a change to any other
+    /// name in their folders is not one of theirs.
+    names: BTreeSet<String>,
+    /// Folders on the way to a bound file's folder that isn't there yet,
+    /// inside its project's folder: anything made in them may be it.
+    on_the_way: BTreeSet<PathBuf>,
 }
 
 impl EnvFiles {
@@ -154,27 +165,49 @@ impl EnvFiles {
     }
 
     /// Watches the folders of the files in `files` for changes to their
-    /// names, instead of the folders watched before.
+    /// names, instead of the folders watched before; for a file whose folder
+    /// isn't there yet, the nearest folder on the way inside its project's
+    /// folder, for anything made there.
     fn follow(&self, app: &AppHandle, files: &[EnvFileStatus]) {
-        let folders: BTreeSet<PathBuf> = files
-            .iter()
-            .filter_map(|status| status.location.as_deref()?.parent().map(Path::to_path_buf))
-            .filter(|folder| folder.is_dir())
-            .collect();
-        let names: BTreeSet<OsString> = files
-            .iter()
-            .filter_map(|status| status.location.as_deref()?.file_name().map(OsString::from))
-            .collect();
+        let home = home_dir();
+        let mut folders: BTreeSet<PathBuf> = BTreeSet::new();
+        let mut wanted = Wanted::default();
+        for status in files {
+            let Some(location) = status.location.as_deref() else {
+                continue;
+            };
+            if let Some(name) = location.file_name() {
+                wanted.names.insert(name_key(name));
+            }
+            let Some(folder) = location.parent() else {
+                continue;
+            };
+            if folder.is_dir() {
+                folders.insert(folder.to_path_buf());
+            } else if let Some(project) =
+                projects::folder_path(&status.file.folder, home.as_deref())
+                && let Some(nearest) = folder
+                    .ancestors()
+                    .take_while(|ancestor| ancestor.starts_with(&project))
+                    .find(|ancestor| ancestor.is_dir())
+            {
+                folders.insert(nearest.to_path_buf());
+                wanted.on_the_way.insert(nearest.to_path_buf());
+                if let Ok(real) = std::fs::canonicalize(nearest) {
+                    wanted.on_the_way.insert(real);
+                }
+            }
+        }
         let mut guard = lock(&self.watch);
         let watch: &mut Watch = &mut guard;
-        *lock(&watch.names) = names;
+        *lock(&watch.wanted) = wanted;
         if watch.watcher.is_none() {
-            let names = Arc::clone(&watch.names);
+            let wanted = Arc::clone(&watch.wanted);
             let handle = app.clone();
             let made = notify::recommended_watcher(move |result: notify::Result<Event>| {
                 if let Ok(event) = result
                     && is_change(&event)
-                    && concerns(&event, &lock(&names))
+                    && concerns(&event, &lock(&wanted))
                     && let Some(files) = handle.try_state::<Arc<EnvFiles>>()
                 {
                     files.request();
@@ -222,13 +255,29 @@ pub fn context(state: &AppState) -> FilesContext {
     }
 }
 
-/// The event names a bound file, or may (a rescan names none).
-fn concerns(event: &Event, names: &BTreeSet<OsString>) -> bool {
+/// The event names a bound file, or may (a rescan names none), or makes
+/// something in a folder on the way to a bound file's folder.
+fn concerns(event: &Event, wanted: &Wanted) -> bool {
     event.paths.is_empty()
-        || event
-            .paths
-            .iter()
-            .any(|path| path.file_name().is_some_and(|name| names.contains(name)))
+        || event.paths.iter().any(|path| {
+            path.file_name()
+                .is_some_and(|name| wanted.names.contains(&name_key(name)))
+                || path
+                    .parent()
+                    .is_some_and(|folder| wanted.on_the_way.contains(folder))
+        })
+}
+
+/// A file name as names are compared: without case where the file system
+/// usually ignores it (macOS, Windows), so a binding whose case differs
+/// from the file's is seen.
+fn name_key(name: &OsStr) -> String {
+    let name = name.to_string_lossy();
+    if cfg!(any(target_os = "macos", windows)) {
+        name.to_lowercase()
+    } else {
+        name.into_owned()
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -244,17 +293,33 @@ mod tests {
 
     #[test]
     fn only_bound_names_count() {
-        let names: BTreeSet<OsString> = [".env", ".env.local"].map(OsString::from).into();
+        let wanted = Wanted {
+            names: [".env", ".env.local"]
+                .map(|n| name_key(OsStr::new(n)))
+                .into(),
+            on_the_way: [PathBuf::from("/code/shop/apps")].into(),
+        };
         let event = |path: &str| {
             Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::To))).add_path(path.into())
         };
-        assert!(concerns(&event("/code/shop/.env"), &names));
-        assert!(concerns(&event("/code/shop/.env.local"), &names));
-        assert!(!concerns(&event("/code/shop/.env.local.swp"), &names));
-        assert!(!concerns(&event("/code/shop/.env.abc.sshkm-tmp"), &names));
+        assert!(concerns(&event("/code/shop/.env"), &wanted));
+        assert!(concerns(&event("/code/shop/.env.local"), &wanted));
+        assert!(!concerns(&event("/code/shop/.env.local.swp"), &wanted));
+        assert!(!concerns(
+            &event("/code/shop/.env.sshkm-Ab12Cd.tmp"),
+            &wanted
+        ));
+        // A folder made on the way to a bound file's folder.
+        assert!(concerns(&event("/code/shop/apps/web"), &wanted));
+        assert!(!concerns(&event("/code/shop/docs/web"), &wanted));
         assert!(concerns(
             &Event::new(EventKind::Create(CreateKind::Any)),
-            &names
+            &wanted
         ));
+        // Case counts only where the file system keeps it.
+        assert_eq!(
+            concerns(&event("/code/shop/.ENV"), &wanted),
+            cfg!(any(target_os = "macos", windows))
+        );
     }
 }

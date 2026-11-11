@@ -182,6 +182,9 @@ pub enum RefusedReason {
     Outside,
     /// It is one of the vault's files or in the SSH folder.
     Protected,
+    /// The binding names a path or a file the app never writes: it came
+    /// from elsewhere (another version, a sync, an edited database).
+    Name,
 }
 
 /// Where a file stands against the vault.
@@ -281,12 +284,34 @@ pub struct Preference<'a> {
     pub env_id: &'a str,
     pub file: &'a EnvFile,
     pub keep: KeepSide,
+    /// The revision of the file's variables the user compared
+    /// ([`EnvFileComparison::revision`]): a file that changed since isn't
+    /// settled. `None` settles only a missing file, by writing it again.
+    pub seen: Option<&'a str>,
 }
 
 impl Preference<'_> {
-    fn keeps(&self, bound: &Bound, side: KeepSide) -> bool {
-        self.keep == side && self.env_id == bound.env_id && *self.file == bound.file
+    /// Whether this settles `bound`'s file, as it is now (`file_rev`, `None`
+    /// when it is missing), by keeping `side`.
+    fn settles(&self, bound: &Bound, side: KeepSide, file_rev: Option<&str>) -> bool {
+        self.keep == side
+            && self.env_id == bound.env_id
+            && *self.file == bound.file
+            && self.seen == file_rev
     }
+}
+
+/// How an environment's variables (left) and its file's (right) differ,
+/// and the revision of the file as compared, to settle a conflict with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+pub struct EnvFileComparison {
+    #[serde(flatten)]
+    #[cfg_attr(feature = "ts", ts(flatten))]
+    pub comparison: EnvComparison,
+    /// `None` when the file is missing.
+    pub revision: Option<String>,
 }
 
 /// What one round of keeping files in step did.
@@ -375,20 +400,39 @@ pub struct Pulled {
     /// The vault changed and must be saved.
     pub vault_changed: bool,
     pub changes: Vec<EnvFileChange>,
-    /// New revisions for [`SyncState`], by file, once the vault is saved.
-    updates: Vec<(String, String)>,
+    /// New agreements for [`SyncState`], by file, once the vault is saved.
+    updates: Vec<(String, Agreement)>,
 }
 
-/// Where this computer's files and the vault last agreed: a revision per
-/// file. Kept by the app, one per computer.
+/// Where this computer's files and the vault last agreed: per file, a
+/// revision of the variables and the identity of the folder the file was
+/// in, so a folder swapped for another (a link put in its place) has
+/// nothing to go by. Kept by the app, one per computer, by the key the
+/// revisions were made with, so switching vaults loses nothing.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncState {
-    /// Which key the revisions were made with.
     #[serde(default)]
-    key: String,
-    #[serde(default)]
-    files: BTreeMap<String, String>,
+    keys: BTreeMap<String, KeyedState>,
 }
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct KeyedState {
+    /// When it was last used, in seconds since 1970.
+    #[serde(default)]
+    used: i64,
+    #[serde(default)]
+    files: BTreeMap<String, Agreement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Agreement {
+    rev: String,
+    #[serde(default)]
+    dir: String,
+}
+
+/// Most keys a [`SyncState`] keeps revisions for.
+const MAX_KEYS: usize = 8;
 
 impl SyncState {
     /// The state kept at `path`; empty if there is none or it can't be read.
@@ -408,10 +452,39 @@ impl SyncState {
         fsutil::atomic_write(path, &json, 0o600)
     }
 
-    fn base(&self, key_id: &str, file: &str) -> Option<&str> {
-        (self.key == key_id)
-            .then(|| self.files.get(file).map(String::as_str))
-            .flatten()
+    /// The revision `file` and the vault agreed on, made with the key
+    /// `key_id`, if the file was in the folder `dir` then.
+    fn base(&self, key_id: &str, file: &str, dir: &str) -> Option<&str> {
+        self.keys
+            .get(key_id)?
+            .files
+            .get(file)
+            .filter(|agreed| agreed.dir == dir)
+            .map(|agreed| agreed.rev.as_str())
+    }
+
+    /// The revisions made with the key `key_id`, to change; the oldest
+    /// keys' go past [`MAX_KEYS`].
+    fn files_mut(&mut self, key_id: &str) -> &mut BTreeMap<String, Agreement> {
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        self.keys.entry(key_id.to_owned()).or_default().used = now;
+        while self.keys.len() > MAX_KEYS {
+            let Some(oldest) = self
+                .keys
+                .iter()
+                .filter(|(id, _)| *id != key_id)
+                .min_by_key(|(_, keyed)| keyed.used)
+                .map(|(id, _)| id.clone())
+            else {
+                break;
+            };
+            self.keys.remove(&oldest);
+        }
+        &mut self
+            .keys
+            .get_mut(key_id)
+            .unwrap_or_else(|| unreachable!("inserted above"))
+            .files
     }
 }
 
@@ -433,6 +506,10 @@ struct Bound {
     kind: EnvKind,
     in_trash: bool,
     file: EnvFile,
+    /// The binding passes [`check_env_file`] as it is stored: one that came
+    /// from elsewhere (another version, a sync, an edited database) and
+    /// doesn't is never used.
+    valid: bool,
 }
 
 impl Bound {
@@ -453,8 +530,13 @@ impl Bound {
     }
 }
 
-/// A file found where a binding points, or why it can't be used.
-type Located = std::result::Result<Target, FileState>;
+/// A file binding with where its file is on this computer, if its folder is
+/// here, and the file found there or why it can't be used.
+struct Planned {
+    bound: Bound,
+    location: Option<PathBuf>,
+    located: std::result::Result<Target, FileState>,
+}
 
 /// Checks a file binding and puts its path in one form: parts between
 /// `/`, each a plain name, the last a `.env` file's name that isn't a
@@ -467,7 +549,11 @@ pub fn check_env_file(file: &EnvFile) -> Result<EnvFile> {
     }
     let parts: Vec<&str> = file.path.split(['/', '\\']).collect();
     let bad_part = |part: &&str| {
-        part.is_empty()
+        let mut components = Path::new(part).components();
+        let plain = matches!(components.next(), Some(std::path::Component::Normal(_)))
+            && components.next().is_none();
+        !plain
+            || part.is_empty()
             || *part == "."
             || *part == ".."
             || part.len() > 255
@@ -505,7 +591,8 @@ pub fn is_env_file_name(name: &str) -> bool {
             .extension()
             .is_some_and(|extension| extension == "env")
         || lower == ".dev.vars";
-    env_like && !is_template_name(&lower)
+    // `.env.sshkm-….tmp` is the app's own write in progress, or a crash's.
+    env_like && !is_template_name(&lower) && !lower.contains(".sshkm-")
 }
 
 /// `.env.example`, `.env.local.sample`, `example.env`, `.env.defaults`…
@@ -576,6 +663,14 @@ fn revision(key: &[u8; 32], vars: &[(&str, &str)]) -> String {
     Base64::encode_string(&mac.finalize().into_bytes())
 }
 
+/// A key no revision was made with: without a key yet, nothing was ever
+/// in step, and comparing with this one finds no agreement.
+fn made_up_key() -> Zeroizing<[u8; 32]> {
+    let mut key = Zeroizing::new([0u8; 32]);
+    OsRng.fill_bytes(key.as_mut());
+    key
+}
+
 /// Which key a [`SyncState`] was made with: the start of its hash.
 fn key_id(key: &[u8; 32]) -> String {
     use std::fmt::Write as _;
@@ -588,39 +683,85 @@ fn key_id(key: &[u8; 32]) -> String {
 }
 
 /// Lines whose loss would remove variables from the vault: a quote that
-/// never closes takes every line after it, and a value too long or after
-/// too many is left out. A word without `=` or a name a shell can't take
-/// sets nothing the vault has, so it doesn't count.
-fn blocking(parsed: &ParsedEnv) -> Option<Vec<ParseProblem>> {
+/// never closes takes every line after it, a value too long or after too
+/// many is left out, and a line without `=` or with a name a shell can't
+/// take that starts with the name of a variable the file no longer sets
+/// (`DB_HOST db.internal` caught while it is typed, `API-TOKEN=`, which
+/// Node's dotenv reads) is one being written. Other such lines set
+/// nothing the vault has, so they don't count.
+fn blocking(text: &str, parsed: &ParsedEnv, vault: &[EnvVariable]) -> Option<Vec<ParseProblem>> {
+    let lines: Vec<&str> = text
+        .strip_prefix('\u{feff}')
+        .unwrap_or(text)
+        .split('\n')
+        .collect();
+    let gone: Vec<String> = vault
+        .iter()
+        .filter(|var| !parsed.vars.iter().any(|other| other.name == var.name))
+        .map(|var| var.name.to_uppercase())
+        .collect();
+    let names_a_gone_one = |line: u32| {
+        let Some(text) = usize::try_from(line)
+            .ok()
+            .and_then(|line| lines.get(line.checked_sub(1)?))
+        else {
+            return false;
+        };
+        let text = text.trim_start();
+        let text = text
+            .strip_prefix("export")
+            .filter(|rest| rest.starts_with([' ', '\t']))
+            .map_or(text, str::trim_start);
+        let word: String = text
+            .chars()
+            .take_while(|c| !c.is_whitespace() && !matches!(c, '=' | ':'))
+            .map(|c| {
+                if matches!(c, '-' | '.') {
+                    '_'
+                } else {
+                    c.to_ascii_uppercase()
+                }
+            })
+            .collect();
+        word.len() >= 2 && gone.iter().any(|name| name.starts_with(&word))
+    };
     let problems: Vec<ParseProblem> = parsed
         .problems
         .iter()
-        .filter(|problem| {
-            matches!(
-                problem.kind,
-                ProblemKind::Unterminated
-                    | ProblemKind::TrailingText
-                    | ProblemKind::TooLong
-                    | ProblemKind::TooMany
-            )
+        .filter(|problem| match problem.kind {
+            ProblemKind::Unterminated
+            | ProblemKind::TrailingText
+            | ProblemKind::TooLong
+            | ProblemKind::TooMany => true,
+            ProblemKind::NoEquals | ProblemKind::BadName => names_a_gone_one(problem.line),
+            ProblemKind::Replaced => false,
         })
         .cloned()
         .collect();
     (!problems.is_empty()).then_some(problems)
 }
 
-/// A file without a variable left, of an environment that has some: what
-/// an editor that writes in place leaves for a moment, or a mistake. It
-/// would remove every variable, so the user says so first, as for a
-/// conflict.
-fn emptied(file: &ParsedEnv, vault: &[EnvVariable]) -> bool {
-    file.vars.is_empty() && !vault.is_empty()
+/// An edit that removes every variable, or two or more that are half of
+/// them or more: what an editor or a script that writes in place leaves
+/// for a moment, or a mistake. The user says so first, as for a conflict.
+fn drastic(file: &ParsedEnv, vault: &[EnvVariable]) -> bool {
+    let removed = vault
+        .iter()
+        .filter(|var| !file.vars.iter().any(|other| other.name == var.name))
+        .count();
+    (file.vars.is_empty() && !vault.is_empty()) || (removed >= 2 && removed * 2 >= vault.len())
 }
 
 /// The variables an environment has after taking a file's: the file's
-/// values and names, in the vault's order with new ones last; a variable
-/// keeps its secret flag and note, a new one is secret if it looks so.
-fn take_file(vault: &[EnvVariable], file: &ParsedEnv) -> (Vec<EnvVariable>, FileEdit) {
+/// values and names, in the vault's order with new ones last. A variable
+/// keeps its secret flag and note; a new one gets them from the latest
+/// version in `remembered` that had it (a line deleted and written again),
+/// else it is secret if it looks so.
+fn take_file(
+    vault: &[EnvVariable],
+    file: &ParsedEnv,
+    remembered: &[EnvVariable],
+) -> (Vec<EnvVariable>, FileEdit) {
     let mut edit = FileEdit::default();
     let mut out = Vec::with_capacity(file.vars.len());
     for var in vault {
@@ -642,11 +783,13 @@ fn take_file(vault: &[EnvVariable], file: &ParsedEnv) -> (Vec<EnvVariable>, File
     for other in &file.vars {
         if !vault.iter().any(|var| var.name == other.name) {
             edit.added.push(other.name.clone());
+            let earlier = remembered.iter().find(|var| var.name == other.name);
             out.push(EnvVariable {
                 name: other.name.clone(),
                 value: SecretString::from(other.value.as_str()),
-                secret: looks_secret(&other.name, &other.value),
-                note: String::new(),
+                secret: earlier
+                    .map_or_else(|| looks_secret(&other.name, &other.value), |var| var.secret),
+                note: earlier.map(|var| var.note.clone()).unwrap_or_default(),
             });
         }
     }
@@ -676,6 +819,75 @@ fn compare(left: &[(&str, &str)], right: &[(&str, &str)]) -> EnvComparison {
         .map(|(name, _)| (*name).to_owned())
         .collect();
     comparison
+}
+
+/// A search for `.env` files in projects' folders that no environment is
+/// written to ([`Vault::unmanaged_search`]), run without the vault.
+#[derive(Debug, Clone)]
+pub struct UnmanagedSearch {
+    vault: crate::vault::VaultPaths,
+    /// Project ids and their folders.
+    folders: Vec<(String, String)>,
+    bound: Vec<disk::Identity>,
+}
+
+/// Folders of the home folder a search never goes into from above: macOS
+/// asks before an app reads them, and they hold no projects' code.
+const PRIVATE_HOME_FOLDERS: [&str; 7] = [
+    "Desktop",
+    "Documents",
+    "Downloads",
+    "Library",
+    "Movies",
+    "Music",
+    "Pictures",
+];
+
+impl UnmanagedSearch {
+    /// The files found, and whether a folder was too large to look through
+    /// to the end.
+    pub fn run(self, ctx: &FilesContext, cloud: &CloudRoots) -> (Vec<UnmanagedEnvFile>, bool) {
+        let skip: Vec<PathBuf> = ctx
+            .home
+            .iter()
+            .flat_map(|home| PRIVATE_HOME_FOLDERS.map(|name| home.join(name)))
+            .collect();
+        let mut found_files = Vec::new();
+        let mut truncated = false;
+        let mut seen: BTreeSet<(String, PathBuf)> = BTreeSet::new();
+        for (project, folder) in self.folders {
+            let Some(path) = projects::folder_path(&folder, ctx.home.as_deref()) else {
+                continue;
+            };
+            if !path.is_dir() {
+                continue;
+            }
+            let (found, cut) = find_env_files(&path, &skip);
+            truncated |= cut;
+            for found in found {
+                let file = EnvFile {
+                    folder: folder.clone(),
+                    path: found,
+                };
+                let Ok(target) = disk::locate(&file, ctx, &self.vault) else {
+                    continue;
+                };
+                if self.bound.contains(&target.identity)
+                    || !seen.insert((project.clone(), target.real.clone()))
+                {
+                    continue;
+                }
+                found_files.push(UnmanagedEnvFile {
+                    project: project.clone(),
+                    cloud: cloud.service(&target.display),
+                    location: target.display,
+                    file,
+                    git: None,
+                });
+            }
+        }
+        (found_files, truncated)
+    }
 }
 
 impl Vault {
@@ -758,6 +970,7 @@ impl Vault {
                     RefusedReason::NotAFile => "that is a folder, a pipe or a device, not a file",
                     RefusedReason::Outside => "a link leads out of the project's folder",
                     RefusedReason::Protected => "the app never writes there",
+                    RefusedReason::Name => "the app never writes that file",
                 }));
             }
             // A folder that isn't on this computer is fine: the binding is
@@ -824,24 +1037,20 @@ impl Vault {
 
     /// Every file and where it stands, without changing anything.
     pub fn env_files_status(&self, ctx: &FilesContext, state: &SyncState) -> Vec<EnvFileStatus> {
-        // Without a key yet, nothing was ever in step here: a key made up
-        // for the comparison matches no revision kept.
-        let key = self.revision_key().unwrap_or_else(|| {
-            let mut key = Zeroizing::new([0u8; 32]);
-            OsRng.fill_bytes(key.as_mut());
-            key
-        });
+        let key = self.revision_key().unwrap_or_else(made_up_key);
         let id = key_id(&key);
         self.plan(ctx)
             .into_iter()
-            .map(|(bound, located)| match located {
-                Err(state) => bound.status(None, state),
-                Ok(target) => {
-                    let base = state.base(&id, &bound.state_key()).map(str::to_owned);
-                    let (file_state, _) =
-                        self.settle(&key, &bound, &target, base.as_deref(), None, false);
-                    bound.status(Some(target.display.clone()), file_state)
-                }
+            .map(|planned| {
+                let file_state = match &planned.located {
+                    Err(file_state) => file_state.clone(),
+                    Ok(target) => {
+                        let base = state.base(&id, &planned.bound.state_key(), &target.dir_token());
+                        self.settle(&key, &planned.bound, target, base, None, false)
+                            .0
+                    }
+                };
+                planned.bound.status(planned.location, file_state)
             })
             .collect()
     }
@@ -867,34 +1076,46 @@ impl Vault {
             .revision_key()
             .ok_or_else(|| Error::NotFound("the files' key".into()))?;
         let id = key_id(&key);
-        for (bound, located) in plan {
-            let Ok(target) = located else { continue };
+        for planned in plan {
+            let (Ok(target), bound) = (planned.located, planned.bound) else {
+                continue;
+            };
             let Disk::Text(text) = disk::read(&target.real) else {
                 continue;
             };
             let parsed = dotenv::parse(&text);
-            if blocking(&parsed).is_some() {
+            let vault = self.env_variables(&bound.env_id)?;
+            if blocking(&text, &parsed, &vault).is_some() {
                 continue;
             }
-            let vault = self.env_variables(&bound.env_id)?;
             let file_rev = revision(&key, &parsed_pairs(&parsed));
             let vault_rev = revision(&key, &pairs(&vault));
+            let dir = target.dir_token();
             if file_rev == vault_rev {
-                pulled.updates.push((bound.state_key(), vault_rev));
+                let agreed = Agreement {
+                    rev: vault_rev,
+                    dir,
+                };
+                pulled.updates.push((bound.state_key(), agreed));
                 continue;
             }
-            let base = state.base(&id, &bound.state_key());
-            let wanted = prefer.is_some_and(|p| p.keeps(&bound, KeepSide::File));
-            if !wanted && (base != Some(vault_rev.as_str()) || emptied(&parsed, &vault)) {
+            let base = state.base(&id, &bound.state_key(), &dir);
+            let wanted = prefer.is_some_and(|p| p.settles(&bound, KeepSide::File, Some(&file_rev)));
+            if !wanted && (base != Some(vault_rev.as_str()) || drastic(&parsed, &vault)) {
                 continue;
             }
-            let (after, edit) = take_file(&vault, &parsed);
+            let remembered = self.remembered_variables(&bound.env_id);
+            let (after, edit) = take_file(&vault, &parsed, &remembered);
             self.edit_variables(&bound.env_id, |vars| {
                 *vars = after;
                 Ok(())
             })?;
             let after_rev = revision(&key, &pairs(&self.env_variables(&bound.env_id)?));
-            pulled.updates.push((bound.state_key(), after_rev.clone()));
+            let agreed = Agreement {
+                rev: after_rev.clone(),
+                dir,
+            };
+            pulled.updates.push((bound.state_key(), agreed));
             pulled.changes.push(EnvFileChange {
                 env_id: bound.env_id.clone(),
                 group: bound.group.clone(),
@@ -917,8 +1138,9 @@ impl Vault {
     /// The second half, once the vault is saved: files whose vault side
     /// changed are rewritten in place, files never written on this computer
     /// are written, and `state` learns where each file and the vault agree
-    /// now. `prefer` writes one file from the vault whatever changed, and
-    /// writes it again if it is missing.
+    /// now. Temporary files a crash left next to the files go first.
+    /// `prefer` writes one file from the vault whatever changed, and writes
+    /// it again if it is missing.
     pub fn env_files_push(
         &self,
         ctx: &FilesContext,
@@ -935,36 +1157,41 @@ impl Vault {
             synced.files = self.env_files_status(ctx, state);
             return synced;
         };
-        let id = key_id(&key);
-        if state.key != id {
-            state.key = id;
-            state.files.clear();
-        }
-        let known: BTreeSet<String> = plan.iter().map(|(bound, _)| bound.state_key()).collect();
-        state.files.retain(|file, _| known.contains(file));
-        for (file, revision) in pulled.updates {
-            state.files.insert(file, revision);
-        }
-        for (bound, located) in plan {
-            let status = match located {
-                Err(file_state) => bound.status(None, file_state),
+        let files = state.files_mut(&key_id(&key));
+        let known: BTreeSet<String> = plan.iter().map(|p| p.bound.state_key()).collect();
+        files.retain(|file, _| known.contains(file));
+        files.extend(pulled.updates);
+        for planned in plan {
+            let mut written = false;
+            let file_state = match &planned.located {
+                Err(file_state) => file_state.clone(),
                 Ok(target) => {
-                    let key_of = bound.state_key();
-                    let base = state.files.get(&key_of).cloned();
+                    disk::sweep(target);
+                    let state_key = planned.bound.state_key();
+                    let dir = target.dir_token();
+                    let base = files
+                        .get(&state_key)
+                        .filter(|agreed| agreed.dir == dir)
+                        .map(|agreed| agreed.rev.clone());
                     let (file_state, agreed) =
-                        self.settle(&key, &bound, &target, base.as_deref(), prefer, true);
+                        self.settle(&key, &planned.bound, target, base.as_deref(), prefer, true);
                     if let Some(agreed) = agreed {
-                        state.files.insert(key_of, agreed.revision);
-                        let status = bound.status(Some(target.display.clone()), file_state);
-                        if agreed.written {
-                            synced.written.push(status.clone());
-                        }
-                        status
-                    } else {
-                        bound.status(Some(target.display.clone()), file_state)
+                        written = agreed.written;
+                        files.insert(
+                            state_key,
+                            Agreement {
+                                rev: agreed.revision,
+                                dir,
+                            },
+                        );
                     }
+                    file_state
                 }
             };
+            let status = planned.bound.status(planned.location, file_state);
+            if written {
+                synced.written.push(status.clone());
+            }
             synced.files.push(status);
         }
         synced
@@ -1007,26 +1234,37 @@ impl Vault {
     }
 
     /// Compares the vault's variables of an environment (left) with those
-    /// of its file (right), for the compare dialog; values are compared
-    /// here.
+    /// of one of its files (right), for the compare dialog; values are
+    /// compared here. Only a file the environment is written to, as found
+    /// for keeping it in step.
     pub fn compare_env_file(
         &self,
         id: &str,
         file: &EnvFile,
         ctx: &FilesContext,
-    ) -> Result<EnvComparison> {
-        let target = disk::locate(file, ctx, &self.paths)
+    ) -> Result<EnvFileComparison> {
+        let planned = self
+            .plan(ctx)
+            .into_iter()
+            .find(|planned| planned.bound.env_id == id && planned.bound.file == *file)
+            .ok_or_else(|| Error::NotFound(format!("{} isn't a file of it", file.path)))?;
+        let target = planned
+            .located
             .map_err(|_| Error::invalid("the file can't be reached"))?;
         let text = match disk::read(&target.real) {
-            Disk::Text(text) => text,
-            Disk::Missing => Zeroizing::new(String::new()),
+            Disk::Text(text) => Some(text),
+            Disk::Missing => None,
             Disk::Refused(_) | Disk::Failed(_) => {
                 return Err(Error::invalid("the file can't be read"));
             }
         };
-        let parsed = dotenv::parse(&text);
+        let parsed = dotenv::parse(text.as_ref().map_or("", |text| text.as_str()));
+        let key = self.revision_key().unwrap_or_else(made_up_key);
         let vars = self.env_variables(id)?;
-        Ok(compare(&pairs(&vars), &parsed_pairs(&parsed)))
+        Ok(EnvFileComparison {
+            comparison: compare(&pairs(&vars), &parsed_pairs(&parsed)),
+            revision: text.map(|_| revision(&key, &parsed_pairs(&parsed))),
+        })
     }
 
     /// Where `bound`'s file and the vault stand, and, when `act`, what is
@@ -1051,7 +1289,6 @@ impl Vault {
         };
         let wanted = pairs(&vault);
         let vault_rev = revision(key, &wanted);
-        let keep_vault = prefer.is_some_and(|p| p.keeps(bound, KeepSide::Vault));
         let text = match disk::read(&target.real) {
             Disk::Text(text) => Some(text),
             Disk::Missing => None,
@@ -1088,14 +1325,15 @@ impl Vault {
             }
         };
         let Some(text) = text else {
-            return if base.is_none() || keep_vault {
+            let again = prefer.is_some_and(|p| p.settles(bound, KeepSide::Vault, None));
+            return if base.is_none() || again {
                 write(None)
             } else {
                 (FileState::Missing, None)
             };
         };
         let parsed = dotenv::parse(&text);
-        if let Some(problems) = blocking(&parsed) {
+        if let Some(problems) = blocking(&text, &parsed, &vault) {
             return (FileState::Invalid { problems }, None);
         }
         let file_rev = revision(key, &parsed_pairs(&parsed));
@@ -1106,9 +1344,10 @@ impl Vault {
             };
             return (FileState::InSync, Some(agreed));
         }
+        let keep_vault = prefer.is_some_and(|p| p.settles(bound, KeepSide::Vault, Some(&file_rev)));
         if keep_vault || base == Some(file_rev.as_str()) {
             write(Some(text.as_str()))
-        } else if base == Some(vault_rev.as_str()) && !emptied(&parsed, &vault) {
+        } else if base == Some(vault_rev.as_str()) && !drastic(&parsed, &vault) {
             (FileState::FileChanged, None)
         } else {
             (FileState::Conflict, None)
@@ -1118,12 +1357,22 @@ impl Vault {
     /// Every file binding with what it can be: its file on this computer,
     /// or why it isn't kept in step. Of two bindings that name one file on
     /// disk, the first in order is.
-    fn plan(&self, ctx: &FilesContext) -> Vec<(Bound, Located)> {
+    fn plan(&self, ctx: &FilesContext) -> Vec<Planned> {
         let projects = self.projects();
         let mut seen: Vec<disk::Identity> = Vec::new();
         self.bound()
             .into_iter()
             .map(|bound| {
+                if !bound.valid {
+                    return Planned {
+                        bound,
+                        location: None,
+                        located: Err(FileState::Refused {
+                            reason: RefusedReason::Name,
+                        }),
+                    };
+                }
+                let location = disk::display(&bound.file, ctx);
                 let reason = if bound.in_trash {
                     Some(InactiveReason::InTrash)
                 } else if bound.kind == EnvKind::Remote {
@@ -1133,20 +1382,51 @@ impl Vault {
                 } else {
                     None
                 };
-                if let Some(reason) = reason {
-                    return (bound, Err(FileState::Inactive { reason }));
+                let located = match reason {
+                    Some(reason) => Err(FileState::Inactive { reason }),
+                    None => disk::locate(&bound.file, ctx, &self.paths).and_then(|target| {
+                        if seen.contains(&target.identity) {
+                            Err(FileState::Duplicate)
+                        } else {
+                            seen.push(target.identity.clone());
+                            Ok(target)
+                        }
+                    }),
+                };
+                Planned {
+                    bound,
+                    location,
+                    located,
                 }
-                let located = disk::locate(&bound.file, ctx, &self.paths).and_then(|target| {
-                    if seen.contains(&target.identity) {
-                        Err(FileState::Duplicate)
-                    } else {
-                        seen.push(target.identity.clone());
-                        Ok(target)
-                    }
-                });
-                (bound, located)
             })
             .collect()
+    }
+
+    /// The flags and notes of the variables of an environment's earlier
+    /// versions, newest first, each name once.
+    fn remembered_variables(&self, id: &str) -> Vec<EnvVariable> {
+        let Ok(entry) = self.env_entry(id) else {
+            return Vec::new();
+        };
+        let mut found: Vec<EnvVariable> = Vec::new();
+        for version in entry
+            .history
+            .as_ref()
+            .map(|history| history.get_entries().as_slice())
+            .unwrap_or_default()
+        {
+            for var in variables_of(version) {
+                if !found.iter().any(|other| other.name == var.name) {
+                    found.push(EnvVariable {
+                        name: var.name,
+                        value: SecretString::from(""),
+                        secret: var.secret,
+                        note: var.note,
+                    });
+                }
+            }
+        }
+        found
     }
 
     /// Every file binding of every environment, in a fixed order.
@@ -1165,6 +1445,7 @@ impl Vault {
                         env_name: summary.name.clone(),
                         kind: summary.kind,
                         in_trash: summary.in_trash,
+                        valid: check_env_file(&file).is_ok_and(|checked| checked == file),
                         file,
                     })
                     .collect::<Vec<_>>()
@@ -1182,11 +1463,12 @@ impl Vault {
         all
     }
 
-    /// The management center's view, of every project or of the one with
-    /// the id `project`: each file with its state, the cloud service that
-    /// copies it and the names its template sets that the environment
-    /// lacks; and the `.env` files in the projects' folders that no
-    /// environment is written to. Git is the caller's to look at.
+    /// The management center's view of the files, of every project or of
+    /// the one with the id `project`: each file with its state, the cloud
+    /// service that copies it and the names its template sets that the
+    /// environment lacks. Git is the caller's to look at, and so are the
+    /// files no environment is written to ([`Self::unmanaged_search`]), both
+    /// once the vault is free again.
     pub fn env_files_overview(
         &self,
         ctx: &FilesContext,
@@ -1201,18 +1483,21 @@ impl Vault {
             if !wanted(&projects) {
                 continue;
             }
-            let example = status.location.as_ref().and_then(|location| {
-                let (file, names) = disk::example_names(location.parent()?)?;
-                let have: BTreeSet<String> = self
-                    .environment(&status.env_id)
-                    .map(|env| env.variables.into_iter().map(|var| var.name).collect())
-                    .unwrap_or_default();
-                let missing = names
-                    .into_iter()
-                    .filter(|name| !have.contains(name))
-                    .collect();
-                Some(ExampleCheck { file, missing })
-            });
+            let example = match status.state {
+                FileState::Inactive { .. } | FileState::Refused { .. } => None,
+                _ => status.location.as_ref().and_then(|location| {
+                    let (file, names) = disk::example_names(location.parent()?)?;
+                    let have: BTreeSet<String> = self
+                        .environment(&status.env_id)
+                        .map(|env| env.variables.into_iter().map(|var| var.name).collect())
+                        .unwrap_or_default();
+                    let missing = names
+                        .into_iter()
+                        .filter(|name| !have.contains(name))
+                        .collect();
+                    Some(ExampleCheck { file, missing })
+                }),
+            };
             overview.files.push(EnvFileReport {
                 cloud: status
                     .location
@@ -1224,51 +1509,36 @@ impl Vault {
                 git: None,
             });
         }
-        let bound: Vec<disk::Identity> = self
+        overview
+    }
+
+    /// What looking for `.env` files that no environment is written to, in
+    /// the folders of every project or of the one with the id `project`,
+    /// needs: taken while the vault is held, run after.
+    pub fn unmanaged_search(&self, ctx: &FilesContext, project: Option<&str>) -> UnmanagedSearch {
+        let bound = self
             .bound()
             .iter()
+            .filter(|bound| bound.valid)
             .filter_map(|bound| disk::locate(&bound.file, ctx, &self.paths).ok())
             .map(|target| target.identity)
             .collect();
-        let mut seen: BTreeSet<(String, PathBuf)> = BTreeSet::new();
-        for project in self
+        let folders = self
             .projects()
             .into_iter()
             .filter(|p| project.is_none_or(|id| p.id == id))
-        {
-            for folder in &project.folders {
-                let Some(path) = projects::folder_path(folder, ctx.home.as_deref()) else {
-                    continue;
-                };
-                if !path.is_dir() {
-                    continue;
-                }
-                let (found, truncated) = find_env_files(&path);
-                overview.truncated |= truncated;
-                for found in found {
-                    let file = EnvFile {
-                        folder: folder.clone(),
-                        path: found,
-                    };
-                    let Ok(target) = disk::locate(&file, ctx, &self.paths) else {
-                        continue;
-                    };
-                    if bound.contains(&target.identity)
-                        || !seen.insert((project.id.clone(), target.real.clone()))
-                    {
-                        continue;
-                    }
-                    overview.unmanaged.push(UnmanagedEnvFile {
-                        project: project.id.clone(),
-                        cloud: cloud.service(&target.display),
-                        location: target.display,
-                        file,
-                        git: None,
-                    });
-                }
-            }
+            .flat_map(|p| {
+                p.folders
+                    .iter()
+                    .map(|folder| (p.id.clone(), folder.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        UnmanagedSearch {
+            vault: self.paths.clone(),
+            folders,
+            bound,
         }
-        overview
     }
 
     /// Reads the `.env` file `file` in a folder of the project `project`,

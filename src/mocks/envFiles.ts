@@ -10,10 +10,10 @@
 // their variables are kept with each binding.
 
 import type { CloudService } from '@/bindings/CloudService';
-import type { EnvComparison } from '@/bindings/EnvComparison';
 import type { EnvDetail } from '@/bindings/EnvDetail';
 import type { EnvFile } from '@/bindings/EnvFile';
 import type { EnvFileChange } from '@/bindings/EnvFileChange';
+import type { EnvFileComparison } from '@/bindings/EnvFileComparison';
 import type { EnvFileReport } from '@/bindings/EnvFileReport';
 import type { EnvFileStatus } from '@/bindings/EnvFileStatus';
 import type { EnvFilesOverview } from '@/bindings/EnvFilesOverview';
@@ -280,13 +280,25 @@ function boundFile(item: Env, file: EnvFile): EnvFile | Promise<never> {
   );
 }
 
-function compare(left: Record<string, string>, right: Record<string, string>): EnvComparison {
+/** A made-up revision of a file's variables, as the backend's keyed hash stands for them. */
+const revisionOf = (vars: Record<string, string>) =>
+  `rev-${Object.entries(vars)
+    .sort()
+    .map(([name, value]) => `${name}=${value.length}`)
+    .join(',')}`;
+
+function compare(
+  left: Record<string, string>,
+  right: Record<string, string> | null,
+): EnvFileComparison {
   const names = Object.keys(left);
+  const file = right ?? {};
   return {
-    onlyLeft: names.filter((name) => !(name in right)),
-    onlyRight: Object.keys(right).filter((name) => !(name in left)),
-    changed: names.filter((name) => name in right && right[name] !== left[name]),
-    same: names.filter((name) => right[name] === left[name]),
+    revision: right ? revisionOf(right) : null,
+    onlyLeft: names.filter((name) => !(name in file)),
+    onlyRight: Object.keys(file).filter((name) => !(name in left)),
+    changed: names.filter((name) => name in file && file[name] !== left[name]),
+    same: names.filter((name) => file[name] === left[name]),
   };
 }
 
@@ -355,13 +367,16 @@ export const envFilesHandlers: Record<string, Handler> = {
     const written = writeFiles(item, edit.file).map((file) => ({ item, file }));
     return synced([change], written);
   },
-  envs_files_resolve: async ({ id, file, keep }): Promise<EnvFilesSynced> => {
+  envs_files_resolve: async ({ id, file, keep, seen }): Promise<EnvFilesSynced> => {
     await requireUnlocked();
     seed();
     const item = await findEnv(id);
     const bound = await boundFile(item, file as EnvFile);
     const found = disk.get(key(item.id, bound));
     if (!found) return fail('not_found', bound.path);
+    if (found.vars && revisionOf(found.vars) !== seen) {
+      return fail('conflict', 'the file changed since it was compared');
+    }
     if ((keep as KeepSide) === 'file' && found.vars) {
       const change = takeFile(item, bound, found.vars);
       found.state = 'inSync';
@@ -372,12 +387,12 @@ export const envFilesHandlers: Record<string, Handler> = {
     found.state = 'inSync';
     return synced([], [{ item, file: bound }]);
   },
-  envs_files_compare: async ({ id, file }): Promise<EnvComparison> => {
+  envs_files_compare: async ({ id, file }): Promise<EnvFileComparison> => {
     await requireUnlocked();
     seed();
     const item = await findEnv(id);
     const bound = await boundFile(item, file as EnvFile);
-    return compare(varsOf(item), disk.get(key(item.id, bound))?.vars ?? {});
+    return compare(varsOf(item), disk.get(key(item.id, bound))?.vars ?? null);
   },
   envs_files_undo: async ({ undo }): Promise<EnvDetail> => {
     await requireUnlocked();

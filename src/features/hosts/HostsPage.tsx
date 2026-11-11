@@ -13,6 +13,7 @@ import { IconButton } from '@/components/ui/IconButton';
 import { SearchField } from '@/components/ui/SearchField';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
+import { BackToProject } from '@/features/projects/BackToProject';
 import { useTerminals } from '@/features/terminal/TerminalProvider';
 import { cn } from '@/lib/cn';
 import { withViewTransition } from '@/lib/viewTransition';
@@ -81,6 +82,7 @@ export function HostsPage({ hostId }: { hostId?: number }) {
   return (
     <>
       <Toolbar
+        leading={<BackToProject />}
         title={t('hosts.title')}
         meta={config.data ? t('hosts.meta', { count: hosts.length }) : undefined}
       >

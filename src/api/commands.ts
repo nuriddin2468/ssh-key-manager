@@ -614,6 +614,9 @@ export const api = {
       rows: size.rows,
       events: isTauri() ? new Channel<TerminalMessage>(onMessage) : onMessage,
     }),
+  /** Shows one of the project's folders in Finder, Explorer or Files; the backend checks it. */
+  projectsRevealFolder: (id: string, folder: string) =>
+    call<null>('projects_reveal_folder', { id, folder }),
 
   // Running on with the window closed, and the tray icon
   // (src-tauri/src/commands/background.rs).

@@ -8,7 +8,7 @@ import { useTerminals } from '@/features/terminal/TerminalProvider';
 import { platform } from '@/lib/platform';
 import { checkForUpdates } from '@/lib/updater';
 import { useDialogs } from './dialogs';
-import { homeRoute, type Page, type Route, useRouter } from './router';
+import { homeRoute, type Page, type Route, useFreshNavigate } from './router';
 
 /** ⌘F: the page's search, or the terminal's find bar. */
 export const FIND_EVENT = 'sshkm:find';
@@ -34,7 +34,8 @@ export const NAV_PAGES: (Page | 'home')[] = [
  * from the backend, managed `.env` files' included.
  */
 export function useAppEvents(): void {
-  const { navigate } = useRouter();
+  // Menus and shortcuts open sections afresh: without the way back to a project.
+  const navigate = useFreshNavigate();
   const dialogs = useDialogs();
   const { setPickerOpen } = useTerminals();
   // Edits of managed `.env` files that went to the vault, with Undo.

@@ -16,6 +16,7 @@ import { SearchField } from '@/components/ui/SearchField';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
 import { findingsByKey } from '@/features/audit/model';
+import { BackToProject } from '@/features/projects/BackToProject';
 import { ProjectDots, RowProjectButton } from '@/features/projects/ProjectMenu';
 import { cn } from '@/lib/cn';
 import { shortFingerprint } from '@/lib/format';
@@ -73,6 +74,7 @@ export function KeysPage({ keyId }: { keyId?: string }) {
   return (
     <>
       <Toolbar
+        leading={<BackToProject />}
         title={t('keys.title')}
         meta={keys.data ? t('keys.meta', { count: all.length, unlocked }) : undefined}
       >

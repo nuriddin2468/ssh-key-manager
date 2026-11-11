@@ -282,6 +282,7 @@ pub fn run() {
             commands::projects::projects_restore_suggestions,
             commands::projects::projects_suggest_in_folder,
             commands::projects::projects_open_terminal,
+            commands::projects::projects_reveal_folder,
             commands::projects::projects_missing_folders,
             commands::terminal::terminal_open,
             commands::terminal::terminal_write,

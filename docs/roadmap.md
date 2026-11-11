@@ -69,8 +69,15 @@ The foundation for everything below.
    sidebar, the library below, system sections last. The project page: hosts (connect),
    environments (file state, run), logins (copy), keys (in the agent or not), folders
    (open a terminal there, in the default shell, with the `local` environment), tunnels,
-   audit findings for the project. Adding items to a project from the library. In review:
+   audit findings for the project. Adding items to a project from the library. Done:
    [#37](https://github.com/nuriddin2468/ssh-key-manager/pull/37).
+4. **Project page polish**: cards show five rows, problems first, and Show all for the
+   rest; two columns that don't push each other down; an item's name opens it in its
+   Library section, with a way back to the project; Add also makes a new host, key, login
+   or environment in the Library's own dialogs, and it joins the project; a project folder
+   can be shown in Finder, Explorer or Files (the backend checks it is the project's). In
+   review:
+   [#39](https://github.com/nuriddin2468/ssh-key-manager/pull/39).
 
 ### 3. Managed `.env` files — in progress
 

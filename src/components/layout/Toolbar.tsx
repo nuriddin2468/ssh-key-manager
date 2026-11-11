@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import { cn } from '@/lib/cn';
 
 interface ToolbarProps {
+  /** Before the title, e.g. the way back to a project. */
+  leading?: ReactNode;
   title?: ReactNode;
   meta?: ReactNode;
   children?: ReactNode;
@@ -12,7 +14,7 @@ interface ToolbarProps {
  * The 52 px unified toolbar at the top of every page. It doubles as the
  * window's drag area, like a native title bar.
  */
-export function Toolbar({ title, meta, children, className }: ToolbarProps) {
+export function Toolbar({ leading, title, meta, children, className }: ToolbarProps) {
   return (
     <header
       data-tauri-drag-region
@@ -21,6 +23,7 @@ export function Toolbar({ title, meta, children, className }: ToolbarProps) {
         className,
       )}
     >
+      {leading}
       {title ? (
         <h1
           data-tauri-drag-region

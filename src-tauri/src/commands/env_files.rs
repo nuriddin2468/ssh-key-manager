@@ -157,7 +157,8 @@ pub async fn envs_files_set_level(
 /// Stops writing an environment to `file`. With `delete_file`, the file
 /// is deleted first, only if it holds exactly what the vault has. Without,
 /// a file kept only while the vault is unlocked stays from then on, as the
-/// user's own. A virtual file's pipe goes either way: it holds nothing.
+/// user's own. A virtual file's pipe goes either way: it holds nothing; a
+/// regular file saved in its place is deleted only when asked, as any.
 #[tauri::command]
 pub async fn envs_files_unbind(
     app: AppHandle,
@@ -178,8 +179,15 @@ pub async fn envs_files_unbind(
                 .find(|status| status.env_id == id && status.file == file)
                 .map(|status| (status.level, status.location)))
         })?;
-        let virtual_file = matches!(level, Some((FileLevel::Virtual, _)));
-        if delete_file && !virtual_file {
+        // A virtual file's place holds a regular file only when one was
+        // saved over the pipe; the pipe itself goes with the binding.
+        let deletable = match &level {
+            Some((FileLevel::Virtual, location)) => location.as_deref().is_some_and(|path| {
+                std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file())
+            }),
+            _ => true,
+        };
+        if delete_file && deletable {
             state
                 .vault
                 .with(&app, |vault| Ok(vault.delete_env_file(&id, &file, &ctx)?))?;

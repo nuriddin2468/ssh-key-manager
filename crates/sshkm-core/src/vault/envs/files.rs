@@ -637,6 +637,9 @@ pub struct FilesContext {
     /// The pipes the app serves now: a pipe at a binding's place is one of
     /// these, or never used.
     pub pipes: Vec<PipeId>,
+    /// The app's list of its pipes ([`pipes::PipeList`]), where a pipe a
+    /// round makes is listed at once.
+    pub pipe_list: Option<PathBuf>,
 }
 
 /// A file binding with its environment.
@@ -1278,7 +1281,7 @@ impl Vault {
                     Err(file_state) => file_state.clone(),
                     Ok(target) if planned.bound.level == FileLevel::Virtual => {
                         let base = state.base(&id, &planned.bound.state_key(), &target.dir_token());
-                        self.settle_virtual(&key, &planned.bound, target, base, None, false)
+                        self.settle_virtual(&key, &planned.bound, target, base, None, Settle::Look)
                             .0
                     }
                     Ok(target) => {
@@ -1424,8 +1427,14 @@ impl Vault {
                 }
                 Err(file_state) => file_state.clone(),
                 Ok(target) if planned.bound.level == FileLevel::Virtual => {
-                    let (file_state, made) =
-                        self.push_virtual(&key, &planned.bound, target, files, prefer);
+                    let (file_state, made) = self.push_virtual(
+                        &key,
+                        &planned.bound,
+                        target,
+                        files,
+                        prefer,
+                        ctx.pipe_list.as_deref(),
+                    );
                     synced.virtual_files.extend(made.served);
                     written = made.written;
                     file_state
@@ -1497,6 +1506,7 @@ impl Vault {
         target: &Target,
         files: &mut BTreeMap<String, Agreement>,
         prefer: Option<Preference<'_>>,
+        list: Option<&Path>,
     ) -> (FileState, PushedVirtual) {
         disk::sweep(target);
         let state_key = bound.state_key();
@@ -1505,8 +1515,14 @@ impl Vault {
             .get(&state_key)
             .filter(|agreed| agreed.dir == dir)
             .map(|agreed| agreed.rev.clone());
-        let (file_state, agreed, served) =
-            self.settle_virtual(key, bound, target, base.as_deref(), prefer, true);
+        let (file_state, agreed, served) = self.settle_virtual(
+            key,
+            bound,
+            target,
+            base.as_deref(),
+            prefer,
+            Settle::Act { list },
+        );
         let mut made = PushedVirtual {
             served,
             written: false,
@@ -1777,8 +1793,12 @@ impl Vault {
         target: &Target,
         base: Option<&str>,
         prefer: Option<Preference<'_>>,
-        act: bool,
+        how: Settle<'_>,
     ) -> (FileState, Option<Agreed>, Option<VirtualFile>) {
+        let (act, list) = match how {
+            Settle::Look => (false, None),
+            Settle::Act { list } => (true, list),
+        };
         let vault = self.env_variables(&bound.env_id);
         let (answer, vault_rev) = match &vault {
             Ok(vars) => match virtual_answer(bound, &pairs(vars)) {
@@ -1824,7 +1844,7 @@ impl Vault {
                 // Made by the next round.
                 return (FileState::VaultChanged, None, None);
             }
-            return match disk::make_pipe(target) {
+            return match disk::make_pipe(target, list) {
                 Ok(id) => (served_state(&vault), agreed(true), Some(serve(id, answer))),
                 Err(error) => (
                     FileState::Failed {
@@ -1852,7 +1872,7 @@ impl Vault {
             if !act {
                 return (FileState::VaultChanged, None, None);
             }
-            return match disk::make_pipe_over(target, text.as_bytes()) {
+            return match disk::make_pipe_over(target, text.as_bytes(), list) {
                 Ok(Some(id)) => (FileState::InSync, agreed(true), Some(serve(id, answer))),
                 // It changed while this was being worked out: the next
                 // round sees it.
@@ -2215,6 +2235,14 @@ impl Vault {
         );
         true
     }
+}
+
+/// Whether [`Vault::settle_virtual`] only looks, or acts: makes the pipe,
+/// listing it in `list`.
+#[derive(Clone, Copy)]
+enum Settle<'a> {
+    Look,
+    Act { list: Option<&'a Path> },
 }
 
 /// What [`Vault::push_virtual`] did: the pipe to serve, and whether one

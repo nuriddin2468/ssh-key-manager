@@ -196,7 +196,7 @@ problems on All projects, and the review's leftovers:
    that watch `.env` (Vite, Next.js) don't take an answer for an edit. Readers at the very
    same instant share one answer (a pipe is one stream). Read-only: a file saved over the
    pipe goes to the vault like any edit (both sides changed → compare), and the pipe comes
-   back; a tool writing into it in place waits for a reader. Pipes stay through a lock
+   back; a tool writing into it in place waits for a reader, and what it wrote isn't kept. Pipes stay through a lock
    and go on quit, waiting readers answered first; the guard and the next start remove
    what a crash leaves. Adding one turns on running in the background; Settings says what
    turning that off would stop. Windows offers no level 3 and says why. Checked on macOS

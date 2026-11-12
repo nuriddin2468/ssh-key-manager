@@ -218,17 +218,20 @@ impl EnvFiles {
         prefer: Option<Preference<'_>>,
         activity: bool,
     ) -> AppResult<EnvFilesSynced> {
+        // A lock after this, which the round may not see, keeps the values
+        // it read from being served.
+        let since = self.pipes.since();
         let mut synced = self.round_once(state, app, shared, prefer, activity)?;
         if self
             .pipes
-            .follow(&synced.virtual_files, !shared.vault.is_unlocked())
+            .follow(&synced.virtual_files, !shared.vault.is_unlocked(), since)
         {
             let first = synced;
             synced = self.round_once(state, app, shared, prefer, activity)?;
             synced.changes.splice(0..0, first.changes);
             synced.written.splice(0..0, first.written);
             self.pipes
-                .follow(&synced.virtual_files, !shared.vault.is_unlocked());
+                .follow(&synced.virtual_files, !shared.vault.is_unlocked(), since);
         }
         if !self.pipes.is_empty() || !synced.unlocked.is_empty() {
             self.guard
@@ -480,6 +483,7 @@ pub fn context(state: &AppState) -> FilesContext {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone(),
+        pipe_list: Some(state.pipe_list.clone()),
     }
 }
 

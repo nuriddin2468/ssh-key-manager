@@ -204,6 +204,7 @@ export function FilesSection({ env, files, whileUnlocked, virtualFiles }: FilesS
         envId={env.id}
         file={stopping}
         level={stopping ? levelOf(stopping, whileUnlocked, virtualFiles) : 'always'}
+        fileThere={stopping !== null && savedOver(statusOf(stopping))}
         onDone={() => setStopping(null)}
       />
       <ConfirmDialog
@@ -274,7 +275,9 @@ function FileRow({
       // A virtual file turns on running in the background: said if it was off.
       const before = next === 'virtual' ? await api.backgroundStatus().catch(() => null) : null;
       const status = await api.envsFilesSetLevel(envId, file, next);
-      return { status, turnedOn: before?.available === true && !before.enabled };
+      // Said only if it is on now: turning it on may have failed.
+      const after = before ? await api.backgroundStatus().catch(() => null) : null;
+      return { status, turnedOn: before?.enabled === false && after?.enabled === true };
     },
     {
       success: ({ turnedOn }, next) =>
@@ -414,9 +417,18 @@ function FileRow({
   );
 }
 
+/**
+ * A virtual file's place holds a regular file saved over its pipe: the
+ * vault couldn't take it yet.
+ */
+const savedOver = (status: EnvFileStatus | undefined) =>
+  status?.level === 'virtual' && ['conflict', 'invalid', 'fileChanged'].includes(status.state.type);
+
 interface StopDialogProps {
   envId: string;
   file: EnvFile | null;
+  /** A virtual file's place holds a regular file, which may be deleted too. */
+  fileThere: boolean;
   /**
    * The file's level: one on disk only while the vault is unlocked is
    * deleted by default; a virtual one has nothing to keep.
@@ -431,10 +443,11 @@ interface StopDialogProps {
  * user keeps it: the app wouldn't remove it any more. A virtual file's pipe
  * goes either way.
  */
-function StopDialog({ envId, file, level, onDone }: StopDialogProps) {
+function StopDialog({ envId, file, level, fileThere, onDone }: StopDialogProps) {
   const { t } = useTranslation();
   const whileUnlocked = level === 'whileUnlocked';
-  const virtual = level === 'virtual';
+  // Only the pipe: nothing to keep or delete.
+  const virtual = level === 'virtual' && !fileThere;
   const [deleteFile, setDeleteFile] = useState(whileUnlocked);
   const [notDeleted, setNotDeleted] = useState(false);
   const name = file ? fileName(file) : '';

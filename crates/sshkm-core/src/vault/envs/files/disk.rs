@@ -136,14 +136,17 @@ pub(super) fn locate(
         });
     }
     let mut pipe = None;
+    let found = PipeId::of(&real);
     match fs::symlink_metadata(&real) {
         Ok(meta) if meta.file_type().is_symlink() => {
             return Err(FileState::Refused {
                 reason: RefusedReason::Link,
             });
         }
-        Ok(_) if PipeId::of(&real).is_some_and(|id| ctx.pipes.contains(&id)) => {
-            pipe = PipeId::of(&real);
+        // One lookup of which pipe it is, so the pipe used is the one
+        // checked.
+        Ok(meta) if found.is_some_and(|id| ctx.pipes.contains(&id)) && !meta.is_file() => {
+            pipe = found;
         }
         Ok(meta) if !meta.is_file() => {
             return Err(FileState::Refused {
@@ -232,22 +235,47 @@ pub(super) fn write(
 }
 
 /// Makes the pipe of a level-3 file where nothing is, if its folder is
-/// still the one it was found in.
-pub(super) fn make_pipe(target: &Target) -> Result<PipeId> {
+/// still the one it was found in, and lists it at once in `list` (the
+/// app's, [`FilesContext::pipe_list`]), so a crash right after leaves no
+/// pipe the guard doesn't know of.
+pub(super) fn make_pipe(target: &Target, list: Option<&Path>) -> Result<PipeId> {
     if !same_folder(target) {
         return Err(Error::invalid("the folder changed"));
     }
-    pipes::make(&target.real)
+    let id = pipes::make(&target.real)?;
+    remember(list, &target.real, id);
+    Ok(id)
 }
 
 /// Puts the pipe of a level-3 file in place of the regular file there, if
 /// it still holds `expected` and its folder is still the one it was found
-/// in. Returns `None` when either changed.
-pub(super) fn make_pipe_over(target: &Target, expected: &[u8]) -> Result<Option<PipeId>> {
+/// in, and lists it at once, as [`make_pipe`]. Returns `None` when either
+/// changed.
+pub(super) fn make_pipe_over(
+    target: &Target,
+    expected: &[u8],
+    list: Option<&Path>,
+) -> Result<Option<PipeId>> {
     if !same_folder(target) {
         return Ok(None);
     }
-    pipes::make_over(&target.real, expected)
+    let made = pipes::make_over(&target.real, expected)?;
+    if let Some(id) = made {
+        remember(list, &target.real, id);
+    }
+    Ok(made)
+}
+
+/// Adds a pipe just made to the app's list of pipes, if it keeps one.
+fn remember(list: Option<&Path>, path: &Path, id: PipeId) {
+    if let Some(list) = list {
+        let mut pipes = pipes::PipeList::load(list);
+        pipes.add(pipes::ListedPipe {
+            path: path.to_path_buf(),
+            id,
+        });
+        let _ = pipes.save(list);
+    }
 }
 
 /// Keeps the target, as it is, out of backups and cloud folders: for a

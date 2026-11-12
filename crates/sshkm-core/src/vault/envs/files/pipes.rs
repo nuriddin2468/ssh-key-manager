@@ -7,23 +7,33 @@
 //! a `.env` file while the vault is unlocked, or a comment saying why there
 //! are none ([`Answer`]). The answer goes into the pipe in one write and the
 //! pipe is closed at once, so a reader that opens it and never reads holds
-//! up no one; an answer larger than the pipe's buffer (8 KiB on macOS) waits
-//! for its reader [`SERVE_TIMEOUT`] at most, and is taken back out if it
-//! isn't taken, so no reader ever gets half of one. While an answer waits
-//! unread in the pipe, nothing is added to it. Readers that open the pipe at
-//! the very same moment share one answer: a pipe is one stream, and the
-//! first to read takes it. Readers one after another each get a whole one;
-//! one that comes back right after its answer, before it closed the pipe,
-//! may get it twice.
+//! up no one. An answer larger than the pipe's buffer (8 KiB on macOS)
+//! waits for its reader while it keeps reading, but no longer than
+//! [`SERVE_TIMEOUT`] without progress; then what is left is taken back out,
+//! so the next reader doesn't start in the middle of it (the reader that
+//! stalled has only part of it). While an answer waits unread in the pipe
+//! nothing is added to it, and once the answer changes (the vault locked)
+//! the unread one is taken out first, so a reader never gets values after a
+//! lock. Readers that open the pipe at the very same moment share one
+//! answer: a pipe is one stream, and the first to read takes it. Readers one
+//! after another each get a whole one; one that comes back right after its
+//! answer, before it closed the pipe, may get it twice.
 //!
 //! Writing into a pipe changes its time of change, and tools that watch a
 //! `.env` file (Next.js, Vite, editors) would take each answer for an edit
 //! and read it again. The time is put back after each answer, so to them
 //! the file never changes.
 //!
-//! **Read-only.** A pipe keeps nothing written into it. A file saved over
-//! it, by renaming, is the app's to take like any edit of a file
-//! ([`super::Vault::env_files_pull`]); the pipe then comes back.
+//! **Read-only.** A pipe keeps nothing written into it: a tool that writes
+//! into it in place waits until a reader opens it, and what it wrote isn't
+//! kept. A file saved over it, by renaming, is the app's to take like any
+//! edit of a file ([`super::Vault::env_files_pull`]); the pipe then comes
+//! back.
+//!
+//! A server thread waits in `open`, which nothing but a reader ends. To
+//! stop one whose pipe was replaced or removed (no reader can reach it any
+//! more), the app sends the thread `SIGURG`, which it otherwise ignores, so
+//! the wait ends with `EINTR`.
 //!
 //! **Going away.** A pipe is removed when its binding goes, when its level
 //! changes and when the app quits; readers already waiting get a comment
@@ -39,7 +49,7 @@ use zeroize::Zeroizing;
 
 use crate::{Error, Result, fsutil};
 
-/// How long an answer waits for its reader to take it.
+/// How long an answer waits for its reader to take more of it.
 pub const SERVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Most pipes a list keeps.
@@ -206,6 +216,14 @@ impl PipeList {
         &self.pipes
     }
 
+    /// Adds a pipe, instead of any listed at its path.
+    pub fn add(&mut self, pipe: ListedPipe) {
+        self.pipes.retain(|listed| listed.path != pipe.path);
+        if self.pipes.len() < MAX_PIPES {
+            self.pipes.push(pipe);
+        }
+    }
+
     /// Removes the pipes kept at `path` that are still the pipes listed,
     /// after answering readers waiting on them that the app isn't running,
     /// and the list with them: after a crash, by the guard or the next
@@ -253,9 +271,8 @@ pub fn make_over(path: &Path, expected: &[u8]) -> Result<Option<PipeId>> {
         random_tag()
     ));
     make(&temp)?;
-    let same = fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file())
-        && fsutil::read_limited(path, crate::vault::envs::MAX_FILE_SIZE)
-            .is_ok_and(|bytes| Zeroizing::new(bytes).as_slice() == expected);
+    // Read as a binding's file is: no link followed, no pipe waited on.
+    let same = matches!(super::disk::read(path), super::disk::Disk::Text(text) if text.as_bytes() == expected);
     if !same {
         let _ = fs::remove_file(&temp);
         return Ok(None);
@@ -294,6 +311,8 @@ pub fn remove(path: &Path, id: PipeId, answer: &Answer) -> bool {
 /// handful of rounds at most, briefly.
 pub fn answer_waiting(path: &Path, id: PipeId, answer: &Answer) {
     let text = answer.text();
+    // An answer left unread goes first: it may hold values.
+    imp::take_back(path, id);
     for _ in 0..4 {
         let Some(pipe) = imp::open_if_read(path, id) else {
             return;
@@ -305,6 +324,7 @@ pub fn answer_waiting(path: &Path, id: PipeId, answer: &Answer) {
             text.as_bytes(),
             None,
             std::time::Duration::from_millis(50),
+            true,
         );
         if served != imp::Served::Answered {
             return;
@@ -325,12 +345,18 @@ mod imp {
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
     use std::time::{Duration, Instant};
 
     use super::{Answer, PipeId, SERVE_TIMEOUT};
     use crate::{Error, Result};
+
+    /// Longest one answer is written for, however slowly its reader takes
+    /// it.
+    const LONGEST: Duration = Duration::from_secs(30);
+    /// The signal that wakes a server thread waiting in `open`.
+    const WAKE: libc::c_int = libc::SIGURG;
 
     /// How long the pipe rests after an answer, so the reader that took it
     /// can close it first: opened again while that reader still has it
@@ -380,29 +406,34 @@ mod imp {
     }
 
     /// Answers the readers that opened the pipe `id` at `path`, which
-    /// `pipe` has open to write: `bytes` goes into it whole, unless an
-    /// earlier answer is still there unread, without waiting longer than
-    /// `timeout` for a reader to take it. An answer cut short by that is
-    /// taken back out, so a reader never gets half of one (a value cut in
-    /// two). Then the pipe's time of change is put back to `mtime`, if
-    /// given (its last access becomes now).
+    /// `pipe` has open to write: `bytes` goes into it whole. An earlier
+    /// answer still there unread is left for the next reader, or, with
+    /// `replace` (the answer changed since), taken out first. An answer
+    /// whose reader stops taking it for `stall` is taken back out, so the
+    /// next reader doesn't start in the middle of it. Then the pipe's time
+    /// of change is put back to `mtime`, if given (its last access becomes
+    /// now).
     pub(super) fn answer(
         path: &Path,
         id: PipeId,
         pipe: &File,
         bytes: &[u8],
         mtime: Option<libc::timespec>,
-        timeout: Duration,
+        stall: Duration,
+        replace: bool,
     ) -> Served {
         // A reader of its own, to see what the pipe holds; read from only
-        // to take a cut answer back.
+        // to take an answer back.
         let Some(own) = open_reader(path, id) else {
             return Served::Gone;
         };
         if unread(&own) > 0 {
-            return Served::Pending;
+            if !replace {
+                return Served::Pending;
+            }
+            drain(&own);
         }
-        if !write_whole(pipe, bytes, timeout) {
+        if !write_whole(pipe, bytes, stall) {
             drain(&own);
         }
         if let Some(mtime) = mtime {
@@ -420,6 +451,17 @@ mod imp {
             }
         }
         Served::Answered
+    }
+
+    /// Takes an answer left unread out of the pipe `id` at `path`, before
+    /// any reader waiting is let in: once the answer changed, the old one
+    /// is no one's.
+    pub(super) fn take_back(path: &Path, id: PipeId) {
+        if let Some(own) = open_reader(path, id)
+            && unread(&own) > 0
+        {
+            drain(&own);
+        }
     }
 
     /// The pipe `id` at `path`, opened to read without waiting.
@@ -449,12 +491,19 @@ mod imp {
         use std::io::Read as _;
         let mut sink = zeroize::Zeroizing::new([0u8; 4096]);
         let mut reader = reader;
-        while matches!(reader.read(&mut sink[..]), Ok(n) if n > 0) {}
+        loop {
+            match reader.read(&mut sink[..]) {
+                Ok(n) if n > 0 => {}
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                _ => return,
+            }
+        }
     }
 
-    /// Writes `bytes` to the pipe, without waiting longer than `timeout` for
-    /// room. Returns whether it wrote them all.
-    fn write_whole(pipe: &File, bytes: &[u8], timeout: Duration) -> bool {
+    /// Writes `bytes` to the pipe, while its reader keeps taking them: no
+    /// longer than `stall` without progress, nor than [`LONGEST`] in all.
+    /// Returns whether it wrote them all.
+    fn write_whole(pipe: &File, bytes: &[u8], stall: Duration) -> bool {
         let fd = pipe.as_raw_fd();
         // SAFETY: plain fcntl calls on a descriptor this function borrows.
         unsafe {
@@ -473,19 +522,25 @@ mod imp {
                 libc::fcntl(fd, libc::F_SETPIPE_SZ, wanted);
             }
         }
-        let deadline = Instant::now() + timeout;
+        let started = Instant::now();
+        let mut progress = started;
         let mut rest = bytes;
         let mut writer = pipe;
         while !rest.is_empty() {
             match writer.write(rest) {
                 Ok(0) => break,
-                Ok(n) => rest = &rest[n..],
+                Ok(n) => {
+                    rest = &rest[n..];
+                    progress = Instant::now();
+                }
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    let left = deadline.saturating_duration_since(Instant::now());
-                    if left.is_zero() || !writable(fd, left) {
+                    let until = (progress + stall).min(started + LONGEST);
+                    let now = Instant::now();
+                    if now >= until {
                         break;
                     }
+                    wait_writable(fd, until - now);
                 }
                 // The reader went.
                 Err(_) => break,
@@ -494,8 +549,9 @@ mod imp {
         rest.is_empty()
     }
 
-    /// Waits up to `left` for the pipe to take more.
-    fn writable(fd: libc::c_int, left: Duration) -> bool {
+    /// Waits up to `left` for the pipe to take more; a signal ends the wait
+    /// early, and the caller looks again.
+    fn wait_writable(fd: libc::c_int, left: Duration) {
         let mut poll = libc::pollfd {
             fd,
             events: libc::POLLOUT,
@@ -503,13 +559,46 @@ mod imp {
         };
         let ms = libc::c_int::try_from(left.as_millis().max(1)).unwrap_or(libc::c_int::MAX);
         // SAFETY: one valid pollfd for the length of the call.
-        let ready = unsafe { libc::poll(&raw mut poll, 1, ms) };
-        ready > 0 && poll.revents & libc::POLLOUT != 0
+        unsafe {
+            libc::poll(&raw mut poll, 1, ms);
+        }
+    }
+
+    /// Ignored, so the signal only ends a wait.
+    extern "C" fn woken(_: libc::c_int) {}
+
+    static WAKE_HANDLER: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+    /// Handles [`WAKE`] with a function that does nothing, without
+    /// restarting what it interrupts, so a thread waiting in `open` can be
+    /// woken. Left alone if something else handles it already. Returns
+    /// whether the signal wakes a server.
+    fn wake_handler() -> bool {
+        *WAKE_HANDLER.get_or_init(|| {
+            // SAFETY: `sigaction` with zeroed (valid) structs, an empty
+            // mask and a handler that does nothing; the old action is read
+            // first and put back if it was someone's.
+            unsafe {
+                let mut old: libc::sigaction = std::mem::zeroed();
+                if libc::sigaction(WAKE, std::ptr::null(), &raw mut old) != 0 {
+                    return false;
+                }
+                if old.sa_sigaction != libc::SIG_DFL && old.sa_sigaction != libc::SIG_IGN {
+                    return false;
+                }
+                let mut action: libc::sigaction = std::mem::zeroed();
+                action.sa_sigaction = woken as *const () as libc::sighandler_t;
+                libc::sigemptyset(&raw mut action.sa_mask);
+                action.sa_flags = 0;
+                libc::sigaction(WAKE, &raw const action, std::ptr::null_mut()) == 0
+            }
+        })
     }
 
     /// Serves one pipe from a thread of its own, until stopped.
     pub struct PipeServer {
         shared: Arc<Shared>,
+        thread: std::thread::JoinHandle<()>,
     }
 
     struct Shared {
@@ -519,6 +608,8 @@ mod imp {
         /// answer.
         mtime: libc::timespec,
         answer: Mutex<Answer>,
+        /// Counts changes of `answer`.
+        generation: AtomicU64,
         stop: AtomicBool,
         /// The thread is gone; set with `gone_signal`.
         gone: Mutex<bool>,
@@ -532,17 +623,19 @@ mod imp {
             if PipeId::of_meta(&meta) != Some(id) {
                 return Err(Error::invalid(format!("{} isn't the pipe", path.display())));
             }
+            wake_handler();
             let shared = Arc::new(Shared {
                 path: path.to_path_buf(),
                 id,
                 mtime: timespec(meta.mtime(), meta.mtime_nsec()),
                 answer: Mutex::new(answer),
+                generation: AtomicU64::new(0),
                 stop: AtomicBool::new(false),
                 gone: Mutex::new(false),
                 gone_signal: Condvar::new(),
             });
             let serving = Arc::clone(&shared);
-            std::thread::Builder::new()
+            let thread = std::thread::Builder::new()
                 .name("sshkm-env-pipe".into())
                 .spawn(move || {
                     run(&serving);
@@ -550,7 +643,7 @@ mod imp {
                     serving.gone_signal.notify_all();
                 })
                 .map_err(|e| Error::io(e, path))?;
-            Ok(Self { shared })
+            Ok(Self { shared, thread })
         }
 
         pub fn id(&self) -> PipeId {
@@ -561,9 +654,14 @@ mod imp {
             &self.shared.path
         }
 
-        /// What the next reader gets.
+        /// What the next reader gets. An answer left unread in the pipe is
+        /// taken out before it, if it is another.
         pub fn set_answer(&self, answer: Answer) {
-            *lock(&self.shared.answer) = answer;
+            let mut current = lock(&self.shared.answer);
+            if *current != answer {
+                *current = answer;
+                self.shared.generation.fetch_add(1, Ordering::SeqCst);
+            }
         }
 
         /// The thread still serves: it stops when the pipe at its path is
@@ -572,32 +670,63 @@ mod imp {
             !*lock(&self.shared.gone)
         }
 
+        /// Asks the thread to stop, and wakes it wherever it waits, without
+        /// waiting for it: [`Self::finish`] does.
+        pub fn signal_stop(&self, answer: &Answer) {
+            self.set_answer(answer.clone());
+            self.shared.stop.store(true, Ordering::SeqCst);
+            self.wake();
+        }
+
         /// Stops serving: readers waiting get `answer`, and the pipe is
-        /// removed if it is still the one served. Returns once that is
-        /// done; a thread still waiting on a pipe that was replaced (its
-        /// path names something else now, and no reader can reach it) is
-        /// left to wait, harmlessly, until the app quits.
+        /// removed if it is still the one served. Returns whether it was.
         pub fn stop(self, answer: &Answer) -> bool {
+            self.signal_stop(answer);
+            self.finish(answer)
+        }
+
+        /// After [`Self::signal_stop`]: waits for the thread a little, then
+        /// answers the readers waiting with `answer` and removes the pipe
+        /// if it is still the one served. Returns whether it was.
+        pub fn finish(self, answer: &Answer) -> bool {
             let shared = &self.shared;
-            *lock(&shared.answer) = answer.clone();
-            shared.stop.store(true, Ordering::SeqCst);
-            // Opening the pipe to read lets the thread's wait end; it then
-            // answers whoever else waits, and goes. Nothing is read here.
-            let wake = OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
-                .open(&shared.path)
-                .ok()
-                .filter(|file| id_of(file) == Some(shared.id));
-            if wake.is_some() {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            loop {
                 let gone = lock(&shared.gone);
-                let _ =
-                    shared
-                        .gone_signal
-                        .wait_timeout_while(gone, Duration::from_secs(1), |gone| !*gone);
+                let left = deadline.saturating_duration_since(Instant::now());
+                if *gone || left.is_zero() {
+                    break;
+                }
+                let _ = shared
+                    .gone_signal
+                    .wait_timeout(gone, left.min(Duration::from_millis(50)));
+                // A wake that came before the thread went back to its wait
+                // is sent again.
+                self.wake();
             }
-            drop(wake);
+            if *lock(&shared.gone) {
+                let _ = self.thread.join();
+            }
             super::remove(&shared.path, shared.id, answer)
+        }
+
+        /// Ends the thread's wait: a signal where one wakes it, else a
+        /// reader opened and closed, which only works while the pipe is
+        /// still at its path.
+        fn wake(&self) {
+            if *lock(&self.shared.gone) {
+                return;
+            }
+            if wake_handler() {
+                use std::os::unix::thread::JoinHandleExt;
+                // SAFETY: the thread isn't joined yet, so its id is valid;
+                // the signal's handler does nothing.
+                unsafe {
+                    libc::pthread_kill(self.thread.as_pthread_t() as libc::pthread_t, WAKE);
+                }
+            } else if let Some(reader) = open_reader(&self.shared.path, self.shared.id) {
+                drop(reader);
+            }
         }
     }
 
@@ -610,29 +739,70 @@ mod imp {
         }
     }
 
+    /// Opens the pipe at `path` to write to, waiting until a reader opens
+    /// it; a signal ends the wait (`EINTR`), unlike `std`'s `open`.
+    fn open_waiting(path: &std::ffi::CStr) -> io::Result<File> {
+        use std::os::fd::FromRawFd as _;
+        // SAFETY: a valid C string; the descriptor returned is owned by
+        // the `File` made from it.
+        let fd = unsafe {
+            libc::open(
+                path.as_ptr(),
+                libc::O_WRONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: `fd` was just opened and nothing else owns it.
+        Ok(unsafe { File::from_raw_fd(fd) })
+    }
+
     fn run(shared: &Shared) {
-        // While an answer waits in the pipe unread, the pipe is looked at
-        // less and less often, up to once a second.
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(c_path) = std::ffi::CString::new(shared.path.as_os_str().as_bytes()) else {
+            return;
+        };
+        // While an answer waits in the pipe unread, or opening it fails for
+        // a while (too many files open), the pipe is looked at less and
+        // less often, up to once a second.
         let mut pause = Duration::ZERO;
+        let mut written: Option<u64> = None;
         loop {
             if shared.stop.load(Ordering::SeqCst) {
                 return;
             }
+            let generation = shared.generation.load(Ordering::SeqCst);
+            // The answer changed since the last one was written: that one,
+            // if left unread, goes before any reader is let in.
+            if written.is_some_and(|last| last != generation) {
+                take_back(&shared.path, shared.id);
+            }
             // Waits until a reader opens the pipe; at once while one holds
             // it open.
-            let opened = OpenOptions::new()
-                .write(true)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(&shared.path);
-            let Ok(pipe) = opened else {
-                return;
+            let pipe = match open_waiting(&c_path) {
+                Ok(pipe) => pipe,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) if PipeId::of(&shared.path) != Some(shared.id) => return,
+                Err(_) => {
+                    pause = back_off(shared, pause);
+                    continue;
+                }
             };
             // Something else is at the path now (a file saved over it):
             // never written to.
             if id_of(&pipe) != Some(shared.id) {
                 return;
             }
-            let text = lock(&shared.answer).text();
+            let (text, now) = {
+                let current = lock(&shared.answer);
+                (current.text(), shared.generation.load(Ordering::SeqCst))
+            };
+            // It changed while the pipe was being opened: the old answer
+            // is taken back first, before readers are let in again.
+            if now != generation {
+                continue;
+            }
             let served = answer(
                 &shared.path,
                 shared.id,
@@ -640,19 +810,38 @@ mod imp {
                 text.as_bytes(),
                 Some(shared.mtime),
                 SERVE_TIMEOUT,
+                written != Some(generation),
             );
             drop(pipe);
             match served {
                 Served::Answered => {
+                    written = Some(generation);
                     pause = Duration::ZERO;
-                    std::thread::sleep(REST);
+                    rest(shared, REST);
                 }
-                Served::Pending => {
-                    pause = (pause * 2).clamp(Duration::from_millis(50), Duration::from_secs(1));
-                    std::thread::sleep(pause);
-                }
+                Served::Pending => pause = back_off(shared, pause),
                 Served::Gone => return,
             }
+        }
+    }
+
+    /// Waits twice as long as last time, from 50 ms up to a second; returns
+    /// how long.
+    fn back_off(shared: &Shared, pause: Duration) -> Duration {
+        let pause = (pause * 2).clamp(Duration::from_millis(50), Duration::from_secs(1));
+        rest(shared, pause);
+        pause
+    }
+
+    /// Sleeps for `time`, or until asked to stop.
+    fn rest(shared: &Shared, time: Duration) {
+        let until = Instant::now() + time;
+        while !shared.stop.load(Ordering::SeqCst) {
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return;
+            }
+            std::thread::sleep(left.min(Duration::from_millis(50)));
         }
     }
 
@@ -696,9 +885,12 @@ mod imp {
         _: &[u8],
         _: Option<()>,
         _: Duration,
+        _: bool,
     ) -> Served {
         Served::Gone
     }
+
+    pub(super) fn take_back(_: &Path, _: PipeId) {}
 
     /// No pipes in folders here.
     pub struct PipeServer;
@@ -722,7 +914,13 @@ mod imp {
             false
         }
 
+        pub fn signal_stop(&self, _: &Answer) {}
+
         pub fn stop(self, _: &Answer) -> bool {
+            false
+        }
+
+        pub fn finish(self, _: &Answer) -> bool {
             false
         }
     }
@@ -747,6 +945,22 @@ mod tests {
             let _ = done.send(fs::read(&path).unwrap_or_default());
         });
         got
+    }
+
+    /// Answers the reader behind `got` with `answer` once it waits on the
+    /// pipe, however long it takes to get there; returns what it read.
+    fn answered(path: &Path, id: PipeId, got: &mpsc::Receiver<Vec<u8>>, answer: &Answer) -> String {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            answer_waiting(path, id, answer);
+            if let Ok(bytes) = got.recv_timeout(Duration::from_millis(20)) {
+                return String::from_utf8(bytes).unwrap();
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the reader never came"
+            );
+        }
     }
 
     fn within(got: &mpsc::Receiver<Vec<u8>>) -> String {
@@ -818,17 +1032,14 @@ mod tests {
             .custom_flags(libc::O_NONBLOCK)
             .open(&path)
             .unwrap();
-        // The next reader gets the answer the idle one left, whole, and at
-        // most a new one after it if it took that one first: nothing else
-        // piles up meanwhile.
+        // The answer the idle one left is the next reader's, whole, until
+        // the answer changes: then it goes, and nothing piles up meanwhile.
         std::thread::sleep(Duration::from_millis(300));
+        let text = within(&reader(&path));
+        assert!(whole(&text, &["A=1\n"]) && text.len() < 4 * 4, "{text:?}");
         server.set_answer(values("A=2\n"));
         let text = within(&reader(&path));
-        assert!(
-            text.starts_with("A=1\n") && whole(&text, &["A=1\n", "A=2\n"]),
-            "{text:?}"
-        );
-        assert!(text.len() < 4 * 4, "{text:?}");
+        assert!(whole(&text, &["A=2\n"]), "{text:?}");
         drop(idle);
         let text = within(&reader(&path));
         assert!(whole(&text, &["A=2\n"]), "{text:?}");
@@ -854,14 +1065,51 @@ mod tests {
     }
 
     #[test]
+    fn an_answer_left_unread_is_no_ones_once_the_vault_locks() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, id) = pipe(dir.path());
+        let server = PipeServer::start(&path, id, values("SECRET=1\n")).unwrap();
+        // It holds the pipe, and the values, unread.
+        let idle = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&path)
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        server.set_answer(Answer::Locked);
+        std::thread::sleep(Duration::from_millis(1200));
+        let text = within(&reader(&path));
+        assert!(!text.contains("SECRET"), "{text:?}");
+        assert!(whole(&text, &[&Answer::Locked.text()]), "{text:?}");
+        drop(idle);
+        // Stopped, the readers waiting get the last word, not the values.
+        server.set_answer(values("SECRET=2\n"));
+        let idle = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&path)
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        server.signal_stop(&Answer::NotRunning);
+        let waiting = reader(&path);
+        drop(idle);
+        let text = answered(&path, id, &waiting, &Answer::NotRunning);
+        assert!(!text.contains("SECRET"), "{text:?}");
+        server.finish(&Answer::NotRunning);
+    }
+
+    #[test]
     fn readers_waiting_when_it_stops_get_an_answer_and_the_pipe_goes() {
         let dir = tempfile::tempdir().unwrap();
         let (path, id) = pipe(dir.path());
         // No server yet: the reader waits, as on a pipe left by a crash.
         let waiting = reader(&path);
-        std::thread::sleep(Duration::from_millis(100));
+        let text = answered(&path, id, &waiting, &Answer::NotRunning);
+        assert!(
+            text.starts_with("# SSH Key Manager isn't running."),
+            "{text:?}"
+        );
         assert!(remove(&path, id, &Answer::NotRunning));
-        assert!(within(&waiting).starts_with("# SSH Key Manager isn't running."));
         assert!(!path.exists());
 
         let (path, id) = pipe(dir.path());
@@ -881,9 +1129,15 @@ mod tests {
         let saved = dir.path().join(".env.saved");
         fs::write(&saved, "A=2\n").unwrap();
         fs::rename(&saved, &path).unwrap();
-        // The thread waits on the pipe no one can reach now; stopping
-        // doesn't wait for it, nor touches the file.
-        assert!(!server.stop(&Answer::Stopped));
+        // The thread waited on the pipe no one can reach now: woken, it
+        // goes, and the file is left as it is.
+        server.signal_stop(&Answer::Stopped);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while server.is_serving() {
+            assert!(std::time::Instant::now() < deadline, "the thread stayed");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!server.finish(&Answer::Stopped));
         assert_eq!(fs::read_to_string(&path).unwrap(), "A=2\n");
         // A pipe of someone else's in its place is left too.
         fs::remove_file(&path).unwrap();
@@ -922,9 +1176,8 @@ mod tests {
         fs::remove_file(&b).unwrap();
         fs::write(&b, "MINE=1\n").unwrap();
         let waiting = reader(&a);
-        std::thread::sleep(Duration::from_millis(100));
+        assert!(answered(&a, a_id, &waiting, &Answer::NotRunning).contains("isn't running"));
         assert_eq!(PipeList::sweep_at(&list_path), 1);
-        assert!(within(&waiting).contains("isn't running"));
         assert!(!a.exists());
         assert_eq!(fs::read_to_string(&b).unwrap(), "MINE=1\n");
         assert!(!list_path.exists());

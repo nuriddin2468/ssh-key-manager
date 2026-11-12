@@ -65,6 +65,7 @@ impl Fixture {
                 home: None,
                 ssh_dir: dir.path().join(".ssh"),
                 pipes: Vec::new(),
+                pipe_list: None,
             },
             dir,
             vault,
@@ -2205,12 +2206,18 @@ fn answer_of(synced: &EnvFilesSynced) -> String {
 fn a_virtual_file_is_a_pipe_that_answers_the_values() {
     let mut f = Fixture::new();
     let file = f.bind_at(".env", FileLevel::Virtual);
+    let list = f.dir.path().join("pipes.json");
+    f.ctx.pipe_list = Some(list.clone());
     // Until a round makes it, the pipe is to come.
     assert_eq!(f.states(), [FileState::VaultChanged]);
     let synced = f.sync();
     f.serve(&synced);
     let path = f.path(".env");
     let id = PipeId::of(&path).expect("a pipe");
+    // Listed as soon as it was made, for the guard.
+    let listed = pipes::PipeList::load(&list);
+    assert_eq!(listed.pipes().len(), 1);
+    assert_eq!(listed.pipes()[0].id, id);
     assert_eq!(synced.files[0].state, FileState::InSync);
     assert_eq!(synced.files[0].level, FileLevel::Virtual);
     assert_eq!(synced.virtual_files[0].id, id);

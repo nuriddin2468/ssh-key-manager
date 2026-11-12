@@ -699,6 +699,25 @@ mod tests {
         address
     }
 
+    /// A TCP listener and a UDP socket on one loopback port. The port TCP
+    /// gets may be taken for UDP, or reserved for it (Windows keeps ranges of
+    /// ports apart per protocol), so a few ports are tried.
+    fn tcp_and_udp_on_one_port() -> (TcpListener, UdpSocket) {
+        // Ports that failed stay bound, so the next try gets another one.
+        let mut tried = Vec::new();
+        let mut last_error = None;
+        for _ in 0..20 {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            match UdpSocket::bind(("127.0.0.1", port)) {
+                Ok(socket) => return (listener, socket),
+                Err(error) => last_error = Some(error),
+            }
+            tried.push(listener);
+        }
+        panic!("no loopback port free for both TCP and UDP: {last_error:?}");
+    }
+
     fn records(report: &DnsReport, kind: RecordType) -> &DnsAnswer {
         report.answers.iter().find(|a| a.kind == kind).unwrap()
     }
@@ -792,10 +811,8 @@ mod tests {
 
     #[test]
     fn a_truncated_answer_is_asked_again_over_tcp() {
-        // A TCP listener first, then UDP on the same port.
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let (listener, socket) = tcp_and_udp_on_one_port();
         let port = listener.local_addr().unwrap().port();
-        let socket = UdpSocket::bind(("127.0.0.1", port)).unwrap();
         let tcp_queries = Arc::new(AtomicUsize::new(0));
         thread::spawn(move || {
             let mut buffer = [0; 1500];

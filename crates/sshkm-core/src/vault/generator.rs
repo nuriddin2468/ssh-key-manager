@@ -265,14 +265,16 @@ mod tests {
     fn passphrases_join_words_from_the_list() {
         let list = diceware_wordlists::Wordlist::EffLong.get_list();
         assert_eq!(list.len(), 7776);
+        // A few words have a hyphen (`t-shirt`), so split on what none has.
+        assert!(list.iter().all(|w| !w.contains('_')));
         let p = generate(&GenerateOptions::Passphrase {
             words: 5,
-            separator: "-".into(),
+            separator: "_".into(),
             capitalize: true,
             number: true,
         })
         .unwrap();
-        let words: Vec<&str> = p.expose_secret().split('-').collect();
+        let words: Vec<&str> = p.expose_secret().split('_').collect();
         assert_eq!(words.len(), 5);
         assert!(
             words

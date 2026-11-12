@@ -280,10 +280,14 @@ fn claude_rules(folder: &Path, path: &str) -> Vec<String> {
             let mut all = Vec::new();
             for part in folder.components() {
                 match part {
-                    Component::Prefix(prefix) => {
-                        let drive = prefix.as_os_str().to_str()?.trim_start_matches(r"\\?\");
-                        all.push(drive.trim_end_matches(':').to_lowercase());
-                    }
+                    // A drive is `/c`; a network share has no form Claude
+                    // Code matches, so it gets no rule.
+                    Component::Prefix(prefix) => match prefix.kind() {
+                        std::path::Prefix::Disk(drive) | std::path::Prefix::VerbatimDisk(drive) => {
+                            all.push(char::from(drive).to_ascii_lowercase().to_string());
+                        }
+                        _ => return None,
+                    },
                     Component::Normal(name) => all.push(name.to_str()?.to_owned()),
                     _ => {}
                 }

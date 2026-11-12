@@ -194,10 +194,12 @@ fn view(
         None => std::collections::BTreeSet::new(),
     };
     let places = RulesPlaces::of(&location, home.as_deref());
-    // Choices that can't be read count as none, and aren't written over.
-    let choice = AgentChoices::load(&choices_path(state))
-        .ok()
-        .and_then(|choices| choices.get(&folder).cloned());
+    // Choices that can't be read aren't written over, nor asked for again
+    // and again: as if the folder had said no.
+    let choice = match AgentChoices::load(&choices_path(state)) {
+        Ok(choices) => choices.get(&folder).cloned(),
+        Err(_) => Some(FolderChoice::Declined),
+    };
     AgentRulesView {
         tools: agents::agent_rules(&places, &files, &found),
         choice,

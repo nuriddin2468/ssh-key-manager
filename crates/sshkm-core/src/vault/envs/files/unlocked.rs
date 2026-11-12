@@ -286,14 +286,18 @@ mod tests {
         assert!(!kept.remove());
         assert!(path.exists());
 
-        // Replaced by another file of the same size and time: it stays.
-        let kept = Leftover::of(&path).unwrap();
-        let other = dir.path().join("other");
-        fs::write(&other, "A=2\n").unwrap();
-        fs::rename(&other, &path).unwrap();
+        // Replaced by another file of the same size: it stays. (Unix tells
+        // the files apart by inode; NTFS may give the new one the old one's
+        // creation time, and its time of change tells them apart there.)
         #[cfg(unix)]
-        assert!(!kept.remove());
-        assert!(path.exists());
+        {
+            let kept = Leftover::of(&path).unwrap();
+            let other = dir.path().join("other");
+            fs::write(&other, "A=2\n").unwrap();
+            fs::rename(&other, &path).unwrap();
+            assert!(!kept.remove());
+            assert!(path.exists());
+        }
     }
 
     #[test]

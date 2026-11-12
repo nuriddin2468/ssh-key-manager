@@ -161,7 +161,7 @@ problems on All projects, and the review's leftovers:
      only if it is as the app wrote it. One the vault couldn't take stays until the next
      unlock, and the app says so. Kept out of Time Machine, Dropbox and the File
      Provider folders (iCloud Drive, OneDrive on macOS); level-1 files are left as they
-     were. Older versions never see these files. Not yet: removing them *before* the
+     were. Older versions never see these files. Not yet: removing them _before_ the
      computer sleeps (they go when the vault locks right after it wakes):
      [#48](https://github.com/nuriddin2468/ssh-key-manager/pull/48).
    - AI tools' ignore rules, per project folder with the user's yes, once: a line per

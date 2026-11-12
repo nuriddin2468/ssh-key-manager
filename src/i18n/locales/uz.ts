@@ -3709,6 +3709,8 @@ const uz = {
         replaced: '{{line}}-qator: {{name}} pastda yana berilgan, oʻsha qiymat amal qiladi.',
         tooMany:
           '{{line}}-qator va undan keyingilari: muhitda koʻpi bilan 1000 ta oʻzgaruvchi boʻladi.',
+        reference:
+          '{{line}}-qator: {{name}} ombor yozuviga havola qiladi, buni faqat omborning oʻzi belgilaydi.',
       },
     },
     export: {

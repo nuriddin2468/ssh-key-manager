@@ -3,4 +3,8 @@
 /**
  * A variable that uses a shared value.
  */
-export type SharedUse = { envId: string, variable: string, };
+export type SharedUse = { envId: string, variable: string, 
+/**
+ * The environment is in the recycle bin.
+ */
+inTrash: boolean, };

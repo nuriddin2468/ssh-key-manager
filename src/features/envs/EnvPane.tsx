@@ -577,6 +577,7 @@ function VariableRow({
 }: VariableRowProps) {
   const { t } = useTranslation();
   const shared = useSharedValues().data?.find((item) => item.id === variable.shared);
+  const users = shared?.users.filter((use) => !use.inTrash).length ?? 1;
   const [revealed, setRevealed] = useState<string | null>(null);
   const reveal = useSecretCall(api.envsReveal);
 
@@ -636,13 +637,11 @@ function VariableRow({
           ) : null}
           {variable.shared ? (
             <span
-              title={t('envs.shared.badge', { count: shared?.users.length ?? 1 })}
+              title={t('envs.shared.badge', { count: users })}
               className="shrink-0 text-cyan-300"
             >
               <Link2 aria-hidden="true" className="size-3.5" strokeWidth={2} />
-              <span className="sr-only">
-                {t('envs.shared.badge', { count: shared?.users.length ?? 1 })}
-              </span>
+              <span className="sr-only">{t('envs.shared.badge', { count: users })}</span>
             </span>
           ) : null}
           {variable.unresolved ? (

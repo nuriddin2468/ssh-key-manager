@@ -444,6 +444,21 @@ fn check_variables(vars: &[EnvVariable]) -> Result<()> {
     Ok(())
 }
 
+/// Values from outside the vault (a file, another computer) never refer to
+/// a vault entry: only the vault makes a variable use a shared value.
+fn check_no_references(vars: &[EnvVariable]) -> Result<()> {
+    match vars
+        .iter()
+        .find(|var| shared::referenced(var.value.expose_secret()).is_some())
+    {
+        Some(var) => Err(Error::invalid(format!(
+            "{} refers to a vault entry, which only the vault sets",
+            var.name
+        ))),
+        None => Ok(()),
+    }
+}
+
 fn same_variables(a: &[EnvVariable], b: &[EnvVariable]) -> bool {
     a.len() == b.len()
         && a.iter().zip(b).all(|(a, b)| {
@@ -855,8 +870,14 @@ impl Vault {
         })
     }
 
-    /// Removes a variable.
+    /// Removes a variable. A shared value no variable uses any more goes to
+    /// the recycle bin.
     pub fn remove_env_variable(&mut self, id: &str, name: &str) -> Result<()> {
+        let shared = self
+            .raw_env_variables(id)?
+            .into_iter()
+            .find(|var| var.name == name)
+            .and_then(|var| self.shared_of(var.value.expose_secret()));
         self.edit_variables(id, |vars| {
             let index = vars
                 .iter()
@@ -864,7 +885,11 @@ impl Vault {
                 .ok_or_else(|| Error::NotFound(format!("variable {name}")))?;
             vars.remove(index);
             Ok(())
-        })
+        })?;
+        if let Some(shared) = shared {
+            self.trash_if_unused(shared)?;
+        }
+        Ok(())
     }
 
     /// Takes `imported` into an environment: a variable it has already gets
@@ -877,6 +902,7 @@ impl Vault {
         imported: &[EnvVariable],
     ) -> Result<ImportCounts> {
         let mut counts = ImportCounts::default();
+        check_no_references(imported)?;
         let raw = self.raw_env_variables(id)?;
         let mut linked = Vec::new();
         for new in imported {
@@ -919,6 +945,7 @@ impl Vault {
         vars: &[EnvVariable],
     ) -> Result<(String, String)> {
         check_variables(vars)?;
+        check_no_references(vars)?;
         let part = check_part(label)?;
         let base = check_label(name, "an environment")?;
         let mut name = base.clone();
@@ -1123,10 +1150,21 @@ impl Vault {
         id: &str,
         change: impl FnOnce(&mut Vec<EnvVariable>) -> Result<()>,
     ) -> Result<()> {
+        self.edit_variables_in(id, false, change)
+    }
+
+    /// [`Self::edit_variables`], also of an environment in the recycle bin
+    /// with `in_trash`: for giving it a copy of a shared value that goes.
+    pub(super) fn edit_variables_in(
+        &mut self,
+        id: &str,
+        in_trash: bool,
+        change: impl FnOnce(&mut Vec<EnvVariable>) -> Result<()>,
+    ) -> Result<()> {
         let entry_id = parse_id(id)?;
         let before = {
             let entry = self.env_entry(id)?;
-            if in_group(entry.parent().id(), self.db.meta.recyclebin_uuid, &self.db) {
+            if !in_trash && in_group(entry.parent().id(), self.db.meta.recyclebin_uuid, &self.db) {
                 return Err(Error::invalid("restore the environment first"));
             }
             variables_of(&entry)

@@ -1928,3 +1928,148 @@ fn a_shared_value_that_is_gone_holds_its_files() {
     assert_ne!(synced.files[0].state, FileState::InSync);
     let _ = other;
 }
+
+#[test]
+fn no_file_import_or_other_computer_can_point_a_variable_at_a_login() {
+    let mut f = Fixture::new();
+    let login = f
+        .vault
+        .add_entry(&crate::vault::EntryInput {
+            title: "db".into(),
+            password: Some(s("hunter2-login")),
+            ..crate::vault::EntryInput::default()
+        })
+        .unwrap();
+    let reference = super::super::shared::reference(uuid::Uuid::parse_str(&login).unwrap());
+    f.bind(".env");
+    f.sync();
+    // A file line that refers to the login is no variable at all.
+    fs::write(
+        f.path(".env"),
+        format!("PORT=3000\nAPI_TOKEN=tok-1\nSTOLEN={reference}\n"),
+    )
+    .unwrap();
+    let synced = f.sync();
+    assert_eq!(synced.changes, []);
+    assert!(
+        matches!(&synced.files[0].state, FileState::Invalid { problems }
+        if problems.iter().any(|p| p.kind == ProblemKind::Reference && p.line == 3))
+    );
+    assert!(
+        f.values()
+            .iter()
+            .all(|(name, value, _)| name != "STOLEN" && !value.contains("hunter2"))
+    );
+    // Nor an import, nor an environment another computer sent.
+    let env = f.env.clone();
+    let from_outside = [EnvVariable {
+        name: "STOLEN".into(),
+        value: s(&reference),
+        secret: true,
+        note: String::new(),
+    }];
+    assert!(f.vault.import_env_variables(&env, &from_outside).is_err());
+    assert!(
+        f.vault
+            .add_received_environment("shop", "dev", "", &from_outside)
+            .is_err()
+    );
+    // One made in KeePassXC isn't resolved to the login's password either.
+    f.vault
+        .edit_variables(&env, |vars| {
+            vars.push(EnvVariable {
+                name: "DB_PASS".into(),
+                value: s(&reference),
+                secret: true,
+                note: String::new(),
+            });
+            Ok(())
+        })
+        .unwrap();
+    assert!(f.vault.env_value(&env, "DB_PASS").is_err());
+    let info = f.vault.environment(&env).unwrap();
+    assert!(
+        info.variables
+            .iter()
+            .any(|var| var.name == "DB_PASS" && var.unresolved)
+    );
+    // The environment's other secrets are still looked for.
+    let secrets = f.vault.known_secrets();
+    assert!(
+        secrets
+            .iter()
+            .any(|known| known.value.expose_secret() == "tok-1")
+    );
+    assert!(
+        secrets
+            .iter()
+            .all(|known| known.value.expose_secret() != reference)
+    );
+}
+
+#[test]
+fn shared_values_tidy_up_after_themselves() {
+    let mut f = Fixture::new();
+    let env = f.env.clone();
+    let other = f.other_env("local", &[]);
+    let shared = f
+        .vault
+        .share_env_variable(&env, "API_TOKEN", std::slice::from_ref(&other))
+        .unwrap();
+    // One name per environment.
+    f.vault
+        .set_env_variable(
+            &other,
+            Some("API_TOKEN"),
+            &EnvVarInput {
+                name: "TOKEN".into(),
+                value: None,
+                secret: true,
+                note: String::new(),
+            },
+        )
+        .unwrap();
+    assert!(
+        f.vault
+            .share_env_variable(&env, "API_TOKEN", std::slice::from_ref(&other))
+            .is_err()
+    );
+    // Deleted with a user in the recycle bin: both get copies.
+    f.vault.trash_environment(&other).unwrap();
+    f.vault.delete_shared_value(&shared).unwrap();
+    f.vault.restore_environment(&other).unwrap();
+    assert_eq!(
+        f.vault.env_value(&other, "TOKEN").unwrap().expose_secret(),
+        "tok-1"
+    );
+    assert_eq!(
+        f.vault
+            .env_value(&env, "API_TOKEN")
+            .unwrap()
+            .expose_secret(),
+        "tok-1"
+    );
+    // Emptying the recycle bin takes it for good.
+    f.vault.empty_trash().unwrap();
+    assert_eq!(f.vault.shared_values(), []);
+
+    // The last user giving it up, or removing it: it goes to the recycle bin.
+    let shared = f.vault.share_env_variable(&env, "PORT", &[]).unwrap();
+    f.vault.unshare_env_variable(&env, "PORT").unwrap();
+    assert!(
+        f.vault
+            .shared_values()
+            .iter()
+            .any(|v| v.id == shared && v.in_trash)
+    );
+    let shared = f.vault.share_env_variable(&env, "PORT", &[]).unwrap();
+    f.vault.remove_env_variable(&env, "PORT").unwrap();
+    assert!(
+        f.vault
+            .shared_values()
+            .iter()
+            .any(|v| v.id == shared && v.in_trash)
+    );
+    // A shared value is no password to rate.
+    assert!(f.vault.entries().iter().all(|entry| entry.id != shared));
+}

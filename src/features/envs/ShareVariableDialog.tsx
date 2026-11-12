@@ -31,9 +31,8 @@ export function ShareVariableDialog({ env, variable, onDone }: ShareVariableDial
   const envs = useEnvs();
   const shared = useSharedValues();
   const value = shared.data?.find((item) => item.id === variable.shared);
-  const users = new Set(
-    (value?.users ?? []).filter((use) => use.variable === variable.name).map((use) => use.envId),
-  );
+  // By environment: one uses a shared value under one name only.
+  const users = new Set((value?.users ?? []).filter((use) => !use.inTrash).map((use) => use.envId));
   const [chosen, setChosen] = useState<Set<string>>(() => new Set());
   const others = (envs.data ?? []).filter((item) => !item.inTrash && item.id !== env.id);
   const share = useVaultMutation((ids: string[]) => api.envsShareVar(env.id, variable.name, ids), {

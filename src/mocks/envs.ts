@@ -560,7 +560,9 @@ export const envsHandlers: Record<string, Handler> = {
       empty: false,
       inTrash: value.inTrash,
       users: envs.flatMap((item) =>
-        item.vars.filter((x) => x.shared === id).map((x) => ({ envId: item.id, variable: x.name })),
+        item.vars
+          .filter((x) => x.shared === id)
+          .map((x) => ({ envId: item.id, variable: x.name, inTrash: item.inTrash })),
       ),
     }));
   },

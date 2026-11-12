@@ -65,8 +65,8 @@ function show(variable: EnvVarInfo) {
       empty: false,
       inTrash: false,
       users: [
-        { envId: 'env-1', variable: 'API_TOKEN' },
-        { envId: 'env-2', variable: 'API_TOKEN' },
+        { envId: 'env-1', variable: 'API_TOKEN', inTrash: false },
+        { envId: 'env-2', variable: 'API_TOKEN', inTrash: false },
       ],
     },
   ]);

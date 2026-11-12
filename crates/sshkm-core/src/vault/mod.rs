@@ -862,14 +862,21 @@ impl Vault {
         Ok(())
     }
 
-    /// Deletes everything in the recycle bin. Returns how many entries went.
+    /// Deletes everything in the recycle bin: logins and the environments'
+    /// shared values. Returns how many entries went.
     pub fn empty_trash(&mut self) -> Result<usize> {
-        let ids: Vec<String> = self
+        let mut ids: Vec<String> = self
             .entries()
             .into_iter()
             .filter(|e| e.in_trash)
             .map(|e| e.id)
             .collect();
+        ids.extend(
+            self.shared_values()
+                .into_iter()
+                .filter(|value| value.in_trash)
+                .map(|value| value.id),
+        );
         for id in &ids {
             self.delete_entry(id)?;
         }

@@ -841,7 +841,8 @@ fn blocking(text: &str, parsed: &ParsedEnv, vault: &[EnvVariable]) -> Option<Vec
             ProblemKind::Unterminated
             | ProblemKind::TrailingText
             | ProblemKind::TooLong
-            | ProblemKind::TooMany => true,
+            | ProblemKind::TooMany
+            | ProblemKind::Reference => true,
             ProblemKind::NoEquals | ProblemKind::BadName => names_a_gone_one(problem.line),
             ProblemKind::Replaced => false,
         })

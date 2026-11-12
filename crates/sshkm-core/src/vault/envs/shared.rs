@@ -13,11 +13,14 @@
 //!
 //! The vault resolves references wherever values leave it — files, the
 //! terminal, exports, comparisons, the leak scanner, another computer (which
-//! gets plain values) — and never writes a reference into a file. A
-//! reference to an entry that isn't there (deleted elsewhere) can't be
-//! resolved: the environment's files wait until it is, or the variable gets
-//! a value of its own. One to another entry's password (made in KeePassXC)
-//! resolves as KeePass resolves it.
+//! gets plain values) — and never writes a reference into a file. Only a
+//! reference to a shared value resolves: one to an entry that isn't there
+//! (deleted elsewhere), or to another entry (a login's password, made in
+//! KeePassXC), can't be, and the environment's files wait until the variable
+//! gets a value of its own; so no file, import or other computer can make a
+//! variable carry a login's password out. A value from any of those that is
+//! a reference isn't taken at all ([`super::dotenv::ProblemKind::Reference`]).
+//! An environment uses a shared value under one name only.
 //!
 //! Changing a shared variable — in the app, by an import, or in a file —
 //! changes the shared value; "Use its own value here" gives one environment
@@ -62,6 +65,8 @@ pub struct SharedValue {
 pub struct SharedUse {
     pub env_id: String,
     pub variable: String,
+    /// The environment is in the recycle bin.
+    pub in_trash: bool,
 }
 
 /// Whether a KeePass entry is a shared value.
@@ -98,8 +103,8 @@ impl Vault {
     pub(super) fn dereference(&self, value: &str) -> Option<std::result::Result<String, ()>> {
         let id = referenced(value)?;
         Some(match self.db.entry(EntryId::from(id)) {
-            // One level, as references in references aren't followed.
-            Some(entry) if !is_environment(&entry) => {
+            // A shared value's, one level deep.
+            Some(entry) if is_shared(&entry) && !is_environment(&entry) => {
                 let password = entry.get(fields::PASSWORD).unwrap_or_default();
                 if referenced(password).is_some() {
                     Err(())
@@ -113,7 +118,7 @@ impl Vault {
 
     /// `vars` with every reference replaced by what it refers to. Fails, by
     /// the variable's name, for one that can't be resolved.
-    pub(super) fn resolve(&self, vars: Vec<EnvVariable>) -> Result<Vec<EnvVariable>> {
+    pub(in crate::vault) fn resolve(&self, vars: Vec<EnvVariable>) -> Result<Vec<EnvVariable>> {
         vars.into_iter()
             .map(|var| match self.dereference(var.value.expose_secret()) {
                 None => Ok(var),
@@ -160,6 +165,7 @@ impl Vault {
                         SharedUse {
                             env_id: entry.id().uuid().to_string(),
                             variable: var.name,
+                            in_trash,
                         },
                         id,
                     ));
@@ -213,22 +219,49 @@ impl Vault {
     }
 
     /// Gives the variable `name` of the environment `id` a value of its own:
-    /// the shared value's, as it is now.
+    /// the shared value's, as it is now. A shared value no variable uses any
+    /// more goes to the recycle bin.
     pub fn unshare_env_variable(&mut self, id: &str, name: &str) -> Result<()> {
-        let raw = self.raw_env_variable(id, name)?;
-        if referenced(raw.value.expose_secret()).is_none() {
-            return Ok(());
+        let shared = self.give_copy(id, name, false)?;
+        if let Some(shared) = shared {
+            self.trash_if_unused(shared)?;
         }
+        Ok(())
+    }
+
+    /// Gives a variable a copy of the shared value it uses; also in an
+    /// environment in the recycle bin with `in_trash`. Returns the shared
+    /// value, if it used one.
+    fn give_copy(&mut self, id: &str, name: &str, in_trash: bool) -> Result<Option<Uuid>> {
+        let raw = self.raw_env_variable(id, name)?;
+        let Some(shared) = self.shared_of(raw.value.expose_secret()) else {
+            return Ok(None);
+        };
         let value = match self.dereference(raw.value.expose_secret()) {
             Some(Ok(value)) => SecretString::from(value),
             _ => return Err(Error::NotFound(format!("the shared value of {name}"))),
         };
-        self.edit_variables(id, |vars| {
+        self.edit_variables_in(id, in_trash, |vars| {
             if let Some(var) = vars.iter_mut().find(|var| var.name == name) {
                 var.value = value;
             }
             Ok(())
-        })
+        })?;
+        Ok(Some(shared))
+    }
+
+    /// Moves a shared value no variable uses to the recycle bin, where it
+    /// can still be restored from.
+    pub(super) fn trash_if_unused(&mut self, shared: Uuid) -> Result<()> {
+        let id = shared.to_string();
+        let unused = self
+            .shared_values()
+            .iter()
+            .any(|value| value.id == id && value.users.is_empty() && !value.in_trash);
+        if unused {
+            self.trash_entry(&id)?;
+        }
+        Ok(())
     }
 
     /// Moves a shared value to the recycle bin, each variable that uses it
@@ -245,7 +278,7 @@ impl Vault {
             .map(|value| value.users)
             .unwrap_or_default();
         for user in users {
-            self.unshare_env_variable(&user.env_id, &user.variable)?;
+            self.give_copy(&user.env_id, &user.variable, user.in_trash)?;
         }
         self.trash_entry(shared)
     }
@@ -254,7 +287,17 @@ impl Vault {
     /// Returns whether it changed.
     pub(super) fn set_shared_value(&mut self, shared: Uuid, value: &str) -> Result<bool> {
         check_field(value)?;
+        if referenced(value).is_some() {
+            return Err(Error::invalid("a shared value is a value, not a reference"));
+        }
         let entry_id = EntryId::from(shared);
+        if !self
+            .db
+            .entry(entry_id)
+            .is_some_and(|entry| is_shared(&entry))
+        {
+            return Err(Error::NotFound(format!("shared value {shared}")));
+        }
         {
             let mut entry = self
                 .db
@@ -302,6 +345,16 @@ impl Vault {
     /// Makes the variable `name` of the environment `id` use the shared
     /// value `shared`: added if it lacks one, its value replaced if not.
     fn link_variable(&mut self, id: &str, name: &str, shared: Uuid, secret: bool) -> Result<()> {
+        // One name per environment: two lines of a file for one value would
+        // undo each other's edits.
+        if let Some(other) = self.raw_env_variables(id)?.into_iter().find(|var| {
+            var.name != name && self.shared_of(var.value.expose_secret()) == Some(shared)
+        }) {
+            return Err(Error::AlreadyExists(format!(
+                "the environment uses it already, as {}",
+                other.name
+            )));
+        }
         let reference = SecretString::from(reference(shared));
         self.edit_variables(id, |vars| {
             match vars.iter_mut().find(|var| var.name == name) {
@@ -334,6 +387,8 @@ impl Vault {
         let mut entry = group.add_entry();
         entry.set_unprotected(fields::TITLE, name);
         entry.set_protected(fields::PASSWORD, value.expose_secret());
+        // An environment's value, not a password KeePassXC should rate.
+        entry.quality_check = false;
         entry.custom_data.insert(
             SHARED.to_owned(),
             CustomDataItem {

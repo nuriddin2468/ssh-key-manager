@@ -3650,6 +3650,7 @@ const en = {
         tooLong: 'Line {{line}}: {{name}} is too long to store.',
         replaced: 'Line {{line}}: {{name}} is set again further down, and that value counts.',
         tooMany: 'Line {{line}} and after: an environment holds up to 1000 variables.',
+        reference: 'Line {{line}}: {{name}} refers to a vault entry, which only the vault sets.',
       },
     },
     export: {

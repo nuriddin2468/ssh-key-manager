@@ -21,11 +21,13 @@ impl Vault {
                 if env.in_trash {
                     continue;
                 }
-                // Shared values resolved: found as the variables that use
-                // them, not as entries of their own.
-                let Ok(vars) = self.env_variables(&env.id) else {
-                    continue;
-                };
+                // Shared values resolved, one by one: found as the
+                // variables that use them, not as entries of their own; one
+                // that can't be resolved is left out alone.
+                let vars = super::envs::variables_of(&entry)
+                    .into_iter()
+                    .filter_map(|var| self.resolve(vec![var]).ok())
+                    .flatten();
                 for var in vars {
                     if !var.secret || var.value.expose_secret().is_empty() {
                         continue;

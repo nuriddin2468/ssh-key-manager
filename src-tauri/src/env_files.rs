@@ -13,10 +13,20 @@
 //! The UI hears of each round that changed something, or where a file's
 //! state changed, through [`EVENT`], with the edits that went to the vault
 //! (to offer Undo) and every file's state.
+//!
+//! **Files written only while the vault is unlocked** (level 2). Each round
+//! keeps the list of those that hold what the vault holds, as they are on
+//! disk, in `env-files-unlocked.json` (no values). Before the vault locks,
+//! and when the app quits, one last round takes their edits to the vault
+//! and they are removed ([`EnvFiles::put_away`]); one the vault couldn't
+//! take stays, and the UI hears of it through [`LEFT_EVENT`]. Until the
+//! next unlock no round writes them. A crash or a forced quit is caught by
+//! the guard ([`crate::env_guard`]), and failing that by the next start.
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
@@ -25,17 +35,25 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use sshkm_core::ErrorCode;
 use sshkm_core::paths::home_dir;
 use sshkm_core::vault::envs::files::{
-    EnvFileStatus, EnvFilesSynced, FilesContext, Preference, SyncState,
+    self as managed, EnvFileStatus, EnvFilesSynced, FilesContext, Leftovers, Preference, PutAway,
+    SyncState,
 };
 use sshkm_core::vault::projects;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::error::AppResult;
+use crate::env_guard::Guard;
+use crate::error::{AppError, AppResult};
 use crate::state::AppState;
+use crate::vault::VaultHooks;
 use crate::watcher::{QUIET, debounce, is_change};
 
 pub const EVENT: &str = "env-files-changed";
+/// Emitted with the level-2 files left on disk when the vault locked: the
+/// vault couldn't take what they hold ([`PutAway::kept`]).
+pub const LEFT_EVENT: &str = "env-files-left";
 const STATE_FILE: &str = "env-files.json";
+/// The level-2 files on disk ([`Leftovers`]).
+const LEFTOVERS_FILE: &str = "env-files-unlocked.json";
 
 /// The managed files' state on this computer, and the watch on their
 /// folders.
@@ -46,6 +64,11 @@ pub struct EnvFiles {
     watch: Mutex<Watch>,
     /// The files as the UI last heard of them.
     last: Mutex<Vec<EnvFileStatus>>,
+    leftovers_path: PathBuf,
+    /// The level-2 files are put away: no round runs until the vault is
+    /// unlocked again. Changed only while `state` is held.
+    away: AtomicBool,
+    guard: Guard,
 }
 
 #[derive(Default)]
@@ -70,12 +93,22 @@ struct Wanted {
 impl EnvFiles {
     pub fn new(data_dir: &Path) -> Self {
         let state_path = data_dir.join(STATE_FILE);
+        let leftovers_path = data_dir.join(LEFTOVERS_FILE);
+        // Level-2 files a crash or a forced quit left, still as the app
+        // wrote them, go before anything else.
+        let removed = Leftovers::sweep_at(&leftovers_path);
+        if removed > 0 {
+            log::info!("env files: removed {removed} left by the last run");
+        }
         Self {
             state: Mutex::new(SyncState::load(&state_path)),
             state_path,
             signal: Mutex::new(None),
             watch: Mutex::new(Watch::default()),
             last: Mutex::new(Vec::new()),
+            leftovers_path,
+            away: AtomicBool::new(false),
+            guard: Guard::default(),
         }
     }
 
@@ -100,6 +133,17 @@ impl EnvFiles {
         });
         let files = Arc::clone(self);
         state.vault.on_change(move || files.request());
+        let (before, after, lost) = (Arc::clone(self), Arc::clone(self), Arc::clone(self));
+        let handle = app.clone();
+        state.vault.set_hooks(VaultHooks {
+            before_lock: Box::new(move || {
+                if let Some(shared) = handle.try_state::<Arc<AppState>>() {
+                    before.put_away(&handle, shared.inner());
+                }
+            }),
+            after_unlock: Box::new(move || after.come_back()),
+            after_loss: Box::new(move || lost.forget()),
+        });
         self.request();
     }
 
@@ -128,14 +172,38 @@ impl EnvFiles {
         // Environments from before projects are in theirs first: a file of
         // one isn't out of its project just because the step is to come.
         crate::commands::projects::tidy_projects(app, shared);
-        let ctx = context(shared);
         let mut state = lock(&self.state);
+        if self.away.load(Ordering::SeqCst) {
+            return Err(AppError::new(
+                ErrorCode::VaultLocked,
+                "the vault is locking",
+            ));
+        }
+        let synced = self.round(&mut state, app, shared, prefer, activity)?;
+        drop(state);
+        self.follow(app, &synced.files);
+        self.tell(app, &synced);
+        Ok(synced)
+    }
+
+    /// The round of [`Self::sync`], with the revisions held: pull, save,
+    /// push, then the revisions and the list of level-2 files on disk are
+    /// kept.
+    fn round(
+        &self,
+        state: &mut SyncState,
+        app: &AppHandle,
+        shared: &AppState,
+        prefer: Option<Preference<'_>>,
+        activity: bool,
+    ) -> AppResult<EnvFilesSynced> {
+        let ctx = context(shared);
         let synced =
             shared
                 .vault
                 .with_files(app, &shared.backup_dir, activity, |vault, save| {
                     let before = vault.snapshot();
-                    let pulled = match vault.env_files_pull(&ctx, &state, prefer) {
+                    let pulled = match vault.env_files_pull(&ctx, state, prefer) {
                         Ok(pulled) => pulled,
                         Err(error) => {
                             vault.restore(before);
@@ -145,15 +213,80 @@ impl EnvFiles {
                     if pulled.vault_changed {
                         save(vault)?;
                     }
-                    Ok(vault.env_files_push(&ctx, &mut state, pulled, prefer))
+                    Ok(vault.env_files_push(&ctx, state, pulled, prefer))
                 })?;
         if let Err(error) = state.save(&self.state_path) {
             log::warn!("env files: the revisions were not kept: {error}");
         }
-        drop(state);
-        self.follow(app, &synced.files);
-        self.tell(app, &synced);
+        let leftovers = Leftovers::new(synced.unlocked.clone());
+        if let Err(error) = leftovers.save(&self.leftovers_path) {
+            log::warn!("env files: the files written while unlocked were not listed: {error}");
+        }
+        if !leftovers.is_empty() {
+            self.guard.ensure(&self.leftovers_path);
+            // The vault went while the round finished: its files go too.
+            if !shared.vault.is_unlocked() {
+                self.forget();
+            }
+        }
         Ok(synced)
+    }
+
+    /// Puts the files written only while the vault is unlocked away, before
+    /// it locks or the app quits: one last round takes their edits to the
+    /// vault, then those that hold what it holds are removed. Those it
+    /// couldn't take stay, and the UI hears of them ([`LEFT_EVENT`]). No
+    /// round runs after, until the vault is unlocked again. Without the
+    /// vault, the files still as the last round left them go.
+    pub fn put_away(&self, app: &AppHandle, shared: &AppState) -> PutAway {
+        let mut state = lock(&self.state);
+        if self.away.swap(true, Ordering::SeqCst) {
+            return PutAway::default();
+        }
+        let away = match self.round(&mut state, app, shared, None, false) {
+            Ok(synced) => managed::put_away(&synced),
+            Err(error) => {
+                if error.code() != ErrorCode::VaultLocked {
+                    log::warn!("env files: the last round before locking failed: {error}");
+                }
+                PutAway {
+                    removed: Leftovers::sweep_at(&self.leftovers_path),
+                    kept: Vec::new(),
+                }
+            }
+        };
+        if let Err(error) = Leftovers::default().save(&self.leftovers_path) {
+            log::warn!("env files: the list of files written while unlocked stays: {error}");
+        }
+        drop(state);
+        if !away.kept.is_empty() {
+            log::warn!(
+                "env files: {} written while unlocked stay on disk until the next unlock",
+                away.kept.len()
+            );
+            let _ = app.emit(LEFT_EVENT, &away.kept);
+        }
+        away
+    }
+
+    /// After an unlock: rounds run again, and write the level-2 files.
+    fn come_back(&self) {
+        let _state = lock(&self.state);
+        self.away.store(false, Ordering::SeqCst);
+    }
+
+    /// The vault went without [`Self::put_away`]: the level-2 files still
+    /// as the last round left them go. Runs while the vault may be held, by
+    /// this thread too, so it doesn't wait for the revisions.
+    fn forget(&self) {
+        Leftovers::sweep_at(&self.leftovers_path);
+    }
+
+    /// When the app quits: the files written only while unlocked go, and
+    /// the guard with them.
+    pub fn quit(&self, app: &AppHandle, shared: &AppState) {
+        self.put_away(app, shared);
+        self.guard.stop();
     }
 
     /// Tells the UI of a round that changed something, or after which a

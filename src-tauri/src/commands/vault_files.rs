@@ -339,6 +339,8 @@ pub async fn vault_use_file(
             confirm_switch(&app, &path)?;
         }
         if use_file(&state.vault, &path)? {
+            // The `.env` files written while it was unlocked go with it.
+            state.vault.lost();
             let _ = app.emit(LOCKED_EVENT, LockReason::Manual);
         }
         Ok(after_change(&app, state))
@@ -365,6 +367,8 @@ pub async fn vault_use_default(
             }
         }
         if use_default(&state.vault, move_files)? {
+            // The `.env` files written while it was unlocked go with it.
+            state.vault.lost();
             let _ = app.emit(LOCKED_EVENT, LockReason::Manual);
         }
         Ok(after_change(&app, state))

@@ -28,6 +28,7 @@ folderHere: boolean,
  */
 git: GitInfo | null, 
 /**
- * The cloud service that copies its folder, if one does.
+ * The cloud service that copies its folder, if one does and doesn't
+ * leave out a file at the level asked.
  */
 cloud: CloudService | null, };

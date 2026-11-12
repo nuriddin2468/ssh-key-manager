@@ -2,6 +2,7 @@
 import type { CloudService } from "./CloudService";
 import type { EnvFile } from "./EnvFile";
 import type { ExampleCheck } from "./ExampleCheck";
+import type { FileLevel } from "./FileLevel";
 import type { FileState } from "./FileState";
 import type { GitInfo } from "./GitInfo";
 
@@ -14,7 +15,8 @@ export type EnvFileReport = {
  */
 projects: Array<string>, 
 /**
- * The cloud service that copies the file's folder, if one does.
+ * The cloud service that copies the file's folder, if one does and
+ * doesn't leave out a level-2 file.
  */
 cloud: CloudService | null, 
 /**
@@ -29,7 +31,7 @@ git: GitInfo | null, envId: string,
  * Where the environment is, for people: `Shop · backend`, `Shop`, a
  * Personal one's part, or nothing ([`super::label`]).
  */
-label: string, envName: string, file: EnvFile, 
+label: string, envName: string, file: EnvFile, level: FileLevel, 
 /**
  * The file on this computer, when its folder is a full path here.
  */

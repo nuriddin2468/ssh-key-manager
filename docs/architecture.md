@@ -163,6 +163,16 @@ translates.
   bound files for their names, so editors that save by renaming are seen. A round
   saves the files' edits to the vault first, then writes files, and tells the UI with
   `env-files-changed`. The revisions are kept in `env-files.json`.
+  - A file kept only while the vault is unlocked (level 2) is written by the round
+    after an unlock and removed before the vault locks (`VaultHooks::before_lock`
+    runs one last round first) and when the app quits. Each round lists those files,
+    as they are on disk (identity, size, time; no values), in
+    `env-files-unlocked.json`; a file still as listed is removed, one edited since
+    stays until the next unlock. A crash or a forced quit is caught by the guard
+    (`src-tauri/src/env_guard.rs`): the app's own executable run with
+    `--sshkm-env-guard`, which sweeps the list when the pipe from the app closes; the
+    next start sweeps it too. Level-2 files get the Time Machine, Dropbox and File
+    Provider exclusion attributes on their temporary file, before it holds anything.
 - **Terminal.** `src-tauri/src/terminal/`: one pseudo-terminal per session (`portable-pty`,
   ConPTY on Windows) running `ssh -o ConnectTimeout=10 -- <alias>`, or the user's own
   shell with a secret environment's variables in its environment (`local.rs`).

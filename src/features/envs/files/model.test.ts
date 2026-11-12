@@ -24,6 +24,7 @@ function report(state: FileState, extra: Partial<EnvFileReport> = {}): EnvFileRe
     label: 'shop-api',
     envName: 'dev',
     file: { folder: '~/code/shop', path: 'apps/web/.env.local' },
+    level: 'always',
     location: '/Users/dev/code/shop/apps/web/.env.local',
     state,
     projects: ['p1'],

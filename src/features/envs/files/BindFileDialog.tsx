@@ -1,4 +1,13 @@
-import { CloudUpload, FilePlus2, GitBranch, HelpCircle, TriangleAlert } from 'lucide-react';
+import {
+  CloudUpload,
+  FilePlus2,
+  FileText,
+  GitBranch,
+  HelpCircle,
+  LockKeyhole,
+  Server,
+  TriangleAlert,
+} from 'lucide-react';
 import { type FormEvent, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -6,7 +15,9 @@ import { api } from '@/api/commands';
 import type { EnvFile } from '@/bindings/EnvFile';
 import type { EnvFileCheck } from '@/bindings/EnvFileCheck';
 import type { EnvSummary } from '@/bindings/EnvSummary';
+import type { FileLevel } from '@/bindings/FileLevel';
 import { Button } from '@/components/ui/Button';
+import { ChoiceCards } from '@/components/ui/ChoiceCards';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
 import { Select } from '@/components/ui/Select';
 import { TextField } from '@/components/ui/TextField';
@@ -15,6 +26,7 @@ import { Callout } from '@/features/passwords/files/Callout';
 import { useVaultMutation } from '@/features/passwords/vault';
 import { useProjects } from '@/features/projects/queries';
 import { cn } from '@/lib/cn';
+import { useEnvLabel } from '../useProjectNames';
 import { conflictToastId, markConflictTold } from './announce';
 import { bindRefusal } from './errors';
 import { bindingPath, cloudName, fileName, isTemplateName, QUICK_NAMES } from './model';
@@ -48,9 +60,16 @@ const risky = (check: EnvFileCheck) =>
  * cloud service copies its folder, the user says so before anything is
  * written, as an export asks. The backend checks the path again on binding
  * and refuses links, templates and anything outside the folder.
+ *
+ * The file is there all the time, or only while the vault is unlocked; a
+ * remote environment gets only the second, after a word on what that means.
  */
 export function BindFileDialog({ env, bound, onDone }: BindFileDialogProps) {
   const { t } = useTranslation();
+  const envLabelOf = useEnvLabel();
+  const remote = env.kind === 'remote';
+  const [chosenLevel, setLevel] = useState<FileLevel>('always');
+  const level: FileLevel = remote ? 'whileUnlocked' : chosenLevel;
   const projects = useProjects();
   const holder = (projects.data ?? []).find((project) => project.id === env.project);
   const folders = useMemo(
@@ -89,7 +108,7 @@ export function BindFileDialog({ env, bound, onDone }: BindFileDialogProps) {
 
   const bind = useVaultMutation(
     async ({ file, ignore }: { file: EnvFile; ignore: boolean }) => {
-      const status = await api.envsFilesBind(env.id, file);
+      const status = await api.envsFilesBind(env.id, file, level);
       // Bound either way: a `.gitignore` that couldn't be changed is told apart.
       let ignoreError: unknown = null;
       if (ignore) {
@@ -128,7 +147,7 @@ export function BindFileDialog({ env, bound, onDone }: BindFileDialogProps) {
       onError: refused,
     },
   );
-  const check = useVaultMutation((file: EnvFile) => api.envsFilesCheck(env.id, file), {
+  const check = useVaultMutation((file: EnvFile) => api.envsFilesCheck(env.id, file, level), {
     onSuccess: (result) => {
       if (risky(result)) setRisk(result);
       else bind.mutate({ file: result.file, ignore: false });
@@ -302,6 +321,41 @@ export function BindFileDialog({ env, bound, onDone }: BindFileDialogProps) {
                 <p role="alert" className="text-[12.5px] text-critical">
                   {refusal}
                 </p>
+              ) : null}
+              <ChoiceCards
+                legend={t('envs.files.level.legend')}
+                value={level}
+                onValueChange={setLevel}
+                columns={2}
+                options={[
+                  {
+                    value: 'always',
+                    tone: 'slate',
+                    icon: FileText,
+                    title: t('envs.files.level.always'),
+                    // Disabled for a remote environment, which says why.
+                    hint: remote
+                      ? t('envs.files.level.alwaysRemoteHint')
+                      : t('envs.files.level.alwaysHint'),
+                    disabled: remote,
+                  },
+                  {
+                    value: 'whileUnlocked',
+                    tone: 'violet',
+                    icon: LockKeyhole,
+                    title: t('envs.files.level.whileUnlocked'),
+                    hint: t('envs.files.level.whileUnlockedHint'),
+                  },
+                ]}
+              />
+              {remote ? (
+                <Callout
+                  tone="warning"
+                  icon={Server}
+                  title={t('envs.files.level.remoteTitle', { name: envLabelOf(env) })}
+                >
+                  {t('envs.files.level.remoteText')}
+                </Callout>
               ) : null}
             </>
           )}

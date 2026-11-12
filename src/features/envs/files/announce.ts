@@ -18,6 +18,7 @@ import type { Route } from '@/app/router';
 import { useRouter } from '@/app/router';
 import type { EnvFile } from '@/bindings/EnvFile';
 import type { EnvFileChange } from '@/bindings/EnvFileChange';
+import type { EnvFileStatus } from '@/bindings/EnvFileStatus';
 import type { EnvFilesSynced } from '@/bindings/EnvFilesSynced';
 import { toastVaultError } from '@/features/passwords/vault';
 import { AppError } from '@/lib/ipc';
@@ -27,6 +28,8 @@ import { fileName } from './model';
 import { refreshFileReports } from './queries';
 
 const EVENT = 'env-files-changed';
+/** The files kept only while the vault is unlocked that stayed when it locked. */
+const LEFT_EVENT = 'env-files-left';
 /** Names a toast lists before "…". */
 const SHOWN_NAMES = 4;
 
@@ -150,6 +153,23 @@ export function announceSynced(
   toldConflicts = now;
 }
 
+/**
+ * Tells of the files kept only while the vault is unlocked that stayed on
+ * disk when it locked: the vault couldn't take what they hold. The next
+ * unlock settles them.
+ */
+export function announceLeft(t: TFunction, files: EnvFileStatus[]): void {
+  if (files.length === 0) return;
+  toast.warning(t('envs.files.level.left', { count: files.length }), {
+    id: 'env-files-left',
+    description: t('envs.files.level.leftText', {
+      count: files.length,
+      files: names(files.map((status) => fileName(status.file))),
+    }),
+    duration: 15_000,
+  });
+}
+
 /** Listens for the backend's rounds: refreshes environments and tells of them. */
 export function useEnvFilesEvents(): void {
   const { t } = useTranslation();
@@ -162,6 +182,10 @@ export function useEnvFilesEvents(): void {
       if (event.payload.written.length > 0) void refreshFileReports();
       announceSynced(t, event.payload, navigate);
     });
-    return () => void stop.then((unlisten) => unlisten());
+    const stopLeft = listen<EnvFileStatus[]>(LEFT_EVENT, (event) => announceLeft(t, event.payload));
+    return () => {
+      void stop.then((unlisten) => unlisten());
+      void stopLeft.then((unlisten) => unlisten());
+    };
   }, [t, navigate]);
 }

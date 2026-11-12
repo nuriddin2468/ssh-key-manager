@@ -1,0 +1,6 @@
+{
+  "kind": "new",
+  "en": "A .env file can be kept on disk only while the vault is unlocked: it’s written when you unlock and removed when the vault locks or the app quits, and after a crash too. Time Machine, Dropbox and iCloud Drive skip it. Remote environments can have such a file.",
+  "ru": "Файл .env можно держать на диске, только пока хранилище разблокировано: он записывается при разблокировке и удаляется, когда хранилище блокируется или приложение закрывается, а также после сбоя. Time Machine, Dropbox и iCloud Drive его пропускают. Такой файл может быть и у удалённого окружения.",
+  "uz": ".env faylni faqat ombor ochiqligida diskda saqlash mumkin: u ombor ochilganda yoziladi va ombor qulflanganda yoki ilova yopilganda, nosozlikdan keyin ham oʻchiriladi. Time Machine, Dropbox va iCloud Drive uni oʻtkazib yuboradi. Bunday fayl masofaviy muhitda ham boʻlishi mumkin."
+}

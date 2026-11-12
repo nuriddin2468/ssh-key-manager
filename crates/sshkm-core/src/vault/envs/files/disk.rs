@@ -194,9 +194,16 @@ pub(super) fn read(path: &Path) -> Disk {
 
 /// Writes `bytes` to the target, readable by its owner only, by renaming a
 /// new file over it, unless it no longer holds `expected` (`None`: unless
-/// it exists now) or its folder is no longer the one it was found in.
-/// Returns whether it wrote.
-pub(super) fn write(target: &Target, expected: Option<&[u8]>, bytes: &[u8]) -> Result<bool> {
+/// it exists now) or its folder is no longer the one it was found in. With
+/// `keep_out`, the new file is kept out of backups and cloud folders from
+/// before it holds anything ([`fsutil::keep_out_of_copies`]). Returns
+/// whether it wrote.
+pub(super) fn write(
+    target: &Target,
+    expected: Option<&[u8]>,
+    bytes: &[u8],
+    keep_out: bool,
+) -> Result<bool> {
     let current = match read(&target.real) {
         Disk::Missing => None,
         Disk::Text(text) => Some(text),
@@ -206,7 +213,17 @@ pub(super) fn write(target: &Target, expected: Option<&[u8]>, bytes: &[u8]) -> R
     if current.as_ref().map(|text| text.as_bytes()) != expected || !same_folder(target) {
         return Ok(false);
     }
-    fsutil::replace_private(&target.real, bytes, expected.is_some())
+    fsutil::replace_private(&target.real, bytes, expected.is_some(), keep_out)
+}
+
+/// Keeps the target, as it is, out of backups and cloud folders, unless it
+/// is so already: for a file that was at level 1 until now. Changing its
+/// attributes is a change the file's watcher reports, so they are set only
+/// when missing.
+pub(super) fn keep_out(target: &Target) {
+    if !fsutil::is_kept_out_of_copies(&target.real) {
+        fsutil::keep_out_of_copies_at(&target.real);
+    }
 }
 
 /// The target's folder is still the folder it was found in, and no link

@@ -15,11 +15,12 @@ use std::time::Duration;
 
 use serde::Serialize;
 use sshkm_core::ErrorCode;
+use sshkm_core::fsutil;
 use sshkm_core::paths::home_dir;
 use sshkm_core::vault::envs::files::{
     self as managed, CloudRoots, CloudService, EnvFile, EnvFileComparison, EnvFileReport,
-    EnvFileStatus, EnvFilesOverview, EnvFilesSynced, EnvKind, EnvUndo, GitInfo, GitState, KeepSide,
-    Preference,
+    EnvFileStatus, EnvFilesOverview, EnvFilesSynced, EnvKind, EnvUndo, FileLevel, GitInfo,
+    GitState, KeepSide, Preference,
 };
 use sshkm_core::vault::envs::{
     self, EnvDetail, EnvImportPreview, EnvInput, ImportChoice, PartRename, looks_secret,
@@ -52,7 +53,8 @@ pub struct EnvFileCheck {
     /// that is here; `None` when the project's folder isn't on this
     /// computer, so Git can't be asked.
     pub git: Option<GitInfo>,
-    /// The cloud service that copies its folder, if one does.
+    /// The cloud service that copies its folder, if one does and doesn't
+    /// leave out a file at the level asked.
     pub cloud: Option<CloudService>,
 }
 
@@ -93,8 +95,10 @@ pub async fn envs_files_status(
     .await
 }
 
-/// Writes an environment to `file` from now on, and writes the file at
-/// once, or reports it as a conflict when it exists with other values.
+/// Writes an environment to `file` from now on, at `level` (all the time,
+/// or only while the vault is unlocked, the only level a remote one has),
+/// and writes the file at once, or reports it as a conflict when it exists
+/// with other values.
 #[tauri::command]
 pub async fn envs_files_bind(
     app: AppHandle,
@@ -102,15 +106,48 @@ pub async fn envs_files_bind(
     files: Files<'_>,
     id: String,
     file: EnvFile,
+    level: FileLevel,
 ) -> AppResult<EnvFileStatus> {
     let files = Arc::clone(&files);
     blocking(&state, move |state| {
         let ctx = context(state);
         let file = state.vault.change(&app, &state.backup_dir, |vault| {
-            Ok(vault.bind_env_file(&id, &file, &ctx)?)
+            Ok(vault.bind_env_file_at(&id, &file, level, &ctx)?)
         })?;
         let synced = files.sync(&app, state, None, true)?;
         status_of(synced, &id, &file)
+    })
+    .await
+}
+
+/// Writes a file of an environment at another level from now on: all the
+/// time (the file is then left to backups and cloud folders again), or only
+/// while the vault is unlocked (kept out of them, and removed when it
+/// locks).
+#[tauri::command]
+pub async fn envs_files_set_level(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    files: Files<'_>,
+    id: String,
+    file: EnvFile,
+    level: FileLevel,
+) -> AppResult<EnvFileStatus> {
+    let files = Arc::clone(&files);
+    blocking(&state, move |state| {
+        let file = managed::check_env_file(&file)?;
+        let changed = state.vault.change(&app, &state.backup_dir, |vault| {
+            Ok(vault.set_env_file_level(&id, &file, level)?)
+        })?;
+        let synced = files.sync(&app, state, None, true)?;
+        let status = status_of(synced, &id, &file)?;
+        if changed
+            && level == FileLevel::Always
+            && let Some(location) = status.location.as_deref()
+        {
+            fsutil::let_into_copies_at(location);
+        }
+        Ok(status)
     })
     .await
 }
@@ -310,20 +347,22 @@ pub async fn envs_files_ignore(
     .await
 }
 
-/// What writing an environment to `file` would mean, before it is bound:
-/// where the file would be, whether Git would take it along and whether a
-/// cloud service copies its folder. Checks the binding as binding does.
+/// What writing an environment to `file` at `level` would mean, before it
+/// is bound: where the file would be, whether Git would take it along and
+/// whether a cloud service copies its folder. Checks the binding as binding
+/// does.
 #[tauri::command]
 pub async fn envs_files_check(
     app: AppHandle,
     state: State<'_, Shared>,
     id: String,
     file: EnvFile,
+    level: FileLevel,
 ) -> AppResult<EnvFileCheck> {
     blocking(&state, move |state| {
         let ctx = context(state);
         let (file, located) = state.vault.with(&app, |vault| {
-            Ok(vault.check_env_file_binding(&id, &file, &ctx)?)
+            Ok(vault.check_env_file_binding(&id, &file, level, &ctx)?)
         })?;
         let cloud = CloudRoots::detect(home_dir().as_deref());
         let folder_here = located.is_some();
@@ -342,7 +381,9 @@ pub async fn envs_files_check(
             (None, _) => None,
         };
         Ok(EnvFileCheck {
-            cloud: location.as_deref().and_then(|path| cloud.service(path)),
+            cloud: location
+                .as_deref()
+                .and_then(|path| cloud.copies(path, level)),
             git,
             folder_here,
             location,

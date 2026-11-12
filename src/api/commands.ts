@@ -42,6 +42,7 @@ import type { EnvSummary } from '@/bindings/EnvSummary';
 import type { EnvUndo } from '@/bindings/EnvUndo';
 import type { EnvVarInput } from '@/bindings/EnvVarInput';
 import type { Exported } from '@/bindings/Exported';
+import type { FileLevel } from '@/bindings/FileLevel';
 import type { FixAction } from '@/bindings/FixAction';
 import type { GeneratedSecret } from '@/bindings/GeneratedSecret';
 import type { GenerateKeyRequest } from '@/bindings/GenerateKeyRequest';
@@ -537,9 +538,15 @@ export const api = {
   envsSetKind: (id: string, kind: EnvKind) => call<EnvDetail>('envs_set_kind', { id, kind }),
   /** Where every file of every environment stands, changing nothing. */
   envsFilesStatus: () => call<EnvFileStatus[]>('envs_files_status'),
-  /** Writes the environment to `file` from now on; writes it at once unless it differs. */
-  envsFilesBind: (id: string, file: EnvFile) =>
-    call<EnvFileStatus>('envs_files_bind', { id, file }),
+  /**
+   * Writes the environment to `file` from now on, all the time or only while the vault
+   * is unlocked (a remote one only so); writes it at once unless it differs.
+   */
+  envsFilesBind: (id: string, file: EnvFile, level: FileLevel) =>
+    call<EnvFileStatus>('envs_files_bind', { id, file, level }),
+  /** Keeps a file on disk all the time, or only while the vault is unlocked, from now on. */
+  envsFilesSetLevel: (id: string, file: EnvFile, level: FileLevel) =>
+    call<EnvFileStatus>('envs_files_set_level', { id, file, level }),
   /** Stops writing to `file`; `deleteFile` deletes it, only if the vault has all of it. */
   envsFilesUnbind: (id: string, file: EnvFile, deleteFile: boolean) =>
     call<EnvDetail>('envs_files_unbind', { id, file, deleteFile }),
@@ -561,8 +568,8 @@ export const api = {
   /** Adds the file to its working tree's `.gitignore`, after the user said to. */
   envsFilesIgnore: (id: string, file: EnvFile) => call<GitInfo>('envs_files_ignore', { id, file }),
   /** What writing to `file` would mean (Git, cloud folder), before binding it. */
-  envsFilesCheck: (id: string, file: EnvFile) =>
-    call<EnvFileCheck>('envs_files_check', { id, file }),
+  envsFilesCheck: (id: string, file: EnvFile, level: FileLevel) =>
+    call<EnvFileCheck>('envs_files_check', { id, file, level }),
   /** The files of one environment (or all) with Git and cloud folders, no folder walk. */
   envsFilesRisks: (id: string | null) => call<EnvFileReport[]>('envs_files_risks', { id }),
   /** The variables of a `.env` file found in a project's folder, without values. */

@@ -117,9 +117,12 @@ required, the same two categories the Chrome Web Store's
 - Logins go between the page and the app: the username and password of the login you
   pick, and a login you typed, to be saved. Usernames are often email addresses.
 
-Firefox shows this list itself from Firefox 140, so the manifest asks for Firefox 140
-or later (`strict_min_version`). Older versions would need a consent page of the
-add-on's own.
+Firefox shows this list itself from Firefox 140 (Firefox for Android from 142), so the
+manifest asks for Firefox 140 or later (`gecko.strict_min_version`) and Firefox for
+Android 142 or later (`gecko_android.strict_min_version`); without the second, Android
+would inherit 140 and the validator warns. Older versions would need a consent page of
+the add-on's own. The add-on can't work on Android anyway (there is no native messaging
+there), so on upload tick only Firefox, not Firefox for Android.
 
 ## Texts
 

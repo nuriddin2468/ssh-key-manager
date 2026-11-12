@@ -3706,12 +3706,13 @@ const en = {
       local: 'Local',
       remote: 'Remote',
       localHint: 'On your computer. It can be written to .env files.',
-      remoteHint: 'A server, staging or production. Used through Run in terminal, without files.',
+      remoteHint:
+        'A server, staging or production. Used through Run in terminal; a file only while the vault is unlocked.',
       makeLocal: 'Make local',
       makeRemote: 'Make remote',
       nowLocal: '{{name}} is local now',
       nowRemote: '{{name}} is remote now',
-      stopFilesFirst: 'Stop writing its files first',
+      stopFilesFirst: 'First keep its files only while the vault is unlocked',
       prodTitle: 'Make {{name}} local?',
       prodText:
         '{{name}} looks like production. A local environment can be written to .env files on this computer, values included. Keep production values off this disk unless you need them here.',
@@ -3772,7 +3773,31 @@ const en = {
         back: 'Choose another file',
       },
       add: 'Add file…',
-      remoteNote: 'Remote environments aren’t written to files. Use Run in terminal instead.',
+      remoteNote:
+        'Remote environments are used through Run in terminal. If a tool needs a file, add one that’s on disk only while the vault is unlocked.',
+      level: {
+        legend: 'Keep the file on disk',
+        always: 'All the time',
+        alwaysHint: 'A regular file, there whenever a tool reads it.',
+        alwaysRemoteHint: 'Not for a remote environment: make it local first.',
+        whileUnlocked: 'Only while unlocked',
+        whileUnlockedHint:
+          'Removed when the vault locks or the app quits. Backups and cloud sync skip it where they can.',
+        badge: 'While unlocked',
+        remoteTitle: '{{name}} is remote',
+        remoteText:
+          'Its values, often staging or production ones, will be on this disk while the vault is unlocked. Add a file only if a tool here needs it.',
+        makeWhileUnlocked: 'Keep only while unlocked',
+        makeAlways: 'Keep all the time',
+        nowWhileUnlocked: '{{file}} is on disk only while the vault is unlocked now',
+        nowAlways: '{{file}} stays on disk all the time now',
+        left_one: 'A .env file stayed on disk',
+        left_other: '{{count}} .env files stayed on disk',
+        leftText_one:
+          '{{files}} has changes the vault couldn’t take, so it wasn’t removed. Unlock the vault to settle it.',
+        leftText_other:
+          '{{files}} have changes the vault couldn’t take, so they weren’t removed. Unlock the vault to settle them.',
+      },
       emptyText:
         'Write this environment to a .env file in one of its projects’ folders. Edits you make in the file come back to the vault.',
       listLabel: 'Files {{env}} is written to',
@@ -3814,7 +3839,8 @@ const en = {
         invalid_other:
           'Lines {{lines}} can’t be read. Fix them in the file: until then nothing changes either way, so a typo can’t remove variables.',
         inactive: {
-          remote: 'The file stays as it is. Make the environment local to write it again.',
+          remote:
+            'The file stays as it is. Make the environment local, or keep the file only while the vault is unlocked, to write it again.',
           inTrash: 'The file stays as it is. Restore the environment to write it again.',
           notInProject:
             'The file stays as it is. Add the folder back to a project that holds this environment, or stop writing to the file.',
@@ -3863,6 +3889,8 @@ const en = {
         text: 'The file stays as it is, and edits made in it no longer reach the vault.',
         delete: 'Delete the file too',
         deleteHint: 'Only if it holds exactly the vault’s values, so nothing is lost.',
+        keepWhileUnlocked:
+          'It’s on disk only while the vault is unlocked. Kept, it stays when the vault locks, and the app won’t remove it.',
         confirm: 'Stop writing',
         done: '{{file}} isn’t written anymore',
         deleted: '{{file}} deleted',

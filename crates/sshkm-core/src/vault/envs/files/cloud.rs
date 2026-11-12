@@ -8,6 +8,11 @@
 //! folders Dropbox's own `info.json` names, `~/OneDrive` and the folders
 //! Windows names in `OneDrive*` variables, `~/iCloudDrive` on Windows, and
 //! Google Drive's `My Drive`.
+//!
+//! Some of them leave out a file kept out of copies
+//! ([`crate::fsutil::keep_out_of_copies_at`]), as a level-2 file is: Dropbox
+//! everywhere, and on macOS iCloud Drive and the File Provider folders. For
+//! such a file there, [`CloudRoots::copies`] names no service.
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -27,64 +32,88 @@ pub enum CloudService {
     Other,
 }
 
-/// The cloud folders of this computer.
+/// The cloud folders of this computer, each with whether its service
+/// leaves out a file kept out of copies.
 #[derive(Debug, Clone, Default)]
-pub struct CloudRoots(Vec<(PathBuf, CloudService)>);
+pub struct CloudRoots(Vec<(PathBuf, CloudService, bool)>);
 
 impl CloudRoots {
     pub fn new(roots: Vec<(PathBuf, CloudService)>) -> Self {
-        Self(roots)
+        Self(
+            roots
+                .into_iter()
+                .map(|(root, service)| (root, service, service == CloudService::Dropbox))
+                .collect(),
+        )
     }
 
     /// The cloud folders found under `home` and in the environment.
     pub fn detect(home: Option<&Path>) -> Self {
+        // macOS's own: iCloud Drive and File Provider read the attribute.
+        let file_provider = cfg!(target_os = "macos");
         let mut roots = Vec::new();
         if let Some(home) = home {
             let library = home.join("Library");
             let mobile = library.join("Mobile Documents");
-            roots.push((mobile.clone(), CloudService::ICloudDrive));
+            roots.push((mobile.clone(), CloudService::ICloudDrive, file_provider));
             // Desktop and Documents in iCloud have their twins there.
             let drive = mobile.join("com~apple~CloudDocs");
             for name in ["Desktop", "Documents"] {
                 if drive.join(name).is_dir() {
-                    roots.push((home.join(name), CloudService::ICloudDrive));
+                    roots.push((home.join(name), CloudService::ICloudDrive, file_provider));
                 }
             }
             for (name, _) in folders(&library.join("CloudStorage")) {
                 let service = service_named(&name).unwrap_or(CloudService::Other);
-                roots.push((library.join("CloudStorage").join(name), service));
+                let kept_out = file_provider || service == CloudService::Dropbox;
+                roots.push((library.join("CloudStorage").join(name), service, kept_out));
             }
             for (name, path) in folders(home) {
                 if let Some(service) = service_named(&name) {
-                    roots.push((path, service));
+                    roots.push((path, service, service == CloudService::Dropbox));
                 } else if name == "iCloudDrive" {
-                    roots.push((path, CloudService::ICloudDrive));
+                    roots.push((path, CloudService::ICloudDrive, false));
                 }
             }
             roots.extend(
                 dropbox_info(&home.join(".dropbox").join("info.json"))
                     .into_iter()
-                    .map(|path| (path, CloudService::Dropbox)),
+                    .map(|path| (path, CloudService::Dropbox, true)),
             );
         }
         for variable in ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"] {
             if let Some(path) = std::env::var_os(variable).map(PathBuf::from)
                 && path.is_absolute()
             {
-                roots.push((path, CloudService::OneDrive));
+                roots.push((path, CloudService::OneDrive, false));
             }
         }
         Self(roots)
     }
 
+    /// The service that copies the file at `path`, written at `level`: none
+    /// for a level-2 file where the service leaves out a file kept out of
+    /// copies.
+    pub fn copies(&self, path: &Path, level: super::FileLevel) -> Option<CloudService> {
+        if level == super::FileLevel::WhileUnlocked
+            && self.root_of(path).is_some_and(|(_, _, kept_out)| *kept_out)
+        {
+            return None;
+        }
+        self.service(path)
+    }
+
+    /// The deepest cloud folder `path` is in.
+    fn root_of(&self, path: &Path) -> Option<&(PathBuf, CloudService, bool)> {
+        self.0
+            .iter()
+            .filter(|(root, _, _)| starts_with(path, root))
+            .max_by_key(|(root, _, _)| root.components().count())
+    }
+
     /// The service that copies `path`, if one does.
     pub fn service(&self, path: &Path) -> Option<CloudService> {
-        if let Some((_, service)) = self
-            .0
-            .iter()
-            .filter(|(root, _)| starts_with(path, root))
-            .max_by_key(|(root, _)| root.components().count())
-        {
+        if let Some((_, service, _)) = self.root_of(path) {
             return Some(*service);
         }
         // Google Drive for desktop: a drive whose top folder is `My Drive`

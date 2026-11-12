@@ -121,6 +121,13 @@ impl Fixture {
             .unwrap()
     }
 
+    fn bind_at(&mut self, path: &str, level: FileLevel) -> EnvFile {
+        let env = self.env.clone();
+        self.vault
+            .bind_env_file_at(&env, &self.file(path), level, &self.ctx)
+            .unwrap()
+    }
+
     /// One round, as the app does it: pull, save, push.
     fn sync(&mut self) -> EnvFilesSynced {
         self.sync_preferring(None)
@@ -282,14 +289,19 @@ fn a_binding_is_checked_before_it_is_made() {
     let env = f.env.clone();
     let (file, location) = f
         .vault
-        .check_env_file_binding(&env, &f.file(r"apps\web\.env.local"), &f.ctx)
+        .check_env_file_binding(
+            &env,
+            &f.file(r"apps\web\.env.local"),
+            FileLevel::Always,
+            &f.ctx,
+        )
         .unwrap();
     assert_eq!(file.path, "apps/web/.env.local");
     // The folder isn't there yet: nothing to show, nothing made.
     assert_eq!(location, None);
     let (_, location) = f
         .vault
-        .check_env_file_binding(&env, &f.file(".env"), &f.ctx)
+        .check_env_file_binding(&env, &f.file(".env"), FileLevel::Always, &f.ctx)
         .unwrap();
     assert_eq!(location, Some(f.path(".env")));
     assert!(!f.path(".env").exists());
@@ -297,11 +309,11 @@ fn a_binding_is_checked_before_it_is_made() {
     f.bind(".env");
     let again = f
         .vault
-        .check_env_file_binding(&env, &f.file(".env"), &f.ctx);
+        .check_env_file_binding(&env, &f.file(".env"), FileLevel::Always, &f.ctx);
     assert_eq!(again.unwrap_err().code(), crate::ErrorCode::AlreadyExists);
     assert!(
         f.vault
-            .check_env_file_binding(&env, &f.file(".env.example"), &f.ctx)
+            .check_env_file_binding(&env, &f.file(".env.example"), FileLevel::Always, &f.ctx)
             .is_err()
     );
 }
@@ -864,8 +876,11 @@ fn files_go_to_other_computers_with_the_vault() {
     let reopened = Vault::unlock(f.vault.paths(), &s("master")).unwrap();
     let (kind, files) = reopened.env_files(&f.env).unwrap();
     assert_eq!(kind, EnvKind::Local);
-    assert_eq!(files, [f.file("apps/api/.env")]);
-    assert_eq!(reopened.environment(&f.env).unwrap().files, files);
+    assert_eq!(files, [(f.file("apps/api/.env"), FileLevel::Always)]);
+    assert_eq!(
+        reopened.environment(&f.env).unwrap().files,
+        [f.file("apps/api/.env")]
+    );
 }
 
 #[test]
@@ -1415,4 +1430,263 @@ fn reparse_points_are_never_read() {
         }
     );
     assert_eq!(read(&outside), "KEEP=1\n");
+}
+
+#[test]
+fn level_two_files_come_and_go_with_the_vault() {
+    let mut f = Fixture::new();
+    f.bind_at(".env", FileLevel::WhileUnlocked);
+    let synced = f.sync();
+    let path = f.path(".env");
+    assert_eq!(read(&path), "PORT=3000\nAPI_TOKEN=tok-1\n");
+    assert_eq!(synced.files[0].level, FileLevel::WhileUnlocked);
+    assert_eq!(synced.files[0].state, FileState::InSync);
+    assert_eq!(synced.unlocked.len(), 1);
+    if cfg!(any(target_os = "macos", target_os = "linux", windows)) {
+        // Where the file system keeps attributes: the temporary folder may
+        // be one that doesn't (tmpfs on an older Linux).
+        let kept_out = fsutil::is_kept_out_of_copies(&path);
+        let supported = cfg!(target_os = "macos") || kept_out;
+        assert!(!supported || kept_out);
+    }
+
+    // The vault locks: the file goes.
+    let away = put_away(&synced);
+    assert_eq!(away.removed, 1);
+    assert_eq!(away.kept, []);
+    assert!(!path.exists());
+    // Unlocked again, it is to be written, not deleted.
+    assert_eq!(f.states(), [FileState::VaultChanged]);
+
+    // Unlocked again: written again, though the app wrote it before.
+    let synced = f.sync();
+    assert_eq!(synced.written.len(), 1);
+    assert_eq!(read(&path), "PORT=3000\nAPI_TOKEN=tok-1\n");
+
+    // A level-1 file next to it stays when the vault locks.
+    f.bind(".env.local");
+    let synced = f.sync();
+    assert_eq!(synced.unlocked.len(), 1);
+    assert_eq!(put_away(&synced).removed, 1);
+    assert!(!path.exists());
+    assert!(f.path(".env.local").exists());
+}
+
+#[test]
+fn an_edit_reaches_the_vault_before_its_file_goes() {
+    let mut f = Fixture::new();
+    f.bind_at(".env", FileLevel::WhileUnlocked);
+    f.sync();
+    let path = f.path(".env");
+    fs::write(&path, "PORT=3000\nAPI_TOKEN=tok-2\n").unwrap();
+    // The last round before the lock takes the edit.
+    let synced = f.sync();
+    assert_eq!(synced.changes.len(), 1);
+    assert_eq!(
+        f.values(),
+        owned(&[("PORT", "3000", false), ("API_TOKEN", "tok-2", true)])
+    );
+    assert_eq!(put_away(&synced).removed, 1);
+    assert!(!path.exists());
+}
+
+#[test]
+fn a_level_two_file_the_vault_cant_take_stays() {
+    let mut f = Fixture::new();
+    f.bind_at(".env", FileLevel::WhileUnlocked);
+    f.sync();
+    let path = f.path(".env");
+    // A quote being typed: the vault can't take it.
+    fs::write(&path, "PORT=3000\nAPI_TOKEN=\"tok-2\n").unwrap();
+    let synced = f.sync();
+    let away = put_away(&synced);
+    assert_eq!(away.removed, 0);
+    assert_eq!(away.kept.len(), 1);
+    assert!(matches!(away.kept[0].state, FileState::Invalid { .. }));
+    assert!(path.exists());
+
+    // Both sides changed: it stays too.
+    fs::write(&path, "PORT=3000\nAPI_TOKEN=tok-3\n").unwrap();
+    f.set("PORT", "4000", false);
+    let synced = f.sync();
+    let away = put_away(&synced);
+    assert_eq!(away.kept.len(), 1);
+    assert_eq!(away.kept[0].state, FileState::Conflict);
+    assert!(path.exists());
+
+    // Changed after the round: as the user left it.
+    f.keep(".env", KeepSide::Vault);
+    let synced = f.sync();
+    assert_eq!(synced.unlocked.len(), 1);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    fs::write(&path, "PORT=4000\nAPI_TOKEN=tok-4\n").unwrap();
+    assert_eq!(put_away(&synced).removed, 0);
+    assert!(path.exists());
+}
+
+#[test]
+fn remote_environments_have_files_only_while_unlocked() {
+    let mut f = Fixture::new();
+    let env = f.env.clone();
+    f.vault.set_env_kind(&env, EnvKind::Remote).unwrap();
+    assert!(
+        f.vault
+            .bind_env_file(&env, &f.file(".env"), &f.ctx)
+            .is_err()
+    );
+    let file = f.bind_at(".env", FileLevel::WhileUnlocked);
+    // Binding keeps it remote.
+    assert_eq!(f.vault.env_files(&env).unwrap().0, EnvKind::Remote);
+    let synced = f.sync();
+    assert_eq!(synced.files[0].state, FileState::InSync);
+    assert!(f.path(".env").exists());
+    assert!(
+        f.vault
+            .set_env_file_level(&env, &file, FileLevel::Always)
+            .is_err()
+    );
+
+    // Made local, its file can be there all the time.
+    f.vault.set_env_kind(&env, EnvKind::Local).unwrap();
+    assert!(
+        f.vault
+            .set_env_file_level(&env, &file, FileLevel::Always)
+            .unwrap()
+    );
+    assert!(
+        !f.vault
+            .set_env_file_level(&env, &file, FileLevel::Always)
+            .unwrap()
+    );
+    let synced = f.sync();
+    assert_eq!(synced.unlocked, []);
+    assert_eq!(put_away(&synced).removed, 0);
+    assert!(f.path(".env").exists());
+    // With a level-1 file, it can't be remote.
+    assert!(f.vault.set_env_kind(&env, EnvKind::Remote).is_err());
+    let detail = f.vault.environment(&env).unwrap();
+    assert_eq!(detail.files, std::slice::from_ref(&file));
+    assert_eq!(detail.while_unlocked, []);
+    f.vault
+        .set_env_file_level(&env, &file, FileLevel::WhileUnlocked)
+        .unwrap();
+    assert_eq!(f.vault.environment(&env).unwrap().while_unlocked, [file]);
+    f.vault.set_env_kind(&env, EnvKind::Remote).unwrap();
+}
+
+#[test]
+fn older_versions_never_see_level_two_files() {
+    let mut f = Fixture::new();
+    f.bind(".env");
+    f.bind_at(".env.local", FileLevel::WhileUnlocked);
+    let entry = f.vault.env_entry(&f.env).unwrap();
+    let Some(CustomDataValue::String(json)) = entry
+        .custom_data
+        .get(FILES_DATA)
+        .and_then(|item| item.value.as_ref())
+    else {
+        panic!("no file list");
+    };
+    let data: Value = serde_json::from_str(json).unwrap();
+    // `files` is the list older versions write; the other they keep as it is.
+    assert_eq!(data["files"].as_array().unwrap().len(), 1);
+    assert_eq!(data["files"][0]["path"], ".env");
+    assert_eq!(data["unlocked"][0]["path"], ".env.local");
+    // Unbinding finds it in either list.
+    let env = f.env.clone();
+    assert!(
+        f.vault
+            .unbind_env_file(&env, &f.file(".env.local"))
+            .unwrap()
+    );
+    assert_eq!(f.vault.environment(&env).unwrap().files, [f.file(".env")]);
+}
+
+#[test]
+fn a_level_two_file_no_longer_kept_in_step_goes() {
+    let mut f = Fixture::new();
+    f.bind_at(".env", FileLevel::WhileUnlocked);
+    f.sync();
+    let path = f.path(".env");
+    assert!(path.exists());
+    // Its environment goes to the recycle bin: the file goes too.
+    let env = f.env.clone();
+    f.vault.trash_environment(&env).unwrap();
+    let synced = f.sync();
+    assert!(matches!(
+        synced.files[0].state,
+        FileState::Inactive {
+            reason: InactiveReason::InTrash
+        }
+    ));
+    assert!(!path.exists());
+
+    // One changed by hand stays.
+    f.vault.restore_environment(&env).unwrap();
+    f.sync();
+    assert!(path.exists());
+    fs::write(&path, "PORT=1\n").unwrap();
+    f.vault.trash_environment(&env).unwrap();
+    f.sync();
+    assert!(path.exists());
+}
+
+#[test]
+fn cloud_folders_that_leave_out_level_two_files_are_no_risk_for_them() {
+    let mut f = Fixture::new();
+    f.bind(".env");
+    f.bind_at(".env.local", FileLevel::WhileUnlocked);
+    f.sync();
+    let services = |cloud: &CloudRoots| -> Vec<(String, Option<CloudService>)> {
+        f.vault
+            .env_files_overview(&f.ctx, &f.state, cloud, None)
+            .files
+            .into_iter()
+            .map(|report| (report.status.file.path, report.cloud))
+            .collect()
+    };
+    // Dropbox skips a file kept out of copies; OneDrive doesn't everywhere.
+    let dropbox = CloudRoots::new(vec![(f.folder.clone(), CloudService::Dropbox)]);
+    assert_eq!(
+        services(&dropbox),
+        [
+            (".env".to_owned(), Some(CloudService::Dropbox)),
+            (".env.local".to_owned(), None),
+        ]
+    );
+    let onedrive = CloudRoots::new(vec![(f.folder.clone(), CloudService::OneDrive)]);
+    assert_eq!(
+        services(&onedrive),
+        [
+            (".env".to_owned(), Some(CloudService::OneDrive)),
+            (".env.local".to_owned(), Some(CloudService::OneDrive)),
+        ]
+    );
+}
+
+#[test]
+fn a_file_back_at_level_one_goes_back_to_backups() {
+    let mut f = Fixture::new();
+    let file = f.bind_at(".env", FileLevel::WhileUnlocked);
+    f.sync();
+    let path = f.path(".env");
+    if !fsutil::is_kept_out_of_copies(&path) {
+        // A file system that keeps no attributes: nothing to take off.
+        let kept_by_system: bool = cfg!(target_os = "macos");
+        assert!(!kept_by_system);
+        return;
+    }
+    // As another computer would: only the binding changes.
+    let env = f.env.clone();
+    f.vault
+        .set_env_file_level(&env, &file, FileLevel::Always)
+        .unwrap();
+    let synced = f.sync();
+    assert_eq!(synced.unlocked, []);
+    assert_eq!(synced.always.len(), 1);
+    assert!(!fsutil::is_kept_out_of_copies(&path));
+    // A level-1 file the app never kept out is left as it is.
+    fsutil::keep_out_of_copies_at(&path);
+    f.sync();
+    assert!(fsutil::is_kept_out_of_copies(&path));
 }

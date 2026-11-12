@@ -5444,6 +5444,7 @@ dependencies = [
  "uuid",
  "windows 0.62.2",
  "windows-registry",
+ "xattr",
  "zeroize",
  "zxcvbn",
 ]

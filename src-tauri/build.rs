@@ -175,6 +175,7 @@ const COMMANDS: &[&str] = &[
     "envs_set_kind",
     "envs_files_status",
     "envs_files_bind",
+    "envs_files_set_level",
     "envs_files_unbind",
     "envs_files_sync",
     "envs_files_resolve",

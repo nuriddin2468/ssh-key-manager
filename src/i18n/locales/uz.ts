@@ -3766,12 +3766,12 @@ const uz = {
       remote: 'Masofaviy',
       localHint: 'Kompyuteringizda. Uni .env fayllarga yozish mumkin.',
       remoteHint:
-        'Server, staging yoki production. Fayllarsiz, «Terminalda ishga tushirish» orqali ishlatiladi.',
+        'Server, staging yoki production. «Terminalda ishga tushirish» orqali ishlatiladi; fayl faqat ombor ochiqligida.',
       makeLocal: 'Mahalliy qilish',
       makeRemote: 'Masofaviy qilish',
       nowLocal: '{{name}} endi mahalliy',
       nowRemote: '{{name}} endi masofaviy',
-      stopFilesFirst: 'Avval uning fayllariga yozishni toʻxtating',
+      stopFilesFirst: 'Avval uning fayllarini faqat ombor ochiqligida saqlang',
       prodTitle: '{{name}} mahalliy qilinsinmi?',
       prodText:
         '{{name}} productionga oʻxshaydi. Mahalliy muhitni shu kompyuterdagi .env fayllarga qiymatlari bilan yozish mumkin. Kerak boʻlmasa, production qiymatlarini bu diskda saqlamang.',
@@ -3834,7 +3834,30 @@ const uz = {
       },
       add: 'Fayl qoʻshish…',
       remoteNote:
-        'Masofaviy muhitlar fayllarga yozilmaydi. «Terminalda ishga tushirish»dan foydalaning.',
+        'Masofaviy muhitlar «Terminalda ishga tushirish» orqali ishlatiladi. Dasturga fayl kerak boʻlsa, faqat ombor ochiqligida diskda boʻladigan fayl qoʻshing.',
+      level: {
+        legend: 'Faylni diskda saqlash',
+        always: 'Doim',
+        alwaysHint: 'Oddiy fayl: dastur oʻqiganda doim joyida.',
+        alwaysRemoteHint: 'Masofaviy muhit uchun emas: avval uni mahalliy qiling.',
+        whileUnlocked: 'Faqat ombor ochiqligida',
+        whileUnlockedHint:
+          'Ombor qulflanganda yoki ilova yopilganda oʻchiriladi. Zaxira nusxalar va bulutli sinxronlash imkon boʻlgan joyda uni oʻtkazib yuboradi.',
+        badge: 'Ombor ochiqligida',
+        remoteTitle: '{{name}} — masofaviy muhit',
+        remoteText:
+          'Uning qiymatlari (koʻpincha staging yoki production) ombor ochiq turganda shu diskda boʻladi. Faylni faqat bu yerdagi dasturga kerak boʻlsa qoʻshing.',
+        makeWhileUnlocked: 'Faqat ombor ochiqligida saqlash',
+        makeAlways: 'Doim saqlash',
+        nowWhileUnlocked: '{{file}} endi faqat ombor ochiqligida diskda boʻladi',
+        nowAlways: '{{file}} endi doim diskda qoladi',
+        left_one: '.env fayl diskda qoldi',
+        left_other: '{{count}} ta .env fayl diskda qoldi',
+        leftText_one:
+          '{{files}} faylida ombor qabul qila olmagan oʻzgarishlar bor, shuning uchun u oʻchirilmadi. Buni hal qilish uchun omborni oching.',
+        leftText_other:
+          '{{files}} fayllarida ombor qabul qila olmagan oʻzgarishlar bor, shuning uchun ular oʻchirilmadi. Buni hal qilish uchun omborni oching.',
+      },
       emptyText:
         'Bu muhitni uning loyihalaridan birining papkasidagi .env faylga yozing. Faylda qilgan tahrirlaringiz omborga qaytadi.',
       listLabel: '{{env}} yoziladigan fayllar',
@@ -3876,7 +3899,8 @@ const uz = {
         invalid_other:
           '{{lines}}-qatorlarni oʻqib boʻlmaydi. Ularni faylda tuzating: shungacha hech tomonda hech narsa oʻzgarmaydi, xato oʻzgaruvchilarni oʻchirib yubormaydi.',
         inactive: {
-          remote: 'Fayl oʻz holicha qoladi. Uni qayta yozish uchun muhitni mahalliy qiling.',
+          remote:
+            'Fayl oʻz holicha qoladi. Uni qayta yozish uchun muhitni mahalliy qiling yoki faylni faqat ombor ochiqligida saqlang.',
           inTrash: 'Fayl oʻz holicha qoladi. Uni qayta yozish uchun muhitni tiklang.',
           notInProject:
             'Fayl oʻz holicha qoladi. Papkani shu muhit bor loyihaga qaytaring yoki faylga yozishni toʻxtating.',
@@ -3927,6 +3951,8 @@ const uz = {
         text: 'Fayl oʻz holicha qoladi, undagi tahrirlar esa endi omborga yetib bormaydi.',
         delete: 'Faylni ham oʻchirish',
         deleteHint: 'Faqat unda aynan ombordagi qiymatlar boʻlsa, hech narsa yoʻqolmasligi uchun.',
+        keepWhileUnlocked:
+          'Hozir u faqat ombor ochiqligida diskda boʻladi. Qoldirilsa, ombor qulflanganda ham qoladi va ilova uni oʻchirmaydi.',
         confirm: 'Yozishni toʻxtatish',
         done: '{{file}} endi yozilmaydi',
         deleted: '{{file}} oʻchirildi',

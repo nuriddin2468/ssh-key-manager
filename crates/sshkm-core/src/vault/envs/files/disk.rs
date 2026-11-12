@@ -194,9 +194,16 @@ pub(super) fn read(path: &Path) -> Disk {
 
 /// Writes `bytes` to the target, readable by its owner only, by renaming a
 /// new file over it, unless it no longer holds `expected` (`None`: unless
-/// it exists now) or its folder is no longer the one it was found in.
-/// Returns whether it wrote.
-pub(super) fn write(target: &Target, expected: Option<&[u8]>, bytes: &[u8]) -> Result<bool> {
+/// it exists now) or its folder is no longer the one it was found in. With
+/// `keep_out`, the new file is kept out of backups and cloud folders from
+/// before it holds anything ([`fsutil::keep_out_of_copies`]). Returns
+/// whether it wrote.
+pub(super) fn write(
+    target: &Target,
+    expected: Option<&[u8]>,
+    bytes: &[u8],
+    keep_out: bool,
+) -> Result<bool> {
     let current = match read(&target.real) {
         Disk::Missing => None,
         Disk::Text(text) => Some(text),
@@ -206,7 +213,14 @@ pub(super) fn write(target: &Target, expected: Option<&[u8]>, bytes: &[u8]) -> R
     if current.as_ref().map(|text| text.as_bytes()) != expected || !same_folder(target) {
         return Ok(false);
     }
-    fsutil::replace_private(&target.real, bytes, expected.is_some())
+    fsutil::replace_private(&target.real, bytes, expected.is_some(), keep_out)
+}
+
+/// Keeps the target, as it is, out of backups and cloud folders: for a
+/// file that was at level 1 until now. Only the attributes it lacks are set
+/// ([`fsutil::keep_out_of_copies_at`]).
+pub(super) fn keep_out(target: &Target) {
+    fsutil::keep_out_of_copies_at(&target.real);
 }
 
 /// The target's folder is still the folder it was found in, and no link
@@ -221,24 +235,7 @@ fn same_folder(target: &Target) -> bool {
 /// Removes the temporary files of the target's writes that a crash left
 /// next to it: they hold its values in plain text.
 pub(super) fn sweep(target: &Target) {
-    let (Some(dir), Some(name)) = (
-        target.real.parent(),
-        target.real.file_name().and_then(|name| name.to_str()),
-    ) else {
-        return;
-    };
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.filter_map(std::result::Result::ok) {
-        let leftover = entry
-            .file_name()
-            .to_str()
-            .is_some_and(|found| fsutil::is_private_temp(found, name));
-        if leftover && entry.file_type().is_ok_and(|kind| kind.is_file()) {
-            let _ = fs::remove_file(entry.path());
-        }
-    }
+    fsutil::sweep_private_temps(&target.real);
 }
 
 /// Deletes the target, a regular file.

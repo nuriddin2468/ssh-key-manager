@@ -7,6 +7,7 @@ mod commands;
 mod confirm;
 mod device_unlock;
 mod env_files;
+pub mod env_guard;
 mod error;
 #[cfg(target_os = "linux")]
 mod gpu;
@@ -260,6 +261,7 @@ pub fn run() {
             commands::env_files::envs_set_kind,
             commands::env_files::envs_files_status,
             commands::env_files::envs_files_bind,
+            commands::env_files::envs_files_set_level,
             commands::env_files::envs_files_unbind,
             commands::env_files::envs_files_sync,
             commands::env_files::envs_files_resolve,
@@ -313,6 +315,16 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to start SSH Key Manager")
         .run(|app, event| {
+            // The `.env` files written only while the vault is unlocked go
+            // with the app.
+            if let RunEvent::Exit = event
+                && let (Some(files), Some(state)) = (
+                    app.try_state::<Arc<env_files::EnvFiles>>(),
+                    app.try_state::<Shared>(),
+                )
+            {
+                files.quit(app, &state);
+            }
             if let RunEvent::Exit = event
                 && let Some(state) = app.try_state::<Shared>()
             {
@@ -381,7 +393,7 @@ fn lock_on_minimize(window: &tauri::Window, event: &WindowEvent) {
         && let Some(state) = window.try_state::<Arc<AppState>>()
         && state.vault.settings().lock_on_minimize
     {
-        state.vault.lock(window.app_handle(), LockReason::Minimize);
+        vault::lock_in_background(window.app_handle(), LockReason::Minimize);
     }
 }
 

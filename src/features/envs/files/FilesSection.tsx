@@ -1,4 +1,4 @@
-import { FilePlus2, GitBranch, MoreHorizontal, Unlink } from 'lucide-react';
+import { FilePlus2, FileText, GitBranch, LockKeyhole, MoreHorizontal, Unlink } from 'lucide-react';
 import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -8,6 +8,7 @@ import type { EnvFile } from '@/bindings/EnvFile';
 import type { EnvFileReport } from '@/bindings/EnvFileReport';
 import type { EnvFileStatus } from '@/bindings/EnvFileStatus';
 import type { EnvSummary } from '@/bindings/EnvSummary';
+import type { FileLevel } from '@/bindings/FileLevel';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Checkbox } from '@/components/ui/Checkbox';
@@ -51,14 +52,17 @@ interface FilesSectionProps {
   env: EnvSummary;
   /** The files it is written to, in the order they were added. */
   files: EnvFile[];
+  /** Those of `files` on disk only while the vault is unlocked. */
+  whileUnlocked: EnvFile[];
 }
 
 /**
  * Where an environment is written: its files and where each stands against
  * the vault, with Git and cloud folders that would take its values along,
- * and the action a file needs. A remote environment gets none.
+ * and the action a file needs. A remote environment gets files only while
+ * the vault is unlocked.
  */
-export function FilesSection({ env, files }: FilesSectionProps) {
+export function FilesSection({ env, files, whileUnlocked }: FilesSectionProps) {
   const { t } = useTranslation();
   const envLabelOf = useEnvLabel();
   const headingId = useId();
@@ -93,17 +97,15 @@ export function FilesSection({ env, files }: FilesSectionProps) {
             <span className="ml-1.5 font-normal text-subtle tabular-nums">{files.length}</span>
           ) : null}
         </h3>
-        {env.kind === 'local' ? (
-          <Button
-            variant="soft"
-            size="sm"
-            className="ml-auto"
-            icon={<FilePlus2 className="size-3.5" strokeWidth={2.2} />}
-            onClick={() => setOpen({ kind: 'bind' })}
-          >
-            {t('envs.files.add')}
-          </Button>
-        ) : null}
+        <Button
+          variant="soft"
+          size="sm"
+          className="ml-auto"
+          icon={<FilePlus2 className="size-3.5" strokeWidth={2.2} />}
+          onClick={() => setOpen({ kind: 'bind' })}
+        >
+          {t('envs.files.add')}
+        </Button>
       </div>
 
       {env.kind === 'remote' && files.length === 0 ? (
@@ -127,6 +129,8 @@ export function FilesSection({ env, files }: FilesSectionProps) {
               key={`${file.folder}\n${file.path}`}
               envId={env.id}
               file={file}
+              level={whileUnlocked.some((x) => sameFile(x, file)) ? 'whileUnlocked' : 'always'}
+              remote={env.kind === 'remote'}
               status={statusOf(file)}
               statusFailed={statuses.isError}
               report={reportOf(file)}
@@ -150,7 +154,14 @@ export function FilesSection({ env, files }: FilesSectionProps) {
           <FileCompareDialog envId={env.id} file={open.file} onDone={() => setOpen(null)} />
         ) : null}
       </Dialog>
-      <StopDialog envId={env.id} file={stopping} onDone={() => setStopping(null)} />
+      <StopDialog
+        // Opened afresh for each file, so its choice starts from that file's level.
+        key={stopping ? `${stopping.folder}\n${stopping.path}` : 'none'}
+        envId={env.id}
+        file={stopping}
+        whileUnlocked={stopping !== null && whileUnlocked.some((x) => sameFile(x, stopping))}
+        onDone={() => setStopping(null)}
+      />
       <ConfirmDialog
         open={ignoring !== null}
         onOpenChange={(next) => (next ? undefined : setIgnoring(null))}
@@ -170,6 +181,9 @@ export function FilesSection({ env, files }: FilesSectionProps) {
 interface FileRowProps {
   envId: string;
   file: EnvFile;
+  level: FileLevel;
+  /** The environment is remote: its files stay at level 2. */
+  remote: boolean;
   status: EnvFileStatus | undefined;
   /** The states couldn't be fetched. */
   statusFailed: boolean;
@@ -184,6 +198,8 @@ interface FileRowProps {
 function FileRow({
   envId,
   file,
+  level,
+  remote,
   status,
   statusFailed,
   report,
@@ -205,6 +221,13 @@ function FileRow({
       toast.warning(t('envs.files.errors.fileBack', { file: fileName(file) }));
       return true;
     },
+  });
+  const setLevel = useVaultMutation((next: FileLevel) => api.envsFilesSetLevel(envId, file, next), {
+    success: (_, next) =>
+      next === 'whileUnlocked'
+        ? t('envs.files.level.nowWhileUnlocked', { file: fileName(file) })
+        : t('envs.files.level.nowAlways', { file: fileName(file) }),
+    onSuccess: () => void refreshFileReports(),
   });
   const git = report?.git?.state;
   const missing = report ? missingNames(report) : [];
@@ -233,6 +256,9 @@ function FileRow({
                 ? t('envs.files.statusFailed')
                 : t('common.loading')}
           </span>
+          {level === 'whileUnlocked' ? (
+            <Badge tone="violet">{t('envs.files.level.badge')}</Badge>
+          ) : null}
           {git === 'untracked' ? (
             <Badge tone="warning">{t('envs.center.gitUntracked')}</Badge>
           ) : null}
@@ -289,6 +315,21 @@ function FileRow({
               {t('envs.center.ignore')}
             </MenuItem>
           ) : null}
+          {level === 'always' ? (
+            <MenuItem
+              icon={<LockKeyhole className="size-4" />}
+              onSelect={() => setLevel.mutate('whileUnlocked')}
+            >
+              {t('envs.files.level.makeWhileUnlocked')}
+            </MenuItem>
+          ) : remote ? null : (
+            <MenuItem
+              icon={<FileText className="size-4" />}
+              onSelect={() => setLevel.mutate('always')}
+            >
+              {t('envs.files.level.makeAlways')}
+            </MenuItem>
+          )}
           <MenuItem icon={<Unlink className="size-4" />} onSelect={onStop}>
             {t('envs.files.stop')}
           </MenuItem>
@@ -301,17 +342,23 @@ function FileRow({
 interface StopDialogProps {
   envId: string;
   file: EnvFile | null;
+  /** It is on disk only while the vault is unlocked: deleting it is the default. */
+  whileUnlocked: boolean;
   onDone: () => void;
 }
 
-/** Stops writing to a file, and deletes it too if asked (only when nothing is lost). */
-function StopDialog({ envId, file, onDone }: StopDialogProps) {
+/**
+ * Stops writing to a file, and deletes it too if asked (only when nothing is
+ * lost). A file kept only while the vault is unlocked is deleted unless the
+ * user keeps it: the app wouldn't remove it any more.
+ */
+function StopDialog({ envId, file, whileUnlocked, onDone }: StopDialogProps) {
   const { t } = useTranslation();
-  const [deleteFile, setDeleteFile] = useState(false);
+  const [deleteFile, setDeleteFile] = useState(whileUnlocked);
   const [notDeleted, setNotDeleted] = useState(false);
   const name = file ? fileName(file) : '';
   const close = () => {
-    setDeleteFile(false);
+    setDeleteFile(whileUnlocked);
     setNotDeleted(false);
     onDone();
   };
@@ -363,6 +410,11 @@ function StopDialog({ envId, file, onDone }: StopDialogProps) {
               label={t('envs.files.unbind.delete')}
             />
             <p className="pl-[28px] text-[12px] text-subtle">{t('envs.files.unbind.deleteHint')}</p>
+            {whileUnlocked && !deleteFile ? (
+              <p className="pl-[28px] text-[12px] text-warning">
+                {t('envs.files.unbind.keepWhileUnlocked')}
+              </p>
+            ) : null}
           </div>
         </DialogBody>
         <DialogFooter>

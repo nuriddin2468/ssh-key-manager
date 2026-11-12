@@ -59,7 +59,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8], new_file_mode: u32) -> Result<()>
 pub(crate) fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     let target = resolve_symlinks(path)?;
     let (_, prefix) = temp_location(&target);
-    write_private_at(&target, bytes, &prefix, ".sshkm-tmp", true).map(drop)
+    write_private_at(&target, bytes, &prefix, ".sshkm-tmp", true, false).map(drop)
 }
 
 /// What the temporary file of [`replace_private`] for a file named `name`
@@ -76,14 +76,38 @@ pub fn is_private_temp(name: &str, of: &str) -> bool {
         .is_some_and(|rest| rest.len() > PRIVATE_TEMP.1.len() && rest.ends_with(PRIVATE_TEMP.1))
 }
 
+/// Removes the temporary files of [`replace_private`]'s writes to `path`
+/// that a crash left next to it: they may hold its contents in plain text.
+/// Only regular files are removed.
+pub fn sweep_private_temps(path: &Path) {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(std::result::Result::ok) {
+        let leftover = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|found| is_private_temp(found, name));
+        if leftover && entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// Replaces `path` with a new file that holds `bytes` and that only this
 /// user can read: mode 0600 on Unix; on Windows an access list for nobody
 /// but the user, `SYSTEM` and `Administrators`, set as the file is made,
 /// as [`atomic_write_private`] does. Unlike [`atomic_write`], a symbolic
 /// link at `path` is never followed: the new file is renamed over whatever
 /// is there, a link included. Without `overwrite`, nothing is written if
-/// something is at `path` by then, and the call returns `false`.
-pub fn replace_private(path: &Path, bytes: &[u8], overwrite: bool) -> Result<bool> {
+/// something is at `path` by then, and the call returns `false`. With
+/// `keep_out`, the new file is kept out of backups and cloud folders
+/// ([`keep_out_of_copies`]) before it is renamed into place; on Unix before
+/// it holds anything.
+pub fn replace_private(path: &Path, bytes: &[u8], overwrite: bool, keep_out: bool) -> Result<bool> {
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -91,7 +115,7 @@ pub fn replace_private(path: &Path, bytes: &[u8], overwrite: bool) -> Result<boo
     let prefix = format!("{name}{}", PRIVATE_TEMP.0);
     #[cfg(windows)]
     {
-        write_private_at(path, bytes, &prefix, PRIVATE_TEMP.1, overwrite)
+        write_private_at(path, bytes, &prefix, PRIVATE_TEMP.1, overwrite, keep_out)
     }
     #[cfg(not(windows))]
     {
@@ -103,6 +127,9 @@ pub fn replace_private(path: &Path, bytes: &[u8], overwrite: bool) -> Result<boo
             .map_err(|e| Error::io(e, dir))?;
         // tempfile makes it 0600; set again in case a umask or ACL differs.
         set_mode(tmp.path(), 0o600)?;
+        if keep_out {
+            keep_out_of_copies(tmp.as_file());
+        }
         tmp.write_all(bytes).map_err(|e| Error::io(e, tmp.path()))?;
         tmp.as_file()
             .sync_all()
@@ -134,6 +161,7 @@ fn write_private_at(
     prefix: &str,
     suffix: &str,
     overwrite: bool,
+    keep_out: bool,
 ) -> Result<bool> {
     let (dir, _) = temp_location(target);
     let created = tempfile::Builder::new()
@@ -147,11 +175,19 @@ fn write_private_at(
         }
         Err(e) => return Err(Error::io(e, dir)),
     };
+    // Out of copies before it holds anything, where the stream can be
+    // written while the file is open; else once it is closed, below.
+    if keep_out {
+        keep_out_of_copies_at(&tmp);
+    }
     // No one else may open the file while `file` is open, so it is closed
     // before `tmp` renames it, or removes it when dropped on an error.
     let written = file.write_all(bytes).and_then(|()| file.sync_all());
     drop(file);
     written.map_err(|e| Error::io(e, &tmp))?;
+    if keep_out {
+        keep_out_of_copies_at(&tmp);
+    }
     let persisted = if overwrite {
         tmp.persist(target)
     } else {
@@ -161,6 +197,132 @@ fn write_private_at(
         Ok(()) => Ok(true),
         Err(e) if !overwrite && e.error.kind() == io::ErrorKind::AlreadyExists => Ok(false),
         Err(e) => Err(Error::io(e.error, target)),
+    }
+}
+
+/// The extended attributes that keep a file out of backups and cloud
+/// folders, where the system reads one:
+///
+/// - macOS: Time Machine's sticky exclusion (what `tmutil addexclusion`
+///   sets, a property list naming `com.apple.backupd`), Dropbox's
+///   `com.dropbox.ignored`, and `com.apple.fileprovider.ignore#P`, which
+///   the folders kept by File Provider (iCloud Drive, Dropbox and `OneDrive`
+///   in `~/Library/CloudStorage`) honour;
+/// - Linux: Dropbox's `user.com.dropbox.ignored`.
+///
+/// On Windows Dropbox reads the stream `com.dropbox.ignored` instead
+/// (`DROPBOX_STREAM`); `OneDrive` and File History have nothing per file.
+#[cfg(target_os = "macos")]
+const COPIES_ATTRIBUTES: [(&str, &[u8]); 3] = [
+    (
+        "com.apple.metadata:com_apple_backup_excludeItem",
+        &TIME_MACHINE_EXCLUDED,
+    ),
+    ("com.dropbox.ignored", b"1"),
+    ("com.apple.fileprovider.ignore#P", b"1"),
+];
+#[cfg(target_os = "linux")]
+const COPIES_ATTRIBUTES: [(&str, &[u8]); 1] = [("user.com.dropbox.ignored", b"1")];
+
+/// The binary property list of the string `com.apple.backupd`, as
+/// `tmutil addexclusion` writes it.
+#[cfg(target_os = "macos")]
+const TIME_MACHINE_EXCLUDED: [u8; 61] = {
+    let mut plist = [0u8; 61];
+    let head = b"bplist00_\x10\x11com.apple.backupd\x08";
+    let mut i = 0;
+    while i < head.len() {
+        plist[i] = head[i];
+        i += 1;
+    }
+    // The trailer: one-byte offsets and references, one object, the top
+    // one first, the offset table at 28.
+    plist[35] = 1;
+    plist[36] = 1;
+    plist[44] = 1;
+    plist[60] = 0x1c;
+    plist
+};
+
+/// The alternate data stream Dropbox reads on Windows.
+#[cfg(windows)]
+const DROPBOX_STREAM: &str = ":com.dropbox.ignored";
+
+/// Keeps the open file out of backups and cloud folders where the system
+/// allows it ([`COPIES_ATTRIBUTES`]). Best effort: a file system without
+/// extended attributes (FAT, some network shares) keeps none, and nothing
+/// fails because of that.
+#[cfg(not(windows))]
+fn keep_out_of_copies(file: &fs::File) {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        use xattr::FileExt as _;
+        for (name, value) in COPIES_ATTRIBUTES {
+            let _ = file.set_xattr(name, value);
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let _ = file;
+}
+
+/// Keeps the file at `path` out of backups and cloud folders, as
+/// [`keep_out_of_copies`] does, without following a link at `path`. Only
+/// the attributes it lacks are set: setting one is a change the file's
+/// watcher reports, and one the file system refuses is not set again and
+/// again.
+pub fn keep_out_of_copies_at(path: &Path) {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    for (name, value) in COPIES_ATTRIBUTES {
+        if xattr::get(path, name).ok().flatten().as_deref() != Some(value) {
+            let _ = xattr::set(path, name, value);
+        }
+    }
+    #[cfg(windows)]
+    if fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file()) && !is_kept_out_of_copies(path) {
+        let mut stream = path.as_os_str().to_owned();
+        stream.push(DROPBOX_STREAM);
+        let _ = fs::write(PathBuf::from(stream), b"1");
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    let _ = path;
+}
+
+/// Lets backups and cloud folders take the file at `path` again: the
+/// attributes of [`keep_out_of_copies_at`] removed.
+pub fn let_into_copies_at(path: &Path) {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    for (name, _) in COPIES_ATTRIBUTES {
+        let _ = xattr::remove(path, name);
+    }
+    #[cfg(windows)]
+    if fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file()) {
+        let mut stream = path.as_os_str().to_owned();
+        stream.push(DROPBOX_STREAM);
+        let _ = fs::remove_file(PathBuf::from(stream));
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    let _ = path;
+}
+
+/// Whether the file at `path` has every attribute [`keep_out_of_copies_at`]
+/// sets. Where the system has none to set, it is as kept out as it gets.
+pub fn is_kept_out_of_copies(path: &Path) -> bool {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        COPIES_ATTRIBUTES
+            .iter()
+            .all(|(name, value)| xattr::get(path, name).ok().flatten().as_deref() == Some(*value))
+    }
+    #[cfg(windows)]
+    {
+        let mut stream = path.as_os_str().to_owned();
+        stream.push(DROPBOX_STREAM);
+        fs::read(PathBuf::from(stream)).is_ok_and(|value| value == b"1")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        let _ = path;
+        true
     }
 }
 
@@ -424,6 +586,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn files_kept_out_of_copies_are_so_from_the_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".env");
+        assert!(replace_private(&path, b"A=1\n", false, true).unwrap());
+        // A temporary folder whose file system keeps no attributes (tmpfs
+        // before Linux 6.6) leaves nothing to check; macOS and Windows keep
+        // them.
+        let kept_out = is_kept_out_of_copies(&path);
+        let kept_by_system: bool = cfg!(any(target_os = "macos", windows));
+        assert!(kept_out || !kept_by_system);
+        if !kept_out {
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let out = std::process::Command::new("tmutil")
+                .arg("isexcluded")
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(String::from_utf8_lossy(&out.stdout).contains("[Excluded]"));
+        }
+        // Written again, the new file is kept out too.
+        assert!(replace_private(&path, b"A=2\n", true, true).unwrap());
+        assert!(is_kept_out_of_copies(&path));
+        let_into_copies_at(&path);
+        assert!(!is_kept_out_of_copies(&path));
+        keep_out_of_copies_at(&path);
+        assert!(is_kept_out_of_copies(&path));
+        // A plain write keeps nothing out.
+        assert!(replace_private(&path, b"A=3\n", true, false).unwrap());
+        assert!(!is_kept_out_of_copies(&path));
+    }
+
+    #[test]
     fn atomic_write_creates_and_replaces() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config");
@@ -498,15 +695,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".env");
         fs::write(&path, "OLD=1\n").unwrap();
-        assert!(replace_private(&path, b"NEW=1\n", true).unwrap());
+        assert!(replace_private(&path, b"NEW=1\n", true, false).unwrap());
         assert_eq!(fs::read(&path).unwrap(), b"NEW=1\n");
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
         // Without overwriting, a file that is there stays.
-        assert!(!replace_private(&path, b"OTHER=1\n", false).unwrap());
+        assert!(!replace_private(&path, b"OTHER=1\n", false, false).unwrap());
         assert_eq!(fs::read(&path).unwrap(), b"NEW=1\n");
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
         let new = dir.path().join("app.env");
-        assert!(replace_private(&new, b"A=1\n", false).unwrap());
+        assert!(replace_private(&new, b"A=1\n", false, false).unwrap());
         assert_eq!(fs::read(&new).unwrap(), b"A=1\n");
         // The temporary file is named like the file, for `.env*` rules.
         assert!(is_private_temp(".env.sshkm-Ab12Cd.tmp", ".env"));
@@ -525,7 +722,7 @@ mod tests {
             fs::write(&elsewhere, "keep").unwrap();
             fs::remove_file(&path).unwrap();
             std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
-            replace_private(&path, b"NEW=2\n", true).unwrap();
+            replace_private(&path, b"NEW=2\n", true, false).unwrap();
             assert_eq!(fs::read_to_string(&elsewhere).unwrap(), "keep");
             assert!(
                 !fs::symlink_metadata(&path)

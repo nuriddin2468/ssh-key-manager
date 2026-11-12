@@ -20,6 +20,13 @@ vi.mock('@/api/commands', () => ({ api }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), warning: vi.fn(), error: vi.fn() }));
 vi.mock('sonner', () => ({ toast }));
 
+// Radix measures radio items; jsdom has no ResizeObserver.
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};
+
 const env = {
   id: 'env-1',
   // In Shop: its folders are the ones offered.
@@ -52,11 +59,12 @@ const waiting: EnvFileStatus = {
   label: 'shop-api',
   envName: 'dev',
   file,
+  level: 'always',
   location: '/code/shop-api/apps/web/.env.local',
   state: { type: 'folderMissing' },
 };
 
-function show() {
+function show(shown: EnvSummary = env) {
   api.vaultStatus.mockResolvedValue({ state: 'unlocked' });
   api.projectsList.mockResolvedValue([shop]);
   api.envsFilesBind.mockResolvedValue(waiting);
@@ -66,7 +74,7 @@ function show() {
     <QueryClientProvider client={client}>
       <TooltipProvider>
         <Dialog open>
-          <BindFileDialog env={env} bound={[]} onDone={onDone} />
+          <BindFileDialog env={shown} bound={[]} onDone={onDone} />
         </Dialog>
       </TooltipProvider>
     </QueryClientProvider>,
@@ -91,7 +99,7 @@ describe('writing an environment to a file whose folder isn’t made yet', () =>
     const onDone = show();
     await addFile();
     await vi.waitFor(() => expect(onDone).toHaveBeenCalled());
-    expect(api.envsFilesBind).toHaveBeenCalledWith('env-1', file);
+    expect(api.envsFilesBind).toHaveBeenCalledWith('env-1', file, 'always');
     expect(toast.success).toHaveBeenCalledWith(
       '.env.local is added. It’s written once its folder exists.',
     );
@@ -127,5 +135,34 @@ describe('writing an environment to a file whose folder isn’t made yet', () =>
     // Nothing that sounds like all is well, nor "the file no longer exists".
     expect(toast.success).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('how long a file stays on disk', () => {
+  it('is all the time unless the user picks only while the vault is unlocked', async () => {
+    api.envsFilesCheck.mockResolvedValue({
+      ...check,
+      git: { state: 'ignored', repository: '/code/shop-api' },
+    });
+    const onDone = show();
+    fireEvent.click(await screen.findByRole('radio', { name: 'Only while unlocked' }));
+    await addFile();
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(api.envsFilesCheck).toHaveBeenCalledWith('env-1', file, 'whileUnlocked');
+    expect(api.envsFilesBind).toHaveBeenCalledWith('env-1', file, 'whileUnlocked');
+  });
+
+  it('is only while the vault is unlocked for a remote environment, which says why', async () => {
+    api.envsFilesCheck.mockResolvedValue({
+      ...check,
+      git: { state: 'ignored', repository: '/code/shop-api' },
+    });
+    const onDone = show({ ...env, name: 'staging', kind: 'remote' });
+    expect(await screen.findByRole('radio', { name: 'All the time' })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: 'Only while unlocked' })).toBeChecked();
+    expect(screen.getByText(/staging is remote$/)).toBeInTheDocument();
+    await addFile();
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(api.envsFilesBind).toHaveBeenCalledWith('env-1', file, 'whileUnlocked');
   });
 });

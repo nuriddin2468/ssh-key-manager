@@ -15,6 +15,7 @@ function status(path: string, state: FileState, envId = 'env-1'): EnvFileStatus 
     label: 'shop-api',
     envName: 'dev',
     file: { folder: '~/code/shop', path },
+    level: 'always',
     location: `/code/shop/${path}`,
     state,
   };

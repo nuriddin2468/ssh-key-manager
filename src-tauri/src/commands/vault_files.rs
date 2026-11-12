@@ -338,7 +338,15 @@ pub async fn vault_use_file(
         if !same_file(&state.vault.paths().database, &path) {
             confirm_switch(&app, &path)?;
         }
-        if use_file(&state.vault, &path)? {
+        // The `.env` files written while it is unlocked go first, their
+        // edits in the vault; back if it stays.
+        state.vault.put_files_away();
+        let locked = use_file(&state.vault, &path);
+        if !matches!(locked, Ok(true)) {
+            state.vault.resume_files();
+        }
+        if locked? {
+            state.vault.lost();
             let _ = app.emit(LOCKED_EVENT, LockReason::Manual);
         }
         Ok(after_change(&app, state))
@@ -364,7 +372,15 @@ pub async fn vault_use_default(
                 _ => confirm_switch(&app, &default.database)?,
             }
         }
-        if use_default(&state.vault, move_files)? {
+        // The `.env` files written while it is unlocked go first, their
+        // edits in the vault; back if it stays.
+        state.vault.put_files_away();
+        let locked = use_default(&state.vault, move_files);
+        if !matches!(locked, Ok(true)) {
+            state.vault.resume_files();
+        }
+        if locked? {
+            state.vault.lost();
             let _ = app.emit(LOCKED_EVENT, LockReason::Manual);
         }
         Ok(after_change(&app, state))

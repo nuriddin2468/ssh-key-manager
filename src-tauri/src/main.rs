@@ -12,6 +12,11 @@ fn main() -> ExitCode {
     if let Some(code) = sshkm_app_lib::askpass::run_helper_from_env() {
         return code;
     }
+    // The app runs it as the guard of the `.env` files written only while
+    // the vault is unlocked, to remove them if the app goes without doing so.
+    if let Some(code) = sshkm_app_lib::env_guard::run_from_args() {
+        return code;
+    }
     // A browser runs it as the extension's native messaging host.
     if let Some(code) = sshkm_app_lib::browser::run_host_from_args() {
         return code;

@@ -357,6 +357,7 @@ describe('a project’s card on All projects', () => {
       label: 'shop-api',
       envName: 'dev',
       file: { folder: '~/code/shop', path },
+      level: 'always',
       location: null,
       state: { type: 'conflict' },
     });

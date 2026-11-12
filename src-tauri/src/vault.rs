@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 use sshkm_core::vault::projects::{self, Project};
 use sshkm_core::vault::{self as core_vault, Vault, VaultPaths};
 use sshkm_core::{ErrorCode, ExposeSecret, SecretString, fsutil};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::error::{AppError, AppResult};
 
@@ -119,6 +119,24 @@ pub struct VaultRuntime {
     /// Told after every change saved and every unlock: the managed `.env`
     /// files follow the vault ([`crate::env_files`]).
     after_change: OnceLock<Box<dyn Fn() + Send + Sync>>,
+    /// What the vault's locks and unlocks mean for the managed `.env` files
+    /// written only while it is unlocked ([`VaultHooks`]).
+    hooks: OnceLock<VaultHooks>,
+}
+
+/// What runs when the vault opens and closes, for the `.env` files written
+/// only while it is unlocked ([`crate::env_files`]).
+pub struct VaultHooks {
+    /// Before the vault locks, while it is still unlocked and not held: the
+    /// files' last edits go to the vault and the files are removed.
+    pub before_lock: Box<dyn Fn() + Send + Sync>,
+    /// After an unlock.
+    pub after_unlock: Box<dyn Fn() + Send + Sync>,
+    /// After the vault went without [`Self::before_lock`] (it changed
+    /// elsewhere in a way this copy can't follow, or is another file now):
+    /// the files still as the last round left them are removed. May run
+    /// while the vault is held, so it must not use it.
+    pub after_loss: Box<dyn Fn() + Send + Sync>,
 }
 
 #[derive(Default)]
@@ -209,6 +227,43 @@ impl VaultRuntime {
             session: AtomicU64::new(0),
             app: OnceLock::new(),
             after_change: OnceLock::new(),
+            hooks: OnceLock::new(),
+        }
+    }
+
+    /// Runs `hooks` when the vault opens and closes, from then on.
+    pub fn set_hooks(&self, hooks: VaultHooks) {
+        let _ = self.hooks.set(hooks);
+    }
+
+    /// Puts the `.env` files written only while the vault is unlocked away,
+    /// as before a lock ([`VaultHooks::before_lock`]), for a change that
+    /// may take the vault away (another vault file). [`Self::resume_files`]
+    /// takes it back if the vault stays.
+    pub fn put_files_away(&self) {
+        if self.is_unlocked()
+            && let Some(hooks) = self.hooks.get()
+        {
+            (hooks.before_lock)();
+        }
+    }
+
+    /// After [`Self::put_files_away`], when the vault stayed unlocked: the
+    /// files are written again.
+    pub fn resume_files(&self) {
+        if self.is_unlocked() {
+            if let Some(hooks) = self.hooks.get() {
+                (hooks.after_unlock)();
+            }
+            self.changed();
+        }
+    }
+
+    /// Tells the hooks the vault went without warning
+    /// ([`VaultHooks::after_loss`]).
+    pub fn lost(&self) {
+        if let Some(hooks) = self.hooks.get() {
+            (hooks.after_loss)();
         }
     }
 
@@ -308,13 +363,23 @@ impl VaultRuntime {
         if let Some(app) = self.app.get() {
             let _ = app.emit(UNLOCKED_EVENT, ());
         }
+        if let Some(hooks) = self.hooks.get() {
+            (hooks.after_unlock)();
+        }
         self.changed();
     }
 
     /// Locks the vault, telling the UI why. Does nothing if it is locked.
+    /// The `.env` files written only while it is unlocked go first
+    /// ([`VaultHooks::before_lock`]).
     pub fn lock(&self, app: &AppHandle, reason: LockReason) {
         if reason.ends_session() {
             self.end_session();
+        }
+        if self.is_unlocked()
+            && let Some(hooks) = self.hooks.get()
+        {
+            (hooks.before_lock)();
         }
         if self.lock_now() {
             log::info!("vault locked ({reason:?})");
@@ -412,6 +477,7 @@ impl VaultRuntime {
                 drop(guard);
                 self.end_session();
                 self.clear_copied_secret();
+                self.lost();
                 on_changed();
                 return Err(locked());
             }
@@ -672,6 +738,18 @@ fn load_settings(path: &Path) -> VaultSettings {
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default()
+}
+
+/// Locks the vault on a thread of its own, for the window's and the tray's
+/// events: a lock may first take the last edits of the `.env` files written
+/// only while it is unlocked, which must not hold up the main thread.
+pub fn lock_in_background(app: &AppHandle, reason: LockReason) {
+    let app = app.clone();
+    thread::spawn(move || {
+        if let Some(state) = app.try_state::<Arc<crate::state::AppState>>() {
+            state.vault.lock(&app, reason);
+        }
+    });
 }
 
 fn locked() -> AppError {

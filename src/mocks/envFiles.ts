@@ -11,8 +11,9 @@
 // folder that isn't on this computer, where Git can't be asked. Adding
 // marketing-site's files to its `.gitignore` fails (it is a link), to show
 // that failure. A few `.env` files in the projects'
-// folders are unmanaged, to take under management. Files exist only here:
-// their variables are kept with each binding.
+// folders are unmanaged, to take under management. shop-api / staging, a
+// remote environment, has `.env.staging` only while the vault is unlocked.
+// Files exist only here: their variables are kept with each binding.
 
 import type { CloudService } from '@/bindings/CloudService';
 import type { EnvDetail } from '@/bindings/EnvDetail';
@@ -28,6 +29,7 @@ import type { EnvImported } from '@/bindings/EnvImported';
 import type { EnvImportPreview } from '@/bindings/EnvImportPreview';
 import type { EnvUndo } from '@/bindings/EnvUndo';
 import type { ExampleCheck } from '@/bindings/ExampleCheck';
+import type { FileLevel } from '@/bindings/FileLevel';
 import type { FileState } from '@/bindings/FileState';
 import type { GitInfo } from '@/bindings/GitInfo';
 import type { ImportChoice } from '@/bindings/ImportChoice';
@@ -86,6 +88,11 @@ const repository = (file: EnvFile): GitInfo => ({
 
 const disk = new Map<string, MockFile>();
 
+const same = (a: EnvFile, b: EnvFile) => a.folder === b.folder && a.path === b.path;
+/** How long the file stays on disk. */
+const levelOf = (item: Env, file: EnvFile): FileLevel =>
+  item.whileUnlocked.some((x) => same(x, file)) ? 'whileUnlocked' : 'always';
+
 /** The sample environment `group / name`. */
 const sample = (group: string, name: string) =>
   mockEnvs().find((item) => item.group === group && item.name === name);
@@ -130,6 +137,17 @@ function seed() {
         example: null,
       });
     }
+  }
+  const staging = sample('shop-api', 'staging');
+  const unlockedOnly = staging?.whileUnlocked[0];
+  if (staging && unlockedOnly) {
+    disk.set(key(staging.id, unlockedOnly), {
+      vars: varsOf(staging),
+      state: 'inSync',
+      git: repository(unlockedOnly),
+      cloud: null,
+      example: null,
+    });
   }
   const local = marketing?.files[0];
   if (marketing && local) {
@@ -214,15 +232,17 @@ function labelOf(item: Env): string {
 
 async function statusOf(item: Env, file: EnvFile, all?: Project[]): Promise<EnvFileStatus> {
   seed();
+  const level = levelOf(item, file);
   const base = {
     envId: item.id,
     label: labelOf(item),
     envName: item.name,
     file: { ...file },
+    level,
   };
   const inactive = item.inTrash
     ? 'inTrash'
-    : kindOf(item) === 'remote'
+    : kindOf(item) === 'remote' && level === 'always'
       ? 'remote'
       : holds(all ?? (await projects()), item.id, file.folder)
         ? null
@@ -352,10 +372,13 @@ async function reports(project: unknown, all: Project[]): Promise<EnvFileReport[
       .map((p) => p.id);
     if (!wanted(ids)) continue;
     const found = disk.get(key(status.envId, status.file));
+    // Dropbox leaves out a file kept only while the vault is unlocked.
+    const cloud =
+      status.level === 'whileUnlocked' && found?.cloud === 'dropbox' ? null : found?.cloud;
     out.push({
       ...status,
       projects: ids,
-      cloud: status.location ? (found?.cloud ?? null) : null,
+      cloud: status.location ? (cloud ?? null) : null,
       example: status.location ? (found?.example ?? null) : null,
       git: status.location ? (found?.git ?? null) : null,
     });
@@ -364,13 +387,16 @@ async function reports(project: unknown, all: Project[]): Promise<EnvFileReport[
 }
 
 export const envFilesHandlers: Record<string, Handler> = {
-  envs_files_check: async ({ id, file }): Promise<EnvFileCheck> => {
+  envs_files_check: async ({ id, file, level }): Promise<EnvFileCheck> => {
     await requireUnlocked();
     seed();
     const item = await findEnv(id);
     const checked = await checkFile(file as EnvFile);
-    if (kindOf(item) === 'remote') {
-      return fail('invalid_input', 'a remote environment has no files: make it local first');
+    if (kindOf(item) === 'remote' && level !== 'whileUnlocked') {
+      return fail(
+        'invalid_input',
+        'a remote environment has a file only while the vault is unlocked',
+      );
     }
     if (!holds(await projects(), item.id, checked.folder)) {
       return fail('invalid_input', "the folder isn't in a project that holds the environment");
@@ -406,14 +432,17 @@ export const envFilesHandlers: Record<string, Handler> = {
     await requireUnlocked();
     return statuses();
   },
-  envs_files_bind: async ({ id, file }): Promise<EnvFileStatus> => {
+  envs_files_bind: async ({ id, file, level }): Promise<EnvFileStatus> => {
     await requireUnlocked();
     seed();
     const item = await findEnv(id);
     const checked = await checkFile(file as EnvFile);
     if (item.inTrash) return fail('invalid_input', 'restore the environment first');
-    if (kindOf(item) === 'remote') {
-      return fail('invalid_input', 'a remote environment has no files: make it local first');
+    if (kindOf(item) === 'remote' && level !== 'whileUnlocked') {
+      return fail(
+        'invalid_input',
+        'a remote environment has a file only while the vault is unlocked',
+      );
     }
     if (!holds(await projects(), item.id, checked.folder)) {
       return fail('invalid_input', "the folder isn't in a project that holds the environment");
@@ -421,8 +450,10 @@ export const envFilesHandlers: Record<string, Handler> = {
     if (item.files.some((x) => x.folder === checked.folder && x.path === checked.path)) {
       return fail('already_exists', checked.path);
     }
-    item.kind = 'local';
+    // Its kind stays as it is now, for good.
+    item.kind = kindOf(item);
     item.files.push(checked);
+    if (level === 'whileUnlocked') item.whileUnlocked.push({ ...checked });
     disk.set(key(item.id, checked), {
       vars: varsOf(item),
       state: checked.path.includes('/') ? 'folderMissing' : 'inSync',
@@ -444,9 +475,26 @@ export const envFilesHandlers: Record<string, Handler> = {
       return fail('conflict', locate(bound));
     }
     item.files = item.files.filter((x) => x !== bound);
+    item.whileUnlocked = item.whileUnlocked.filter((x) => !same(x, bound));
     disk.delete(key(item.id, bound));
     touchMockEnv(item);
     return mockEnvDetail(item);
+  },
+  envs_files_set_level: async ({ id, file, level }): Promise<EnvFileStatus> => {
+    await requireUnlocked();
+    seed();
+    const item = await findEnv(id);
+    const bound = await boundFile(item, file as EnvFile);
+    if (level === 'always' && kindOf(item) === 'remote') {
+      return fail(
+        'invalid_input',
+        'a remote environment has files only while the vault is unlocked',
+      );
+    }
+    item.whileUnlocked = item.whileUnlocked.filter((x) => !same(x, bound));
+    if (level === 'whileUnlocked') item.whileUnlocked.push({ ...bound });
+    touchMockEnv(item);
+    return statusOf(item, bound);
   },
   envs_files_sync: async (): Promise<EnvFilesSynced> => {
     await requireUnlocked();
@@ -583,7 +631,10 @@ export const envFilesHandlers: Record<string, Handler> = {
         return fail('invalid_input', 'the environment is in another project: move it first');
       }
       if (kindOf(existing) === 'remote') {
-        return fail('invalid_input', 'a remote environment has no files: make it local first');
+        return fail(
+          'invalid_input',
+          'a remote environment has a file only while the vault is unlocked',
+        );
       }
       return existing;
     });
@@ -607,6 +658,7 @@ export const envFilesHandlers: Record<string, Handler> = {
     });
     const bound = { folder: found.folder, path: found.path };
     item.files.push(bound);
+    // Taken under management as it is: there all the time.
     adopted.add(`${found.folder}\n${found.path}`);
     disk.set(key(item.id, bound), {
       vars: varsOf(item),

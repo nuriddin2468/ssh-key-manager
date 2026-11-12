@@ -188,6 +188,7 @@ describe('a card', () => {
       label: 'shop',
       envName: 'dev',
       file: { folder: '~/code/shop', path: '.env' },
+      level: 'always',
       location: '/code/shop/.env',
       state: { type: 'inSync' },
     } as const;

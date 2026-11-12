@@ -41,6 +41,7 @@ function conflict(path: string): EnvFileStatus {
     label: 'shop-api',
     envName: 'dev',
     file: { folder: '~/code/shop', path },
+    level: 'always',
     location: null,
     state: { type: 'conflict' },
   };

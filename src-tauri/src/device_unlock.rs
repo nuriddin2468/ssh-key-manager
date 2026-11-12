@@ -430,7 +430,11 @@ pub fn watch_screen_lock(runtime: Arc<VaultRuntime>, app: AppHandle) {
             let app = app.clone();
             let on_lock = move || {
                 if runtime.settings().lock_on_screen_lock {
-                    runtime.lock(&app, LockReason::ScreenLock);
+                    // On a thread of its own: the lock may first take the
+                    // last edits of the files written only while unlocked,
+                    // and the OS delivers this where it shouldn't wait.
+                    let (runtime, app) = (Arc::clone(&runtime), app.clone());
+                    thread::spawn(move || runtime.lock(&app, LockReason::ScreenLock));
                 } else {
                     runtime.end_session();
                 }

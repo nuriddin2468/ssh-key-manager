@@ -8,9 +8,13 @@ import type { EnvVarInfo } from "./EnvVarInfo";
  */
 export type EnvDetail = { notes: string, variables: Array<EnvVarInfo>, 
 /**
- * The files it is written to.
+ * The files it is written to: level 1 first.
  */
 files: Array<EnvFile>, 
+/**
+ * Those of `files` written only while the vault is unlocked (level 2).
+ */
+whileUnlocked: Array<EnvFile>, 
 /**
  * The KeePass entry UUID.
  */

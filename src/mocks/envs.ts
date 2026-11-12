@@ -51,6 +51,8 @@ export interface Env {
   /** Set by the user; otherwise from the name, as the backend does. */
   kind: EnvKind | null;
   files: EnvFile[];
+  /** Those of `files` written only while the vault is unlocked (level 2). */
+  whileUnlocked: EnvFile[];
 }
 
 const fail = (code: string, message: string) => Promise.reject({ code, message });
@@ -77,6 +79,7 @@ function env(group: string, name: string, vars: Variable[], extra: Partial<Env> 
     vars,
     kind: null,
     files: [],
+    whileUnlocked: [],
     ...extra,
   };
 }
@@ -107,15 +110,24 @@ const envs: Env[] = [
       ],
     },
   ),
-  env('shop-api', 'staging', [
-    v('NODE_ENV', 'production'),
-    v('PORT', '8080', false, 'API server'),
-    v('DATABASE_URL', 'postgres://shop:st4ging@db.staging.internal:5432/shop', true),
-    v('REDIS_URL', 'redis://cache.staging.internal:6379/0'),
-    v('STRIPE_SECRET_KEY', 'sk_test_51Hx0staging', true),
-    v('SENTRY_DSN', 'https://4f0c@o12.ingest.sentry.io/77', true),
-    v('LOG_LEVEL', 'info'),
-  ]),
+  env(
+    'shop-api',
+    'staging',
+    [
+      v('NODE_ENV', 'production'),
+      v('PORT', '8080', false, 'API server'),
+      v('DATABASE_URL', 'postgres://shop:st4ging@db.staging.internal:5432/shop', true),
+      v('REDIS_URL', 'redis://cache.staging.internal:6379/0'),
+      v('STRIPE_SECRET_KEY', 'sk_test_51Hx0staging', true),
+      v('SENTRY_DSN', 'https://4f0c@o12.ingest.sentry.io/77', true),
+      v('LOG_LEVEL', 'info'),
+    ],
+    {
+      // Remote, with a file only while the vault is unlocked.
+      files: [{ folder: '~/code/shop-api', path: '.env.staging' }],
+      whileUnlocked: [{ folder: '~/code/shop-api', path: '.env.staging' }],
+    },
+  ),
   env(
     'shop-api',
     'prod',
@@ -283,6 +295,7 @@ function detail(item: Env): EnvDetail {
       empty: value === '',
     })),
     files: item.files.map((file) => ({ ...file })),
+    whileUnlocked: item.whileUnlocked.map((file) => ({ ...file })),
   };
 }
 
@@ -521,8 +534,14 @@ export const envsHandlers: Record<string, Handler> = {
     await requireUnlocked();
     const item = find(id);
     if (!item) return fail('not_found', `environment ${id}`);
-    if (kind === 'remote' && item.files.length > 0) {
-      return fail('invalid_input', 'a remote environment has no files: remove its files first');
+    const always = item.files.filter(
+      (file) => !item.whileUnlocked.some((x) => x.folder === file.folder && x.path === file.path),
+    );
+    if (kind === 'remote' && always.length > 0) {
+      return fail(
+        'invalid_input',
+        'a remote environment has files only while the vault is unlocked: remove its other files or make them so first',
+      );
     }
     item.kind = kind as EnvKind;
     touch(item);

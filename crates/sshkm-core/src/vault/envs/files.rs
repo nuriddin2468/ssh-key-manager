@@ -27,7 +27,17 @@
 //!   conflict: nothing changes until the user keeps one side.
 //!
 //! A file the app wrote and someone deleted is reported, not written again;
-//! one never written on this computer is written. A file whose lines can't
+//! one never written on this computer is written.
+//!
+//! **Levels.** A file is there all the time (level 1), or only while the
+//! vault is unlocked (level 2, [`FileLevel::WhileUnlocked`]): written on
+//! unlock, written again whenever it is missing then, and removed by the app
+//! when the vault locks or the app quits ([`put_away`]). A
+//! level-2 file is kept out of Time Machine and cloud folders
+//! ([`fsutil::keep_out_of_copies`]), and is the only kind a remote
+//! environment can have. Its bindings are kept in a list of their own, which
+//! older versions keep without reading, so they never write such a file for
+//! good. A file whose lines can't
 //! all be read (a quote that never closes, a value too long) changes
 //! nothing either way until it is fixed, so a typo can't empty the vault;
 //! nor does a file left without a variable, which is a conflict.
@@ -37,6 +47,7 @@ mod cloud;
 mod disk;
 #[cfg(test)]
 mod tests;
+mod unlocked;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -54,6 +65,7 @@ use zeroize::Zeroizing;
 pub use self::cloud::{CloudRoots, CloudService};
 use self::disk::{Disk, Target};
 pub use self::disk::{find_env_files, ignore_in_git};
+pub use self::unlocked::{Leftover, Leftovers, PutAway, left_on_disk, put_away};
 use super::document::EnvDocument;
 use super::dotenv::{self, ParseProblem, ParsedEnv, ProblemKind};
 use super::{
@@ -116,6 +128,19 @@ impl EnvKind {
     }
 }
 
+/// How long a file an environment is written to stays on disk.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+pub enum FileLevel {
+    /// Level 1: a regular file, there all the time.
+    #[default]
+    Always,
+    /// Level 2: written when the vault is unlocked, removed when it locks
+    /// and when the app quits, and kept out of backups and cloud folders.
+    WhileUnlocked,
+}
+
 /// A file an environment is written to.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -137,8 +162,34 @@ struct FilesData {
     kind: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     files: Vec<StoredFile>,
+    /// The files written only while the vault is unlocked
+    /// ([`FileLevel::WhileUnlocked`]): a list older versions don't read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    unlocked: Vec<StoredFile>,
     #[serde(flatten)]
     rest: Map<String, Value>,
+}
+
+impl FilesData {
+    /// Every binding and its level: level 1 first, each list in the order
+    /// its files were added.
+    fn bindings(&self) -> impl Iterator<Item = (&StoredFile, FileLevel)> {
+        self.files
+            .iter()
+            .map(|stored| (stored, FileLevel::Always))
+            .chain(
+                self.unlocked
+                    .iter()
+                    .map(|stored| (stored, FileLevel::WhileUnlocked)),
+            )
+    }
+
+    fn list_mut(&mut self, level: FileLevel) -> &mut Vec<StoredFile> {
+        match level {
+            FileLevel::Always => &mut self.files,
+            FileLevel::WhileUnlocked => &mut self.unlocked,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -237,6 +288,7 @@ pub struct EnvFileStatus {
     pub label: String,
     pub env_name: String,
     pub file: EnvFile,
+    pub level: FileLevel,
     /// The file on this computer, when its folder is a full path here.
     pub location: Option<PathBuf>,
     pub state: FileState,
@@ -329,6 +381,16 @@ pub struct EnvFilesSynced {
     pub written: Vec<EnvFileStatus>,
     /// Every file and where it stands now.
     pub files: Vec<EnvFileStatus>,
+    /// The level-2 files that hold what the vault holds, as they are on
+    /// disk now: what to remove after a crash ([`Leftovers`]).
+    #[serde(skip)]
+    #[cfg_attr(feature = "ts", ts(skip))]
+    pub unlocked: Vec<Leftover>,
+    /// The level-1 files on this computer, in their folders with links
+    /// resolved: a level-2 file that was one of them stays.
+    #[serde(skip)]
+    #[cfg_attr(feature = "ts", ts(skip))]
+    pub always: Vec<PathBuf>,
 }
 
 /// A template next to a file (`.env.example`) and the names it sets that
@@ -363,7 +425,8 @@ pub struct EnvFileReport {
     pub status: EnvFileStatus,
     /// The projects (by id) that hold the environment and the folder.
     pub projects: Vec<String>,
-    /// The cloud service that copies the file's folder, if one does.
+    /// The cloud service that copies the file's folder, if one does and
+    /// doesn't leave out a level-2 file.
     pub cloud: Option<CloudService>,
     /// What a template next to it sets that the environment lacks.
     pub example: Option<ExampleCheck>,
@@ -433,6 +496,10 @@ struct Agreement {
     rev: String,
     #[serde(default)]
     dir: String,
+    /// The app kept the file out of backups and cloud folders, as a level-2
+    /// file: let back in once it is at level 1, whoever changed its level.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    out: bool,
 }
 
 /// Most keys a [`SyncState`] keeps revisions for.
@@ -465,6 +532,15 @@ impl SyncState {
             .get(file)
             .filter(|agreed| agreed.dir == dir)
             .map(|agreed| agreed.rev.as_str())
+    }
+
+    /// Whether the app kept `file` out of copies, by the agreement made with
+    /// the key `key_id`.
+    fn kept_out(&self, key_id: &str, file: &str) -> bool {
+        self.keys
+            .get(key_id)
+            .and_then(|keyed| keyed.files.get(file))
+            .is_some_and(|agreed| agreed.out)
     }
 
     /// The revisions made with the key `key_id`, to change; the oldest
@@ -512,6 +588,7 @@ struct Bound {
     kind: EnvKind,
     in_trash: bool,
     file: EnvFile,
+    level: FileLevel,
     /// The binding passes [`check_env_file`] as it is stored: one that came
     /// from elsewhere (another version, a sync, an edited database) and
     /// doesn't is never used.
@@ -530,6 +607,7 @@ impl Bound {
             label: self.label.clone(),
             env_name: self.env_name.clone(),
             file: self.file.clone(),
+            level: self.level,
             location,
             state,
         }
@@ -631,10 +709,15 @@ pub(super) fn kind_of(entry: &Entry) -> EnvKind {
         )
 }
 
-/// An environment's files, in the order they were added.
-pub(super) fn files_of(entry: &Entry) -> Vec<EnvFile> {
+/// An environment's files with their levels: level 1 first, each in the
+/// order they were added.
+pub(super) fn bindings_of(entry: &Entry) -> Vec<(EnvFile, FileLevel)> {
     files_data(entry)
-        .map(|data| data.files.iter().map(StoredFile::file).collect())
+        .map(|data| {
+            data.bindings()
+                .map(|(stored, level)| (stored.file(), level))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -897,44 +980,59 @@ impl UnmanagedSearch {
 }
 
 impl Vault {
-    /// An environment's kind and files.
-    pub fn env_files(&self, id: &str) -> Result<(EnvKind, Vec<EnvFile>)> {
+    /// An environment's kind and files, with their levels.
+    pub fn env_files(&self, id: &str) -> Result<(EnvKind, Vec<(EnvFile, FileLevel)>)> {
         let entry = self.env_entry(id)?;
-        Ok((kind_of(&entry), files_of(&entry)))
+        Ok((kind_of(&entry), bindings_of(&entry)))
     }
 
-    /// Makes an environment local or remote. A remote one has no files, so
-    /// its files are to be removed first.
+    /// Makes an environment local or remote. A remote one has files only
+    /// while the vault is unlocked, so its other files are to be removed, or
+    /// made so, first.
     pub fn set_env_kind(&mut self, id: &str, kind: EnvKind) -> Result<()> {
         let entry = self.env_entry(id)?;
         let mut data = files_data(&entry)?;
         if kind == EnvKind::Remote && !data.files.is_empty() {
             return Err(Error::invalid(
-                "a remote environment has no files: remove its files first",
+                "a remote environment has files only while the vault is unlocked: \
+                 remove its other files or make them so first",
             ));
         }
         data.kind = Some(kind.as_str().to_owned());
         self.put_files_data(id, &data)
     }
 
-    /// Writes `file` from now on with the environment `id`: a local one,
-    /// outside the recycle bin, in a folder of a project that holds it.
-    /// Makes the environment local for good, so a new name doesn't take
-    /// its files away. Fails for a file another binding names already,
-    /// here or through another folder that is the same on disk, and for one
-    /// that can never be written ([`RefusedReason`]). Returns the binding as
-    /// kept.
+    /// Writes `file` from now on with the environment `id`, all the time
+    /// ([`Self::bind_env_file_at`] at level 1).
     pub fn bind_env_file(
         &mut self,
         id: &str,
         file: &EnvFile,
         ctx: &FilesContext,
     ) -> Result<EnvFile> {
-        let (file, _) = self.check_env_file_binding(id, file, ctx)?;
+        self.bind_env_file_at(id, file, FileLevel::Always, ctx)
+    }
+
+    /// Writes `file` from now on with the environment `id`, at `level`:
+    /// for an environment outside the recycle bin, in a folder of a project
+    /// that holds it; a remote one only while the vault is unlocked. Keeps
+    /// the environment's kind as it is now for good, so a new name doesn't
+    /// take its files away. Fails for a file another binding names already,
+    /// here or through another folder that is the same on disk, and for one
+    /// that can never be written ([`RefusedReason`]). Returns the binding as
+    /// kept.
+    pub fn bind_env_file_at(
+        &mut self,
+        id: &str,
+        file: &EnvFile,
+        level: FileLevel,
+        ctx: &FilesContext,
+    ) -> Result<EnvFile> {
+        let (file, _) = self.check_env_file_binding(id, file, level, ctx)?;
         let entry = self.env_entry(id)?;
         let mut data = files_data(&entry)?;
-        data.kind = Some(EnvKind::Local.as_str().to_owned());
-        data.files.push(StoredFile {
+        data.kind = Some(kind_of(&entry).as_str().to_owned());
+        data.list_mut(level).push(StoredFile {
             folder: file.folder.clone(),
             path: file.path.clone(),
             rest: Map::new(),
@@ -944,14 +1042,47 @@ impl Vault {
         Ok(file)
     }
 
-    /// Checks that `file` can be bound to the environment `id`, as
-    /// [`Self::bind_env_file`] does, without binding it: to tell the user
-    /// what writing there means first. Returns the binding as it would be
-    /// kept and the file on this computer, if its folder is here.
+    /// Writes a file of the environment at another level from now on.
+    /// Returns whether its level changed. A remote environment's files stay
+    /// at level 2.
+    pub fn set_env_file_level(
+        &mut self,
+        id: &str,
+        file: &EnvFile,
+        level: FileLevel,
+    ) -> Result<bool> {
+        let entry = self.env_entry(id)?;
+        let mut data = files_data(&entry)?;
+        let Some((_, now)) = data.bindings().find(|(stored, _)| stored.file() == *file) else {
+            return Err(Error::NotFound(file.path.clone()));
+        };
+        if now == level {
+            return Ok(false);
+        }
+        if level == FileLevel::Always && kind_of(&entry) == EnvKind::Remote {
+            return Err(Error::invalid(
+                "a remote environment has files only while the vault is unlocked",
+            ));
+        }
+        let from = data.list_mut(now);
+        let Some(index) = from.iter().position(|stored| stored.file() == *file) else {
+            return Err(Error::NotFound(file.path.clone()));
+        };
+        let stored = from.remove(index);
+        data.list_mut(level).push(stored);
+        self.put_files_data(id, &data)?;
+        Ok(true)
+    }
+
+    /// Checks that `file` can be bound to the environment `id` at `level`,
+    /// as [`Self::bind_env_file_at`] does, without binding it: to tell the
+    /// user what writing there means first. Returns the binding as it would
+    /// be kept and the file on this computer, if its folder is here.
     pub fn check_env_file_binding(
         &self,
         id: &str,
         file: &EnvFile,
+        level: FileLevel,
         ctx: &FilesContext,
     ) -> Result<(EnvFile, Option<PathBuf>)> {
         let file = check_env_file(file)?;
@@ -960,9 +1091,9 @@ impl Vault {
         if in_group(entry.parent().id(), self.db.meta.recyclebin_uuid, &self.db) {
             return Err(Error::invalid("restore the environment first"));
         }
-        if kind_of(&entry) == EnvKind::Remote {
+        if kind_of(&entry) == EnvKind::Remote && level == FileLevel::Always {
             return Err(Error::invalid(
-                "a remote environment has no files: make it local first",
+                "a remote environment has a file only while the vault is unlocked",
             ));
         }
         let owner = self
@@ -974,10 +1105,10 @@ impl Vault {
                 "the folder isn't in a project that holds the environment",
             ));
         }
-        if data.files.iter().any(|stored| stored.file() == file) {
+        if data.bindings().any(|(stored, _)| stored.file() == file) {
             return Err(Error::AlreadyExists(file.path));
         }
-        if data.files.len() >= MAX_FILES {
+        if data.files.len() + data.unlocked.len() >= MAX_FILES {
             return Err(Error::invalid(format!(
                 "an environment is written to at most {MAX_FILES} files"
             )));
@@ -1018,9 +1149,10 @@ impl Vault {
     pub fn unbind_env_file(&mut self, id: &str, file: &EnvFile) -> Result<bool> {
         let entry = self.env_entry(id)?;
         let mut data = files_data(&entry)?;
-        let before = data.files.len();
+        let before = data.files.len() + data.unlocked.len();
         data.files.retain(|stored| stored.file() != *file);
-        if data.files.len() == before {
+        data.unlocked.retain(|stored| stored.file() != *file);
+        if data.files.len() + data.unlocked.len() == before {
             return Ok(false);
         }
         self.put_files_data(id, &data)?;
@@ -1120,6 +1252,7 @@ impl Vault {
                 let agreed = Agreement {
                     rev: vault_rev,
                     dir,
+                    out: state.kept_out(&id, &bound.state_key()),
                 };
                 pulled.updates.push((bound.state_key(), agreed));
                 continue;
@@ -1139,6 +1272,7 @@ impl Vault {
             let agreed = Agreement {
                 rev: after_rev.clone(),
                 dir,
+                out: state.kept_out(&id, &bound.state_key()),
             };
             pulled.updates.push((bound.state_key(), agreed));
             pulled.changes.push(EnvFileChange {
@@ -1162,8 +1296,10 @@ impl Vault {
 
     /// The second half, once the vault is saved: files whose vault side
     /// changed are rewritten in place, files never written on this computer
-    /// are written, and `state` learns where each file and the vault agree
-    /// now. Temporary files a crash left next to the files go first.
+    /// (and level-2 files that are missing) are written, and `state` learns
+    /// where each file and the vault agree now. Temporary files a crash left
+    /// next to the files go first. A level-2 file of a binding that isn't
+    /// kept in step any more is removed, if it holds what the vault holds.
     /// `prefer` writes one file from the vault whatever changed, and writes
     /// it again if it is missing.
     pub fn env_files_push(
@@ -1186,9 +1322,20 @@ impl Vault {
         let known: BTreeSet<String> = plan.iter().map(|p| p.bound.state_key()).collect();
         files.retain(|file, _| known.contains(file));
         files.extend(pulled.updates);
+        let kept_in_step: Vec<disk::Identity> = plan
+            .iter()
+            .filter_map(|planned| planned.located.as_ref().ok())
+            .map(|target| target.identity.clone())
+            .collect();
         for planned in plan {
             let mut written = false;
             let file_state = match &planned.located {
+                Err(file_state @ FileState::Inactive { .. })
+                    if planned.bound.level == FileLevel::WhileUnlocked =>
+                {
+                    self.remove_stale(&key, &planned.bound, ctx, &kept_in_step);
+                    file_state.clone()
+                }
                 Err(file_state) => file_state.clone(),
                 Ok(target) => {
                     disk::sweep(target);
@@ -1198,8 +1345,29 @@ impl Vault {
                         .get(&state_key)
                         .filter(|agreed| agreed.dir == dir)
                         .map(|agreed| agreed.rev.clone());
+                    let was_out = files.get(&state_key).is_some_and(|agreed| agreed.out);
                     let (file_state, agreed) =
                         self.settle(&key, &planned.bound, target, base.as_deref(), prefer, true);
+                    let in_sync = file_state == FileState::InSync;
+                    let mut out = was_out;
+                    match planned.bound.level {
+                        FileLevel::WhileUnlocked if in_sync => {
+                            // One that was at level 1 until now gets them too.
+                            disk::keep_out(target);
+                            out = true;
+                            synced
+                                .unlocked
+                                .extend(self.leftover(&key, &planned.bound, target));
+                        }
+                        FileLevel::WhileUnlocked => {}
+                        FileLevel::Always => {
+                            synced.always.push(target.real.clone());
+                            if was_out && in_sync {
+                                fsutil::let_into_copies_at(&target.real);
+                                out = false;
+                            }
+                        }
+                    }
                     if let Some(agreed) = agreed {
                         written = agreed.written;
                         files.insert(
@@ -1207,6 +1375,7 @@ impl Vault {
                             Agreement {
                                 rev: agreed.revision,
                                 dir,
+                                out,
                             },
                         );
                     }
@@ -1316,8 +1485,11 @@ impl Vault {
         };
         let write = |current: Option<&str>| -> (FileState, Option<Agreed>) {
             if !act {
+                // A level-2 file that isn't there is written by the next
+                // round: it is missing only while the vault is locked.
+                let pending = current.is_some() || bound.level == FileLevel::WhileUnlocked;
                 return (
-                    if current.is_some() {
+                    if pending {
                         FileState::VaultChanged
                     } else {
                         FileState::Missing
@@ -1329,7 +1501,13 @@ impl Vault {
             if let Err(error) = doc.set_variables(&wanted) {
                 return (failed(&error), None);
             }
-            match disk::write(target, current.map(str::as_bytes), doc.text().as_bytes()) {
+            let keep_out = bound.level == FileLevel::WhileUnlocked;
+            match disk::write(
+                target,
+                current.map(str::as_bytes),
+                doc.text().as_bytes(),
+                keep_out,
+            ) {
                 Ok(true) => (
                     FileState::InSync,
                     Some(Agreed {
@@ -1345,7 +1523,9 @@ impl Vault {
         };
         let Some(text) = text else {
             let again = prefer.is_some_and(|p| p.settles(bound, KeepSide::Vault, None));
-            return if base.is_none() || again {
+            // A level-2 file is missing whenever the vault was locked.
+            let unlocked = bound.level == FileLevel::WhileUnlocked;
+            return if base.is_none() || again || unlocked {
                 write(None)
             } else {
                 (FileState::Missing, None)
@@ -1394,7 +1574,7 @@ impl Vault {
                 let location = disk::display(&bound.file, ctx);
                 let reason = if bound.in_trash {
                     Some(InactiveReason::InTrash)
-                } else if bound.kind == EnvKind::Remote {
+                } else if bound.kind == EnvKind::Remote && bound.level == FileLevel::Always {
                     Some(InactiveReason::Remote)
                 } else if !holds(&projects, bound.project.as_deref(), &bound.file.folder) {
                     Some(InactiveReason::NotInProject)
@@ -1419,6 +1599,52 @@ impl Vault {
                 }
             })
             .collect()
+    }
+
+    /// The level-2 file of `bound` as it is on disk now, if it holds what the
+    /// vault holds: read again after its stamp is taken, so an edit made
+    /// meanwhile isn't taken for the app's own write.
+    fn leftover(&self, key: &[u8; 32], bound: &Bound, target: &Target) -> Option<Leftover> {
+        let left = Leftover::of(&target.real)?;
+        let Disk::Text(text) = disk::read(&target.real) else {
+            return None;
+        };
+        let vault = self.env_variables(&bound.env_id).ok()?;
+        let parsed = dotenv::parse(&text);
+        (revision(key, &parsed_pairs(&parsed)) == revision(key, &pairs(&vault))).then_some(left)
+    }
+
+    /// Removes the level-2 file of a binding that isn't kept in step any
+    /// more (its environment went to the recycle bin, or its project no
+    /// longer has the folder), if it holds what the vault holds: it was
+    /// there only while the vault is unlocked. Not one another binding keeps
+    /// in step.
+    fn remove_stale(
+        &self,
+        key: &[u8; 32],
+        bound: &Bound,
+        ctx: &FilesContext,
+        kept_in_step: &[disk::Identity],
+    ) {
+        if !bound.valid {
+            return;
+        }
+        let Ok(target) = disk::locate(&bound.file, ctx, &self.paths) else {
+            return;
+        };
+        if kept_in_step.contains(&target.identity) {
+            return;
+        }
+        let (Disk::Text(text), Ok(vault)) =
+            (disk::read(&target.real), self.env_variables(&bound.env_id))
+        else {
+            return;
+        };
+        let parsed = dotenv::parse(&text);
+        if revision(key, &parsed_pairs(&parsed)) == revision(key, &pairs(&vault)) {
+            disk::sweep(&target);
+            let _ = disk::remove(&target);
+        }
     }
 
     /// The flags and notes of the variables of an environment's earlier
@@ -1459,9 +1685,9 @@ impl Vault {
                 let summary = self.env_summary(&entry, &owners);
                 let project_name = summary.project.as_ref().and_then(|id| names.get(id));
                 let label = super::label(project_name.map(String::as_str), &summary.part);
-                files_of(&entry)
+                bindings_of(&entry)
                     .into_iter()
-                    .map(move |file| Bound {
+                    .map(move |(file, level)| Bound {
                         env_id: summary.id.clone(),
                         project: summary.project.clone(),
                         label: label.clone(),
@@ -1470,6 +1696,7 @@ impl Vault {
                         in_trash: summary.in_trash,
                         valid: check_env_file(&file).is_ok_and(|checked| checked == file),
                         file,
+                        level,
                     })
                     .collect::<Vec<_>>()
             })
@@ -1525,7 +1752,7 @@ impl Vault {
                 cloud: status
                     .location
                     .as_deref()
-                    .and_then(|path| cloud.service(path)),
+                    .and_then(|path| cloud.copies(path, status.level)),
                 status,
                 projects,
                 example,

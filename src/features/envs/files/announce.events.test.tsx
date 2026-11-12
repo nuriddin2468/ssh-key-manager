@@ -26,6 +26,7 @@ const written = {
   label: 'shop-api',
   envName: 'dev',
   file: { folder: '~/code/shop', path: 'apps/web/.env' },
+  level: 'always',
   location: '/code/shop/apps/web/.env',
   state: { type: 'inSync' },
 } as const;

@@ -39,7 +39,7 @@ use zeroize::Zeroizing;
 pub use self::detect::looks_secret;
 pub use self::document::EnvDocument;
 pub use self::dotenv::{ParseProblem, ParsedEnv, ProblemKind};
-pub use self::files::{EnvFile, EnvKind};
+pub use self::files::{EnvFile, EnvKind, FileLevel};
 pub use self::format::{EnvFormat, render};
 use super::export::{checked_target, write_private};
 use super::{Vault, check_field, duplicate, in_group, parse_id, rfc3339};
@@ -125,8 +125,10 @@ pub struct EnvDetail {
     pub summary: EnvSummary,
     pub notes: String,
     pub variables: Vec<EnvVarInfo>,
-    /// The files it is written to.
+    /// The files it is written to: level 1 first.
     pub files: Vec<EnvFile>,
+    /// Those of `files` written only while the vault is unlocked (level 2).
+    pub while_unlocked: Vec<EnvFile>,
 }
 
 /// A new environment, or where an environment is, its stage and notes.
@@ -550,6 +552,7 @@ impl Vault {
 
     pub fn environment(&self, id: &str) -> Result<EnvDetail> {
         let entry = self.env_entry(id)?;
+        let bindings = files::bindings_of(&entry);
         Ok(EnvDetail {
             summary: self.env_summary(&entry, &self.environment_owners()),
             notes: entry.get(fields::NOTES).unwrap_or_default().to_owned(),
@@ -562,7 +565,12 @@ impl Vault {
                     note: var.note,
                 })
                 .collect(),
-            files: files::files_of(&entry),
+            while_unlocked: bindings
+                .iter()
+                .filter(|(_, level)| *level == FileLevel::WhileUnlocked)
+                .map(|(file, _)| file.clone())
+                .collect(),
+            files: bindings.into_iter().map(|(file, _)| file).collect(),
         })
     }
 

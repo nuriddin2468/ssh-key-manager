@@ -4002,7 +4002,7 @@ const uz = {
       ownDone: 'Endi {{name}} bu yerda oʻz qiymatiga ega',
       badge_one: 'Umumiy qiymat, {{count}} ta muhitda ishlatiladi',
       badge_other: 'Umumiy qiymat, {{count}} ta muhitda ishlatiladi',
-      gone: 'Uning umumiy qiymati oʻchirilgan: oʻz qiymatini bering, shunda fayllari yana yoziladi',
+      gone: 'U bu yerda ishlatib boʻlmaydigan ombor yozuviga havola qiladi (oʻchirilgan yoki umumiy qiymat emas): oʻz qiymatini bering, shunda fayllari yana yoziladi',
       shareLabel: '{{name}} qiymatini boshqa muhitlar bilan ulashish',
       editHint: 'Umumiy qiymat: uni oʻzgartirish uni ishlatadigan barcha muhitlarda oʻzgartiradi.',
     },

@@ -823,6 +823,14 @@ impl Vault {
     ) -> Result<()> {
         let name = input.name.trim().to_owned();
         let note = input.note.trim().to_owned();
+        if let Some(value) = &input.value {
+            check_no_references(&[EnvVariable {
+                name: name.clone(),
+                value: duplicate(value),
+                secret: input.secret,
+                note: String::new(),
+            }])?;
+        }
         let shared = previous
             .and_then(|previous| {
                 self.raw_env_variables(id)
@@ -873,11 +881,6 @@ impl Vault {
     /// Removes a variable. A shared value no variable uses any more goes to
     /// the recycle bin.
     pub fn remove_env_variable(&mut self, id: &str, name: &str) -> Result<()> {
-        let shared = self
-            .raw_env_variables(id)?
-            .into_iter()
-            .find(|var| var.name == name)
-            .and_then(|var| self.shared_of(var.value.expose_secret()));
         self.edit_variables(id, |vars| {
             let index = vars
                 .iter()
@@ -885,11 +888,7 @@ impl Vault {
                 .ok_or_else(|| Error::NotFound(format!("variable {name}")))?;
             vars.remove(index);
             Ok(())
-        })?;
-        if let Some(shared) = shared {
-            self.trash_if_unused(shared)?;
-        }
-        Ok(())
+        })
     }
 
     /// Takes `imported` into an environment: a variable it has already gets
@@ -1040,10 +1039,12 @@ impl Vault {
         label(project.as_deref(), &env.part)
     }
 
-    /// Deletes an environment in the recycle bin for good.
+    /// Deletes an environment in the recycle bin for good. A shared value
+    /// it was the last to use goes to the recycle bin.
     pub fn delete_environment(&mut self, id: &str) -> Result<()> {
         self.env_entry(id)?;
-        self.delete_entry(id)
+        self.delete_entry(id)?;
+        self.trash_unused_shared()
     }
 
     fn env_entry(&self, id: &str) -> Result<EntryRef<'_>> {
@@ -1175,6 +1176,9 @@ impl Vault {
         if same_variables(&before, &after) {
             return Ok(());
         }
+        let shared_before = before
+            .iter()
+            .any(|var| self.shared_of(var.value.expose_secret()).is_some());
         {
             let mut entry = self
                 .db
@@ -1184,6 +1188,10 @@ impl Vault {
             write_variables(&mut tracked, &before, &after);
         }
         self.settle_history(entry_id, true);
+        // A shared value it no longer uses may be used by none.
+        if shared_before {
+            self.trash_unused_shared()?;
+        }
         Ok(())
     }
 

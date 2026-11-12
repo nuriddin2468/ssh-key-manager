@@ -2073,3 +2073,53 @@ fn shared_values_tidy_up_after_themselves() {
     // A shared value is no password to rate.
     assert!(f.vault.entries().iter().all(|entry| entry.id != shared));
 }
+
+#[test]
+fn a_shared_value_still_in_use_is_never_lost() {
+    let mut f = Fixture::new();
+    let env = f.env.clone();
+    let other = f.other_env("local", &[]);
+    let shared = f
+        .vault
+        .share_env_variable(&env, "API_TOKEN", std::slice::from_ref(&other))
+        .unwrap();
+    // Trashed elsewhere (KeePassXC, an older version): it still resolves,
+    // and emptying the recycle bin gives its users copies first.
+    f.vault.trash_entry(&shared).unwrap();
+    f.vault.empty_trash().unwrap();
+    assert_eq!(f.vault.shared_values(), []);
+    for id in [&env, &other] {
+        assert_eq!(
+            f.vault.env_value(id, "API_TOKEN").unwrap().expose_secret(),
+            "tok-1"
+        );
+    }
+
+    // Its last line removed from a file: it goes to the recycle bin.
+    let shared = f.vault.share_env_variable(&env, "PORT", &[]).unwrap();
+    f.bind(".env");
+    f.sync();
+    fs::write(f.path(".env"), "API_TOKEN=tok-1\n").unwrap();
+    f.sync();
+    assert!(
+        f.vault
+            .shared_values()
+            .iter()
+            .any(|value| value.id == shared && value.in_trash)
+    );
+
+    // A reference typed in the app is refused.
+    let typed = f.vault.set_env_variable(
+        &env,
+        None,
+        &EnvVarInput {
+            name: "X".into(),
+            value: Some(s(&super::super::shared::reference(
+                uuid::Uuid::parse_str(&shared).unwrap(),
+            ))),
+            secret: false,
+            note: String::new(),
+        },
+    );
+    assert!(typed.is_err());
+}

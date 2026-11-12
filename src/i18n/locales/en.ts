@@ -3939,7 +3939,7 @@ const en = {
       ownDone: '{{name}} has its own value here now',
       badge_one: 'Shared value, used by {{count}} environment',
       badge_other: 'Shared value, used by {{count}} environments',
-      gone: 'Its shared value is gone: give it a value of its own, and its files are written again',
+      gone: 'It refers to a vault entry the app can’t use here (deleted, or not a shared value): give it a value of its own, and its files are written again',
       shareLabel: 'Share {{name}} with other environments',
       editHint: 'A shared value: changing it changes it in every environment that uses it.',
     },

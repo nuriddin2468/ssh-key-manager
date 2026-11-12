@@ -220,13 +220,9 @@ impl Vault {
 
     /// Gives the variable `name` of the environment `id` a value of its own:
     /// the shared value's, as it is now. A shared value no variable uses any
-    /// more goes to the recycle bin.
+    /// more goes to the recycle bin ([`Self::trash_unused_shared`]).
     pub fn unshare_env_variable(&mut self, id: &str, name: &str) -> Result<()> {
-        let shared = self.give_copy(id, name, false)?;
-        if let Some(shared) = shared {
-            self.trash_if_unused(shared)?;
-        }
-        Ok(())
+        self.give_copy(id, name, false).map(drop)
     }
 
     /// Gives a variable a copy of the shared value it uses; also in an
@@ -250,16 +246,34 @@ impl Vault {
         Ok(Some(shared))
     }
 
-    /// Moves a shared value no variable uses to the recycle bin, where it
-    /// can still be restored from.
-    pub(super) fn trash_if_unused(&mut self, shared: Uuid) -> Result<()> {
-        let id = shared.to_string();
-        let unused = self
+    /// Moves the shared values no variable uses any more to the recycle
+    /// bin, where they can still be restored from: after any change of
+    /// variables (a line removed from a file, an Undo, a variable given
+    /// another value) and an environment deleted for good.
+    pub(in crate::vault) fn trash_unused_shared(&mut self) -> Result<()> {
+        let unused: Vec<String> = self
             .shared_values()
-            .iter()
-            .any(|value| value.id == id && value.users.is_empty() && !value.in_trash);
-        if unused {
+            .into_iter()
+            .filter(|value| value.users.is_empty() && !value.in_trash)
+            .map(|value| value.id)
+            .collect();
+        for id in unused {
             self.trash_entry(&id)?;
+        }
+        Ok(())
+    }
+
+    /// Gives every variable that uses the shared value `shared` a copy of
+    /// it, in the recycle bin too: before it goes for good.
+    pub(in crate::vault) fn release_shared(&mut self, shared: &str) -> Result<()> {
+        let users = self
+            .shared_values()
+            .into_iter()
+            .find(|value| value.id == shared)
+            .map(|value| value.users)
+            .unwrap_or_default();
+        for user in users {
+            self.give_copy(&user.env_id, &user.variable, user.in_trash)?;
         }
         Ok(())
     }
@@ -271,15 +285,7 @@ impl Vault {
         if !is_shared(&entry) {
             return Err(Error::NotFound(format!("shared value {shared}")));
         }
-        let users = self
-            .shared_values()
-            .into_iter()
-            .find(|value| value.id == shared)
-            .map(|value| value.users)
-            .unwrap_or_default();
-        for user in users {
-            self.give_copy(&user.env_id, &user.variable, user.in_trash)?;
-        }
+        self.release_shared(shared)?;
         self.trash_entry(shared)
     }
 

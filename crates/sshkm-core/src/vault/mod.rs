@@ -871,12 +871,18 @@ impl Vault {
             .filter(|e| e.in_trash)
             .map(|e| e.id)
             .collect();
-        ids.extend(
-            self.shared_values()
-                .into_iter()
-                .filter(|value| value.in_trash)
-                .map(|value| value.id),
-        );
+        // A shared value environments still use (trashed elsewhere) gives
+        // them copies first.
+        let shared: Vec<String> = self
+            .shared_values()
+            .into_iter()
+            .filter(|value| value.in_trash)
+            .map(|value| value.id)
+            .collect();
+        for id in &shared {
+            self.release_shared(id)?;
+        }
+        ids.extend(shared);
         for id in &ids {
             self.delete_entry(id)?;
         }

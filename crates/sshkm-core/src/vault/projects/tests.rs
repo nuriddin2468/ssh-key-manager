@@ -1723,3 +1723,61 @@ fn a_tombstone_kept_for_its_environments_lets_its_name_go() {
         std::slice::from_ref(&db)
     );
 }
+
+#[test]
+fn a_removed_projects_hold_wins_over_a_step_elsewhere_that_hadnt_heard_of_it() {
+    // x: Shop and Blog both name the group, Shop first, so the step puts
+    // the environment in Shop; z has heard only of Blog's, and puts it in
+    // Blog. x deletes Shop before the two sync: the environment went to
+    // Personal with it, and stays there on both.
+    let dir = tempfile::tempdir().unwrap();
+    let paths = VaultPaths::new(dir.path().join("vault.kdbx"));
+    let (mut vault, _) = Vault::create(&paths, &s("master")).unwrap();
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    let blog = vault.add_project(&input("Blog")).unwrap();
+    let env = legacy_env(&mut vault, "shared", "dev");
+    vault.save(&dir.path().join("backups")).unwrap();
+    let mut x = Vault::unlock(&paths, &s("master")).unwrap();
+    let mut z = Vault::unlock(&paths, &s("master")).unwrap();
+    name_group_at(&mut x, &shop, "shared", at(-20));
+    name_group_at(&mut x, &blog, "shared", at(-10));
+    name_group_at(&mut z, &blog, "shared", at(-10));
+    x.tidy_projects();
+    z.tidy_projects();
+    assert_eq!(owner(&x, &env).as_deref(), Some(shop.as_str()));
+    assert_eq!(owner(&z, &env).as_deref(), Some(blog.as_str()));
+    x.remove_project(&shop).unwrap();
+    assert_eq!(owner(&x, &env), None);
+    settle(&mut x, &mut z);
+    assert_eq!(owner(&x, &env), None);
+    assert_eq!(owner(&z, &env), None);
+    // Blog's hold is taken out at the time the step placed it.
+    let held = z.stored_project(&blog).unwrap().members[&format!("envid:{env}")];
+    assert_eq!(held.r, Some(held.a));
+    // The user can still put it in Blog.
+    assert!(z.move_environment(&env, Some(&blog)).unwrap());
+    settle(&mut x, &mut z);
+    assert_eq!(owner(&x, &env).as_deref(), Some(blog.as_str()));
+}
+
+#[test]
+fn a_removed_projects_hold_leaves_one_the_user_placed() {
+    // z puts the environment in Blog; later, before they sync, x puts it in
+    // Shop and deletes Shop. What the user did on z stays.
+    let dir = tempfile::tempdir().unwrap();
+    let paths = VaultPaths::new(dir.path().join("vault.kdbx"));
+    let (mut vault, _) = Vault::create(&paths, &s("master")).unwrap();
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    let blog = vault.add_project(&input("Blog")).unwrap();
+    let env = new_env(&mut vault, None, "api", "dev").unwrap();
+    vault.save(&dir.path().join("backups")).unwrap();
+    let mut x = Vault::unlock(&paths, &s("master")).unwrap();
+    let mut z = Vault::unlock(&paths, &s("master")).unwrap();
+    assert!(z.move_environment(&env, Some(&blog)).unwrap());
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    assert!(x.move_environment(&env, Some(&shop)).unwrap());
+    x.remove_project(&shop).unwrap();
+    settle(&mut x, &mut z);
+    assert_eq!(owner(&x, &env).as_deref(), Some(blog.as_str()));
+    assert_eq!(owner(&z, &env).as_deref(), Some(blog.as_str()));
+}

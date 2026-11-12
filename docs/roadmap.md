@@ -112,7 +112,10 @@ The foundation for everything below.
    environment, or took it out, is kept for good, so the step never brings one back after
    the 400 days other removals are kept; a suggestion that adds to a project of one part
    names the first part too, and shows environments by part and stage:
-   [#46](https://github.com/nuriddin2468/ssh-key-manager/pull/46).
+   [#46](https://github.com/nuriddin2468/ssh-key-manager/pull/46). A removed project's
+   hold outranks one the step placed on a device that hadn't heard of it, so the
+   environment stays in Personal:
+   [#47](https://github.com/nuriddin2468/ssh-key-manager/pull/47).
 
 ### 3. Managed `.env` files — done
 

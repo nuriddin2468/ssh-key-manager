@@ -714,24 +714,41 @@ impl Vault {
 
     /// The holds of an environment that lose to its owner's
     /// ([`Self::environment_owners`]), by project id and member key: two
-    /// devices put it in two projects before they synced.
+    /// devices put it in two projects before they synced. Also those the
+    /// step from groups placed that lose to a removed project's hold: the
+    /// environment went to Personal with that project, and a device that
+    /// hadn't heard of it yet doesn't get to place it elsewhere. One the user
+    /// placed stays.
     fn stale_holds(&self) -> Vec<(String, String)> {
+        type Rank = ((bool, i64), std::cmp::Reverse<String>);
         let owners = self.environment_owners();
-        let mut stale = Vec::new();
-        for (id, stored) in self.stored_projects() {
-            if !stored.is_live() {
-                continue;
-            }
-            for (key, presence) in &stored.members {
-                if let Some(env) = key.strip_prefix(ENV_KIND)
-                    && presence.present()
-                    && owners.get(env).is_some_and(|owner| *owner != id)
-                {
-                    stale.push((id.clone(), key.clone()));
-                }
+        let all = self.stored_projects();
+        let holds = || {
+            all.iter().flat_map(|(id, stored)| {
+                stored.members.iter().filter_map(move |(key, presence)| {
+                    let env = key.strip_prefix(ENV_KIND)?;
+                    presence.present().then(|| {
+                        let rank = (hold_rank(stored, *presence), std::cmp::Reverse(id.clone()));
+                        (id, stored.is_live(), key, env, rank)
+                    })
+                })
+            })
+        };
+        let mut removed: BTreeMap<&str, Rank> = BTreeMap::new();
+        for (_, live, _, env, rank) in holds() {
+            if !live && removed.get(env).is_none_or(|best| rank > *best) {
+                removed.insert(env, rank);
             }
         }
-        stale
+        holds()
+            .filter(|(id, live, _, env, rank)| {
+                let placed_by_step = !rank.0.0;
+                *live
+                    && (owners.get(*env).is_some_and(|owner| owner != *id)
+                        || placed_by_step && removed.get(env).is_some_and(|best| best > rank))
+            })
+            .map(|(id, _, key, _, _)| (id.clone(), key.clone()))
+            .collect()
     }
 
     /// Records the holds that lose as taken out, so the environment goes to

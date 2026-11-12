@@ -11,7 +11,8 @@ import { Select } from '@/components/ui/Select';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
 import { cn } from '@/lib/cn';
-import { envLabel, isProduction } from './model';
+import { isProduction } from './model';
+import { useEnvLabel } from './useProjectNames';
 
 interface CompareDialogProps {
   env: EnvSummary;
@@ -25,6 +26,7 @@ interface CompareDialogProps {
  */
 export function CompareDialog({ env, all, onDone }: CompareDialogProps) {
   const { t } = useTranslation();
+  const envLabelOf = useEnvLabel();
   const others = all.filter((other) => !other.inTrash && other.id !== env.id);
   // The same project's production first: what most comparisons are about.
   const [otherId, setOtherId] = useState(
@@ -65,7 +67,7 @@ export function CompareDialog({ env, all, onDone }: CompareDialogProps) {
               {t('envs.compareDialog.this')}
             </span>
             <span className="field flex h-9 min-w-0 items-center truncate rounded-[10px] px-[11px] text-fg-2">
-              {envLabel(env)}
+              {envLabelOf(env)}
             </span>
           </div>
           <ArrowLeftRight aria-hidden="true" className="mb-2.5 size-4 text-subtle" />
@@ -73,7 +75,7 @@ export function CompareDialog({ env, all, onDone }: CompareDialogProps) {
             label={t('envs.compareDialog.with')}
             value={otherId}
             onValueChange={setOtherId}
-            options={others.map((item) => ({ value: item.id, label: envLabel(item) }))}
+            options={others.map((item) => ({ value: item.id, label: envLabelOf(item) }))}
           />
         </div>
 
@@ -96,13 +98,13 @@ export function CompareDialog({ env, all, onDone }: CompareDialogProps) {
             <Group
               icon={<Minus className="size-3.5" strokeWidth={2.4} />}
               tone="critical"
-              title={t('envs.compareDialog.missing', { name: envLabel(other) })}
+              title={t('envs.compareDialog.missing', { name: envLabelOf(other) })}
               names={result.onlyLeft}
             />
             <Group
               icon={<Plus className="size-3.5" strokeWidth={2.4} />}
               tone="info"
-              title={t('envs.compareDialog.extra', { name: envLabel(other) })}
+              title={t('envs.compareDialog.extra', { name: envLabelOf(other) })}
               names={result.onlyRight}
             />
             <Group

@@ -16,11 +16,21 @@ files: Array<EnvFile>,
  */
 id: string, 
 /**
- * The project it belongs to: its group under `Environments`.
+ * The project it belongs to, by id; `None` for Personal.
  */
-project: string, 
+project: string | null, 
 /**
- * `dev`, `staging`, `prod`…: the entry's title.
+ * Its part of the project (`backend`, `frontend`), or empty. A project
+ * with one part shows none.
+ */
+part: string, 
+/**
+ * The KeePass group it is in, which older versions take as its
+ * project.
+ */
+group: string, 
+/**
+ * Its stage, `local`, `dev`, `staging`, `prod`…: the entry's title.
  */
 name: string, 
 /**

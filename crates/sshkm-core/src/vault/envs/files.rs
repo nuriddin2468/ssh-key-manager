@@ -232,8 +232,9 @@ pub enum FileState {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
 pub struct EnvFileStatus {
     pub env_id: String,
-    /// The environment's group under `Environments`.
-    pub group: String,
+    /// Where the environment is, for people: `Shop · backend`, `Shop`, a
+    /// Personal one's part, or nothing ([`super::label`]).
+    pub label: String,
     pub env_name: String,
     pub file: EnvFile,
     /// The file on this computer, when its folder is a full path here.
@@ -247,7 +248,8 @@ pub struct EnvFileStatus {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
 pub struct EnvFileChange {
     pub env_id: String,
-    pub group: String,
+    /// Where the environment is, as [`EnvFileStatus::label`].
+    pub label: String,
     pub env_name: String,
     pub file: EnvFile,
     pub added: Vec<String>,
@@ -503,7 +505,9 @@ pub struct FilesContext {
 #[derive(Debug, Clone)]
 struct Bound {
     env_id: String,
-    group: String,
+    /// The project that has the environment, by id.
+    project: Option<String>,
+    label: String,
     env_name: String,
     kind: EnvKind,
     in_trash: bool,
@@ -523,7 +527,7 @@ impl Bound {
     fn status(&self, location: Option<PathBuf>, state: FileState) -> EnvFileStatus {
         EnvFileStatus {
             env_id: self.env_id.clone(),
-            group: self.group.clone(),
+            label: self.label.clone(),
             env_name: self.env_name.clone(),
             file: self.file.clone(),
             location,
@@ -961,9 +965,11 @@ impl Vault {
                 "a remote environment has no files: make it local first",
             ));
         }
-        let group = self.env_summary(&entry).project;
+        let owner = self
+            .environment_owners()
+            .remove(&entry.id().uuid().to_string());
         let projects = self.projects();
-        if !holds(&projects, &group, &file.folder) {
+        if !holds(&projects, owner.as_deref(), &file.folder) {
             return Err(Error::invalid(
                 "the folder isn't in a project that holds the environment",
             ));
@@ -1137,7 +1143,7 @@ impl Vault {
             pulled.updates.push((bound.state_key(), agreed));
             pulled.changes.push(EnvFileChange {
                 env_id: bound.env_id.clone(),
-                group: bound.group.clone(),
+                label: bound.label.clone(),
                 env_name: bound.env_name.clone(),
                 file: bound.file.clone(),
                 added: edit.added,
@@ -1390,7 +1396,7 @@ impl Vault {
                     Some(InactiveReason::InTrash)
                 } else if bound.kind == EnvKind::Remote {
                     Some(InactiveReason::Remote)
-                } else if !holds(&projects, &bound.group, &bound.file.folder) {
+                } else if !holds(&projects, bound.project.as_deref(), &bound.file.folder) {
                     Some(InactiveReason::NotInProject)
                 } else {
                     None
@@ -1439,17 +1445,26 @@ impl Vault {
 
     /// Every file binding of every environment, in a fixed order.
     fn bound(&self) -> Vec<Bound> {
+        let owners = self.environment_owners();
+        let names: BTreeMap<String, String> = self
+            .projects()
+            .into_iter()
+            .map(|project| (project.id, project.name))
+            .collect();
         let mut all: Vec<Bound> = self
             .db
             .iter_all_entries()
             .filter(is_environment)
             .flat_map(|entry| {
-                let summary = self.env_summary(&entry);
+                let summary = self.env_summary(&entry, &owners);
+                let project_name = summary.project.as_ref().and_then(|id| names.get(id));
+                let label = super::label(project_name.map(String::as_str), &summary.part);
                 files_of(&entry)
                     .into_iter()
                     .map(move |file| Bound {
                         env_id: summary.id.clone(),
-                        group: summary.project.clone(),
+                        project: summary.project.clone(),
+                        label: label.clone(),
                         env_name: summary.name.clone(),
                         kind: summary.kind,
                         in_trash: summary.in_trash,
@@ -1460,9 +1475,9 @@ impl Vault {
             })
             .collect();
         all.sort_by(|a, b| {
-            (a.in_trash, &a.group, &a.env_name, &a.env_id, &a.file).cmp(&(
+            (a.in_trash, &a.label, &a.env_name, &a.env_id, &a.file).cmp(&(
                 b.in_trash,
-                &b.group,
+                &b.label,
                 &b.env_name,
                 &b.env_id,
                 &b.file,
@@ -1487,7 +1502,7 @@ impl Vault {
         let mut overview = EnvFilesOverview::default();
         let wanted = |ids: &[String]| project.is_none_or(|id| ids.iter().any(|p| p == id));
         for status in self.env_files_status(ctx, state) {
-            let projects = self.env_file_projects(&status.group, &status.file);
+            let projects = self.env_file_projects(&status.env_id, &status.file);
             if !wanted(&projects) {
                 continue;
             }
@@ -1573,12 +1588,13 @@ impl Vault {
         }
     }
 
-    /// The projects (by id) that hold `file` of an environment in `group`.
-    pub fn env_file_projects(&self, group: &str, file: &EnvFile) -> Vec<String> {
+    /// The project (by id) that has the environment `env` and `file`'s
+    /// folder, if one does.
+    pub fn env_file_projects(&self, env: &str, file: &EnvFile) -> Vec<String> {
         self.projects()
             .into_iter()
             .filter(|project| {
-                project.environments.iter().any(|g| g == group)
+                project.environments.iter().any(|e| e == env)
                     && project.folders.contains(&file.folder)
             })
             .map(|project| project.id)
@@ -1643,11 +1659,12 @@ struct Agreed {
     written: bool,
 }
 
-/// Whether a live project holds both the environments of `group` and
+/// Whether the live project `owner`, which has the environment, holds
 /// `folder`.
-fn holds(projects: &[Project], group: &str, folder: &str) -> bool {
-    projects.iter().any(|project| {
-        project.environments.iter().any(|g| g == group)
-            && project.folders.iter().any(|f| f == folder)
+fn holds(projects: &[Project], owner: Option<&str>, folder: &str) -> bool {
+    owner.is_some_and(|owner| {
+        projects
+            .iter()
+            .any(|project| project.id == owner && project.folders.iter().any(|f| f == folder))
     })
 }

@@ -22,7 +22,9 @@ import { baseName } from '@/features/passwords/files/pickers';
 import { useVaultMutation } from '@/features/passwords/vault';
 import { cn } from '@/lib/cn';
 import { AppError } from '@/lib/ipc';
-import { envLabel, initialChoices, labelProblem, nameTaken } from './model';
+import { initialChoices, labelProblem, nameTaken, whereLabel } from './model';
+import { useEnvLabel, useProjectNames } from './useProjectNames';
+import { PERSONAL, partProblem, projectOf, WhereFields } from './WhereFields';
 
 interface ImportEnvDialogProps {
   all: EnvSummary[];
@@ -48,12 +50,16 @@ interface Picked {
  */
 export function ImportEnvDialog({ all, into, onDone }: ImportEnvDialogProps) {
   const { t } = useTranslation();
+  const envLabelOf = useEnvLabel();
+  const names = useProjectNames();
   const [picked, setPicked] = useState<Picked | null>(null);
   const [error, setError] = useState<string | null>(null);
   const existing = all.filter((env) => !env.inTrash);
   const [target, setTarget] = useState<Target>(into ? 'existing' : 'new');
   const [intoId, setIntoId] = useState(into?.id ?? existing[0]?.id ?? '');
-  const [project, setProject] = useState('');
+  // Where a new one goes: a project (or Personal) and a part.
+  const [project, setProject] = useState(into?.project ?? PERSONAL);
+  const [part, setPart] = useState('');
   const [name, setName] = useState('');
   const [touched, setTouched] = useState(false);
   const review = useRef<HTMLDivElement>(null);
@@ -74,14 +80,15 @@ export function ImportEnvDialog({ all, into, onDone }: ImportEnvDialogProps) {
         choices: initialChoices(result.preview),
       });
       const { suggestedProject, suggestedName } = result.preview;
-      setProject(into?.project ?? suggestedProject);
+      // The file's folder names the part.
+      setPart(into?.part ?? suggestedProject);
       setName(suggestedName);
       // Opened from the page's toolbar: the environment the file's names
       // point at, if there is one, else a new one.
       if (!into) {
         const match = existing.find(
           (env) =>
-            env.project === suggestedProject &&
+            same(env.part, suggestedProject) &&
             env.name.toLowerCase() === suggestedName.toLowerCase(),
         );
         setTarget(match ? 'existing' : 'new');
@@ -106,7 +113,7 @@ export function ImportEnvDialog({ all, into, onDone }: ImportEnvDialogProps) {
       api.envsImport(
         target === 'existing'
           ? { type: 'existing', id: intoId }
-          : { type: 'new', project: project.trim(), name: name.trim() },
+          : { type: 'new', project: projectOf(project), part: part.trim(), name: name.trim() },
         choices,
       ),
     {
@@ -131,10 +138,13 @@ export function ImportEnvDialog({ all, into, onDone }: ImportEnvDialogProps) {
     },
   );
 
-  const projectProblem = labelProblem(project);
+  const projectProblem = partProblem(part);
   const nameProblem = labelProblem(name);
   const taken =
-    target === 'new' && !projectProblem && !nameProblem && nameTaken(all, project, name);
+    target === 'new' &&
+    !projectProblem &&
+    !nameProblem &&
+    nameTaken(all, projectOf(project), part, name);
   const chosen = picked?.choices ?? [];
   const ready =
     chosen.length > 0 &&
@@ -192,11 +202,13 @@ export function ImportEnvDialog({ all, into, onDone }: ImportEnvDialogProps) {
             />
             {target === 'new' ? (
               <div className="grid grid-cols-2 gap-3">
-                <TextField
-                  label={t('envs.form.project')}
-                  value={project}
-                  onChange={(event) => setProject(event.target.value)}
-                  error={touched && projectProblem ? t(`envs.form.${projectProblem}`) : undefined}
+                <WhereFields
+                  all={all}
+                  project={project}
+                  part={part}
+                  onProject={setProject}
+                  onPart={setPart}
+                  touched={touched}
                 />
                 <TextField
                   label={t('envs.form.name')}
@@ -208,7 +220,13 @@ export function ImportEnvDialog({ all, into, onDone }: ImportEnvDialogProps) {
                       ? nameProblem
                         ? t(`envs.form.${nameProblem}`)
                         : taken
-                          ? t('envs.form.taken', { project: project.trim() })
+                          ? t('envs.form.taken', {
+                              where: whereLabel(
+                                names.get(projectOf(project) ?? '') ?? t('projects.personal'),
+                                part.trim(),
+                              ),
+                              stage: name.trim(),
+                            })
                           : undefined
                       : undefined
                   }
@@ -219,7 +237,7 @@ export function ImportEnvDialog({ all, into, onDone }: ImportEnvDialogProps) {
                 label={t('envs.import.into')}
                 value={intoId}
                 onValueChange={setIntoId}
-                options={existing.map((env) => ({ value: env.id, label: envLabel(env) }))}
+                options={existing.map((env) => ({ value: env.id, label: envLabelOf(env) }))}
                 hint={t('envs.import.intoHint')}
               />
             )}
@@ -398,4 +416,8 @@ export function Problems({ problems, title }: { problems: ParseProblem[]; title?
       </ul>
     </Callout>
   );
+}
+
+function same(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
 }

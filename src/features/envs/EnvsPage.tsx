@@ -27,8 +27,9 @@ import { FilesCenter } from './files/FilesCenter';
 import { needsAction, needsAttention, sameFile } from './files/model';
 import { useFileRisks, useFileStatuses } from './files/queries';
 import { ImportEnvDialog } from './ImportEnvDialog';
-import { groupByProject, trashed } from './model';
+import { sectionsOf, trashed } from './model';
 import { useEnvs } from './queries';
+import { useProjectNames } from './useProjectNames';
 import { type EnvsView, ViewTabs, viewPanelId } from './ViewTabs';
 
 /**
@@ -114,10 +115,11 @@ function EnvBrowser({ envId, view, project }: EnvsPageProps) {
   useFindShortcut(search);
 
   const all = envs.data ?? [];
-  const groups = useMemo(() => groupByProject(all, query), [all, query]);
+  const names = useProjectNames();
+  const sections = useMemo(() => sectionsOf(all, names, query), [all, names, query]);
   const inTrash = useMemo(() => trashed(all), [all]);
   const active = all.filter((env) => !env.inTrash);
-  const shown = groups.flatMap((group) => group.envs);
+  const shown = sections.flatMap((section) => section.parts.flatMap((part) => part.envs));
   const selected =
     all.find((env) => env.id === envId) ?? shown[0] ?? (query ? undefined : inTrash[0]);
 
@@ -220,7 +222,8 @@ function EnvBrowser({ envId, view, project }: EnvsPageProps) {
             ) : (
               <div className="flex min-h-0 flex-1 items-stretch gap-4">
                 <EnvList
-                  groups={groups}
+                  sections={sections}
+                  names={names}
                   trash={inTrash}
                   selectedId={selected?.id}
                   query={query}

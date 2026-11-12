@@ -25,7 +25,7 @@ const navigate = vi.fn();
 function change(after: string): EnvFileChange {
   return {
     envId: 'env-1',
-    group: 'shop-api',
+    label: 'shop-api',
     envName: 'dev',
     file: { folder: '~/code/shop', path: '.env' },
     added: ['DEBUG'],
@@ -38,7 +38,7 @@ function change(after: string): EnvFileChange {
 function conflict(path: string): EnvFileStatus {
   return {
     envId: 'env-1',
-    group: 'shop-api',
+    label: 'shop-api',
     envName: 'dev',
     file: { folder: '~/code/shop', path },
     location: null,
@@ -106,7 +106,7 @@ describe('announcing rounds', () => {
     envsFilesUndo.mockResolvedValueOnce({});
     await undoChange(t, change('rev-c'));
     expect(envsFilesUndo).toHaveBeenCalledWith({ envId: 'env-1', before: 'rev-0', after: 'rev-c' });
-    expect(toast.success).toHaveBeenCalledWith('envs.files.undone {"env":"shop-api / dev"}');
+    expect(toast.success).toHaveBeenCalledWith('envs.files.undone {"env":"shop-api · dev"}');
 
     envsFilesUndo.mockRejectedValueOnce({
       code: 'conflict',
@@ -114,7 +114,7 @@ describe('announcing rounds', () => {
     });
     await undoChange(t, change('rev-d'));
     expect(toast.error).toHaveBeenLastCalledWith(
-      'envs.files.errors.undoChanged {"env":"shop-api / dev"}',
+      'envs.files.errors.undoChanged {"env":"shop-api · dev"}',
     );
 
     envsFilesUndo.mockRejectedValueOnce({

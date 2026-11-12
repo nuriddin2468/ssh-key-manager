@@ -249,11 +249,20 @@ pub struct Repository {
     pub remotes: Vec<String>,
 }
 
+/// One of Personal's environments as suggestions see it: by id, with its
+/// part (from before projects, its group's name).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvFacts {
+    pub id: String,
+    pub part: String,
+}
+
 /// What suggestions are made from.
 #[derive(Debug, Default)]
 pub struct Sources<'a> {
     pub hosts: &'a [HostFacts],
-    pub environment_groups: &'a [String],
+    /// Personal's environments that have a part ([`super::super::Vault::suggestion_environments`]).
+    pub environments: &'a [EnvFacts],
     pub logins: &'a [LoginFacts],
     pub repositories: &'a [Repository],
     pub projects: &'a [Project],
@@ -268,7 +277,8 @@ pub struct Sources<'a> {
 #[serde(tag = "type", rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
 pub enum SuggestionReason {
-    /// Environments of this project group.
+    /// Personal's environments with this part (from before projects, their
+    /// group).
     Environments { group: String },
     /// A Git working tree.
     GitFolder { folder: String },
@@ -321,9 +331,7 @@ impl ProjectSuggestion {
         list.extend(
             self.environments
                 .iter()
-                .map(|group| ProjectMember::Environment {
-                    group: group.clone(),
-                }),
+                .map(|group| ProjectMember::Environment { id: group.clone() }),
         );
         list.extend(
             self.folders
@@ -349,7 +357,7 @@ impl ProjectSuggestion {
             ProjectMember::Host { alias } => self.hosts.contains(alias),
             ProjectMember::Key { fingerprint } => self.keys.contains(fingerprint),
             ProjectMember::Login { id } => self.logins.contains(id),
-            ProjectMember::Environment { group } => self.environments.contains(group),
+            ProjectMember::Environment { id } => self.environments.contains(id),
             ProjectMember::Folder { path } => self.folders.contains(path),
             ProjectMember::HostsFile { name } => self.hosts_file.contains(name),
         }
@@ -373,7 +381,7 @@ impl ProjectSuggestion {
             match member {
                 ProjectMember::Host { alias } => self.hosts.push(alias),
                 ProjectMember::Key { fingerprint } => self.keys.push(fingerprint),
-                ProjectMember::Environment { group } => self.environments.push(group),
+                ProjectMember::Environment { id } => self.environments.push(id),
                 ProjectMember::Folder { path } => self.folders.push(path),
                 ProjectMember::Login { id } => self.logins.push(id),
                 ProjectMember::HostsFile { name } => self.hosts_file.push(name),
@@ -390,7 +398,7 @@ impl ProjectSuggestion {
                 ProjectMember::Host { alias } => self.hosts.retain(|v| v != alias),
                 ProjectMember::Key { fingerprint } => self.keys.retain(|v| v != fingerprint),
                 ProjectMember::Login { id } => self.logins.retain(|v| v != id),
-                ProjectMember::Environment { group } => self.environments.retain(|v| v != group),
+                ProjectMember::Environment { id } => self.environments.retain(|v| v != id),
                 ProjectMember::Folder { path } => self.folders.retain(|v| v != path),
                 ProjectMember::HostsFile { name } => self.hosts_file.retain(|v| v != name),
             }
@@ -795,15 +803,25 @@ fn hosts_file_matches(
     (reasons, found)
 }
 
+/// Personal's environments that share a part make a project of that name.
 fn environments(sources: &Sources<'_>, out: &mut Vec<ProjectSuggestion>) {
-    for group in sources.environment_groups {
+    let mut parts: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
+    for env in sources.environments {
+        let (_, ids) = parts
+            .entry(env.part.to_lowercase())
+            .or_insert_with(|| (env.part.clone(), Vec::new()));
+        if ids.len() < MAX_MEMBERS {
+            ids.push(env.id.clone());
+        }
+    }
+    for (part, ids) in parts.into_values() {
         if let Some(mut c) = candidate(
-            group,
+            &part,
             SuggestionReason::Environments {
-                group: group.clone(),
+                group: part.clone(),
             },
         ) {
-            c.environments.push(group.clone());
+            c.environments = ids;
             out.push(c);
         }
     }

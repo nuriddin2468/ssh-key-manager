@@ -20,6 +20,7 @@ import { Tile } from '@/components/ui/Tile';
 import { useVaultMutation } from '@/features/passwords/vault';
 import { useProjects } from '@/features/projects/queries';
 import { cn } from '@/lib/cn';
+import { whereLabel } from '../model';
 import { AdoptFileDialog } from './AdoptFileDialog';
 import { announceSynced } from './announce';
 import { ignoreFailed, isFileConflict } from './errors';
@@ -309,7 +310,7 @@ function FileReportRow({ report, onCompare, onIgnore }: FileReportRowProps) {
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-mono text-[13px] font-semibold">{report.file.path}</span>
           <span className="inline-flex h-5 items-center rounded-md border border-white/10 bg-white/[0.06] px-[7px] text-[11.5px] text-fg-2">
-            {report.group} / {report.envName}
+            {whereLabel(report.label || null, report.envName)}
           </span>
           <span className={cn('text-[11.5px] font-semibold', tone.text)}>
             {stateLabel(t, report.state)}
@@ -387,7 +388,9 @@ function FileReportRow({ report, onCompare, onIgnore }: FileReportRowProps) {
         <Button
           variant="ghost"
           size="sm"
-          aria-label={t('envs.files.openEnvLabel', { env: `${report.group} / ${report.envName}` })}
+          aria-label={t('envs.files.openEnvLabel', {
+            env: whereLabel(report.label || null, report.envName),
+          })}
           onClick={() => navigate({ page: 'envs', envId: report.envId })}
         >
           {t('envs.files.openEnv')}

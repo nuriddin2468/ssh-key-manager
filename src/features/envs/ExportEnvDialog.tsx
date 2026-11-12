@@ -25,7 +25,7 @@ import { showFileError } from '@/features/passwords/files/errors';
 import { baseName } from '@/features/passwords/files/pickers';
 import { useVaultMutation } from '@/features/passwords/vault';
 import { displayPath } from '@/lib/format';
-import { envLabel } from './model';
+import { useEnvLabel } from './useProjectNames';
 
 const FORMATS: { id: EnvFormat; ext: string; tone: Tone; icon: ChoiceIcon }[] = [
   { id: 'dotenv', ext: '.env', tone: 'lime', icon: FileCode2 },
@@ -48,6 +48,7 @@ interface ExportEnvDialogProps {
  */
 export function ExportEnvDialog({ env, onDone }: ExportEnvDialogProps) {
   const { t } = useTranslation();
+  const envLabelOf = useEnvLabel();
   const [format, setFormat] = useState<EnvFormat>('dotenv');
   const [waiting, setWaiting] = useState<EnvExport | null>(null);
   const home = useEnvironment().data?.paths.home;
@@ -93,7 +94,7 @@ export function ExportEnvDialog({ env, onDone }: ExportEnvDialogProps) {
               <FileDown className="size-[22px]" strokeWidth={2} />
             </Tile>
           }
-          title={t('envs.export.title', { name: envLabel(env) })}
+          title={t('envs.export.title', { name: envLabelOf(env) })}
           description={t('envs.export.description')}
         />
         <DialogBody>

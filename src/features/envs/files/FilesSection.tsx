@@ -24,7 +24,7 @@ import { Menu, MenuContent, MenuItem, MenuTrigger } from '@/components/ui/Menu';
 import { Tile } from '@/components/ui/Tile';
 import { useVaultMutation } from '@/features/passwords/vault';
 import { cn } from '@/lib/cn';
-import { envLabel } from '../model';
+import { useEnvLabel } from '../useProjectNames';
 import { announceSynced } from './announce';
 import { BindFileDialog } from './BindFileDialog';
 import { ignoreFailed, isFileConflict } from './errors';
@@ -60,13 +60,14 @@ interface FilesSectionProps {
  */
 export function FilesSection({ env, files }: FilesSectionProps) {
   const { t } = useTranslation();
+  const envLabelOf = useEnvLabel();
   const headingId = useId();
   const statuses = useFileStatuses();
   const risks = useFileRisks();
   const [open, setOpen] = useState<Open | null>(null);
   const [stopping, setStopping] = useState<EnvFile | null>(null);
   const [ignoring, setIgnoring] = useState<EnvFile | null>(null);
-  const label = envLabel(env);
+  const label = envLabelOf(env);
   const makeLocal = useMakeLocal(env);
   const ignore = useVaultMutation((file: EnvFile) => api.envsFilesIgnore(env.id, file), {
     success: (_, file) => t('envs.center.ignored', { file: fileName(file) }),

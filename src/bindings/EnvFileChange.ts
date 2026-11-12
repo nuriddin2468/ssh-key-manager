@@ -5,7 +5,11 @@ import type { EnvUndo } from "./EnvUndo";
 /**
  * What an edit of a file changed in the vault, by name.
  */
-export type EnvFileChange = { envId: string, group: string, envName: string, file: EnvFile, added: Array<string>, changed: Array<string>, removed: Array<string>, 
+export type EnvFileChange = { envId: string, 
+/**
+ * Where the environment is, as [`EnvFileStatus::label`].
+ */
+label: string, envName: string, file: EnvFile, added: Array<string>, changed: Array<string>, removed: Array<string>, 
 /**
  * What [`Vault::undo_env_file_change`] takes to undo it.
  */

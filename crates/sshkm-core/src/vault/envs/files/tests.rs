@@ -51,18 +51,11 @@ impl Fixture {
                 true,
             )
             .unwrap();
-        vault
-            .set_project_member(
-                &project,
-                &ProjectMember::Environment {
-                    group: "shop-api".into(),
-                },
-                true,
-            )
-            .unwrap();
+        // In the project, as `Environments/Shop/dev` in KeePass.
         let env = vault
             .add_environment(&EnvInput {
-                project: "shop-api".into(),
+                project: Some(project.clone()),
+                part: String::new(),
                 name: "dev".into(),
                 notes: String::new(),
             })
@@ -220,7 +213,8 @@ fn kinds_come_from_names_until_set() {
     assert!(f.vault.set_env_kind(&f.env, EnvKind::Remote).is_err());
     // A new name doesn't take its files away: binding made it local.
     let mut input = EnvInput {
-        project: "shop-api".into(),
+        project: Some(f.project.clone()),
+        part: String::new(),
         name: "staging".into(),
         notes: String::new(),
     };

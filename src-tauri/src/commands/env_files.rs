@@ -24,7 +24,7 @@ use sshkm_core::vault::envs::files::{
 use sshkm_core::vault::envs::{
     self, EnvDetail, EnvImportPreview, EnvInput, ImportChoice, looks_secret,
 };
-use sshkm_core::vault::projects::{self, ProjectMember};
+use sshkm_core::vault::projects;
 use tauri::{AppHandle, State};
 
 use super::envs::{EnvImported, ImportTarget, unignored_in_git};
@@ -433,24 +433,22 @@ pub async fn envs_files_adopt(
         let vars = envs::chosen_variables(parsed, &every);
         let imported = state.vault.change(&app, &state.backup_dir, |vault| {
             let id = match &target {
-                ImportTarget::New {
-                    project: group,
-                    name,
-                } => {
+                // In the project whose folder has the file.
+                ImportTarget::New { part, name, .. } => {
                     let id = vault.add_environment(&EnvInput {
-                        project: group.clone(),
+                        project: Some(project.clone()),
+                        part: part.clone(),
                         name: name.clone(),
                         notes: String::new(),
                     })?;
                     vault.set_env_kind(&id, EnvKind::Local)?;
                     id
                 }
-                ImportTarget::Existing { id } => id.clone(),
+                ImportTarget::Existing { id } => {
+                    take_into(vault, &project, id)?;
+                    id.clone()
+                }
             };
-            let group = vault.environment(&id)?.summary.project;
-            if !vault.project(&project)?.environments.contains(&group) {
-                vault.set_project_member(&project, &ProjectMember::Environment { group }, true)?;
-            }
             let counts = vault.import_env_variables(&id, &vars)?;
             vault.bind_env_file(&id, &file, &ctx)?;
             Ok(EnvImported { id, counts })
@@ -573,9 +571,73 @@ fn tracked(path: &Path) -> bool {
         .is_ok_and(|output| output.code == Some(0))
 }
 
+/// Puts the existing environment a file is taken under management into in
+/// `project`, whose folder has the file: its files are written while the
+/// project that has it holds their folder. One of Personal's comes in; one
+/// another project has is refused, since its own files there would stop
+/// being written without a word (Move to project… says so first).
+fn take_into(vault: &mut sshkm_core::vault::Vault, project: &str, id: &str) -> AppResult<()> {
+    match vault.environment(id)?.summary.project.as_deref() {
+        Some(owner) if owner == project => Ok(()),
+        Some(_) => Err(AppError::invalid(
+            "the environment is in another project: move it to this one first",
+        )),
+        None => {
+            vault.move_environment(id, Some(project))?;
+            Ok(())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_goes_into_this_projects_environment_or_personals_not_anothers() {
+        use sshkm_core::vault::projects::{ProjectColor, ProjectInput};
+        use sshkm_core::vault::{Vault, VaultPaths};
+        let dir = tempfile::tempdir().unwrap();
+        let paths = VaultPaths::new(dir.path().join("vault.kdbx"));
+        let (mut vault, _) =
+            Vault::create(&paths, &sshkm_core::SecretString::from("master")).unwrap();
+        let project = |vault: &mut Vault, name: &str| {
+            vault
+                .add_project(&ProjectInput {
+                    name: name.into(),
+                    color: ProjectColor::Blue,
+                })
+                .unwrap()
+        };
+        let shop = project(&mut vault, "Shop");
+        let blog = project(&mut vault, "Blog");
+        let env = |vault: &mut Vault, project: Option<&str>, name: &str| {
+            vault
+                .add_environment(&EnvInput {
+                    project: project.map(str::to_owned),
+                    part: String::new(),
+                    name: name.into(),
+                    notes: String::new(),
+                })
+                .unwrap()
+        };
+        let mine = env(&mut vault, None, "local");
+        let shops = env(&mut vault, Some(&shop), "dev");
+        let blogs = env(&mut vault, Some(&blog), "dev");
+        take_into(&mut vault, &shop, &shops).unwrap();
+        take_into(&mut vault, &shop, &mine).unwrap();
+        let owner = |vault: &Vault, id: &str| vault.environment(id).unwrap().summary.project;
+        assert_eq!(owner(&vault, &mine).as_deref(), Some(shop.as_str()));
+        let refused = take_into(&mut vault, &shop, &blogs).unwrap_err();
+        assert!(matches!(
+            refused,
+            AppError::App {
+                code: ErrorCode::InvalidInput,
+                ..
+            }
+        ));
+        assert_eq!(owner(&vault, &blogs).as_deref(), Some(blog.as_str()));
+    }
 
     #[test]
     fn git_says_what_it_would_take_along() {

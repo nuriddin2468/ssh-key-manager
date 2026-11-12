@@ -10,38 +10,47 @@ import { TextField } from '@/components/ui/TextField';
 import { Tile } from '@/components/ui/Tile';
 import { useVaultMutation } from '@/features/passwords/vault';
 import { cn } from '@/lib/cn';
-import { labelProblem, nameTaken, projects } from './model';
+import { labelProblem, nameTaken, partsOf, whereLabel } from './model';
+import { useProjectNames } from './useProjectNames';
+import { PERSONAL, partProblem, projectOf, WhereFields } from './WhereFields';
 
-/** Names most projects use, offered as one-click fills. */
-const STAGES = ['dev', 'staging', 'prod'] as const;
+/** Stages most projects use, offered as one-click fills. */
+const STAGES = ['local', 'dev', 'staging', 'prod'] as const;
 
 interface EnvDialogProps {
-  /** The environment to rename; `null` makes a new one. */
+  /** The environment to edit; `null` makes a new one. */
   env: EnvDetail | null;
   all: EnvSummary[];
-  /** The project a new environment starts in. */
-  defaultProject?: string;
+  /** The project a new environment starts in (by id); Personal without it. */
+  defaultProject?: string | null;
   /** Closes the dialog, with the environment's id when it was saved. */
   onDone: (id?: string) => void;
   /** Called with the environment once it is saved, before `onDone`. */
   onSaved?: (saved: EnvDetail) => void;
 }
 
-/** A new environment, or a new name, project or notes for one. */
+/**
+ * A new environment, or another project, part, stage or notes for one: in
+ * a project (or Personal), an optional part, and its stage.
+ */
 export function EnvDialog({ env, all, defaultProject, onDone, onSaved }: EnvDialogProps) {
   const { t } = useTranslation();
-  const listId = useId();
   const notesId = useId();
-  const [project, setProject] = useState(env?.project ?? defaultProject ?? '');
+  const names = useProjectNames();
+  const [project, setProject] = useState(
+    env ? (env.project ?? PERSONAL) : (defaultProject ?? PERSONAL),
+  );
+  const projectId = projectOf(project);
+  const parts = partsOf(all, projectId);
+  // With one part, a new environment starts in it.
+  const [part, setPart] = useState(env?.part ?? (parts.length === 1 ? (parts[0] ?? '') : ''));
   const [name, setName] = useState(env?.name ?? '');
   const [notes, setNotes] = useState(env?.notes ?? '');
   const [touched, setTouched] = useState(false);
 
+  const input = { project: projectId, part: part.trim(), name, notes };
   const save = useVaultMutation(
-    () =>
-      env
-        ? api.envsUpdate(env.id, { project, name, notes })
-        : api.envsCreate({ project, name, notes }),
+    () => (env ? api.envsUpdate(env.id, input) : api.envsCreate(input)),
     {
       success: (saved) =>
         env ? t('envs.saved', { name: saved.name }) : t('envs.created', { name: saved.name }),
@@ -57,12 +66,16 @@ export function EnvDialog({ env, all, defaultProject, onDone, onSaved }: EnvDial
     },
   );
 
-  const projectProblem = labelProblem(project);
+  const placeProblem = partProblem(part);
   const nameProblem = labelProblem(name);
-  const taken = !nameProblem && !projectProblem && nameTaken(all, project, name, env?.id);
+  const taken = !nameProblem && !placeProblem && nameTaken(all, projectId, part, name, env?.id);
   const problemText = (problem: ReturnType<typeof labelProblem>) =>
     problem ? t(`envs.form.${problem}`) : undefined;
-  const ready = !projectProblem && !nameProblem && !taken;
+  const ready = !placeProblem && !nameProblem && !taken;
+  const projectName = projectId ? names.get(projectId) : undefined;
+  const where = whereLabel(projectName ?? t('projects.personal'), part.trim());
+  // Where KeePassXC shows a new one; an edited one stays where it is.
+  const path = [projectName, part.trim(), name.trim()].filter(Boolean).join(' / ');
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -87,20 +100,14 @@ export function EnvDialog({ env, all, defaultProject, onDone, onSaved }: EnvDial
           description={t('envs.form.description')}
         />
         <DialogBody>
-          <TextField
-            label={t('envs.form.project')}
-            value={project}
-            list={listId}
-            placeholder={t('envs.form.projectPlaceholder')}
-            onChange={(event) => setProject(event.target.value)}
-            error={touched ? problemText(projectProblem) : undefined}
-            hint={t('envs.form.projectHint')}
+          <WhereFields
+            all={all}
+            project={project}
+            part={part}
+            onProject={setProject}
+            onPart={setPart}
+            touched={touched}
           />
-          <datalist id={listId}>
-            {projects(all).map((item) => (
-              <option key={item} value={item} />
-            ))}
-          </datalist>
           <div className="flex flex-col gap-2">
             <TextField
               label={t('envs.form.name')}
@@ -110,7 +117,7 @@ export function EnvDialog({ env, all, defaultProject, onDone, onSaved }: EnvDial
               error={
                 touched
                   ? (problemText(nameProblem) ??
-                    (taken ? t('envs.form.taken', { project: project.trim() }) : undefined))
+                    (taken ? t('envs.form.taken', { where, stage: name.trim() }) : undefined))
                   : undefined
               }
             />
@@ -133,6 +140,9 @@ export function EnvDialog({ env, all, defaultProject, onDone, onSaved }: EnvDial
               ))}
             </div>
           </div>
+          {env || !name.trim() ? null : (
+            <p className="text-[12px] text-subtle">{t('envs.form.keepass', { path })}</p>
+          )}
           <div className="flex flex-col gap-1.5">
             <label htmlFor={notesId} className="text-[12px] font-semibold text-fg-2">
               {t('envs.form.notes')}

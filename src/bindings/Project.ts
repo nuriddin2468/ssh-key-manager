@@ -19,8 +19,8 @@ hosts: Array<string>,
  */
 keys: Array<string>, 
 /**
- * Environments by their project's group under `Environments`: the
- * `project` of an [`envs::EnvSummary`].
+ * Environments by entry id, in the order they were added, not counting
+ * those in the recycle bin or gone, nor one another project took later.
  */
 environments: Array<string>, 
 /**

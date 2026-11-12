@@ -81,15 +81,21 @@ fn projects_are_kept_in_the_vault_with_their_members() {
     let paths = VaultPaths::new(dir.path().join("vault.kdbx"));
     let (mut vault, secret) = Vault::create(&paths, &s("master")).unwrap();
     let id = vault.add_project(&input(" Shop ")).unwrap();
+    let env = vault
+        .add_environment(&EnvInput {
+            project: None,
+            part: "shop-api".into(),
+            name: "dev".into(),
+            notes: String::new(),
+        })
+        .unwrap();
     for member in [
         host("shop-prod"),
         host("shop-bastion"),
         ProjectMember::Key {
             fingerprint: "SHA256:k3XbV9qL2mT8sRw4YzN1cJ6hD0fGpA5uE7oIiKjBnHw".into(),
         },
-        ProjectMember::Environment {
-            group: "shop-api".into(),
-        },
+        ProjectMember::Environment { id: env.clone() },
         ProjectMember::Folder {
             path: "~/code/shop".into(),
         },
@@ -116,7 +122,7 @@ fn projects_are_kept_in_the_vault_with_their_members() {
         project.keys,
         ["SHA256:k3XbV9qL2mT8sRw4YzN1cJ6hD0fGpA5uE7oIiKjBnHw"]
     );
-    assert_eq!(project.environments, ["shop-api"]);
+    assert_eq!(project.environments, std::slice::from_ref(&env));
     assert_eq!(project.folders, ["~/code/shop"]);
     assert_eq!(project.logins, std::slice::from_ref(&github));
     // A KeePass tag, as KeePassXC reads and shows it, next to the user's own.
@@ -204,7 +210,8 @@ fn logins_are_members_by_id_whatever_their_own_tags_say() {
 
     let env = vault
         .add_environment(&EnvInput {
-            project: "shop".into(),
+            project: None,
+            part: "shop".into(),
             name: "dev".into(),
             notes: String::new(),
         })
@@ -331,7 +338,7 @@ fn members_are_checked() {
             fingerprint: "SHA256:abc def".into(),
         },
         ProjectMember::Environment {
-            group: "a/b".into(),
+            id: "not-an-id".into(),
         },
         ProjectMember::Folder {
             path: String::new(),
@@ -943,4 +950,580 @@ fn hosts_file_names_are_members_in_lower_case() {
     });
     std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
     assert_eq!(load_copy(&path, "v")[0].hosts_file, Vec::<String>::new());
+}
+
+/// An environment as versions before projects made it: in the group
+/// `Environments/<group>`, with no part kept on it.
+fn legacy_env(vault: &mut Vault, group: &str, stage: &str) -> String {
+    let id = vault
+        .add_environment(&EnvInput {
+            project: None,
+            part: group.into(),
+            name: stage.into(),
+            notes: String::new(),
+        })
+        .unwrap();
+    let mut entry = vault
+        .db
+        .entry_mut(crate::vault::parse_id(&id).unwrap())
+        .unwrap();
+    entry.custom_data.remove(envs::PART);
+    id
+}
+
+/// A project naming an environments' group, as projects held them before.
+fn name_group(vault: &mut Vault, project: &str, group: &str) {
+    let t = vault.stored_project(project).unwrap().tick();
+    name_group_at(vault, project, group, t);
+}
+
+/// [`name_group`] at a set time, for an order that doesn't depend on the clock.
+fn name_group_at(vault: &mut Vault, project: &str, group: &str, a: i64) {
+    let mut stored = vault.stored_project(project).unwrap();
+    stored
+        .members
+        .insert(format!("env:{group}"), Presence { a, r: None });
+    vault.put_project(project, &stored).unwrap();
+}
+
+fn env_in<'a>(envs: &'a [envs::EnvSummary], id: &str) -> &'a envs::EnvSummary {
+    envs.iter().find(|env| env.id == id).unwrap()
+}
+
+fn sorted(mut ids: Vec<String>) -> Vec<String> {
+    ids.sort();
+    ids
+}
+
+fn new_env(vault: &mut Vault, project: Option<&str>, part: &str, stage: &str) -> Result<String> {
+    vault.add_environment(&EnvInput {
+        project: project.map(str::to_owned),
+        part: part.into(),
+        name: stage.into(),
+        notes: String::new(),
+    })
+}
+
+#[test]
+fn environments_join_the_project_that_named_their_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "laptop");
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    let api_local = legacy_env(&mut vault, "shop-api", "local");
+    let api_prod = legacy_env(&mut vault, "shop-api", "prod");
+    let web = legacy_env(&mut vault, "shop-web", "local");
+    let scripts = legacy_env(&mut vault, "scripts", "dev");
+    name_group(&mut vault, &shop, "shop-api");
+    name_group(&mut vault, &shop, "shop-web");
+
+    assert!(vault.tidy_projects());
+    let project = vault.project(&shop).unwrap();
+    assert_eq!(
+        sorted(project.environments),
+        sorted(vec![api_local.clone(), api_prod.clone(), web.clone()])
+    );
+    // Their groups are their parts; nothing moved in KeePass.
+    let envs = vault.environments();
+    assert_eq!(
+        env_in(&envs, &api_prod).project.as_deref(),
+        Some(shop.as_str())
+    );
+    assert_eq!(env_in(&envs, &api_prod).part, "shop-api");
+    assert_eq!(env_in(&envs, &web).part, "shop-web");
+    assert_eq!(env_in(&envs, &web).group, "shop-web");
+    // KeePassXC shows the project as a tag, as for logins.
+    assert_eq!(tags(&vault, &web), ["project/Shop"]);
+    // A group no project named stays in Personal, its name the part.
+    assert_eq!(env_in(&envs, &scripts).project, None);
+    assert_eq!(env_in(&envs, &scripts).part, "scripts");
+    assert_eq!(tags(&vault, &scripts), Vec::<String>::new());
+    // Older versions still find the group in the record.
+    let stored = vault.stored_project(&shop).unwrap();
+    assert!(stored.members.contains_key("env:shop-api"));
+
+    // Again: nothing to do.
+    assert!(!vault.tidy_projects());
+    // One taken out stays out; one an older device makes in the group joins.
+    assert!(vault.move_environment(&api_prod, None).unwrap());
+    let newer = legacy_env(&mut vault, "shop-api", "staging");
+    assert!(vault.tidy_projects());
+    let project = vault.project(&shop).unwrap();
+    assert!(!project.environments.contains(&api_prod));
+    assert!(project.environments.contains(&newer));
+    assert_eq!(tags(&vault, &api_prod), Vec::<String>::new());
+}
+
+#[test]
+fn a_group_two_projects_named_goes_to_the_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "laptop");
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    let blog = vault.add_project(&input("Blog")).unwrap();
+    let shared = legacy_env(&mut vault, "shared", "dev");
+    name_group_at(&mut vault, &blog, "shared", at(-2));
+    name_group_at(&mut vault, &shop, "shared", at(-1));
+    vault.tidy_projects();
+    assert_eq!(vault.project(&blog).unwrap().environments, [shared]);
+    assert_eq!(
+        vault.project(&shop).unwrap().environments,
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn two_devices_migrating_at_once_end_up_with_the_same() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = VaultPaths::new(dir.path().join("vault.kdbx"));
+    let (mut vault, _) = Vault::create(&paths, &s("master")).unwrap();
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    let blog = vault.add_project(&input("Blog")).unwrap();
+    let api = legacy_env(&mut vault, "shop-api", "local");
+    let web = legacy_env(&mut vault, "shop-web", "local");
+    let shared = legacy_env(&mut vault, "shared", "dev");
+    name_group(&mut vault, &shop, "shop-api");
+    name_group(&mut vault, &shop, "shop-web");
+    name_group_at(&mut vault, &blog, "shared", at(-2));
+    name_group_at(&mut vault, &shop, "shared", at(-1));
+    vault.save(&dir.path().join("backups")).unwrap();
+
+    // The same file, opened on two devices before either took the step.
+    let mut laptop = Vault::unlock(&paths, &s("master")).unwrap();
+    let mut desktop = Vault::unlock(&paths, &s("master")).unwrap();
+    assert!(laptop.tidy_projects());
+    assert!(desktop.tidy_projects());
+    sync(&mut laptop, &mut desktop);
+    sync(&mut laptop, &mut desktop);
+
+    assert_eq!(laptop.project_records(), desktop.project_records());
+    assert_eq!(laptop.projects(), desktop.projects());
+    for vault in [&laptop, &desktop] {
+        let project = vault.project(&shop).unwrap();
+        assert_eq!(
+            sorted(project.environments),
+            sorted(vec![api.clone(), web.clone()])
+        );
+        assert_eq!(
+            vault.project(&blog).unwrap().environments,
+            std::slice::from_ref(&shared)
+        );
+    }
+    assert!(!laptop.tidy_projects());
+    assert!(!desktop.tidy_projects());
+}
+
+#[test]
+fn an_environment_is_in_one_project_and_the_latest_move_wins() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = VaultPaths::new(dir.path().join("vault.kdbx"));
+    let (mut vault, _) = Vault::create(&paths, &s("master")).unwrap();
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    let blog = vault.add_project(&input("Blog")).unwrap();
+    let env = new_env(&mut vault, Some(&shop), "", "dev").unwrap();
+    assert_eq!(
+        vault.project(&shop).unwrap().environments,
+        std::slice::from_ref(&env)
+    );
+    // Into another project: out of the first.
+    let member = ProjectMember::Environment { id: env.clone() };
+    add(&mut vault, &blog, &member);
+    assert_eq!(
+        vault.project(&shop).unwrap().environments,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        vault.project(&blog).unwrap().environments,
+        std::slice::from_ref(&env)
+    );
+    assert_eq!(tags(&vault, &env), ["project/Blog"]);
+    // Taken back.
+    assert!(vault.set_project_member(&shop, &member, true).unwrap());
+    assert_eq!(
+        vault.project(&shop).unwrap().environments,
+        std::slice::from_ref(&env)
+    );
+    vault.save(&dir.path().join("backups")).unwrap();
+
+    // Two devices move it at once: both end up with the one moved last.
+    let mut laptop = Vault::unlock(&paths, &s("master")).unwrap();
+    let mut desktop = Vault::unlock(&paths, &s("master")).unwrap();
+    laptop.move_environment(&env, Some(&blog)).unwrap();
+    desktop.move_environment(&env, None).unwrap();
+    desktop.move_environment(&env, Some(&shop)).unwrap();
+    sync(&mut laptop, &mut desktop);
+    // Of the records that hold it after the merge, the one that took it last.
+    let rank = |project: &str| {
+        let presence = laptop.stored_project(project).unwrap().members[&format!("envid:{env}")];
+        presence
+            .present()
+            .then_some((presence.a, std::cmp::Reverse(project.to_owned())))
+    };
+    let last = if rank(&blog) > rank(&shop) {
+        &blog
+    } else {
+        &shop
+    };
+    assert!(rank(last).is_some());
+    for vault in [&laptop, &desktop] {
+        let holders: Vec<String> = vault
+            .projects()
+            .into_iter()
+            .filter(|p| p.environments.contains(&env))
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(holders, std::slice::from_ref(last));
+    }
+}
+
+#[test]
+fn a_stage_is_unique_within_a_project_and_its_part() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "laptop");
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    let blog = vault.add_project(&input("Blog")).unwrap();
+    let backend = new_env(&mut vault, Some(&shop), "backend", "local").unwrap();
+    assert!(matches!(
+        new_env(&mut vault, Some(&shop), "Backend", "LOCAL"),
+        Err(Error::AlreadyExists(_))
+    ));
+    let frontend = new_env(&mut vault, Some(&shop), "frontend", "local").unwrap();
+    new_env(&mut vault, Some(&blog), "backend", "local").unwrap();
+    new_env(&mut vault, None, "backend", "local").unwrap();
+    assert!(new_env(&mut vault, Some(&shop), "a/b", "local").is_err());
+    // Filed for KeePassXC under the project and the part.
+    let root = vault.db.root();
+    let group = root
+        .group_by_path(&[envs::GROUP, "Shop", "backend"])
+        .expect("Environments/Shop/backend");
+    assert!(group.entry_by_name("local").is_some());
+
+    // Naming a part: not onto a stage it has.
+    assert!(matches!(
+        vault.set_environment_part(std::slice::from_ref(&frontend), "backend"),
+        Err(Error::AlreadyExists(_))
+    ));
+    let envs = vault.environments();
+    assert_eq!(env_in(&envs, &backend).part, "backend");
+    assert_eq!(env_in(&envs, &frontend).part, "frontend");
+}
+
+#[test]
+fn the_parts_a_project_had_as_groups_can_be_named() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "laptop");
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    let local = legacy_env(&mut vault, "shop-api", "local");
+    let prod = legacy_env(&mut vault, "shop-api", "prod");
+    name_group(&mut vault, &shop, "shop-api");
+    vault.tidy_projects();
+    // A second part comes: the first is named, then kept on the entries.
+    vault
+        .set_environment_part(&[local.clone(), prod.clone()], "backend")
+        .unwrap();
+    new_env(&mut vault, Some(&shop), "frontend", "local").unwrap();
+    let envs = vault.environments();
+    assert_eq!(env_in(&envs, &local).part, "backend");
+    assert_eq!(env_in(&envs, &prod).part, "backend");
+    assert_eq!(env_in(&envs, &prod).group, "shop-api");
+    // Personal's environments with a part may make a project.
+    let scripts = legacy_env(&mut vault, "scripts", "dev");
+    let facts = vault.suggestion_environments();
+    assert_eq!(
+        facts,
+        [suggest::EnvFacts {
+            id: scripts,
+            part: "scripts".into(),
+        }]
+    );
+}
+
+// ------------------------------------------------- the step from groups, racing
+
+/// One vault on two devices, both still on an older version's records:
+/// Shop named the group `shop-api`, Blog exists, and `api` is in the group.
+fn two_devices(dir: &TempDir) -> (Vault, Vault, String, String, String) {
+    let paths = VaultPaths::new(dir.path().join("vault.kdbx"));
+    let (mut vault, _) = Vault::create(&paths, &s("master")).unwrap();
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    let blog = vault.add_project(&input("Blog")).unwrap();
+    let api = legacy_env(&mut vault, "shop-api", "local");
+    name_group_at(&mut vault, &shop, "shop-api", at(-60));
+    vault.save(&dir.path().join("backups")).unwrap();
+    let laptop = Vault::unlock(&paths, &s("master")).unwrap();
+    let desktop = Vault::unlock(&paths, &s("master")).unwrap();
+    (laptop, desktop, shop, blog, api)
+}
+
+fn owner(vault: &Vault, env: &str) -> Option<String> {
+    env_in(&vault.environments(), env).project.clone()
+}
+
+/// Syncs until nothing changes, and checks both ended up with one set of
+/// records.
+fn settle(a: &mut Vault, b: &mut Vault) {
+    for _ in 0..3 {
+        sync(a, b);
+    }
+    assert!(!a.merge_projects(&b.project_records()).unwrap());
+    assert_eq!(a.project_records(), b.project_records());
+    assert!(!a.projects_untidy() && !b.projects_untidy());
+}
+
+#[test]
+fn what_the_user_did_after_the_step_wins_over_the_step_taken_later_elsewhere() {
+    // A move to Blog, to Personal, and Shop deleted, each on the desktop,
+    // which updated first; the laptop takes the step later, then they sync.
+    for case in ["blog", "personal", "deleted"] {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut laptop, mut desktop, shop, blog, api) = two_devices(&dir);
+        assert!(desktop.tidy_projects());
+        assert_eq!(owner(&desktop, &api).as_deref(), Some(shop.as_str()));
+        match case {
+            "blog" => assert!(desktop.move_environment(&api, Some(&blog)).unwrap()),
+            "personal" => assert!(desktop.move_environment(&api, None).unwrap()),
+            _ => desktop.remove_project(&shop).unwrap(),
+        }
+        assert!(laptop.tidy_projects());
+        // Both took the same step: the same record for Shop's `api`.
+        settle(&mut laptop, &mut desktop);
+        let expected = (case == "blog").then(|| blog.clone());
+        for device in [&laptop, &desktop] {
+            assert_eq!(owner(device, &api), expected, "{case}");
+            assert_eq!(device.project(&shop).is_ok(), case != "deleted", "{case}");
+        }
+    }
+}
+
+#[test]
+fn of_two_groups_known_on_different_devices_the_one_named_first_wins() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = VaultPaths::new(dir.path().join("vault.kdbx"));
+    let (mut vault, _) = Vault::create(&paths, &s("master")).unwrap();
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    let blog = vault.add_project(&input("Blog")).unwrap();
+    let env = legacy_env(&mut vault, "shared", "dev");
+    vault.save(&dir.path().join("backups")).unwrap();
+    let mut a = Vault::unlock(&paths, &s("master")).unwrap();
+    let mut b = Vault::unlock(&paths, &s("master")).unwrap();
+    // Older devices named the group: Blog first, heard of only on `a`;
+    // Shop later, heard of only on `b`.
+    name_group_at(&mut a, &blog, "shared", at(-10));
+    name_group_at(&mut b, &shop, "shared", at(-5));
+    assert!(a.tidy_projects());
+    assert!(b.tidy_projects());
+    assert_eq!(owner(&b, &env).as_deref(), Some(shop.as_str()));
+    settle(&mut a, &mut b);
+    assert_eq!(owner(&a, &env).as_deref(), Some(blog.as_str()));
+    assert_eq!(owner(&b, &env).as_deref(), Some(blog.as_str()));
+    // Shop's hold is recorded as lost: taking it out of Blog leaves it in
+    // Personal.
+    assert!(a.move_environment(&env, None).unwrap());
+    assert_eq!(owner(&a, &env), None);
+}
+
+#[test]
+fn a_hold_that_lost_after_a_sync_doesnt_take_the_environment_back() {
+    // The owner lets go two ways: taken out on its page, or deleted.
+    for delete in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = VaultPaths::new(dir.path().join("vault.kdbx"));
+        let (mut vault, _) = Vault::create(&paths, &s("master")).unwrap();
+        let shop = vault.add_project(&input("Shop")).unwrap();
+        let blog = vault.add_project(&input("Blog")).unwrap();
+        let docs = vault.add_project(&input("Docs")).unwrap();
+        let env = new_env(&mut vault, Some(&shop), "", "dev").unwrap();
+        vault.save(&dir.path().join("backups")).unwrap();
+        let mut laptop = Vault::unlock(&paths, &s("master")).unwrap();
+        let mut desktop = Vault::unlock(&paths, &s("master")).unwrap();
+        laptop.move_environment(&env, Some(&blog)).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        desktop.move_environment(&env, Some(&docs)).unwrap();
+        settle(&mut laptop, &mut desktop);
+        assert_eq!(owner(&laptop, &env).as_deref(), Some(docs.as_str()));
+        assert!(!laptop.project(&blog).unwrap().environments.contains(&env));
+        if delete {
+            laptop.remove_project(&docs).unwrap();
+        } else {
+            let member = ProjectMember::Environment { id: env.clone() };
+            assert!(laptop.set_project_member(&docs, &member, false).unwrap());
+        }
+        assert_eq!(owner(&laptop, &env), None, "delete: {delete}");
+        // And the other device follows.
+        settle(&mut laptop, &mut desktop);
+        assert_eq!(owner(&desktop, &env), None, "delete: {delete}");
+    }
+}
+
+#[test]
+fn only_environments_an_older_version_made_take_the_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "laptop");
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    let old = legacy_env(&mut vault, "backend", "dev");
+    name_group(&mut vault, &shop, "backend");
+    assert!(vault.tidy_projects());
+    assert_eq!(owner(&vault, &old).as_deref(), Some(shop.as_str()));
+    // Made in Personal with the part `backend`, filed in that group, or
+    // received from another device with it as the label.
+    let mine = new_env(&mut vault, None, "backend", "dev").unwrap();
+    let (got, _) = vault
+        .add_received_environment("backend", "prod", "", &[])
+        .unwrap();
+    assert_eq!(env_in(&vault.environments(), &mine).group, "backend");
+    assert!(!vault.projects_untidy());
+    assert!(!vault.tidy_projects());
+    assert_eq!(owner(&vault, &mine), None);
+    assert_eq!(owner(&vault, &got), None);
+}
+
+#[test]
+fn one_taken_out_long_ago_doesnt_come_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "laptop");
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    let other = vault.add_project(&input("Other")).unwrap();
+    let api = legacy_env(&mut vault, "shop-api", "local");
+    let day = 24 * 60 * 60 * 1000;
+    name_group_at(&mut vault, &shop, "shop-api", now_ms() - 800 * day);
+    vault.tidy_projects();
+    assert!(vault.move_environment(&api, None).unwrap());
+    // As if that was 401 days ago: the removal is pruned with anything that
+    // prunes (removing another project).
+    let mut stored = vault.stored_project(&shop).unwrap();
+    let key = format!("envid:{api}");
+    stored.members.insert(
+        key.clone(),
+        Presence {
+            a: now_ms() - 800 * day,
+            r: Some(now_ms() - 401 * day),
+        },
+    );
+    vault.put_project(&shop, &stored).unwrap();
+    vault.remove_project(&other).unwrap();
+    assert!(
+        !vault
+            .stored_project(&shop)
+            .unwrap()
+            .members
+            .contains_key(&key)
+    );
+    // Placed by the user: its part is on the entry, and the step skips it.
+    assert!(!vault.projects_untidy());
+    assert_eq!(owner(&vault, &api), None);
+}
+
+#[test]
+fn a_full_project_doesnt_ask_for_a_save_on_every_tidy() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "laptop");
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    let mut stored = vault.stored_project(&shop).unwrap();
+    for n in 0..MAX_MEMBERS {
+        stored.members.insert(
+            format!("envid:6f1c2d3e-0000-4000-8000-{n:012}"),
+            Presence { a: 1, r: None },
+        );
+    }
+    vault.put_project(&shop, &stored).unwrap();
+    let api = legacy_env(&mut vault, "shop-api", "local");
+    name_group(&mut vault, &shop, "shop-api");
+    vault.tidy_projects();
+    assert!(!vault.projects_untidy());
+    assert!(!vault.tidy_projects());
+    assert_eq!(owner(&vault, &api), None);
+}
+
+#[test]
+fn a_stage_is_unique_however_an_environment_comes_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "laptop");
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    new_env(&mut vault, Some(&shop), "backend", "dev").unwrap();
+    let mine = new_env(&mut vault, None, "backend", "dev").unwrap();
+    let member = ProjectMember::Environment { id: mine.clone() };
+    // Added on the project's page, or moved there.
+    assert!(matches!(
+        vault.set_project_member(&shop, &member, true),
+        Err(Error::AlreadyExists(_))
+    ));
+    assert!(matches!(
+        vault.move_environment(&mine, Some(&shop)),
+        Err(Error::AlreadyExists(_))
+    ));
+    // Back to Personal, where one of that stage is now.
+    let elsewhere = new_env(&mut vault, Some(&shop), "web", "local").unwrap();
+    new_env(&mut vault, None, "web", "local").unwrap();
+    assert!(matches!(
+        vault.move_environment(&elsewhere, None),
+        Err(Error::AlreadyExists(_))
+    ));
+    // The step from groups takes no second either: an older version's
+    // `backend / dev` stays in Personal.
+    vault.trash_environment(&mine).unwrap();
+    let old = legacy_env(&mut vault, "backend", "dev");
+    name_group(&mut vault, &shop, "backend");
+    vault.tidy_projects();
+    assert_eq!(owner(&vault, &old), None);
+    assert!(!vault.projects_untidy());
+    let count = vault
+        .environments()
+        .into_iter()
+        .filter(|e| e.project.as_deref() == Some(shop.as_str()) && e.name == "dev")
+        .count();
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn a_file_an_older_environment_is_written_to_works_once_it_takes_the_step() {
+    use crate::vault::envs::files::{EnvFile, FileState, FilesContext, InactiveReason, SyncState};
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "laptop");
+    let folder = dir.path().join("shop");
+    std::fs::create_dir_all(&folder).unwrap();
+    let folder_text = folder_text(&folder, None).unwrap();
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    add(
+        &mut vault,
+        &shop,
+        &ProjectMember::Folder {
+            path: folder_text.clone(),
+        },
+    );
+    let env = new_env(&mut vault, Some(&shop), "", "dev").unwrap();
+    let ctx = FilesContext {
+        home: None,
+        ssh_dir: dir.path().join(".ssh"),
+    };
+    let file = EnvFile {
+        folder: folder_text,
+        path: ".env".into(),
+    };
+    vault.bind_env_file(&env, &file, &ctx).unwrap();
+    // As an older version left it: the group named, no part on the entry.
+    let group = env_in(&vault.environments(), &env).group.clone();
+    let mut stored = vault.stored_project(&shop).unwrap();
+    stored.members.remove(&format!("envid:{env}"));
+    vault.put_project(&shop, &stored).unwrap();
+    vault
+        .db
+        .entry_mut(crate::vault::parse_id(&env).unwrap())
+        .unwrap()
+        .custom_data
+        .remove(envs::PART);
+    name_group(&mut vault, &shop, &group);
+    let state = SyncState::default();
+    let states = |vault: &Vault| -> Vec<FileState> {
+        vault
+            .env_files_status(&ctx, &state)
+            .into_iter()
+            .map(|status| status.state)
+            .collect()
+    };
+    assert_eq!(
+        states(&vault),
+        [FileState::Inactive {
+            reason: InactiveReason::NotInProject
+        }]
+    );
+    assert!(vault.tidy_projects());
+    assert!(!matches!(states(&vault)[..], [FileState::Inactive { .. }]));
 }

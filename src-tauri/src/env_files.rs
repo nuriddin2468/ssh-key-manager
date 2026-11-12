@@ -125,6 +125,9 @@ impl EnvFiles {
         prefer: Option<Preference<'_>>,
         activity: bool,
     ) -> AppResult<EnvFilesSynced> {
+        // Environments from before projects are in theirs first: a file of
+        // one isn't out of its project just because the step is to come.
+        crate::commands::projects::tidy_projects(app, shared);
         let ctx = context(shared);
         let mut state = lock(&self.state);
         let synced =

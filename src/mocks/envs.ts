@@ -38,7 +38,10 @@ export interface Variable {
 
 export interface Env {
   id: string;
-  project: string;
+  /** Its KeePass group: what older versions call its project. */
+  group: string;
+  /** Kept on the entry; `null` from before parts: its group's name. */
+  part: string | null;
   name: string;
   notes: string;
   inTrash: boolean;
@@ -60,11 +63,12 @@ const v = (name: string, value: string, secret = false, note = ''): Variable => 
 });
 const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
 
-function env(project: string, name: string, vars: Variable[], extra: Partial<Env> = {}): Env {
+function env(group: string, name: string, vars: Variable[], extra: Partial<Env> = {}): Env {
   nextId += 1;
   return {
     id: `env-${nextId}`,
-    project,
+    group,
+    part: null,
     name,
     notes: '',
     inTrash: false,
@@ -188,10 +192,46 @@ export const mockEnv = (id: unknown) => find(id);
 /** An environment's detail as `envs_get` gives it. */
 export const mockEnvDetail = (item: Env) => detail(item);
 /** Adds an environment as `envs_create` does, for taking a file under management. */
-export function addMockEnv(project: string, name: string, vars: Variable[]): Env {
-  const item = env(project, name, vars, { modified: new Date().toISOString(), kind: 'local' });
+export function addMockEnv(
+  project: string | null,
+  part: string,
+  name: string,
+  vars: Variable[],
+): Env {
+  const item = env(part || 'Personal', name, vars, {
+    part,
+    modified: new Date().toISOString(),
+    kind: 'local',
+  });
   envs.push(item);
+  setMockEnvOwner(item.id, project);
   return item;
+}
+
+/**
+ * Which project has each environment, by id, as the projects' records say
+ * (mocks/projects.ts moves them); one in none is Personal's.
+ */
+const owners = new Map<string, string>();
+export const mockEnvOwner = (id: string): string | null => owners.get(id) ?? null;
+export function setMockEnvOwner(id: string, project: string | null) {
+  owners.delete(id);
+  if (project) owners.set(id, project);
+}
+/** The environments a project has, outside the recycle bin, in the order it took them. */
+export const mockOwnedEnvs = (project: string): string[] =>
+  [...owners].filter(([id, owner]) => owner === project && !find(id)?.inTrash).map(([id]) => id);
+/** The environments in a KeePass group, as projects held them before. */
+export const mockEnvsInGroup = (group: string): string[] =>
+  envs.filter((item) => item.group === group).map((item) => item.id);
+/** Its part: kept on it, else its group's name. */
+export const partOf = (item: Env): string => item.part ?? item.group;
+/** `Shop · backend · prod`, with the project's name from `projectName`. */
+export function mockEnvLabel(item: Env, projectName?: (id: string) => string | undefined): string {
+  const owner = mockEnvOwner(item.id);
+  return [owner ? projectName?.(owner) : undefined, partOf(item), item.name]
+    .filter(Boolean)
+    .join(' · ');
 }
 export const mockVariable = v;
 export const touchMockEnv = (item: Env) => touch(item);
@@ -206,7 +246,9 @@ function requireUnlocked(): Promise<never> | undefined {
 function summary(item: Env): EnvSummary {
   return {
     id: item.id,
-    project: item.project,
+    project: mockEnvOwner(item.id),
+    part: partOf(item),
+    group: item.group,
     name: item.name,
     kind: kindOf(item),
     variableCount: item.vars.length,
@@ -240,22 +282,30 @@ function sorted(): Env[] {
   return [...envs].sort(
     (a, b) =>
       Number(a.inTrash) - Number(b.inTrash) ||
-      a.project.localeCompare(b.project) ||
+      (mockEnvOwner(a.id) ?? '').localeCompare(mockEnvOwner(b.id) ?? '') ||
+      partOf(a).localeCompare(partOf(b)) ||
       stage(a.name) - stage(b.name) ||
       a.name.localeCompare(b.name),
   );
 }
 
-function checkName(project: string, name: string, except?: string): Promise<never> | undefined {
-  if (!project.trim() || !name.trim()) return fail('invalid_input', 'a name is missing');
+function checkName(
+  project: string | null,
+  part: string,
+  name: string,
+  except?: string,
+): Promise<never> | undefined {
+  if (!name.trim()) return fail('invalid_input', 'a name is missing');
+  if (part.includes('/')) return fail('invalid_input', 'a part can’t have /');
   const taken = envs.some(
     (item) =>
       !item.inTrash &&
       item.id !== except &&
-      item.project === project.trim() &&
+      mockEnvOwner(item.id) === project &&
+      partOf(item).toLowerCase() === part.trim().toLowerCase() &&
       item.name.toLowerCase() === name.trim().toLowerCase(),
   );
-  return taken ? fail('already_exists', `${project} / ${name}`) : undefined;
+  return taken ? fail('already_exists', `${part} / ${name}`) : undefined;
 }
 
 function touch(item: Env) {
@@ -298,11 +348,11 @@ export const mockLooksSecret = looksSecret;
 
 const FILE_NAMES: Record<EnvFormat, (item: Env) => string> = {
   dotenv: () => '.env',
-  json: (item) => `${item.project}.${item.name}.json`,
-  yaml: (item) => `${item.project}.${item.name}.yaml`,
-  shell: (item) => `${item.project}.${item.name}.sh`,
-  docker: (item) => `${item.project}.${item.name}.env`,
-  kubernetes: (item) => `${item.project}-${item.name}-secret.yaml`,
+  json: (item) => `${partOf(item)}.${item.name}.json`,
+  yaml: (item) => `${partOf(item)}.${item.name}.yaml`,
+  shell: (item) => `${partOf(item)}.${item.name}.sh`,
+  docker: (item) => `${partOf(item)}.${item.name}.env`,
+  kubernetes: (item) => `${partOf(item)}-${item.name}-secret.yaml`,
 };
 
 let picked = false;
@@ -313,7 +363,7 @@ export function envSummary(id: string): ItemSummary {
   const item = find(id) ?? envs[0];
   return {
     type: 'environment',
-    project: item?.project ?? '',
+    project: item ? partOf(item) : '',
     name: item?.name ?? '',
     variables: item?.vars.length ?? 0,
     secrets: item?.vars.filter((variable) => variable.secret).length ?? 0,
@@ -321,20 +371,23 @@ export function envSummary(id: string): ItemSummary {
   };
 }
 
-/** The variables of the environment `name` of `project`, outside the recycle bin, if any. */
-export function mockEnvironment(project: string, name: string): [string, string][] | undefined {
+/** The variables of the environment `name` in `part`, outside the recycle bin, if any. */
+export function mockEnvironment(part: string, name: string): [string, string][] | undefined {
   const item = envs.find(
-    (e) => !e.inTrash && e.project === project && e.name.toLowerCase() === name.toLowerCase(),
+    (e) => !e.inTrash && partOf(e) === part && e.name.toLowerCase() === name.toLowerCase(),
   );
   return item?.vars.map((x): [string, string] => [x.name, x.value]);
 }
 
 /**
- * The group's local environment, as `projects_open_terminal` picks it: a
- * local one by kind, the one named `local` if there are several.
+ * The project's local environment, as `projects_open_terminal` picks it: a
+ * local one by kind, the one named `local` if there are several, else the
+ * first the project took.
  */
 export function mockLocalEnvironment(project: string): [string, string][] | undefined {
-  const local = envs.filter((e) => !e.inTrash && e.project === project && kindOf(e) === 'local');
+  const local = mockOwnedEnvs(project)
+    .flatMap((id) => find(id) ?? [])
+    .filter((e) => kindOf(e) === 'local');
   const item = local.find((e) => e.name.toLowerCase() === 'local') ?? local[0];
   return item?.vars.map((x): [string, string] => [x.name, x.value]);
 }
@@ -352,24 +405,37 @@ export const envsHandlers: Record<string, Handler> = {
   },
   envs_create: async ({ input }): Promise<EnvDetail> => {
     await requireUnlocked();
-    const { project, name, notes } = input as EnvInput;
-    await checkName(project, name);
-    const item = env(project.trim(), name.trim(), [], {
+    const { project, part, name, notes } = input as EnvInput;
+    await checkName(project, part, name);
+    const item = env(part.trim() || 'Personal', name.trim(), [], {
+      part: part.trim(),
       notes,
       modified: new Date().toISOString(),
     });
     envs.push(item);
+    setMockEnvOwner(item.id, project);
     return detail(item);
   },
   envs_update: async ({ id, input }): Promise<EnvDetail> => {
     await requireUnlocked();
     const item = find(id);
     if (!item) return fail('not_found', `environment ${id}`);
-    const { project, name, notes } = input as EnvInput;
-    await checkName(project, name, item.id);
-    Object.assign(item, { project: project.trim(), name: name.trim(), notes: notes.trimEnd() });
+    const { project, part, name, notes } = input as EnvInput;
+    await checkName(project, part, name, item.id);
+    Object.assign(item, { part: part.trim(), name: name.trim(), notes: notes.trimEnd() });
+    // Into another project, or Personal: the project's record says so.
+    if (project !== mockEnvOwner(item.id)) setMockEnvOwner(item.id, project);
     touch(item);
     return detail(item);
+  },
+  envs_set_part: async ({ ids, part }) => {
+    await requireUnlocked();
+    for (const id of ids as string[]) {
+      const item = find(id);
+      if (!item) return fail('not_found', `environment ${id}`);
+      await checkName(mockEnvOwner(item.id), String(part), item.name, item.id);
+      item.part = String(part).trim();
+    }
   },
   envs_set_var: async ({ id, previous, input }): Promise<EnvDetail> => {
     await requireUnlocked();
@@ -429,7 +495,7 @@ export const envsHandlers: Record<string, Handler> = {
     await requireUnlocked();
     const item = find(id);
     if (!item) return fail('not_found', `environment ${id}`);
-    await checkName(item.project, item.name, item.id);
+    await checkName(mockEnvOwner(item.id), partOf(item), item.name, item.id);
     item.inTrash = false;
   },
   envs_delete: async ({ id }) => {
@@ -478,9 +544,13 @@ export const envsHandlers: Record<string, Handler> = {
     const to = target as ImportTarget;
     let item: Env | undefined;
     if (to.type === 'new') {
-      await checkName(to.project, to.name);
-      item = env(to.project, to.name, [], { modified: new Date().toISOString() });
+      await checkName(to.project, to.part, to.name);
+      item = env(to.part || 'Personal', to.name, [], {
+        part: to.part,
+        modified: new Date().toISOString(),
+      });
       envs.push(item);
+      setMockEnvOwner(item.id, to.project);
     } else {
       item = find(to.id);
     }
@@ -515,7 +585,7 @@ export const envsHandlers: Record<string, Handler> = {
     }
     // A `.env` goes next to the project's code, which Git doesn't ignore yet.
     if (kind === 'dotenv') {
-      const repository = `/Users/dev/Projects/${item.project}`;
+      const repository = `/Users/dev/Projects/${partOf(item)}`;
       const path = `${repository}/.env`;
       pending = { id: item.id, format: kind, path };
       return { path, written: false, count: 0, repository };
@@ -543,7 +613,7 @@ export const envsHandlers: Record<string, Handler> = {
     const found = findShell(shell);
     if (!found) return fail('not_found', 'this shell isn’t on this computer anymore');
     return openLocalShell(
-      `${item.project} · ${item.name}`,
+      mockEnvLabel(item),
       found,
       item.vars.map((x) => [x.name, x.value]),
       events as (message: ArrayBuffer | TerminalEvent) => void,

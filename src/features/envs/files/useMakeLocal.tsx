@@ -4,7 +4,8 @@ import { api } from '@/api/commands';
 import type { EnvSummary } from '@/bindings/EnvSummary';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { useVaultMutation } from '@/features/passwords/vault';
-import { envLabel, isProduction } from '../model';
+import { isProduction } from '../model';
+import { useEnvLabel } from '../useProjectNames';
 
 /**
  * Makes an environment local, so it can be written to files. One that
@@ -12,8 +13,9 @@ import { envLabel, isProduction } from '../model';
  */
 export function useMakeLocal(env: EnvSummary) {
   const { t } = useTranslation();
+  const envLabelOf = useEnvLabel();
   const [confirming, setConfirming] = useState(false);
-  const label = envLabel(env);
+  const label = envLabelOf(env);
   const makeLocal = useVaultMutation(() => api.envsSetKind(env.id, 'local'), {
     success: () => t('envs.kind.nowLocal', { name: label }),
     onSuccess: () => setConfirming(false),

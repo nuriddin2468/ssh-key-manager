@@ -57,8 +57,9 @@ import { CompareDialog } from './CompareDialog';
 import { ExportEnvDialog } from './ExportEnvDialog';
 import { FilesSection } from './files/FilesSection';
 import { useMakeLocal } from './files/useMakeLocal';
-import { envLabel, isProduction } from './model';
+import { isProduction, showsParts, whereLabel } from './model';
 import { useEnv } from './queries';
+import { useEnvLabel, useProjectNames } from './useProjectNames';
 import { VariableDialog } from './VariableDialog';
 
 type Open =
@@ -84,8 +85,11 @@ interface EnvPaneProps {
  */
 export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps) {
   const { t, i18n } = useTranslation();
-  const projectMember: ProjectMember | null =
-    summary.inTrash || !summary.project ? null : { type: 'environment', group: summary.project };
+  const envLabelOf = useEnvLabel();
+  const names = useProjectNames();
+  const projectMember: ProjectMember | null = summary.inTrash
+    ? null
+    : { type: 'environment', id: summary.id };
   const projectMenu = useProjectMenu(projectMember);
   const { navigate } = useRouter();
   const terminals = useTerminals();
@@ -96,7 +100,7 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
   const [removing, setRemoving] = useState<EnvVarInfo | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const env = detail.data;
-  const label = envLabel(summary);
+  const label = envLabelOf(summary);
   const production = isProduction(summary.name);
   const inTrash = summary.inTrash;
 
@@ -149,7 +153,7 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
   const run = (shell?: string) => {
     terminals.openLocal({
       shell,
-      env: { id: summary.id, label: `${summary.project} · ${summary.name}` },
+      env: { id: summary.id, label },
     });
     navigate({ page: 'terminal' });
   };
@@ -165,7 +169,12 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
             <Variable className="size-[22px]" strokeWidth={2} />
           </Tile>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[12.5px] text-muted">{summary.project}</p>
+            <p className="truncate text-[12.5px] text-muted">
+              {whereLabel(
+                summary.project ? names.get(summary.project) : t('projects.personal'),
+                showsParts(all, summary.project) ? summary.part : '',
+              )}
+            </p>
             <h2 className="selectable flex min-w-0 items-center gap-2 text-[17px] leading-6 font-semibold">
               <span className="truncate">{summary.name}</span>
               <Badge tone={summary.kind === 'local' ? 'accent' : 'neutral'}>

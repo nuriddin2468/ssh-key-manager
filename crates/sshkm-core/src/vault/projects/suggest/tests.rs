@@ -10,6 +10,9 @@ fn root() -> PathBuf {
 /// Entry ids, as the vault's logins have.
 const L1: &str = "6f1c2d3e-0000-4000-8000-0000000000a1";
 const L2: &str = "6f1c2d3e-0000-4000-8000-0000000000a2";
+/// Environments' entry ids.
+const E1: &str = "6f1c2d3e-0000-4000-8000-0000000000e1";
+const E2: &str = "6f1c2d3e-0000-4000-8000-0000000000e2";
 
 fn host(alias: &str, host_name: Option<&str>, jump: Option<&str>) -> HostFacts {
     HostFacts {
@@ -140,11 +143,15 @@ fn environments_folders_and_keepass_join_by_name() {
             tags: vec!["Blog".into(), " ".into()],
         },
     ];
-    let groups = ["shop-api".to_owned()];
+    // Personal's environments with a part: from before projects, their group.
+    let envs = [EnvFacts {
+        id: E1.into(),
+        part: "shop-api".into(),
+    }];
     let suggestions = suggest(
         &Sources {
             hosts: &hosts,
-            environment_groups: &groups,
+            environments: &envs,
             logins: &logins,
             repositories: &repositories,
             projects: &[],
@@ -155,7 +162,7 @@ fn environments_folders_and_keepass_join_by_name() {
     );
     assert_eq!(names(&suggestions), ["shop-api", "blog"]);
     let shop = &suggestions[0];
-    assert_eq!(shop.environments, ["shop-api"]);
+    assert_eq!(shop.environments, [E1]);
     assert_eq!(shop.folders, ["~/code/shop_api"]);
     // The remote's own alias and its key; github.com is everyone's.
     assert_eq!(shop.hosts, ["github-shop"]);
@@ -351,11 +358,20 @@ fn members_a_project_cant_take_arent_suggested() {
         host("shop-\"db\"", None, None),
         host("shop-web", None, None),
     ];
-    let groups = ["a/b".to_owned(), "fine".to_owned()];
+    let envs = [
+        EnvFacts {
+            id: "not-an-id".into(),
+            part: "broken".into(),
+        },
+        EnvFacts {
+            id: E2.into(),
+            part: "fine".into(),
+        },
+    ];
     let suggestions = suggest(
         &Sources {
             hosts: &hosts,
-            environment_groups: &groups,
+            environments: &envs,
             ..Sources::default()
         },
         &Declined::default(),

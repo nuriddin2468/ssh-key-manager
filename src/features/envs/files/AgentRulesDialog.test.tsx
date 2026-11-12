@@ -110,9 +110,7 @@ describe('AI tools’ ignore rules for a folder', () => {
     expect(screen.getByRole('button', { name: 'Stop adding lines here' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Add lines' }));
     await vi.waitFor(() => expect(toast.warning).toHaveBeenCalled());
-    expect(toast.warning).toHaveBeenCalledWith(
-      'Couldn’t change the file of Claude Code',
-    );
+    expect(toast.warning).toHaveBeenCalledWith('Couldn’t change the file of Claude Code');
     // It stays open, to see why.
     expect(onDone).not.toHaveBeenCalled();
   });

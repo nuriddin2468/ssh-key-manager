@@ -247,9 +247,15 @@ impl EnvFiles {
             return PutAway::default();
         }
         // No level-2 file on disk as the app wrote it: none to take edits
-        // from or to remove, and the lock doesn't wait for a round.
+        // from or to remove, and the lock doesn't wait for a round. Those
+        // the vault couldn't take, by the last round, stay.
         if Leftovers::load(&self.leftovers_path).is_empty() {
-            return PutAway::default();
+            let kept = managed::left_on_disk(&lock(&self.last));
+            drop(state);
+            if !kept.is_empty() {
+                let _ = app.emit(LEFT_EVENT, &kept);
+            }
+            return PutAway { removed: 0, kept };
         }
         let away = match self.round(&mut state, app, shared, None, false) {
             Ok(synced) => managed::put_away(&synced),

@@ -65,7 +65,7 @@ use zeroize::Zeroizing;
 pub use self::cloud::{CloudRoots, CloudService};
 use self::disk::{Disk, Target};
 pub use self::disk::{find_env_files, ignore_in_git};
-pub use self::unlocked::{Leftover, Leftovers, PutAway, put_away};
+pub use self::unlocked::{Leftover, Leftovers, PutAway, left_on_disk, put_away};
 use super::document::EnvDocument;
 use super::dotenv::{self, ParseProblem, ParsedEnv, ProblemKind};
 use super::{

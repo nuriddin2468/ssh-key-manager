@@ -188,10 +188,14 @@ impl Leftovers {
     }
 
     /// Forgets the file at `path`, which the user keeps: no sweep removes
-    /// it. Returns whether it was listed.
+    /// it. Found by its path, or by which file it is on disk, since a path
+    /// can name it in another case where the file system ignores case.
+    /// Returns whether it was listed.
     pub fn forget(&mut self, path: &Path) -> bool {
+        let id = Stamp::of(path).map(|stamp| stamp.id);
         let before = self.files.len();
-        self.files.retain(|file| file.path != path);
+        self.files
+            .retain(|file| file.path != path && Some(&file.stamp.id) != id.as_ref());
         self.files.len() != before
     }
 
@@ -226,8 +230,16 @@ pub struct PutAway {
 pub fn put_away(synced: &EnvFilesSynced) -> PutAway {
     let mut leftovers = Leftovers::new(synced.unlocked.clone());
     let removed = leftovers.sweep();
-    let kept = synced
-        .files
+    PutAway {
+        removed,
+        kept: left_on_disk(&synced.files),
+    }
+}
+
+/// The level-2 files of `files` that are on disk and that a lock leaves
+/// there: those the vault couldn't take.
+pub fn left_on_disk(files: &[EnvFileStatus]) -> Vec<EnvFileStatus> {
+    files
         .iter()
         .filter(|status| status.level == FileLevel::WhileUnlocked)
         .filter(|status| {
@@ -247,8 +259,7 @@ pub fn put_away(synced: &EnvFilesSynced) -> PutAway {
                 .is_some_and(|location| fs::symlink_metadata(location).is_ok_and(|m| m.is_file()))
         })
         .cloned()
-        .collect();
-    PutAway { removed, kept }
+        .collect()
 }
 
 #[cfg(test)]
@@ -333,8 +344,9 @@ mod tests {
         assert_eq!(before.sweep_dropped(&now, std::slice::from_ref(&c)), 1);
         assert!(!a.exists());
         assert!(b.exists() && c.exists());
-        // One the user keeps is forgotten, and no sweep takes it.
-        assert!(before.forget(&b));
+        // One the user keeps is forgotten, and no sweep takes it, however
+        // its path is spelt.
+        assert!(before.forget(&dir.path().join(".").join(".env.local")));
         assert!(!before.forget(&b));
         assert_eq!(
             before.sweep_dropped(&Leftovers::default(), std::slice::from_ref(&c)),

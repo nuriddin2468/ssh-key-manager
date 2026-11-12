@@ -3868,7 +3868,7 @@ const uz = {
       remoteNote:
         'Masofaviy muhitlar «Terminalda ishga tushirish» orqali ishlatiladi. Dasturga fayl kerak boʻlsa, faqat ombor ochiqligida diskda boʻladigan fayl qoʻshing.',
       level: {
-        legend: 'Faylni diskda saqlash',
+        legend: 'Fayl qanday saqlanadi',
         always: 'Doim',
         alwaysHint: 'Oddiy fayl: dastur oʻqiganda doim joyida.',
         alwaysRemoteHint: 'Masofaviy muhit uchun emas: avval uni mahalliy qiling.',
@@ -3879,6 +3879,29 @@ const uz = {
         remoteTitle: '{{name}} — masofaviy muhit',
         remoteText:
           'Uning qiymatlari (koʻpincha staging yoki production) ombor ochiq turganda shu diskda boʻladi. Faylni faqat bu yerdagi dasturga kerak boʻlsa qoʻshing.',
+        virtual: 'Virtual fayl',
+        virtualHint:
+          'Qiymatlar diskka tushmaydi: ilova ishlab turganda ularni faylni oʻqigan har bir dasturga beradi. Faqat oʻqish uchun.',
+        nowVirtualKeepRunning: '{{file}} endi virtual fayl. «Oyna yopilganda ham ishlash» yoqildi.',
+        virtualWindows:
+          'Diskda hech narsa saqlamaydigan virtual fayllar faqat macOS va Linuxda ishlaydi: Windows faylni bunday bera olmaydi.',
+        virtualTitle: 'Ilova ishlab turganda mavjud',
+        virtualKeepMac:
+          'Oyna yopilganda ilova menyu satrida qoladi, shuning uchun dasturlar faylni oʻqiy oladi.',
+        virtualKeepLinux:
+          'Oyna yopilganda ilova trayda qoladi, shuning uchun dasturlar faylni oʻqiy oladi.',
+        virtualTurnOnMac:
+          'Qoʻshilganda «Oyna yopilganda ham ishlash» yoqiladi: ilova menyu satrida qoladi va dasturlar faylni oʻqiy oladi.',
+        virtualTurnOnLinux:
+          'Qoʻshilganda «Oyna yopilganda ham ishlash» yoqiladi: ilova trayda qoladi va dasturlar faylni oʻqiy oladi.',
+        virtualNoTray:
+          'Ish stolida tray yoʻq: oyna yopilganda ilova ham yopiladi va ilovani qayta ochmaguningizcha fayl boʻlmaydi.',
+        virtualReadOnly: 'Ikki dastur uni aynan bir vaqtda oʻqisa, biri boʻsh fayl oladi.',
+        badgeVirtual: 'Virtual',
+        makeVirtual: 'Virtual qilish',
+        nowVirtual: '{{file}} endi virtual: ilova ishlab turganda uni beradi',
+        remoteTextVirtual:
+          'Uning qiymatlari (koʻpincha staging yoki production) ombor ochiq turganda faylni oʻqigan bu yerdagi har qanday dasturga beriladi. Faylni faqat bu yerdagi dasturga kerak boʻlsa qoʻshing.',
         makeWhileUnlocked: 'Faqat ombor ochiqligida saqlash',
         makeAlways: 'Doim saqlash',
         nowWhileUnlocked: '{{file}} endi faqat ombor ochiqligida diskda boʻladi',
@@ -3895,6 +3918,8 @@ const uz = {
       listLabel: '{{env}} yoziladigan fayllar',
       state: {
         inSync: 'Mos',
+        served: 'Mavjud',
+        makingPipe: 'Virtual fayl yaratilmoqda…',
         fileChanged: 'Omborga saqlanmoqda…',
         vaultChanged: 'Fayl yozilmoqda…',
         conflict: 'Ikkalasi ham oʻzgargan',
@@ -3907,6 +3932,7 @@ const uz = {
           remote: 'Yozilmaydi: muhit masofaviy',
           inTrash: 'Yozilmaydi: muhit savatda',
           notInProject: 'Yozilmaydi: papka uning loyihalarida yoʻq',
+          unsupported: 'Mavjud emas: virtual fayllarga macOS yoki Linux kerak',
         },
         refused: {
           link: 'Yozilmaydi: bu ramziy havola',
@@ -3922,6 +3948,8 @@ const uz = {
         vaultChanged: 'Ombor oʻzgardi. Fayl qayta yozilmoqda.',
         conflict:
           'Oxirgi moslashtirishdan beri fayl ham, ombor ham oʻzgardi. Bir tomonni tanlamaguningizcha hech narsa oʻzgarmaydi.',
+        conflictVirtual:
+          'Virtual fayl oʻrniga oddiy fayl saqlandi, ombor ham oʻzgardi. Bir tomonni tanlamaguningizcha bu fayl diskda qoladi; keyin virtual fayl qaytadi.',
         missing: 'Fayl oʻchirildi. Siz soʻramaguningizcha u qayta yozilmaydi.',
         folderMissing:
           'Bu papka kompyuterda yoʻq. Hech narsa yaratilmaydi: papka paydo boʻlgach, fayl yoziladi.',
@@ -3936,6 +3964,8 @@ const uz = {
           inTrash: 'Fayl oʻz holicha qoladi. Uni qayta yozish uchun muhitni tiklang.',
           notInProject:
             'Fayl oʻz holicha qoladi. Papkani shu muhit bor loyihaga qaytaring yoki faylga yozishni toʻxtating.',
+          unsupported:
+            'Bu kompyuter virtual fayllarni qoʻllamaydi. Faylni bu yerda ishlatish uchun menyusidan «Doim saqlash» yoki «Faqat ombor ochiqligida saqlash»ni tanlang; bu barcha kompyuterlaringizda amal qiladi.',
         },
         refused: {
           link: 'Bu ramziy havola, ilova esa hech qachon havola orqali yozmaydi. Uni oddiy fayl bilan almashtiring yoki yozishni toʻxtating.',
@@ -3981,6 +4011,7 @@ const uz = {
       unbind: {
         title: '{{file}}ga yozish toʻxtatilsinmi?',
         text: 'Fayl oʻz holicha qoladi, undagi tahrirlar esa endi omborga yetib bormaydi.',
+        textVirtual: 'Virtual fayl yoʻqoladi: dasturlar u yerda endi fayl topmaydi.',
         delete: 'Faylni ham oʻchirish',
         deleteHint: 'Faqat unda aynan ombordagi qiymatlar boʻlsa, hech narsa yoʻqolmasligi uchun.',
         keepWhileUnlocked:
@@ -4164,6 +4195,10 @@ const uz = {
       'Brauzerda avtomatik toʻldirish, qurilmalaringiz va terminal seanslari ishlashda davom etadi. Ilovani traydagi belgisi orqali ochish yoki undan chiqish mumkin. Ish stolida tray belgilari koʻrinmasa, ilovani ilovalar menyusidan qayta oching — oyna qaytadi.',
     unavailable:
       'Ish stolida ilova belgisi uchun tray yoʻq. libayatana-appindicator3-1 paketini oʻrnating va ilovani qayta ishga tushiring.',
+    virtualFiles_one:
+      '{{count}} ta virtual .env faylni beradi. Buni oʻchirsangiz, oyna yopilganda ilova yopiladi va fayl yoʻqoladi.',
+    virtualFiles_other:
+      '{{count}} ta virtual .env faylni beradi. Buni oʻchirsangiz, oyna yopilganda ilova yopiladi va fayllar yoʻqoladi.',
     login: 'Tizimga kirganda ochish',
     loginHintMac:
       'Menyu satrida oynasiz ishga tushadi: brauzerda avtomatik toʻldirish va qurilmalaringiz tizimga kirishingiz bilan ishlaydi.',

@@ -3807,7 +3807,7 @@ const en = {
       remoteNote:
         'Remote environments are used through Run in terminal. If a tool needs a file, add one that’s on disk only while the vault is unlocked.',
       level: {
-        legend: 'Keep the file on disk',
+        legend: 'How the file is kept',
         always: 'All the time',
         alwaysHint: 'A regular file, there whenever a tool reads it.',
         alwaysRemoteHint: 'Not for a remote environment: make it local first.',
@@ -3818,6 +3818,30 @@ const en = {
         remoteTitle: '{{name}} is remote',
         remoteText:
           'Its values, often staging or production ones, will be on this disk while the vault is unlocked. Add a file only if a tool here needs it.',
+        virtual: 'Virtual file',
+        virtualHint:
+          'Values never touch the disk: the app hands them to each tool that reads the file, while it runs. Read-only.',
+        nowVirtualKeepRunning:
+          '{{file}} is a virtual file now. “Keep running when the window is closed” is on.',
+        virtualWindows:
+          'Virtual files, which keep nothing on disk, work on macOS and Linux only: Windows can’t serve a file this way.',
+        virtualTitle: 'Available while the app runs',
+        virtualKeepMac:
+          'Closing the window keeps the app in the menu bar, so tools can still read the file.',
+        virtualKeepLinux:
+          'Closing the window keeps the app in the tray, so tools can still read the file.',
+        virtualTurnOnMac:
+          'Adding it turns on “Keep running when the window is closed”, so the app stays in the menu bar and tools can still read the file.',
+        virtualTurnOnLinux:
+          'Adding it turns on “Keep running when the window is closed”, so the app stays in the tray and tools can still read the file.',
+        virtualNoTray:
+          'Your desktop has no tray: closing the window quits the app, and the file is gone until you open the app again.',
+        virtualReadOnly: 'If two tools read it at the same instant, one gets an empty file.',
+        badgeVirtual: 'Virtual',
+        makeVirtual: 'Make virtual',
+        nowVirtual: '{{file}} is virtual now: the app serves it while it runs',
+        remoteTextVirtual:
+          'Its values, often staging or production ones, go to any tool here that reads the file while the vault is unlocked. Add a file only if a tool here needs it.',
         makeWhileUnlocked: 'Keep only while unlocked',
         makeAlways: 'Keep all the time',
         nowWhileUnlocked: '{{file}} is on disk only while the vault is unlocked now',
@@ -3834,6 +3858,8 @@ const en = {
       listLabel: 'Files {{env}} is written to',
       state: {
         inSync: 'In sync',
+        served: 'Available',
+        makingPipe: 'Making the virtual file…',
         fileChanged: 'Saving to the vault…',
         vaultChanged: 'Writing the file…',
         conflict: 'Both changed',
@@ -3846,6 +3872,7 @@ const en = {
           remote: 'Not written: the environment is remote',
           inTrash: 'Not written: the environment is in the recycle bin',
           notInProject: 'Not written: the folder isn’t in its projects',
+          unsupported: 'Not available: virtual files need macOS or Linux',
         },
         refused: {
           link: 'Not written: it’s a symbolic link',
@@ -3861,6 +3888,8 @@ const en = {
         vaultChanged: 'The vault changed. The file is being rewritten.',
         conflict:
           'The file and the vault both changed since they were last in sync. Nothing changes until you keep one side.',
+        conflictVirtual:
+          'A tool saved a regular file in its place, and the vault changed too. That file stays on disk until you keep one side; then the virtual file comes back.',
         missing: 'The file was deleted. It isn’t written again until you ask.',
         folderMissing:
           'The folder isn’t on this computer. Nothing is created; the file is written once the folder is here.',
@@ -3875,6 +3904,8 @@ const en = {
           inTrash: 'The file stays as it is. Restore the environment to write it again.',
           notInProject:
             'The file stays as it is. Add the folder back to a project that holds this environment, or stop writing to the file.',
+          unsupported:
+            'This computer can’t serve virtual files. To use the file here, choose Keep all the time or Keep only while unlocked from its menu; that applies on all your computers.',
         },
         refused: {
           link: 'It’s a symbolic link, and the app never writes through one. Replace it with a regular file or stop writing to it.',
@@ -3918,6 +3949,7 @@ const en = {
       unbind: {
         title: 'Stop writing to {{file}}?',
         text: 'The file stays as it is, and edits made in it no longer reach the vault.',
+        textVirtual: 'The virtual file goes: tools won’t find a file there anymore.',
         delete: 'Delete the file too',
         deleteHint: 'Only if it holds exactly the vault’s values, so nothing is lost.',
         keepWhileUnlocked:
@@ -4099,6 +4131,10 @@ const en = {
       'Browser autofill, your devices and terminal sessions keep working. Open or quit the app from its icon in the tray. If your desktop shows no tray icons, open the app again from the app menu to bring the window back.',
     unavailable:
       'Your desktop has no tray for the app’s icon. Install the libayatana-appindicator3-1 package, then restart the app.',
+    virtualFiles_one:
+      'Serves {{count}} virtual .env file. If you turn this off, closing the window quits the app and the file goes.',
+    virtualFiles_other:
+      'Serves {{count}} virtual .env files. If you turn this off, closing the window quits the app and the files go.',
     login: 'Open at login',
     loginHintMac:
       'Starts in the menu bar without a window, so browser autofill and your devices work as soon as you log in.',

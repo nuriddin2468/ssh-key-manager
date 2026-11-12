@@ -42,6 +42,7 @@ import type { ImportChoice } from '@/bindings/ImportChoice';
 import type { ImportTarget } from '@/bindings/ImportTarget';
 import type { KeepSide } from '@/bindings/KeepSide';
 import type { Project } from '@/bindings/Project';
+import { keepRunningForVirtualFiles, setVirtualFiles } from './background';
 import {
   addMockEnv,
   applyMockFolderChoice,
@@ -98,7 +99,15 @@ const disk = new Map<string, MockFile>();
 const same = (a: EnvFile, b: EnvFile) => a.folder === b.folder && a.path === b.path;
 /** How long the file stays on disk. */
 const levelOf = (item: Env, file: EnvFile): FileLevel =>
-  item.whileUnlocked.some((x) => same(x, file)) ? 'whileUnlocked' : 'always';
+  item.virtualFiles.some((x) => same(x, file))
+    ? 'virtual'
+    : item.whileUnlocked.some((x) => same(x, file))
+      ? 'whileUnlocked'
+      : 'always';
+
+/** Tells the Settings page how many virtual files the app serves now. */
+const countVirtualFiles = () =>
+  setVirtualFiles(mockEnvs().reduce((count, item) => count + item.virtualFiles.length, 0));
 
 /** The sample environment `group / name`. */
 const sample = (group: string, name: string) =>
@@ -144,6 +153,18 @@ function seed() {
         example: null,
       });
     }
+  }
+  const served = shop?.virtualFiles[0];
+  if (shop && served) {
+    // Served by the app: nothing on disk to take along.
+    disk.set(key(shop.id, served), {
+      vars: varsOf(shop),
+      state: 'inSync',
+      git: repository(served),
+      cloud: null,
+      example: null,
+    });
+    countVirtualFiles();
   }
   const staging = sample('shop-api', 'staging');
   const unlockedOnly = staging?.whileUnlocked[0];
@@ -320,13 +341,17 @@ async function statusOf(item: Env, file: EnvFile, all?: Project[]): Promise<EnvF
     file: { ...file },
     level,
   };
+  // Pipes in folders: macOS and Linux.
+  const windows = typeof navigator !== 'undefined' && /Windows/.test(navigator.userAgent);
   const inactive = item.inTrash
     ? 'inTrash'
-    : kindOf(item) === 'remote' && level === 'always'
-      ? 'remote'
-      : holds(all ?? (await projects()), item.id, file.folder)
-        ? null
-        : 'notInProject';
+    : level === 'virtual' && windows
+      ? 'unsupported'
+      : kindOf(item) === 'remote' && level === 'always'
+        ? 'remote'
+        : holds(all ?? (await projects()), item.id, file.folder)
+          ? null
+          : 'notInProject';
   if (inactive) {
     return { ...base, location: null, state: { type: 'inactive', reason: inactive } };
   }
@@ -452,15 +477,19 @@ async function reports(project: unknown, all: Project[]): Promise<EnvFileReport[
       .map((p) => p.id);
     if (!wanted(ids)) continue;
     const found = disk.get(key(status.envId, status.file));
-    // Dropbox leaves out a file kept only while the vault is unlocked.
+    // Dropbox leaves out a file kept only while the vault is unlocked, and
+    // a virtual file holds nothing to copy.
     const cloud =
-      status.level === 'whileUnlocked' && found?.cloud === 'dropbox' ? null : found?.cloud;
+      status.level === 'virtual' || (status.level === 'whileUnlocked' && found?.cloud === 'dropbox')
+        ? null
+        : found?.cloud;
     out.push({
       ...status,
       projects: ids,
       cloud: status.location ? (cloud ?? null) : null,
       example: status.location ? (found?.example ?? null) : null,
-      git: status.location ? (found?.git ?? null) : null,
+      // Git never takes a pipe along.
+      git: status.location && status.level !== 'virtual' ? (found?.git ?? null) : null,
     });
   }
   return out;
@@ -496,10 +525,10 @@ export const envFilesHandlers: Record<string, Handler> = {
     seed();
     const item = await findEnv(id);
     const checked = await checkFile(file as EnvFile);
-    if (kindOf(item) === 'remote' && level !== 'whileUnlocked') {
+    if (kindOf(item) === 'remote' && level === 'always') {
       return fail(
         'invalid_input',
-        'a remote environment has a file only while the vault is unlocked',
+        'a remote environment has a file only while the vault is unlocked, or a virtual one',
       );
     }
     if (!holds(await projects(), item.id, checked.folder)) {
@@ -542,10 +571,10 @@ export const envFilesHandlers: Record<string, Handler> = {
     const item = await findEnv(id);
     const checked = await checkFile(file as EnvFile);
     if (item.inTrash) return fail('invalid_input', 'restore the environment first');
-    if (kindOf(item) === 'remote' && level !== 'whileUnlocked') {
+    if (kindOf(item) === 'remote' && level === 'always') {
       return fail(
         'invalid_input',
-        'a remote environment has a file only while the vault is unlocked',
+        'a remote environment has a file only while the vault is unlocked, or a virtual one',
       );
     }
     if (!holds(await projects(), item.id, checked.folder)) {
@@ -561,6 +590,11 @@ export const envFilesHandlers: Record<string, Handler> = {
     const choice = agentChoices.get(checked.folder);
     if (choice?.type === 'added') addAgentLines(checked.folder, choice.tools);
     if (level === 'whileUnlocked') item.whileUnlocked.push({ ...checked });
+    if (level === 'virtual') {
+      item.virtualFiles.push({ ...checked });
+      keepRunningForVirtualFiles();
+      countVirtualFiles();
+    }
     disk.set(key(item.id, checked), {
       vars: varsOf(item),
       state: checked.path.includes('/') ? 'folderMissing' : 'inSync',
@@ -583,6 +617,8 @@ export const envFilesHandlers: Record<string, Handler> = {
     }
     item.files = item.files.filter((x) => x !== bound);
     item.whileUnlocked = item.whileUnlocked.filter((x) => !same(x, bound));
+    item.virtualFiles = item.virtualFiles.filter((x) => !same(x, bound));
+    countVirtualFiles();
     disk.delete(key(item.id, bound));
     touchMockEnv(item);
     return mockEnvDetail(item);
@@ -599,7 +635,13 @@ export const envFilesHandlers: Record<string, Handler> = {
       );
     }
     item.whileUnlocked = item.whileUnlocked.filter((x) => !same(x, bound));
+    item.virtualFiles = item.virtualFiles.filter((x) => !same(x, bound));
     if (level === 'whileUnlocked') item.whileUnlocked.push({ ...bound });
+    if (level === 'virtual') {
+      item.virtualFiles.push({ ...bound });
+      keepRunningForVirtualFiles();
+    }
+    countVirtualFiles();
     touchMockEnv(item);
     return statusOf(item, bound);
   },

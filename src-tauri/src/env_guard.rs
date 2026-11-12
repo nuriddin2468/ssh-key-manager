@@ -1,11 +1,14 @@
 //! A guard for the `.env` files written only while the vault is unlocked
-//! (level 2, `sshkm_core::vault::envs::files::Leftovers`): the app's own
-//! program, started with [`FLAG`] and the path of the list of those files,
-//! which waits on a pipe from the app. When the pipe closes — the app quit,
-//! crashed or was killed — it removes the files on the list that are still
-//! as the app left them, and exits. A clean quit or lock empties the list
-//! first, so then it removes nothing. If the guard goes too (a power cut, a
-//! whole session killed), the app's next start sweeps the list.
+//! (level 2, `sshkm_core::vault::envs::files::Leftovers`) and the pipes of
+//! virtual ones (level 3, `…::pipes::PipeList`): the app's own program,
+//! started with [`FLAG`] and the paths of the lists of those, which waits
+//! on a pipe from the app. When the pipe closes — the app quit, crashed or
+//! was killed — it removes the files on the list that are still as the app
+//! left them, answers the readers waiting on the listed pipes that the app
+//! isn't running and removes those pipes, and exits. A clean quit or lock
+//! empties the lists first, so then it removes nothing. If the guard goes
+//! too (a power cut, a whole session killed), the app's next start sweeps
+//! the lists.
 //!
 //! The guard is in a process group of its own, so a signal to the app's
 //! group (Ctrl+C in a terminal) doesn't take it along. For an `AppImage` it
@@ -19,21 +22,27 @@ use std::process::{Child, ChildStdin, Command, ExitCode, Stdio};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use sshkm_core::vault::envs::files::Leftovers;
+use sshkm_core::vault::envs::files::pipes::PipeList;
 
 /// The argument that makes the app's program the guard.
 pub const FLAG: &str = "--sshkm-env-guard";
 
 /// Runs the guard when the program was started as one: waits for standard
-/// input to close, then sweeps the list named after [`FLAG`]. Before Tauri
-/// starts, as the askpass helper does.
+/// input to close, then sweeps the lists named after [`FLAG`]: the files',
+/// then the pipes', if given. Before Tauri starts, as the askpass helper
+/// does.
 pub fn run_from_args() -> Option<ExitCode> {
     let mut args = std::env::args_os().skip(1);
     if args.next().as_deref() != Some(OsStr::new(FLAG)) {
         return None;
     }
     let list = PathBuf::from(args.next()?);
+    let pipes = args.next().map(PathBuf::from);
     wait_for_eof(&mut io::stdin().lock());
     Leftovers::sweep_at(&list);
+    if let Some(pipes) = pipes {
+        PipeList::sweep_at(&pipes);
+    }
     Some(ExitCode::SUCCESS)
 }
 
@@ -65,9 +74,9 @@ struct Running {
 }
 
 impl Guard {
-    /// Starts the guard for the list at `list`, unless one runs.
-    /// Without one, the next start removes what a crash leaves.
-    pub fn ensure(&self, list: &Path) {
+    /// Starts the guard for the lists at `list` (files) and `pipes`, unless
+    /// one runs. Without one, the next start removes what a crash leaves.
+    pub fn ensure(&self, list: &Path, pipes: &Path) {
         use std::sync::atomic::Ordering;
         let mut running = lock(&self.running);
         if let Some(run) = running.as_mut()
@@ -78,14 +87,16 @@ impl Guard {
         if self.failed.load(Ordering::SeqCst) {
             return;
         }
-        *running = match spawn(list) {
+        *running = match spawn(list, pipes) {
             Ok(mut child) => {
                 let pipe = child.stdin.take();
                 Some(Running { child, pipe })
             }
             Err(error) => {
                 self.failed.store(true, Ordering::SeqCst);
-                log::warn!("env files: no guard for files written while unlocked: {error}");
+                log::warn!(
+                    "env files: no guard for files written while unlocked or virtual: {error}"
+                );
                 None
             }
         };
@@ -104,11 +115,12 @@ impl Guard {
     }
 }
 
-fn spawn(list: &Path) -> io::Result<Child> {
+fn spawn(list: &Path, pipes: &Path) -> io::Result<Child> {
     let mut command = Command::new(program()?);
     command
         .arg(FLAG)
         .arg(list)
+        .arg(pipes)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());

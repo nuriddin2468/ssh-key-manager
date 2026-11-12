@@ -65,6 +65,8 @@ export interface Env {
   files: EnvFile[];
   /** Those of `files` written only while the vault is unlocked (level 2). */
   whileUnlocked: EnvFile[];
+  /** Those of `files` that are virtual (level 3). */
+  virtualFiles: EnvFile[];
 }
 
 const fail = (code: string, message: string) => Promise.reject({ code, message });
@@ -92,6 +94,7 @@ function env(group: string, name: string, vars: Variable[], extra: Partial<Env> 
     kind: null,
     files: [],
     whileUnlocked: [],
+    virtualFiles: [],
     ...extra,
   };
 }
@@ -120,7 +123,10 @@ const envs: Env[] = [
       files: [
         { folder: '~/code/shop-api', path: '.env' },
         { folder: '~/code/shop-api', path: 'apps/worker/.env.local' },
+        { folder: '~/code/shop-api', path: '.env.development.local' },
       ],
+      // A virtual file: the app serves it while it runs.
+      virtualFiles: [{ folder: '~/code/shop-api', path: '.env.development.local' }],
     },
   ),
   env(
@@ -311,6 +317,7 @@ function detail(item: Env): EnvDetail {
     })),
     files: item.files.map((file) => ({ ...file })),
     whileUnlocked: item.whileUnlocked.map((file) => ({ ...file })),
+    virtualFiles: item.virtualFiles.map((file) => ({ ...file })),
   };
 }
 
@@ -667,8 +674,11 @@ export const envsHandlers: Record<string, Handler> = {
     await requireUnlocked();
     const item = find(id);
     if (!item) return fail('not_found', `environment ${id}`);
+    const same = (a: EnvFile, b: EnvFile) => a.folder === b.folder && a.path === b.path;
     const always = item.files.filter(
-      (file) => !item.whileUnlocked.some((x) => x.folder === file.folder && x.path === file.path),
+      (file) =>
+        !item.whileUnlocked.some((x) => same(x, file)) &&
+        !item.virtualFiles.some((x) => same(x, file)),
     );
     if (kind === 'remote' && always.length > 0) {
       return fail(

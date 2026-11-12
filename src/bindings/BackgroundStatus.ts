@@ -7,4 +7,10 @@ export type BackgroundStatus = { enabled: boolean,
 /**
  * The system can show the tray icon; without it, the setting stays off.
  */
-available: boolean, };
+available: boolean, 
+/**
+ * How many virtual `.env` files the app serves now: they stop being
+ * served when the app quits, as it does on closing the window with the
+ * setting off.
+ */
+virtualFiles: number, };

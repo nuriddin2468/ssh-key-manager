@@ -187,9 +187,22 @@ problems on All projects, and the review's leftovers:
      the app or in any of their files — changes every file, with Undo. The value lives
      in one entry, so syncing converges; references are resolved wherever values leave
      the vault: [#50](https://github.com/nuriddin2468/ssh-key-manager/pull/50).
-3. **Level 3**, the virtual `.env` on macOS and Linux: the app always in the tray; at once
-   a placeholder when the vault is locked, never a hang; pipes removed on quit; one full
-   answer per open; a list of tools it was checked with.
+3. **Level 3**, the virtual `.env` on macOS and Linux: in place of the file, a named pipe
+   (FIFO) the app serves while it runs, chosen per file like level 2 and kept in a list of
+   its own that older versions don't read; a remote environment may have one too. Each
+   open gets one whole answer, the values with shared ones resolved, or at once a comment
+   while the vault is locked; it is written into the pipe in one go, so a reader that
+   never reads holds up no one, and the pipe's time of change is put back after, so tools
+   that watch `.env` (Vite, Next.js) don't take an answer for an edit. Readers at the very
+   same instant share one answer (a pipe is one stream). Read-only: a file saved over the
+   pipe goes to the vault like any edit (both sides changed → compare), and the pipe comes
+   back; a tool writing into it in place waits for a reader. Pipes stay through a lock
+   and go on quit, waiting readers answered first; the guard and the next start remove
+   what a crash leaves. Adding one turns on running in the background; Settings says what
+   turning that off would stop. Windows offers no level 3 and says why. Checked on macOS
+   with Node `dotenv` 18, `python-dotenv` 1.2, Docker Compose 5.5, direnv 2.38, Vite 8
+   (`loadEnv` and its dev server), Next.js 16 (`@next/env` and `next dev`), and `source`
+   in bash and zsh. In review.
 
 ### 5. Teams
 

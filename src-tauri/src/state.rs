@@ -29,6 +29,9 @@ pub struct AppState {
     pub terminals: Arc<Terminals>,
     /// What became of checks and terminal sessions, by host.
     pub history: Arc<History>,
+    /// The pipes of level-3 `.env` files the app serves now
+    /// ([`crate::env_pipes`]).
+    pub served_pipes: crate::env_pipes::KnownPipes,
 }
 
 impl AppState {
@@ -51,6 +54,7 @@ impl AppState {
             vault: Arc::new(VaultRuntime::new(data_dir)),
             askpass: Mutex::new(None),
             terminals: Arc::new(Terminals::new(history)),
+            served_pipes: crate::env_pipes::KnownPipes::default(),
         }
     }
 

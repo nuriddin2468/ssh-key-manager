@@ -1,5 +1,6 @@
 import {
   Bot,
+  Cable,
   FilePlus2,
   FileText,
   GitBranch,
@@ -11,6 +12,7 @@ import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
+import { queryClient } from '@/api/queries';
 import { useRouter } from '@/app/router';
 import type { EnvFile } from '@/bindings/EnvFile';
 import type { EnvFileReport } from '@/bindings/EnvFileReport';
@@ -32,7 +34,9 @@ import { IconButton } from '@/components/ui/IconButton';
 import { Menu, MenuContent, MenuItem, MenuTrigger } from '@/components/ui/Menu';
 import { Tile } from '@/components/ui/Tile';
 import { useVaultMutation } from '@/features/passwords/vault';
+import { backgroundKey } from '@/features/settings/BackgroundSection';
 import { cn } from '@/lib/cn';
+import { platform } from '@/lib/platform';
 import { useEnvLabel } from '../useProjectNames';
 import { AGENT_NAMES, AgentRulesDialog, offered } from './AgentRulesDialog';
 import { announceSynced } from './announce';
@@ -43,17 +47,25 @@ import {
   bindingPath,
   cloudBadge,
   fileName,
+  levelOf,
+  levelStateLabel,
+  levelStateText,
   missingNames,
   needsAction,
   sameFile,
   stateDetail,
-  stateLabel,
   stateLook,
-  stateText,
   TONE_CLASSES,
 } from './model';
 import { refreshFileReports, useAgentRules, useFileRisks, useFileStatuses } from './queries';
 import { useMakeLocal } from './useMakeLocal';
+
+/** What a toast says once a file is at a level. */
+const NOW_AT = {
+  always: 'envs.files.level.nowAlways',
+  whileUnlocked: 'envs.files.level.nowWhileUnlocked',
+  virtual: 'envs.files.level.nowVirtual',
+} as const satisfies Record<FileLevel, string>;
 
 type Open =
   | { kind: 'bind' }
@@ -66,6 +78,8 @@ interface FilesSectionProps {
   files: EnvFile[];
   /** Those of `files` on disk only while the vault is unlocked. */
   whileUnlocked: EnvFile[];
+  /** Those of `files` that are virtual: pipes the app serves. */
+  virtualFiles: EnvFile[];
 }
 
 /**
@@ -74,7 +88,7 @@ interface FilesSectionProps {
  * and the action a file needs. A remote environment gets files only while
  * the vault is unlocked.
  */
-export function FilesSection({ env, files, whileUnlocked }: FilesSectionProps) {
+export function FilesSection({ env, files, whileUnlocked, virtualFiles }: FilesSectionProps) {
   const { t } = useTranslation();
   const envLabelOf = useEnvLabel();
   const headingId = useId();
@@ -152,7 +166,7 @@ export function FilesSection({ env, files, whileUnlocked }: FilesSectionProps) {
                 key={`${file.folder}\n${file.path}`}
                 envId={env.id}
                 file={file}
-                level={whileUnlocked.some((x) => sameFile(x, file)) ? 'whileUnlocked' : 'always'}
+                level={levelOf(file, whileUnlocked, virtualFiles)}
                 remote={env.kind === 'remote'}
                 status={statusOf(file)}
                 statusFailed={statuses.isError}
@@ -189,7 +203,7 @@ export function FilesSection({ env, files, whileUnlocked }: FilesSectionProps) {
         key={stopping ? `${stopping.folder}\n${stopping.path}` : 'none'}
         envId={env.id}
         file={stopping}
-        whileUnlocked={stopping !== null && whileUnlocked.some((x) => sameFile(x, stopping))}
+        level={stopping ? levelOf(stopping, whileUnlocked, virtualFiles) : 'always'}
         onDone={() => setStopping(null)}
       />
       <ConfirmDialog
@@ -255,13 +269,24 @@ function FileRow({
       return true;
     },
   });
-  const setLevel = useVaultMutation((next: FileLevel) => api.envsFilesSetLevel(envId, file, next), {
-    success: (_, next) =>
-      next === 'whileUnlocked'
-        ? t('envs.files.level.nowWhileUnlocked', { file: fileName(file) })
-        : t('envs.files.level.nowAlways', { file: fileName(file) }),
-    onSuccess: () => void refreshFileReports(),
-  });
+  const setLevel = useVaultMutation(
+    async (next: FileLevel) => {
+      // A virtual file turns on running in the background: said if it was off.
+      const before = next === 'virtual' ? await api.backgroundStatus().catch(() => null) : null;
+      const status = await api.envsFilesSetLevel(envId, file, next);
+      return { status, turnedOn: before?.available === true && !before.enabled };
+    },
+    {
+      success: ({ turnedOn }, next) =>
+        t(turnedOn ? 'envs.files.level.nowVirtualKeepRunning' : NOW_AT[next], {
+          file: fileName(file),
+        }),
+      onSuccess: (_, next) => {
+        void refreshFileReports();
+        if (next === 'virtual') void queryClient.invalidateQueries({ queryKey: backgroundKey });
+      },
+    },
+  );
   const git = report?.git?.state;
   const missing = report ? missingNames(report) : [];
   const Icon = look?.icon;
@@ -284,13 +309,16 @@ function FileRow({
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className={cn('text-[12px]', statusFailed && !state ? 'text-warning' : tone.text)}>
             {state
-              ? stateLabel(t, state)
+              ? levelStateLabel(t, state, level)
               : statusFailed
                 ? t('envs.files.statusFailed')
                 : t('common.loading')}
           </span>
           {level === 'whileUnlocked' ? (
             <Badge tone="violet">{t('envs.files.level.badge')}</Badge>
+          ) : null}
+          {level === 'virtual' ? (
+            <Badge tone="cyan">{t('envs.files.level.badgeVirtual')}</Badge>
           ) : null}
           {git === 'untracked' ? (
             <Badge tone="warning">{t('envs.center.gitUntracked')}</Badge>
@@ -303,7 +331,7 @@ function FileRow({
         </span>
         {state && needsAction(state) ? (
           <span className="text-[12px] leading-[17px] text-muted" title={stateDetail(state)}>
-            {stateText(t, state)}
+            {levelStateText(t, state, level)}
           </span>
         ) : null}
         {missing.length > 0 && report?.example ? (
@@ -348,21 +376,30 @@ function FileRow({
               {t('envs.center.ignore')}
             </MenuItem>
           ) : null}
-          {level === 'always' ? (
-            <MenuItem
-              icon={<LockKeyhole className="size-4" />}
-              onSelect={() => setLevel.mutate('whileUnlocked')}
-            >
-              {t('envs.files.level.makeWhileUnlocked')}
-            </MenuItem>
-          ) : remote ? null : (
+          {level !== 'always' && !remote ? (
             <MenuItem
               icon={<FileText className="size-4" />}
               onSelect={() => setLevel.mutate('always')}
             >
               {t('envs.files.level.makeAlways')}
             </MenuItem>
-          )}
+          ) : null}
+          {level !== 'whileUnlocked' ? (
+            <MenuItem
+              icon={<LockKeyhole className="size-4" />}
+              onSelect={() => setLevel.mutate('whileUnlocked')}
+            >
+              {t('envs.files.level.makeWhileUnlocked')}
+            </MenuItem>
+          ) : null}
+          {level !== 'virtual' && platform !== 'windows' ? (
+            <MenuItem
+              icon={<Cable className="size-4" />}
+              onSelect={() => setLevel.mutate('virtual')}
+            >
+              {t('envs.files.level.makeVirtual')}
+            </MenuItem>
+          ) : null}
           {onAgents ? (
             <MenuItem icon={<Bot className="size-4" />} onSelect={onAgents}>
               {t('envs.agents.menu')}
@@ -380,18 +417,24 @@ function FileRow({
 interface StopDialogProps {
   envId: string;
   file: EnvFile | null;
-  /** It is on disk only while the vault is unlocked: deleting it is the default. */
-  whileUnlocked: boolean;
+  /**
+   * The file's level: one on disk only while the vault is unlocked is
+   * deleted by default; a virtual one has nothing to keep.
+   */
+  level: FileLevel;
   onDone: () => void;
 }
 
 /**
  * Stops writing to a file, and deletes it too if asked (only when nothing is
  * lost). A file kept only while the vault is unlocked is deleted unless the
- * user keeps it: the app wouldn't remove it any more.
+ * user keeps it: the app wouldn't remove it any more. A virtual file's pipe
+ * goes either way.
  */
-function StopDialog({ envId, file, whileUnlocked, onDone }: StopDialogProps) {
+function StopDialog({ envId, file, level, onDone }: StopDialogProps) {
   const { t } = useTranslation();
+  const whileUnlocked = level === 'whileUnlocked';
+  const virtual = level === 'virtual';
   const [deleteFile, setDeleteFile] = useState(whileUnlocked);
   const [notDeleted, setNotDeleted] = useState(false);
   const name = file ? fileName(file) : '';
@@ -404,7 +447,7 @@ function StopDialog({ envId, file, whileUnlocked, onDone }: StopDialogProps) {
     (target: EnvFile) => api.envsFilesUnbind(envId, target, deleteFile),
     {
       success: () =>
-        deleteFile
+        deleteFile && !virtual
           ? t('envs.files.unbind.deleted', { file: name })
           : t('envs.files.unbind.done', { file: name }),
       onSuccess: () => {
@@ -430,7 +473,7 @@ function StopDialog({ envId, file, whileUnlocked, onDone }: StopDialogProps) {
             </Tile>
           }
           title={t('envs.files.unbind.title', { file: name })}
-          description={t('envs.files.unbind.text')}
+          description={virtual ? t('envs.files.unbind.textVirtual') : t('envs.files.unbind.text')}
         />
         <DialogBody>
           {notDeleted ? (
@@ -441,19 +484,23 @@ function StopDialog({ envId, file, whileUnlocked, onDone }: StopDialogProps) {
               {t('envs.files.errors.notDeleted', { file: name })}
             </p>
           ) : null}
-          <div className="flex flex-col gap-1">
-            <Checkbox
-              checked={deleteFile}
-              onCheckedChange={setDeleteFile}
-              label={t('envs.files.unbind.delete')}
-            />
-            <p className="pl-[28px] text-[12px] text-subtle">{t('envs.files.unbind.deleteHint')}</p>
-            {whileUnlocked && !deleteFile ? (
-              <p className="pl-[28px] text-[12px] text-warning">
-                {t('envs.files.unbind.keepWhileUnlocked')}
+          {virtual ? null : (
+            <div className="flex flex-col gap-1">
+              <Checkbox
+                checked={deleteFile}
+                onCheckedChange={setDeleteFile}
+                label={t('envs.files.unbind.delete')}
+              />
+              <p className="pl-[28px] text-[12px] text-subtle">
+                {t('envs.files.unbind.deleteHint')}
               </p>
-            ) : null}
-          </div>
+              {whileUnlocked && !deleteFile ? (
+                <p className="pl-[28px] text-[12px] text-warning">
+                  {t('envs.files.unbind.keepWhileUnlocked')}
+                </p>
+              ) : null}
+            </div>
+          )}
         </DialogBody>
         <DialogFooter>
           <Button size="lg" onClick={close}>
@@ -461,7 +508,7 @@ function StopDialog({ envId, file, whileUnlocked, onDone }: StopDialogProps) {
           </Button>
           <Button
             size="lg"
-            variant={deleteFile ? 'danger' : 'primary'}
+            variant={deleteFile && !virtual ? 'danger' : 'primary'}
             loading={stop.isPending}
             onClick={() => file && stop.mutate(file)}
           >

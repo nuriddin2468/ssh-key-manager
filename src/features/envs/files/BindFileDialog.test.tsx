@@ -15,8 +15,15 @@ const api = vi.hoisted(() => ({
   envsFilesCheck: vi.fn(),
   envsFilesBind: vi.fn(),
   envsFilesIgnore: vi.fn(),
+  backgroundStatus: vi.fn(),
 }));
 vi.mock('@/api/commands', () => ({ api }));
+const where = vi.hoisted(() => ({ platform: 'macos' }));
+vi.mock('@/lib/platform', () => ({
+  get platform() {
+    return where.platform;
+  },
+}));
 const toast = vi.hoisted(() => ({ success: vi.fn(), warning: vi.fn(), error: vi.fn() }));
 vi.mock('sonner', () => ({ toast }));
 
@@ -66,6 +73,7 @@ const waiting: EnvFileStatus = {
 
 function show(shown: EnvSummary = env) {
   api.vaultStatus.mockResolvedValue({ state: 'unlocked' });
+  api.backgroundStatus.mockResolvedValue({ enabled: false, available: true, virtualFiles: 0 });
   api.projectsList.mockResolvedValue([shop]);
   api.envsFilesBind.mockResolvedValue(waiting);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -164,5 +172,43 @@ describe('how long a file stays on disk', () => {
     await addFile();
     await vi.waitFor(() => expect(onDone).toHaveBeenCalled());
     expect(api.envsFilesBind).toHaveBeenCalledWith('env-1', file, 'whileUnlocked');
+  });
+
+  it('is virtual when picked: nothing on disk to warn of, and the app keeps running', async () => {
+    // Git would take a file there along, but a virtual file isn't one.
+    api.envsFilesCheck.mockResolvedValue(check);
+    const onDone = show();
+    fireEvent.click(await screen.findByRole('radio', { name: 'Virtual file' }));
+    expect(await screen.findByText('Available while the app runs')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Adding it turns on “Keep running when the window is closed”/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/one gets an empty file/)).toBeInTheDocument();
+    await addFile();
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(api.envsFilesBind).toHaveBeenCalledWith('env-1', file, 'virtual');
+    expect(screen.queryByRole('button', { name: 'Add to .gitignore and write' })).toBeNull();
+  });
+
+  it('can be virtual for a remote environment, which says where its values go', async () => {
+    api.envsFilesCheck.mockResolvedValue(check);
+    const onDone = show({ ...env, name: 'staging', kind: 'remote' });
+    fireEvent.click(await screen.findByRole('radio', { name: 'Virtual file' }));
+    expect(screen.getByText(/go to any tool here that reads the file/)).toBeInTheDocument();
+    await addFile();
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(api.envsFilesBind).toHaveBeenCalledWith('env-1', file, 'virtual');
+  });
+
+  it('is never virtual on Windows, which says why', async () => {
+    where.platform = 'windows';
+    try {
+      show();
+      await screen.findByRole('radio', { name: 'All the time' });
+      expect(screen.queryByRole('radio', { name: 'Virtual file' })).toBeNull();
+      expect(screen.getByText(/work on macOS and Linux only/)).toBeInTheDocument();
+    } finally {
+      where.platform = 'macos';
+    }
   });
 });

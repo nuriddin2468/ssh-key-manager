@@ -9,6 +9,7 @@ const tones = {
   critical: 'border-critical-solid/35 bg-critical-solid/10 text-critical',
   info: 'border-info-solid/30 bg-info-solid/12 text-info',
   violet: 'border-violet-400/30 bg-violet-400/12 text-violet-200',
+  cyan: 'border-cyan-400/30 bg-cyan-400/12 text-cyan-200',
 } as const;
 
 export type BadgeTone = keyof typeof tones;

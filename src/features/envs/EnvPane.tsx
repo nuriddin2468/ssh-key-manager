@@ -178,8 +178,9 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
   });
   // Production asks first: its values would be on this disk.
   const makeLocal = useMakeLocal(summary);
-  // A remote environment has files only while the vault is unlocked.
-  const keptAlways = (env?.files.length ?? 0) - (env?.whileUnlocked.length ?? 0);
+  // A remote environment has files only while the vault is unlocked, or virtual ones.
+  const keptAlways =
+    (env?.files.length ?? 0) - (env?.whileUnlocked.length ?? 0) - (env?.virtualFiles.length ?? 0);
   const removeVar = useVaultMutation((name: string) => api.envsRemoveVar(summary.id, name), {
     success: (_, name) => t('envs.varRemoved', { name }),
     onSuccess: () => setRemoving(null),
@@ -438,7 +439,12 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
 
       <div className="relative flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 pt-4 pb-5">
         {env ? (
-          <FilesSection env={summary} files={env.files} whileUnlocked={env.whileUnlocked} />
+          <FilesSection
+            env={summary}
+            files={env.files}
+            whileUnlocked={env.whileUnlocked}
+            virtualFiles={env.virtualFiles}
+          />
         ) : null}
         <div className="flex items-center gap-2">
           <h3 className="text-[13px] font-semibold">

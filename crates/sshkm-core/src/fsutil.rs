@@ -82,7 +82,7 @@ pub(crate) fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 /// is called between its prefix and suffix: `.env.sshkm-Ab12Cd.tmp`, so
 /// that the rules that keep `.env*` files out of Git and backups keep it
 /// out too.
-const PRIVATE_TEMP: (&str, &str) = (".sshkm-", ".tmp");
+pub(crate) const PRIVATE_TEMP: (&str, &str) = (".sshkm-", ".tmp");
 
 /// Whether `name` is a temporary file [`replace_private`] makes for the file
 /// named `of`, which a crash may have left behind.
@@ -94,7 +94,8 @@ pub fn is_private_temp(name: &str, of: &str) -> bool {
 
 /// Removes the temporary files of [`replace_private`]'s writes to `path`
 /// that a crash left next to it: they may hold its contents in plain text.
-/// Only regular files are removed.
+/// Only regular files are removed, and the pipes a level-3 file is made
+/// from next to it (`vault::envs::files::pipes::make_over`).
 pub fn sweep_private_temps(path: &Path) {
     let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else {
         return;
@@ -107,10 +108,25 @@ pub fn sweep_private_temps(path: &Path) {
             .file_name()
             .to_str()
             .is_some_and(|found| is_private_temp(found, name));
-        if leftover && entry.file_type().is_ok_and(|kind| kind.is_file()) {
+        if leftover
+            && entry
+                .file_type()
+                .is_ok_and(|kind| kind.is_file() || is_fifo(kind))
+        {
             let _ = fs::remove_file(entry.path());
         }
     }
+}
+
+#[cfg(unix)]
+fn is_fifo(kind: fs::FileType) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+    kind.is_fifo()
+}
+
+#[cfg(not(unix))]
+fn is_fifo(_: fs::FileType) -> bool {
+    false
 }
 
 /// Replaces `path` with a new file that holds `bytes` and that only this

@@ -137,6 +137,8 @@ pub struct EnvDetail {
     pub files: Vec<EnvFile>,
     /// Those of `files` written only while the vault is unlocked (level 2).
     pub while_unlocked: Vec<EnvFile>,
+    /// Those of `files` that are pipes the app answers (level 3).
+    pub virtual_files: Vec<EnvFile>,
 }
 
 /// A new environment, or where an environment is, its stage and notes.
@@ -607,6 +609,11 @@ impl Vault {
             while_unlocked: bindings
                 .iter()
                 .filter(|(_, level)| *level == FileLevel::WhileUnlocked)
+                .map(|(file, _)| file.clone())
+                .collect(),
+            virtual_files: bindings
+                .iter()
+                .filter(|(_, level)| *level == FileLevel::Virtual)
                 .map(|(file, _)| file.clone())
                 .collect(),
             files: bindings.into_iter().map(|(file, _)| file).collect(),

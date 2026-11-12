@@ -7,9 +7,11 @@
 //! The file itself is never a link: it is opened without following one,
 //! written by renaming a new file over it (which replaces a link rather
 //! than writing through it), and only a regular file is read, so a pipe
-//! can't make a read hang. Nothing is written over the vault's own files or
-//! into the SSH folder ([`checked_target`]). A folder that isn't there is
-//! never made.
+//! can't make a read hang; a pipe isn't even opened, so reading the app's
+//! own ([`super::pipes`]) never takes an answer. Nothing is written over the
+//! vault's own files or into the SSH folder ([`checked_target`]). A folder
+//! that isn't there is never made. The only pipe a binding's place may be is
+//! one the app serves ([`FilesContext::pipes`]).
 
 use std::fs;
 use std::io::{self, Read as _};
@@ -17,6 +19,7 @@ use std::path::{Component, Path, PathBuf};
 
 use zeroize::Zeroizing;
 
+use super::pipes::{self, PipeId};
 use super::{EnvFile, FileState, FilesContext, RefusedReason, check_env_file, is_env_file_name};
 use crate::leaks::sources::SKIP_DIRS;
 use crate::vault::VaultPaths;
@@ -44,6 +47,8 @@ pub(super) struct Target {
     /// The file as the project's folder names it, to show.
     pub display: PathBuf,
     pub identity: Identity,
+    /// The pipe the app serves there, if that is what is there.
+    pub pipe: Option<PipeId>,
 }
 
 impl Target {
@@ -130,11 +135,15 @@ pub(super) fn locate(
             reason: RefusedReason::Name,
         });
     }
+    let mut pipe = None;
     match fs::symlink_metadata(&real) {
         Ok(meta) if meta.file_type().is_symlink() => {
             return Err(FileState::Refused {
                 reason: RefusedReason::Link,
             });
+        }
+        Ok(_) if PipeId::of(&real).is_some_and(|id| ctx.pipes.contains(&id)) => {
+            pipe = PipeId::of(&real);
         }
         Ok(meta) if !meta.is_file() => {
             return Err(FileState::Refused {
@@ -154,12 +163,18 @@ pub(super) fn locate(
         real,
         display,
         identity: (dir_id, name.to_lowercase()),
+        pipe,
     })
 }
 
 /// Reads a `.env` file of at most [`MAX_FILE_SIZE`] bytes, in UTF-8,
 /// without following a link and only if it is a regular file.
 pub(super) fn read(path: &Path) -> Disk {
+    // Never opened, not even without waiting: opening a pipe to read is
+    // what makes its server answer.
+    if PipeId::of(path).is_some() {
+        return Disk::Refused(RefusedReason::NotAFile);
+    }
     let file = match open_no_follow(path) {
         Ok(file) => file,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Disk::Missing,
@@ -214,6 +229,25 @@ pub(super) fn write(
         return Ok(false);
     }
     fsutil::replace_private(&target.real, bytes, expected.is_some(), keep_out)
+}
+
+/// Makes the pipe of a level-3 file where nothing is, if its folder is
+/// still the one it was found in.
+pub(super) fn make_pipe(target: &Target) -> Result<PipeId> {
+    if !same_folder(target) {
+        return Err(Error::invalid("the folder changed"));
+    }
+    pipes::make(&target.real)
+}
+
+/// Puts the pipe of a level-3 file in place of the regular file there, if
+/// it still holds `expected` and its folder is still the one it was found
+/// in. Returns `None` when either changed.
+pub(super) fn make_pipe_over(target: &Target, expected: &[u8]) -> Result<Option<PipeId>> {
+    if !same_folder(target) {
+        return Ok(None);
+    }
+    pipes::make_over(&target.real, expected)
 }
 
 /// Keeps the target, as it is, out of backups and cloud folders: for a

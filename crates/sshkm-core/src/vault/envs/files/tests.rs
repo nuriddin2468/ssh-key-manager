@@ -64,6 +64,7 @@ impl Fixture {
             ctx: FilesContext {
                 home: None,
                 ssh_dir: dir.path().join(".ssh"),
+                pipes: Vec::new(),
             },
             dir,
             vault,
@@ -170,6 +171,29 @@ impl Fixture {
             .into_iter()
             .map(|var| (var.name, var.value.expose_secret().to_owned(), var.secret))
             .collect()
+    }
+
+    /// Serves the pipes of a round, as the app does: those it answers
+    /// count as its own from then on, and the others it served go.
+    fn serve(&mut self, synced: &EnvFilesSynced) {
+        let now: Vec<PipeId> = synced.virtual_files.iter().map(|v| v.id).collect();
+        self.ctx.pipes.retain(|id| now.contains(id));
+        self.ctx.pipes.extend(now);
+    }
+
+    /// Stops serving every pipe, as the app does before a level changes.
+    fn stop_serving(&mut self, synced: &EnvFilesSynced) {
+        for served in &synced.virtual_files {
+            pipes::remove(&served.path, served.id, &Answer::Stopped);
+        }
+        self.ctx.pipes.clear();
+    }
+
+    /// Saves `text` over the file at `path`, by renaming, as editors do.
+    fn save_over(&self, path: &str, text: &str) {
+        let temp = self.path(&format!("{path}.saving"));
+        fs::write(&temp, text).unwrap();
+        fs::rename(&temp, self.path(path)).unwrap();
     }
 
     fn states(&self) -> Vec<FileState> {
@@ -2162,4 +2186,234 @@ fn undo_takes_a_shared_value_out_of_the_recycle_bin() {
             .iter()
             .any(|value| value.id == shared)
     );
+}
+
+/// The answer a round gives a level-3 file, as text.
+#[cfg(unix)]
+fn answer_of(synced: &EnvFilesSynced) -> String {
+    match &synced.virtual_files[..] {
+        [served] => served.answer.text().to_string(),
+        other => panic!("not one pipe: {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_virtual_file_is_a_pipe_that_answers_the_values() {
+    let mut f = Fixture::new();
+    let file = f.bind_at(".env", FileLevel::Virtual);
+    // Until a round makes it, the pipe is to come.
+    assert_eq!(f.states(), [FileState::VaultChanged]);
+    let synced = f.sync();
+    f.serve(&synced);
+    let path = f.path(".env");
+    let id = PipeId::of(&path).expect("a pipe");
+    assert_eq!(synced.files[0].state, FileState::InSync);
+    assert_eq!(synced.files[0].level, FileLevel::Virtual);
+    assert_eq!(synced.virtual_files[0].id, id);
+    let answer = answer_of(&synced);
+    assert!(
+        answer.starts_with(
+            "# Read-only: SSH Key Manager serves this file from the vault (Shop · dev)."
+        )
+    );
+    assert!(answer.contains("PORT=3000\n") && answer.contains("API_TOKEN=tok-1\n"));
+    assert_eq!(f.states(), [FileState::InSync]);
+    // Nothing for the guard of level-2 files, nor a level-1 file.
+    assert_eq!(synced.unlocked, []);
+    assert_eq!(synced.always, Vec::<PathBuf>::new());
+
+    // A change in the vault changes the answer; the pipe stays.
+    f.set("PORT", "4000", false);
+    let synced = f.sync();
+    f.serve(&synced);
+    assert_eq!(PipeId::of(&path), Some(id));
+    assert!(answer_of(&synced).contains("PORT=4000\n"));
+    assert_eq!(synced.written, []);
+
+    let detail = f.vault.environment(&f.env).unwrap();
+    assert_eq!(detail.files, std::slice::from_ref(&file));
+    assert_eq!(detail.virtual_files, [file]);
+    assert_eq!(detail.while_unlocked, []);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_pipe_the_app_didnt_make_is_never_served() {
+    let mut f = Fixture::new();
+    f.bind_at(".env", FileLevel::Virtual);
+    pipes::make(&f.path(".env")).unwrap();
+    let synced = f.sync();
+    assert_eq!(
+        synced.files[0].state,
+        FileState::Refused {
+            reason: RefusedReason::NotAFile
+        }
+    );
+    assert_eq!(synced.virtual_files, []);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_saved_over_the_pipe_goes_to_the_vault_and_the_pipe_comes_back() {
+    let mut f = Fixture::new();
+    f.bind_at(".env", FileLevel::Virtual);
+    let synced = f.sync();
+    f.serve(&synced);
+    let first = PipeId::of(&f.path(".env")).unwrap();
+    f.save_over(".env", "PORT=5000\nAPI_TOKEN=tok-1\n");
+    let synced = f.sync();
+    f.serve(&synced);
+    assert_eq!(synced.changes.len(), 1);
+    assert_eq!(synced.changes[0].changed, ["PORT"]);
+    assert_eq!(
+        f.values(),
+        owned(&[("PORT", "5000", false), ("API_TOKEN", "tok-1", true)])
+    );
+    let again = PipeId::of(&f.path(".env")).expect("the pipe is back");
+    assert_ne!(again, first);
+    assert!(answer_of(&synced).contains("PORT=5000\n"));
+    assert_eq!(synced.files[0].state, FileState::InSync);
+
+    // Only what the last answer held, while the vault changed since: the
+    // file was stale, nothing of the user's is lost by the pipe.
+    let answer = answer_of(&synced);
+    f.set("PORT", "6000", false);
+    f.save_over(".env", &answer);
+    let synced = f.sync();
+    f.serve(&synced);
+    assert!(PipeId::of(&f.path(".env")).is_some());
+    assert!(answer_of(&synced).contains("PORT=6000\n"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_saved_over_the_pipe_the_vault_cant_take_waits_for_the_user() {
+    let mut f = Fixture::new();
+    f.bind_at(".env", FileLevel::Virtual);
+    let synced = f.sync();
+    f.serve(&synced);
+    // Both sides changed.
+    f.set("PORT", "4000", false);
+    f.save_over(".env", "PORT=5000\nAPI_TOKEN=tok-1\n");
+    let synced = f.sync();
+    f.serve(&synced);
+    assert_eq!(synced.files[0].state, FileState::Conflict);
+    assert_eq!(synced.virtual_files, []);
+    assert_eq!(read(&f.path(".env")), "PORT=5000\nAPI_TOKEN=tok-1\n");
+    // The user keeps the vault: the pipe takes the file's place.
+    let synced = f.keep(".env", KeepSide::Vault);
+    f.serve(&synced);
+    assert!(PipeId::of(&f.path(".env")).is_some());
+    assert!(answer_of(&synced).contains("PORT=4000\n"));
+
+    // Saved from the answer of a locked vault: no variable is left, which
+    // is never taken as is.
+    f.save_over(".env", "# locked\nNEW=1\n");
+    let synced = f.sync();
+    assert_eq!(synced.files[0].state, FileState::Conflict);
+    assert_eq!(synced.changes, []);
+    // Keeping the file takes it, and the pipe comes back.
+    let synced = f.keep(".env", KeepSide::File);
+    f.serve(&synced);
+    assert_eq!(f.values(), owned(&[("NEW", "1", false)]));
+    assert!(PipeId::of(&f.path(".env")).is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_becomes_a_pipe_and_back_with_its_level() {
+    let mut f = Fixture::new();
+    let file = f.bind(".env");
+    f.sync();
+    let path = f.path(".env");
+    assert!(read(&path).contains("PORT=3000"));
+    let env = f.env.clone();
+    f.vault
+        .set_env_file_level(&env, &file, FileLevel::Virtual)
+        .unwrap();
+    let synced = f.sync();
+    f.serve(&synced);
+    assert!(PipeId::of(&path).is_some());
+    assert_eq!(synced.files[0].state, FileState::InSync);
+
+    // Back to level 1: the app's pipe waits until it stops serving it.
+    f.vault
+        .set_env_file_level(&env, &file, FileLevel::Always)
+        .unwrap();
+    let pending = f.sync();
+    assert_eq!(pending.files[0].state, FileState::VaultChanged);
+    assert!(PipeId::of(&path).is_some());
+    assert_eq!(pending.virtual_files, []);
+    f.stop_serving(&synced);
+    let synced = f.sync();
+    assert_eq!(synced.files[0].state, FileState::InSync);
+    assert!(read(&path).contains("PORT=3000"));
+
+    // A file there with other values, at binding: compared first.
+    fs::write(f.path(".env.local"), "PORT=1\n").unwrap();
+    f.bind_at(".env.local", FileLevel::Virtual);
+    let synced = f.sync();
+    let local = synced
+        .files
+        .iter()
+        .find(|status| status.file.path == ".env.local")
+        .unwrap();
+    assert_eq!(local.state, FileState::Conflict);
+    assert_eq!(read(&f.path(".env.local")), "PORT=1\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn remote_environments_may_have_virtual_files() {
+    let mut f = Fixture::new();
+    let env = f.env.clone();
+    f.vault.set_env_kind(&env, EnvKind::Remote).unwrap();
+    let file = f.bind_at(".env", FileLevel::Virtual);
+    let synced = f.sync();
+    assert_eq!(synced.files[0].state, FileState::InSync);
+    assert!(PipeId::of(&f.path(".env")).is_some());
+    assert!(
+        f.vault
+            .set_env_file_level(&env, &file, FileLevel::Always)
+            .is_err()
+    );
+    // Still remote with only a virtual file.
+    f.vault.set_env_kind(&env, EnvKind::Remote).unwrap();
+}
+
+#[test]
+fn older_versions_never_see_virtual_files() {
+    let mut f = Fixture::new();
+    f.bind(".env");
+    let env = f.env.clone();
+    let virtual_file = f.file(".env.local");
+    let bound = if pipes::SUPPORTED {
+        f.vault
+            .bind_env_file_at(&env, &virtual_file, FileLevel::Virtual, &f.ctx)
+    } else {
+        // Where pipes aren't, level 3 can't be chosen.
+        assert_eq!(
+            f.vault
+                .bind_env_file_at(&env, &virtual_file, FileLevel::Virtual, &f.ctx)
+                .unwrap_err()
+                .code(),
+            crate::ErrorCode::Unsupported
+        );
+        return;
+    };
+    bound.unwrap();
+    let entry = f.vault.env_entry(&f.env).unwrap();
+    let Some(CustomDataValue::String(json)) = entry
+        .custom_data
+        .get(FILES_DATA)
+        .and_then(|item| item.value.as_ref())
+    else {
+        panic!("no file list");
+    };
+    let data: Value = serde_json::from_str(json).unwrap();
+    assert_eq!(data["files"].as_array().unwrap().len(), 1);
+    assert_eq!(data["virtual"][0]["path"], ".env.local");
+    assert!(f.vault.unbind_env_file(&env, &virtual_file).unwrap());
+    assert_eq!(f.vault.environment(&env).unwrap().virtual_files, []);
 }

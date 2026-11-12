@@ -1,4 +1,6 @@
+import { useQuery } from '@tanstack/react-query';
 import {
+  Cable,
   CloudUpload,
   FilePlus2,
   FileText,
@@ -8,10 +10,12 @@ import {
   Server,
   TriangleAlert,
 } from 'lucide-react';
-import { type FormEvent, useMemo, useState } from 'react';
+import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
+import { queryClient } from '@/api/queries';
+import type { BackgroundStatus } from '@/bindings/BackgroundStatus';
 import type { EnvFile } from '@/bindings/EnvFile';
 import type { EnvFileCheck } from '@/bindings/EnvFileCheck';
 import type { EnvSummary } from '@/bindings/EnvSummary';
@@ -25,7 +29,9 @@ import { Tile } from '@/components/ui/Tile';
 import { Callout } from '@/features/passwords/files/Callout';
 import { useVaultMutation } from '@/features/passwords/vault';
 import { useProjects } from '@/features/projects/queries';
+import { backgroundKey } from '@/features/settings/BackgroundSection';
 import { cn } from '@/lib/cn';
+import { platform } from '@/lib/platform';
 import { useEnvLabel } from '../useProjectNames';
 import { conflictToastId, markConflictTold } from './announce';
 import { bindRefusal } from './errors';
@@ -45,13 +51,15 @@ const LOOKS_LIKE_ENV = /^(?:[^/\\]+[/\\])*(?:\.env(?:\..+)?|.+\.env|\.dev\.vars)
 
 /**
  * Git or a cloud service would take the file's values along, or Git can't
- * be asked because the project's folder isn't on this computer.
+ * be asked because the project's folder isn't on this computer. Never for a
+ * virtual file: nothing of it is on disk.
  */
-const risky = (check: EnvFileCheck) =>
-  check.git === null ||
-  check.git.state === 'untracked' ||
-  check.git.state === 'tracked' ||
-  check.cloud !== null;
+const risky = (check: EnvFileCheck, level: FileLevel) =>
+  level !== 'virtual' &&
+  (check.git === null ||
+    check.git.state === 'untracked' ||
+    check.git.state === 'tracked' ||
+    check.cloud !== null);
 
 /**
  * Writes an environment to a file in a folder of the project that has it:
@@ -61,15 +69,20 @@ const risky = (check: EnvFileCheck) =>
  * written, as an export asks. The backend checks the path again on binding
  * and refuses links, templates and anything outside the folder.
  *
- * The file is there all the time, or only while the vault is unlocked; a
- * remote environment gets only the second, after a word on what that means.
+ * The file is there all the time, only while the vault is unlocked, or
+ * never: a virtual file the app serves while it runs (macOS and Linux),
+ * which keeps the app running when its window closes. A remote
+ * environment gets one of the last two, after a word on what that means.
  */
 export function BindFileDialog({ env, bound, onDone }: BindFileDialogProps) {
   const { t } = useTranslation();
   const envLabelOf = useEnvLabel();
   const remote = env.kind === 'remote';
   const [chosenLevel, setLevel] = useState<FileLevel>('always');
-  const level: FileLevel = remote ? 'whileUnlocked' : chosenLevel;
+  const level: FileLevel = remote && chosenLevel === 'always' ? 'whileUnlocked' : chosenLevel;
+  const background = useQuery({ queryKey: backgroundKey, queryFn: api.backgroundStatus }).data;
+  // Pipes in folders: macOS and Linux.
+  const virtualHere = platform !== 'windows';
   const projects = useProjects();
   const holder = (projects.data ?? []).find((project) => project.id === env.project);
   const folders = useMemo(
@@ -123,6 +136,8 @@ export function BindFileDialog({ env, bound, onDone }: BindFileDialogProps) {
     {
       onSuccess: ({ status, ignoreError }) => {
         void refreshFileReports();
+        // Binding a virtual file keeps the app running in the background.
+        if (level === 'virtual') void queryClient.invalidateQueries({ queryKey: backgroundKey });
         const file = fileName(status.file);
         // Bound, but Git would take it along: said as such, not as the error itself.
         if (ignoreError) toast.warning(t('envs.files.bind.notIgnored', { file }));
@@ -149,7 +164,7 @@ export function BindFileDialog({ env, bound, onDone }: BindFileDialogProps) {
   );
   const check = useVaultMutation((file: EnvFile) => api.envsFilesCheck(env.id, file, level), {
     onSuccess: (result) => {
-      if (risky(result)) setRisk(result);
+      if (risky(result, level)) setRisk(result);
       else bind.mutate({ file: result.file, ignore: false });
     },
     onError: refused,
@@ -326,7 +341,7 @@ export function BindFileDialog({ env, bound, onDone }: BindFileDialogProps) {
                 legend={t('envs.files.level.legend')}
                 value={level}
                 onValueChange={setLevel}
-                columns={2}
+                columns={1}
                 options={[
                   {
                     value: 'always',
@@ -346,17 +361,37 @@ export function BindFileDialog({ env, bound, onDone }: BindFileDialogProps) {
                     title: t('envs.files.level.whileUnlocked'),
                     hint: t('envs.files.level.whileUnlockedHint'),
                   },
+                  // Left out on Windows, which says why below.
+                  ...(virtualHere
+                    ? [
+                        {
+                          value: 'virtual' as const,
+                          tone: 'cyan' as const,
+                          icon: Cable,
+                          title: t('envs.files.level.virtual'),
+                          hint: t('envs.files.level.virtualHint'),
+                        },
+                      ]
+                    : []),
                 ]}
               />
+              {virtualHere ? null : (
+                <p className="text-[12px] leading-[17px] text-subtle">
+                  {t('envs.files.level.virtualWindows')}
+                </p>
+              )}
               {remote ? (
                 <Callout
                   tone="warning"
                   icon={Server}
                   title={t('envs.files.level.remoteTitle', { name: envLabelOf(env) })}
                 >
-                  {t('envs.files.level.remoteText')}
+                  {level === 'virtual'
+                    ? t('envs.files.level.remoteTextVirtual')
+                    : t('envs.files.level.remoteText')}
                 </Callout>
               ) : null}
+              <VirtualNote shown={level === 'virtual'} background={background} />
             </>
           )}
         </DialogBody>
@@ -376,5 +411,45 @@ export function BindFileDialog({ env, bound, onDone }: BindFileDialogProps) {
         </DialogFooter>
       </form>
     </DialogContent>
+  );
+}
+
+/**
+ * What a virtual file asks of the app: to keep running, which closing the
+ * window does where there is a tray (and adding the file turns on), and
+ * that readers at the same instant share one answer. Shown once the level
+ * is picked, in a live region so screen readers hear it, and scrolled to.
+ */
+function VirtualNote({
+  shown,
+  background,
+}: {
+  shown: boolean;
+  background: BackgroundStatus | undefined;
+}) {
+  const { t } = useTranslation();
+  const region = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (shown) region.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [shown]);
+  const tray = background?.available !== false;
+  const mac = platform === 'macos';
+  const keep = !tray
+    ? t('envs.files.level.virtualNoTray')
+    : background?.enabled === false
+      ? t(mac ? 'envs.files.level.virtualTurnOnMac' : 'envs.files.level.virtualTurnOnLinux')
+      : t(mac ? 'envs.files.level.virtualKeepMac' : 'envs.files.level.virtualKeepLinux');
+  return (
+    <div ref={region} aria-live="polite" className="empty:hidden">
+      {shown ? (
+        <Callout
+          tone={tray ? 'info' : 'warning'}
+          icon={tray ? Cable : TriangleAlert}
+          title={t('envs.files.level.virtualTitle')}
+        >
+          {keep} {t('envs.files.level.virtualReadOnly')}
+        </Callout>
+      ) : null}
+    </div>
   );
 }

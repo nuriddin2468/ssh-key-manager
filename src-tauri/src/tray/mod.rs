@@ -78,6 +78,10 @@ pub struct BackgroundStatus {
     pub enabled: bool,
     /// The system can show the tray icon; without it, the setting stays off.
     pub available: bool,
+    /// How many virtual `.env` files the app serves now: they stop being
+    /// served when the app quits, as it does on closing the window with the
+    /// setting off.
+    pub virtual_files: u32,
 }
 
 pub type SharedBackground = Arc<Background>;
@@ -158,6 +162,7 @@ impl Background {
         BackgroundStatus {
             enabled: self.enabled(),
             available: self.available,
+            virtual_files: 0,
         }
     }
 

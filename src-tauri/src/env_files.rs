@@ -22,6 +22,14 @@
 //! take stays, and the UI hears of it through [`LEFT_EVENT`]. Until the
 //! next unlock no round writes them. A crash or a forced quit is caught by
 //! the guard ([`crate::env_guard`]), and failing that by the next start.
+//!
+//! **Virtual files** (level 3, macOS and Linux). Each round makes or keeps
+//! their pipes and gives them their answers, which [`crate::env_pipes`]
+//! serves; a pipe whose binding went or whose level changed is stopped, and
+//! the round runs once more to write a file due in its place. Before the
+//! vault locks they answer that it is locked; they go when the app quits.
+//! The watcher takes no notice of the app's own pipes: answering a reader
+//! touches a pipe's times, which isn't an edit.
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -35,13 +43,14 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use sshkm_core::ErrorCode;
 use sshkm_core::paths::home_dir;
 use sshkm_core::vault::envs::files::{
-    self as managed, EnvFileStatus, EnvFilesSynced, FilesContext, Leftovers, Preference, PutAway,
-    SyncState,
+    self as managed, EnvFileStatus, EnvFilesSynced, FilesContext, Leftovers, PipeId, Preference,
+    PutAway, SyncState,
 };
 use sshkm_core::vault::projects;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::env_guard::Guard;
+use crate::env_pipes::{KnownPipes, Pipes};
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 use crate::vault::VaultHooks;
@@ -69,6 +78,8 @@ pub struct EnvFiles {
     /// unlocked again. Changed only while `state` is held.
     away: AtomicBool,
     guard: Guard,
+    /// The pipes of the virtual files.
+    pipes: Pipes,
 }
 
 #[derive(Default)]
@@ -88,10 +99,13 @@ struct Wanted {
     /// Folders on the way to a bound file's folder that isn't there yet,
     /// inside its project's folder: anything made in them may be it.
     on_the_way: BTreeSet<PathBuf>,
+    /// The app's pipes: a change to one that is still the same pipe is
+    /// an answer it gave.
+    pipes: Vec<(PathBuf, PipeId)>,
 }
 
 impl EnvFiles {
-    pub fn new(data_dir: &Path) -> Self {
+    pub fn new(data_dir: &Path, known: KnownPipes) -> Self {
         let state_path = data_dir.join(STATE_FILE);
         let leftovers_path = data_dir.join(LEFTOVERS_FILE);
         // Level-2 files a crash or a forced quit left, still as the app
@@ -109,7 +123,13 @@ impl EnvFiles {
             leftovers_path,
             away: AtomicBool::new(false),
             guard: Guard::default(),
+            pipes: Pipes::new(data_dir, known),
         }
+    }
+
+    /// How many virtual files the app serves now.
+    pub fn served(&self) -> usize {
+        self.pipes.count()
     }
 
     /// Starts the thread that runs a round once requests settle, and has
@@ -188,8 +208,37 @@ impl EnvFiles {
 
     /// The round of [`Self::sync`], with the revisions held: pull, save,
     /// push, then the revisions and the list of level-2 files on disk are
-    /// kept.
+    /// kept, and the virtual files served. When a pipe went (its level
+    /// changed), once more, to write the file due in its place.
     fn round(
+        &self,
+        state: &mut SyncState,
+        app: &AppHandle,
+        shared: &AppState,
+        prefer: Option<Preference<'_>>,
+        activity: bool,
+    ) -> AppResult<EnvFilesSynced> {
+        let mut synced = self.round_once(state, app, shared, prefer, activity)?;
+        if self
+            .pipes
+            .follow(&synced.virtual_files, !shared.vault.is_unlocked())
+        {
+            let first = synced;
+            synced = self.round_once(state, app, shared, prefer, activity)?;
+            synced.changes.splice(0..0, first.changes);
+            synced.written.splice(0..0, first.written);
+            self.pipes
+                .follow(&synced.virtual_files, !shared.vault.is_unlocked());
+        }
+        if !self.pipes.is_empty() || !synced.unlocked.is_empty() {
+            self.guard
+                .ensure(&self.leftovers_path, self.pipes.list_path());
+        }
+        Ok(synced)
+    }
+
+    /// One pass of [`Self::round`].
+    fn round_once(
         &self,
         state: &mut SyncState,
         app: &AppHandle,
@@ -225,12 +274,9 @@ impl EnvFiles {
         if let Err(error) = leftovers.save(&self.leftovers_path) {
             log::warn!("env files: the files written while unlocked were not listed: {error}");
         }
-        if !leftovers.is_empty() {
-            self.guard.ensure(&self.leftovers_path);
-            // The vault went while the round finished: its files go too.
-            if !shared.vault.is_unlocked() {
-                self.forget();
-            }
+        // The vault went while the round finished: its files go too.
+        if !leftovers.is_empty() && !shared.vault.is_unlocked() {
+            self.forget();
         }
         Ok(synced)
     }
@@ -250,6 +296,7 @@ impl EnvFiles {
         // from or to remove, and the lock doesn't wait for a round. Those
         // the vault couldn't take, by the last round, stay.
         if Leftovers::load(&self.leftovers_path).is_empty() {
+            self.pipes.lock();
             let kept = managed::left_on_disk(&lock(&self.last));
             drop(state);
             if !kept.is_empty() {
@@ -272,6 +319,7 @@ impl EnvFiles {
         if let Err(error) = Leftovers::default().save(&self.leftovers_path) {
             log::warn!("env files: the list of files written while unlocked stays: {error}");
         }
+        self.pipes.lock();
         drop(state);
         if !away.kept.is_empty() {
             log::warn!(
@@ -310,16 +358,20 @@ impl EnvFiles {
     }
 
     /// The vault went without [`Self::put_away`]: the level-2 files still
-    /// as the last round left them go. Runs while the vault may be held, by
-    /// this thread too, so it doesn't wait for the revisions.
+    /// as the last round left them go, and the virtual files answer that
+    /// it is locked. Runs while the vault may be held, by this thread too,
+    /// so it doesn't wait for the revisions.
     fn forget(&self) {
+        self.pipes.lock();
         Leftovers::sweep_at(&self.leftovers_path);
     }
 
-    /// When the app quits: the files written only while unlocked go, and
-    /// the guard with them.
+    /// When the app quits: the files written only while unlocked go, the
+    /// virtual files' pipes too, and the guard with them.
     pub fn quit(&self, app: &AppHandle, shared: &AppState) {
         self.put_away(app, shared);
+        let _state = lock(&self.state);
+        self.pipes.quit();
         self.guard.stop();
     }
 
@@ -368,6 +420,7 @@ impl EnvFiles {
                 }
             }
         }
+        wanted.pipes = self.pipes.watched();
         let mut guard = lock(&self.watch);
         let watch: &mut Watch = &mut guard;
         *lock(&watch.wanted) = wanted;
@@ -422,19 +475,31 @@ pub fn context(state: &AppState) -> FilesContext {
     FilesContext {
         home: home_dir(),
         ssh_dir: state.paths.dir.clone(),
+        pipes: state
+            .served_pipes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone(),
     }
 }
 
 /// The event names a bound file, or may (a rescan names none), or makes
-/// something in a folder on the way to a bound file's folder.
+/// something in a folder on the way to a bound file's folder. Not one of
+/// the app's pipes that is still the same pipe: that is an answer it gave.
 fn concerns(event: &Event, wanted: &Wanted) -> bool {
     event.paths.is_empty()
         || event.paths.iter().any(|path| {
-            path.file_name()
-                .is_some_and(|name| wanted.names.contains(&name_key(name)))
-                || path
-                    .parent()
-                    .is_some_and(|folder| wanted.on_the_way.contains(folder))
+            let own_pipe = wanted
+                .pipes
+                .iter()
+                .any(|(pipe, id)| pipe == path && PipeId::of(path) == Some(*id));
+            !own_pipe
+                && (path
+                    .file_name()
+                    .is_some_and(|name| wanted.names.contains(&name_key(name)))
+                    || path
+                        .parent()
+                        .is_some_and(|folder| wanted.on_the_way.contains(folder)))
         })
 }
 
@@ -468,6 +533,7 @@ mod tests {
                 .map(|n| name_key(OsStr::new(n)))
                 .into(),
             on_the_way: [PathBuf::from("/code/shop/apps")].into(),
+            pipes: Vec::new(),
         };
         let event = |path: &str| {
             Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::To))).add_path(path.into())
@@ -491,5 +557,27 @@ mod tests {
             concerns(&event("/code/shop/.ENV"), &wanted),
             cfg!(any(target_os = "macos", windows))
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_apps_own_pipes_dont_count() {
+        use notify::event::MetadataKind;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".env");
+        let id = managed::pipes::make(&path).unwrap();
+        let wanted = Wanted {
+            names: [name_key(OsStr::new(".env"))].into(),
+            on_the_way: BTreeSet::new(),
+            pipes: vec![(path.clone(), id)],
+        };
+        let touched = Event::new(EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any)))
+            .add_path(path.clone());
+        // Answering a reader touches its times: not an edit.
+        assert!(!concerns(&touched, &wanted));
+        // A file saved over it is one.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, "A=1\n").unwrap();
+        assert!(concerns(&touched, &wanted));
     }
 }

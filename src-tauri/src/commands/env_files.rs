@@ -113,6 +113,8 @@ pub async fn envs_files_bind(
         let file = state.vault.change(&app, &state.backup_dir, |vault| {
             Ok(vault.bind_env_file_at(&id, &file, level, &ctx)?)
         })?;
+        // A folder whose AI tools' rules the user asked for gets its line.
+        super::env_agents::follow_choice(&app, state, &file.folder);
         let synced = files.sync(&app, state, None, true)?;
         status_of(synced, &id, &file)
     })
@@ -511,6 +513,8 @@ pub async fn envs_files_adopt(
             vault.bind_env_file(&id, &file, &ctx)?;
             Ok(EnvImported { id, counts })
         })?;
+        // A folder whose AI tools' rules the user asked for gets its line.
+        super::env_agents::follow_choice(&app, state, &file.folder);
         // The vault holds the file's variables now, and perhaps more: the
         // file gets those too, keeping its own lines, unless it changed
         // since it was read.

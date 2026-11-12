@@ -11,6 +11,8 @@ export const filesKeys = {
   status: ['vault', 'envs', 'files', 'status'] as const,
   overview: (project: string | null) => ['vault', 'env-files-overview', project] as const,
   risks: ['vault', 'env-files-risks'] as const,
+  agents: (project: string, folder: string) =>
+    ['vault', 'env-files-agents', project, folder] as const,
 };
 
 /** Where every file of every environment stands; idle while the vault is locked. */
@@ -50,6 +52,23 @@ export function useFilesOverview(project: string | null, wanted = true) {
     enabled: unlocked && wanted,
     staleTime: 30_000,
     refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * What AI tools' ignore files in a project folder lack for its managed
+ * files, and what the user said about the folder. Under `env-files-`, so a
+ * bound file fetches it again.
+ */
+export function useAgentRules(project: string | null, folder: string) {
+  const unlocked = useVaultStatus().data?.state === 'unlocked';
+  return useQuery({
+    queryKey: filesKeys.agents(project ?? '', folder),
+    queryFn: () => api.envsAgentsRules(project ?? '', folder),
+    enabled: unlocked && project !== null,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    retry: false,
   });
 }
 

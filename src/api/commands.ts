@@ -2,6 +2,8 @@
 
 import { Channel, isTauri } from '@tauri-apps/api/core';
 import type { AddFromVaultReport } from '@/bindings/AddFromVaultReport';
+import type { AgentRulesView } from '@/bindings/AgentRulesView';
+import type { AgentTool } from '@/bindings/AgentTool';
 import type { AgentView } from '@/bindings/AgentView';
 import type { AuditReport } from '@/bindings/AuditReport';
 import type { AuthorizedLine } from '@/bindings/AuthorizedLine';
@@ -570,6 +572,15 @@ export const api = {
   /** What writing to `file` would mean (Git, cloud folder), before binding it. */
   envsFilesCheck: (id: string, file: EnvFile, level: FileLevel) =>
     call<EnvFileCheck>('envs_files_check', { id, file, level }),
+  /** What AI tools' ignore files in a project folder lack for its managed files. */
+  envsAgentsRules: (project: string, folder: string) =>
+    call<AgentRulesView>('envs_agents_rules', { project, folder }),
+  /** Adds the lines those tools' files lack, and remembers it for the folder. */
+  envsAgentsAdd: (project: string, folder: string, tools: AgentTool[]) =>
+    call<AgentRulesView>('envs_agents_add', { project, folder, tools }),
+  /** Remembers that the folder gets no AI tools' rules. */
+  envsAgentsDecline: (project: string, folder: string) =>
+    call<AgentRulesView>('envs_agents_decline', { project, folder }),
   /** The files of one environment (or all) with Git and cloud folders, no folder walk. */
   envsFilesRisks: (id: string | null) => call<EnvFileReport[]>('envs_files_risks', { id }),
   /** The variables of a `.env` file found in a project's folder, without values. */

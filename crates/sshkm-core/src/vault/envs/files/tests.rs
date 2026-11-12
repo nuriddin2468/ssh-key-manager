@@ -1690,3 +1690,23 @@ fn a_file_back_at_level_one_goes_back_to_backups() {
     f.sync();
     assert!(fsutil::is_kept_out_of_copies(&path));
 }
+
+#[test]
+fn a_folders_files_are_listed_for_ai_tools_rules() {
+    let mut f = Fixture::new();
+    f.bind("apps/web/.env.local");
+    f.bind_at(".env", FileLevel::WhileUnlocked);
+    let folder = f.folder_text.clone();
+    assert_eq!(
+        f.vault.env_files_in_folder(&folder),
+        [".env", "apps/web/.env.local"]
+    );
+    assert_eq!(
+        f.vault.env_files_in_folder("~/elsewhere"),
+        Vec::<String>::new()
+    );
+    // Not those of an environment in the recycle bin.
+    let env = f.env.clone();
+    f.vault.trash_environment(&env).unwrap();
+    assert_eq!(f.vault.env_files_in_folder(&folder), Vec::<String>::new());
+}

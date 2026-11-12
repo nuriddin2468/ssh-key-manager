@@ -467,7 +467,7 @@ fn nearest_folder<'a>(folder: &'a Path, top: &Path) -> Result<(PathBuf, Vec<&'a 
 
 /// A path as a `.gitignore` pattern for that path alone: wildcards and
 /// backslashes escaped, as is a space at the end.
-fn ignore_pattern(path: &str) -> String {
+pub(super) fn ignore_pattern(path: &str) -> String {
     let mut out = String::with_capacity(path.len());
     for c in path.chars() {
         if matches!(c, '*' | '?' | '[' | ']' | '\\' | '!' | '#') {

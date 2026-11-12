@@ -1,0 +1,6 @@
+{
+  "kind": "new",
+  "en": "Environments can keep AI tools from reading a project folder’s .env files: with your yes for that folder, the app adds them where Cursor, Windsurf, Aider, Gemini CLI, Cline, Roo Code, Continue and JetBrains AI read their ignore files, and to Claude Code’s settings, and does so for files added there later.",
+  "ru": "Окружения могут скрыть файлы .env папки проекта от ИИ-инструментов: с вашего согласия для этой папки приложение добавит их туда, где Cursor, Windsurf, Aider, Gemini CLI, Cline, Roo Code, Continue и JetBrains AI читают свои файлы исключений, и в настройки Claude Code — и так же для файлов, добавленных туда позже.",
+  "uz": "Muhitlar loyiha papkasidagi .env fayllarni AI vositalaridan yashira oladi: shu papka uchun roziligingiz bilan ilova ularni Cursor, Windsurf, Aider, Gemini CLI, Cline, Roo Code, Continue va JetBrains AI istisno fayllarini oʻqiydigan joyga va Claude Code sozlamalariga qoʻshadi, keyin u yerga qoʻshilgan fayllar uchun ham."
+}

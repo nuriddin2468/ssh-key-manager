@@ -57,7 +57,9 @@ import {
 } from './model';
 import { ProjectDialog } from './ProjectDialog';
 import { PersonalTile, ProjectTile } from './ProjectTile';
+import { usePlaces } from './places';
 import { projectKeys, useProjects, useSuggestions } from './queries';
+import { TerminalButton } from './TerminalButton';
 
 /** How many problems a card lists before "+2 more". */
 const PROBLEM_LIMIT = 3;
@@ -495,7 +497,8 @@ function ProjectCard({
   const vaultAudit = useVaultAudit();
   const ignored = new Set(useSettings().ignoredFindings);
   const reveal = useMutation({
-    mutationFn: ({ id, path }: { id: string; path: string }) => api.projectsRevealFolder(id, path),
+    mutationFn: ({ id, path }: { id: string; path: string }) =>
+      api.projectsRevealFolder(id, { folder: path, path: '' }),
     onError: (error) => toastError(t, error),
   });
 
@@ -518,6 +521,17 @@ function ProjectCard({
       : [],
   );
   const quick = quickActions(members, gone, goneFolders, library.hosts);
+  // An environment in the terminal's menu: `part · stage` where parts show.
+  const labelOf = (id: string) => {
+    const env = library.envs?.find((item) => item.id === id);
+    if (!env) return id;
+    const parts = new Set(
+      (library.envs ?? [])
+        .filter((item) => item.project === env.project && !item.inTrash)
+        .map((item) => item.part.toLowerCase()),
+    );
+    return [parts.size > 1 ? env.part : '', env.name].filter(Boolean).join(' · ');
+  };
   // The files' reports, once in (or not asked for, the vault locked); if
   // they couldn't be had, the files are unknown, as a check still running.
   const filesKnown = fileRisks.data !== undefined || (!fileRisks.isLoading && !fileRisks.isError);
@@ -628,15 +642,10 @@ function ProjectCard({
         <div className="mt-auto flex flex-wrap items-center gap-1.5 border-t border-white/[0.045] pt-2.5">
           {project && quick.folder ? (
             <FolderActions
+              project={project}
               path={quick.folder}
+              labelOf={labelOf}
               onReveal={() => reveal.mutate({ id: project.id, path: quick.folder ?? '' })}
-              onTerminal={(path) => {
-                const folder = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-                terminals.openLocal({
-                  folder: { project: project.id, path, label: `${project.name} · ${folder}` },
-                });
-                navigate({ page: 'terminal' });
-              }}
             />
           ) : null}
           {quick.host ? (
@@ -658,28 +667,28 @@ function ProjectCard({
   );
 }
 
-/** "Open terminal" in a project's folder, and "Show in Finder" next to it. */
+/**
+ * "Open terminal" in a project's folder (asking which environment where
+ * several parts work), and "Show in Finder" next to it.
+ */
 function FolderActions({
+  project,
   path,
-  onTerminal,
+  labelOf,
   onReveal,
 }: {
+  project: Project;
   path: string;
-  onTerminal: (path: string) => void;
+  labelOf: (id: string) => string;
   onReveal: () => void;
 }) {
   const { t } = useTranslation();
+  const place = usePlaces(project.id).data?.find(
+    (item) => item.folder === path && item.path === '',
+  );
   return (
     <>
-      <Button
-        size="sm"
-        className="relative z-10"
-        icon={<SquareTerminal className="size-3.5" strokeWidth={2} />}
-        aria-label={t('projects.openTerminalIn', { name: path })}
-        onClick={() => onTerminal(path)}
-      >
-        {t('projects.openTerminal')}
-      </Button>
+      <TerminalButton project={project} place={place} labelOf={labelOf} className="relative z-10" />
       <IconButton
         label={t('projects.showFolderIn', { name: path, app: fileManagerName })}
         tooltip={t('keys.showIn', { app: fileManagerName })}

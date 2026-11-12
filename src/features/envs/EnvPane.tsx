@@ -7,6 +7,7 @@ import {
   FileDown,
   FileUp,
   FolderInput,
+  FolderOpen,
   Link2,
   Lock,
   MonitorSmartphone,
@@ -51,6 +52,9 @@ import { Tooltip } from '@/components/ui/Tooltip';
 import { SendDialog } from '@/features/nearby/SendDialog';
 import { MASK, REVEAL_MS } from '@/features/passwords/SavedSecret';
 import { toastVaultError, useSecretCall, useVaultMutation } from '@/features/passwords/vault';
+import { PartFolderDialog } from '@/features/projects/PartFolderDialog';
+import { placeOfEnv, placeText, usePlaces } from '@/features/projects/places';
+import { useProjects } from '@/features/projects/queries';
 import { defaultShell, shellName, useShells } from '@/features/terminal/shells';
 import { useTerminals } from '@/features/terminal/TerminalProvider';
 import { cn } from '@/lib/cn';
@@ -84,6 +88,7 @@ type Open =
   | { kind: 'send' }
   | { kind: 'move' }
   | { kind: 'renamePart' }
+  | { kind: 'folder' }
   | { kind: 'restore'; first: FirstPart };
 
 interface EnvPaneProps {
@@ -117,6 +122,10 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
   const [confirmDelete, setConfirmDelete] = useState(false);
   const env = detail.data;
   const label = envLabelOf(summary);
+  const project = useProjects().data?.find((item) => item.id === summary.project);
+  // Where it works: its part's folder, as its terminal opens there.
+  const at = placeOfEnv(usePlaces(summary.project).data, summary.id);
+  const folderText = at && project ? placeText(at.place, project.folders) : null;
   const production = isProduction(summary.name);
   const inTrash = summary.inTrash;
 
@@ -196,11 +205,24 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
             <Variable className="size-[22px]" strokeWidth={2} />
           </Tile>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[12.5px] text-muted">
-              {whereLabel(
-                summary.project ? names.get(summary.project) : t('projects.personal'),
-                showsParts(all, summary.project) ? summary.part : '',
-              )}
+            <p className="flex min-w-0 items-baseline gap-1.5 text-[12.5px] text-muted">
+              <span className="shrink-0 truncate">
+                {whereLabel(
+                  summary.project ? names.get(summary.project) : t('projects.personal'),
+                  showsParts(all, summary.project) ? summary.part : '',
+                )}
+              </span>
+              {folderText && !inTrash ? (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="min-w-0 truncate font-mono text-[12px]" title={folderText}>
+                    <span className="sr-only">
+                      {t('projects.partFolder.folderOf', { path: folderText })}
+                    </span>
+                    <span aria-hidden="true">{folderText}</span>
+                  </span>
+                </>
+              ) : null}
             </p>
             <h2 className="selectable flex min-w-0 items-center gap-2 text-[17px] leading-6 font-semibold">
               <span className="truncate">{summary.name}</span>
@@ -308,6 +330,14 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
                   >
                     {t('envs.move.menu')}
                   </MenuItem>
+                  {project && project.folders.length > 0 ? (
+                    <MenuItem
+                      icon={<FolderOpen className="size-4" />}
+                      onSelect={() => setOpen({ kind: 'folder' })}
+                    >
+                      {t('projects.partFolder.menu')}
+                    </MenuItem>
+                  ) : null}
                   {/* Where parts show: names from before projects can change at once. */}
                   {summary.part && showsParts(all, summary.project) ? (
                     <MenuItem
@@ -515,6 +545,9 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
         ) : null}
         {open?.kind === 'renamePart' ? (
           <RenamePartDialog env={summary} all={all} onDone={() => setOpen(null)} />
+        ) : null}
+        {open?.kind === 'folder' && project ? (
+          <PartFolderDialog project={project} part={summary.part} onDone={() => setOpen(null)} />
         ) : null}
         {open?.kind === 'move' && env ? (
           <MoveEnvDialog env={env} all={all} onDone={() => setOpen(null)} />

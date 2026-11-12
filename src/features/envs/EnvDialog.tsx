@@ -10,7 +10,10 @@ import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/compone
 import { TextField } from '@/components/ui/TextField';
 import { Tile } from '@/components/ui/Tile';
 import { useVaultMutation } from '@/features/passwords/vault';
+import { useProjects } from '@/features/projects/queries';
 import { FirstPartField, useFirstPart } from './FirstPart';
+import { useFolderField } from './FolderField';
+import { refreshFileReports } from './files/queries';
 import {
   KEEPASS_PERSONAL,
   labelProblem,
@@ -67,12 +70,39 @@ export function EnvDialog({ env, all, defaultProject, onDone, onSaved }: EnvDial
   // An edited one is in its project already: it counts there as it is.
   const first = secondPart(all, projectId, [part], env ? [env.id] : []);
 
+  const projects = useProjects().data;
+  const folder = useFolderField({
+    project: projects?.find((item) => item.id === projectId),
+    all,
+    part,
+    stage: name,
+    creating: env === null,
+    onPartName: (next) => {
+      setPart(next);
+      setServerTaken(false);
+    },
+  });
+
   const input = { project: projectId, part: part.trim(), name, notes };
   const save = useVaultMutation(
-    () =>
-      env
-        ? api.envsUpdate(env.id, input, firstPart.rename)
-        : api.envsCreate(input, firstPart.rename),
+    async () => {
+      if (env) return api.envsUpdate(env.id, input, firstPart.rename, folder.change);
+      if (!folder.adopt || projectId === null) {
+        return api.envsCreate(input, firstPart.rename, folder.change);
+      }
+      // A `.env` file found in the folder: its variables come in, and the
+      // app keeps it in sync from now on.
+      const adopted = await api.envsFilesAdopt(
+        projectId,
+        folder.adopt.file,
+        { type: 'new', project: projectId, part: part.trim(), name: name.trim(), notes },
+        [],
+        firstPart.rename,
+        folder.change,
+      );
+      void refreshFileReports();
+      return api.envsGet(adopted.id);
+    },
     {
       success: (saved) =>
         env ? t('envs.saved', { name: saved.name }) : t('envs.created', { name: saved.name }),
@@ -110,8 +140,8 @@ export function EnvDialog({ env, all, defaultProject, onDone, onSaved }: EnvDial
   const where = whereLabel(projectName ?? t('projects.personal'), part.trim());
   // Where KeePassXC shows a new one (as the backend files it; Personal
   // without a part has its own folder); an edited one stays where it is.
-  const folder = projectId ? [projectName, part.trim()] : [part.trim() || KEEPASS_PERSONAL];
-  const path = [...folder, name.trim()].filter(Boolean).join(' / ');
+  const group = projectId ? [projectName, part.trim()] : [part.trim() || KEEPASS_PERSONAL];
+  const path = [...group, name.trim()].filter(Boolean).join(' / ');
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -213,6 +243,7 @@ export function EnvDialog({ env, all, defaultProject, onDone, onSaved }: EnvDial
             {env || !name.trim() ? null : (
               <p className="text-[12px] text-subtle">{t('envs.form.keepass', { path })}</p>
             )}
+            {folder.node}
             <div className="flex flex-col gap-1.5">
               <label htmlFor={notesId} className="text-[12px] font-semibold text-fg-2">
                 {t('envs.form.notes')}

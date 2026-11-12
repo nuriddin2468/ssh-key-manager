@@ -5,8 +5,7 @@ import { TextField } from '@/components/ui/TextField';
 import { PersonalTile, ProjectTile } from '@/features/projects/ProjectTile';
 import { useProjects } from '@/features/projects/queries';
 import { cn } from '@/lib/cn';
-import { useFilesOverview } from './files/queries';
-import { folderParts, labelProblem, partsOf } from './model';
+import { labelProblem, partsOf } from './model';
 
 /** Personal in the project choice: Select values are strings, never empty. */
 export const PERSONAL = 'personal';
@@ -36,10 +35,9 @@ interface WhereFieldsProps {
 
 /**
  * Where an environment goes: a project (or Personal) and an optional part.
- * The parts the project has and the folders in it with a `.env` are
- * offered under the part's field as chips, in two labelled rows, as the
- * stages are: seen without opening anything, and plain buttons for
- * keyboards and screen readers.
+ * The parts the project has are offered under the part's field as chips, as
+ * the stages are: seen without opening anything, and plain buttons for
+ * keyboards and screen readers. The part's folder is [`FolderField`]'s.
  */
 export function WhereFields({
   all,
@@ -55,18 +53,6 @@ export function WhereFields({
   const problem = partProblem(part);
   const chosen = projectOf(project);
   const parts = partsOf(all, chosen);
-  // Folders in the project with a `.env` (`backend/.env`) name parts too.
-  const overview = useFilesOverview(chosen, chosen !== null).data;
-  const fromFolders =
-    chosen === null
-      ? []
-      : folderParts(
-          [
-            ...(overview?.files ?? []).map((report) => report.file.path),
-            ...(overview?.unmanaged ?? []).map((found) => found.file.path),
-          ],
-          parts,
-        );
   return (
     <>
       {partOnly ? null : (
@@ -102,14 +88,6 @@ export function WhereFields({
                   : (projects.find((item) => item.id === chosen)?.name ?? ''),
             })}
             items={[...parts, '']}
-            value={part}
-            onPick={onPart}
-          />
-        ) : null}
-        {fromFolders.length > 0 ? (
-          <Suggestions
-            label={t('envs.form.partsFromFolders')}
-            items={fromFolders}
             value={part}
             onPick={onPart}
           />

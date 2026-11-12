@@ -3,7 +3,6 @@ import type { EnvSummary } from '@/bindings/EnvSummary';
 import {
   compareWith,
   envLabel,
-  folderParts,
   initialChoices,
   isProduction,
   isVariableName,
@@ -182,22 +181,6 @@ describe('a project’s parts', () => {
       'web',
       'tools',
     ]);
-  });
-
-  it('are offered from the folders that have a .env, without those it has', () => {
-    expect(
-      folderParts(
-        [
-          '.env',
-          'backend/.env',
-          'frontend/.env.local',
-          'backend/api/.env',
-          '.config/.env',
-          'apps/web/.env',
-        ],
-        ['Frontend'],
-      ),
-    ).toEqual(['backend', 'api', 'web']);
   });
 
   it('say which stages a rename would make two of', () => {

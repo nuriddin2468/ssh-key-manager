@@ -1,0 +1,6 @@
+{
+  "kind": "notice",
+  "en": "Run in terminal now opens in the environment's folder (its part's folder, else where its .env file is, else the project's first folder) instead of your home folder.",
+  "ru": "«Запустить в терминале» теперь открывает терминал в папке окружения (папке его части, иначе там, где лежит его файл .env, иначе в первой папке проекта), а не в домашней папке.",
+  "uz": "«Terminalda ishga tushirish» endi terminalni uy papkangizda emas, muhit papkasida ochadi (qismining papkasida, boʻlmasa .env fayli turgan joyda, boʻlmasa loyihaning birinchi papkasida)."
+}

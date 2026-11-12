@@ -47,6 +47,7 @@ const shop: Project = {
   environments: ['shop'],
   logins: [],
   hostsFile: [],
+  parts: [],
   modified: '2026-11-10T10:00:00Z',
 };
 const host = {

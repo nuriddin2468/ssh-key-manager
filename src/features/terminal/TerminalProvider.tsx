@@ -5,6 +5,7 @@ import { api, type TerminalMessage } from '@/api/commands';
 import { invalidateAll, queryClient, refreshConnectionHistory } from '@/api/queries';
 import { errorMessage } from '@/api/useAppMutation';
 import { useRouter } from '@/app/router';
+import type { ProjectFolder } from '@/bindings/ProjectFolder';
 import type { PromptAnswer } from '@/bindings/PromptAnswer';
 import type { ShellInfo } from '@/bindings/ShellInfo';
 import type { TerminalEvent } from '@/bindings/TerminalEvent';
@@ -37,8 +38,11 @@ interface LocalOptions {
   shell?: string | null;
   /** A secret environment whose variables the shell gets; `label` names the tab. */
   env?: { id: string; label: string };
-  /** A project's folder the shell starts in; `label` names the tab. */
-  folder?: { project: string; path: string; label: string };
+  /**
+   * A project's place the shell starts in, with the variables of `env` (one
+   * the place offers, or none); `label` names the tab.
+   */
+  folder?: { project: string; place: ProjectFolder; env: string | null; label: string };
 }
 
 interface TerminalsValue {
@@ -178,7 +182,8 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
         ? local.folder
           ? api.projectsOpenTerminal(
               local.folder.project,
-              local.folder.path,
+              local.folder.place,
+              local.folder.env,
               local.shell,
               size,
               onMessage,
@@ -302,7 +307,11 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
         shell,
         env: options.env?.id,
         folder: options.folder
-          ? { project: options.folder.project, path: options.folder.path }
+          ? {
+              project: options.folder.project,
+              place: options.folder.place,
+              env: options.folder.env,
+            }
           : undefined,
       };
       const tab = newTab(label, local);

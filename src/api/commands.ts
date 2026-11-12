@@ -46,6 +46,7 @@ import type { EnvVarInput } from '@/bindings/EnvVarInput';
 import type { Exported } from '@/bindings/Exported';
 import type { FileLevel } from '@/bindings/FileLevel';
 import type { FixAction } from '@/bindings/FixAction';
+import type { FolderPlace } from '@/bindings/FolderPlace';
 import type { GeneratedSecret } from '@/bindings/GeneratedSecret';
 import type { GenerateKeyRequest } from '@/bindings/GenerateKeyRequest';
 import type { GenerateOptions } from '@/bindings/GenerateOptions';
@@ -81,11 +82,13 @@ import type { NameLookup } from '@/bindings/NameLookup';
 import type { NearbyStatus } from '@/bindings/NearbyStatus';
 import type { OpenOptions } from '@/bindings/OpenOptions';
 import type { OtpCode } from '@/bindings/OtpCode';
+import type { PartFolderChoice } from '@/bindings/PartFolderChoice';
 import type { PartRename } from '@/bindings/PartRename';
 import type { PermissionFix } from '@/bindings/PermissionFix';
 import type { PortCheck } from '@/bindings/PortCheck';
 import type { PortProbe } from '@/bindings/PortProbe';
 import type { Project } from '@/bindings/Project';
+import type { ProjectFolder } from '@/bindings/ProjectFolder';
 import type { ProjectInput } from '@/bindings/ProjectInput';
 import type { ProjectMember } from '@/bindings/ProjectMember';
 import type { ProjectSuggestion } from '@/bindings/ProjectSuggestion';
@@ -488,10 +491,18 @@ export const api = {
   envsGet: (id: string) => call<EnvDetail>('envs_get', { id }),
   // `rename` names the part a project had, when this gives it a second (in
   // the same change).
-  envsCreate: (input: EnvInput, rename: PartRename | null = null) =>
-    call<EnvDetail>('envs_create', { input, rename }),
-  envsUpdate: (id: string, input: EnvInput, rename: PartRename | null = null) =>
-    call<EnvDetail>('envs_update', { id, input, rename }),
+  /** `folder` sets the folder of its part, as the dialog chose it (`null` leaves it). */
+  envsCreate: (
+    input: EnvInput,
+    rename: PartRename | null = null,
+    folder: PartFolderChoice | null = null,
+  ) => call<EnvDetail>('envs_create', { input, rename, folder }),
+  envsUpdate: (
+    id: string,
+    input: EnvInput,
+    rename: PartRename | null = null,
+    folder: PartFolderChoice | null = null,
+  ) => call<EnvDetail>('envs_update', { id, input, rename, folder }),
   /** Gives environments a part (or none): a project's first, named when it gets a second. */
   envsSetPart: (ids: string[], part: string) => call<void>('envs_set_part', { ids, part }),
   /** Adds a variable (`previous` null) or changes the one named `previous`. */
@@ -603,7 +614,8 @@ export const api = {
     target: ImportTarget,
     choices: ImportChoice[],
     rename: PartRename | null = null,
-  ) => call<EnvImported>('envs_files_adopt', { project, file, target, choices, rename }),
+    folder: PartFolderChoice | null = null,
+  ) => call<EnvImported>('envs_files_adopt', { project, file, target, choices, rename, folder }),
 
   // Projects in the vault (src-tauri/src/commands/projects.rs). While the
   // vault is locked the list comes from a copy without secrets: its
@@ -625,6 +637,23 @@ export const api = {
    */
   /** The project's folders not found on this computer (a slow mount counts as found). */
   projectsMissingFolders: (id: string) => call<string[]>('projects_missing_folders', { id }),
+  /**
+   * Where the project's parts work: each of its folders, then the folders
+   * in it where parts work, with the environments a terminal there may get
+   * and those not found on this computer marked. While locked, only the
+   * folders set for parts, without environments.
+   */
+  projectsPlaces: (id: string) => call<FolderPlace[]>('projects_places', { id }),
+  /**
+   * Sets the folder a part works in (`part` empty for a project's one
+   * unnamed part); `null` goes back to automatic. The folder must be the
+   * project's, or in one, and found here.
+   */
+  projectsSetPartFolder: (id: string, part: string, folder: ProjectFolder | null) =>
+    call<Project>('projects_set_part_folder', { id, part, folder }),
+  /** A folder of the project, or in one, from the system dialog; `null` if cancelled. */
+  projectsPickPartFolder: (id: string) =>
+    call<ProjectFolder | null>('projects_pick_part_folder', { id }),
   projectsSuggestions: () => call<ProjectSuggestion[]>('projects_suggestions'),
   /**
    * Creates the suggested project (or adds to the existing one it names)
@@ -642,28 +671,31 @@ export const api = {
   /** Asks for a folder to look into for Git folders; `null` if cancelled. */
   projectsSuggestInFolder: () => call<ProjectSuggestion[] | null>('projects_suggest_in_folder'),
   /**
-   * Starts a shell in one of the project's folders (as kept, e.g. `~/code/shop`),
-   * with its `local` environment's variables while the vault is unlocked;
-   * like `terminalOpenLocal` otherwise.
+   * Starts a shell in one of the project's places (a folder as kept, e.g.
+   * `~/code/shop`, and a path in it where parts work), with the variables of
+   * `env`: one of those the place offers a terminal, or none.
    */
   projectsOpenTerminal: (
     id: string,
-    folder: string,
+    place: ProjectFolder,
+    env: string | null,
     shell: string | null,
     size: { cols: number; rows: number },
     onMessage: (message: TerminalMessage) => void,
   ) =>
     call<TerminalInfo>('projects_open_terminal', {
       id,
-      folder,
+      folder: place.folder,
+      path: place.path,
+      env,
       shell,
       cols: size.cols,
       rows: size.rows,
       events: isTauri() ? new Channel<TerminalMessage>(onMessage) : onMessage,
     }),
   /** Shows one of the project's folders in Finder, Explorer or Files; the backend checks it. */
-  projectsRevealFolder: (id: string, folder: string) =>
-    call<null>('projects_reveal_folder', { id, folder }),
+  projectsRevealFolder: (id: string, place: ProjectFolder) =>
+    call<null>('projects_reveal_folder', { id, folder: place.folder, path: place.path }),
 
   // Running on with the window closed, and the tray icon
   // (src-tauri/src/commands/background.rs).

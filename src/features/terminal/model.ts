@@ -7,6 +7,7 @@ import type { Diagnosis } from '@/bindings/Diagnosis';
 import type { FailReason } from '@/bindings/FailReason';
 import type { Failure } from '@/bindings/Failure';
 import type { HostEntry } from '@/bindings/HostEntry';
+import type { ProjectFolder } from '@/bindings/ProjectFolder';
 import type { PromptAsk } from '@/bindings/PromptAsk';
 import type { PromptRequest } from '@/bindings/PromptRequest';
 import type { SessionState } from '@/bindings/SessionState';
@@ -28,8 +29,14 @@ export interface LocalShell {
   shell: string | null;
   /** The secret environment whose variables it gets; the tab's `alias` then names it. */
   env?: string;
-  /** A project's folder it starts in, with the project's `local` environment. */
-  folder?: { project: string; path: string };
+  /** A project's folder (or one in it) it starts in, with an environment it offers or none. */
+  folder?: {
+    project: string;
+    /** One of the project's places: a folder of it, or one in it where parts work. */
+    place: ProjectFolder;
+    /** The environment whose variables the shell gets, if any: one the place offers. */
+    env: string | null;
+  };
 }
 
 export interface Tab {

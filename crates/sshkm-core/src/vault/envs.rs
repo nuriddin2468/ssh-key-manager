@@ -733,11 +733,15 @@ impl Vault {
     /// the one a project had before it got a second, named then. Those in
     /// the recycle bin take it too, so a restore doesn't bring the old name
     /// back; their stages are checked when they are restored. All are
-    /// checked before any changes.
+    /// checked before any changes. A part left without environments gives
+    /// its folder to the new one ([`super::projects::places`]), unless that
+    /// one has its own.
     pub fn set_environment_part(&mut self, ids: &[String], part: &str) -> Result<()> {
         let part = check_part(part)?;
         let envs = self.environments();
         let mut changes = Vec::new();
+        // The parts the environments leave, by project.
+        let mut left: Vec<(String, String)> = Vec::new();
         for id in ids {
             let env = envs
                 .iter()
@@ -759,9 +763,23 @@ impl Vault {
                 }
             }
             changes.push(parse_id(id)?);
+            if let Some(project) = &env.project
+                && !left.contains(&(project.clone(), env.part.clone()))
+            {
+                left.push((project.clone(), env.part.clone()));
+            }
         }
         for entry in changes {
             self.put_part(entry, &part)?;
+        }
+        let now = self.environments();
+        for (project, before) in left {
+            let emptied = !now
+                .iter()
+                .any(|env| env.project.as_ref() == Some(&project) && same(&env.part, &before));
+            if emptied {
+                self.move_part_folder(&project, &before, &part)?;
+            }
         }
         Ok(())
     }

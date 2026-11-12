@@ -24,7 +24,7 @@ use sshkm_core::vault::envs::files::{
 use sshkm_core::vault::envs::{
     self, EnvDetail, EnvImportPreview, EnvInput, ImportChoice, PartRename, looks_secret,
 };
-use sshkm_core::vault::projects;
+use sshkm_core::vault::projects::{self, PartFolderChoice};
 use tauri::{AppHandle, State};
 
 use super::envs::{EnvImported, ImportTarget, unignored_in_git};
@@ -456,7 +456,8 @@ pub async fn envs_files_adopt_preview(
 /// which are secret; one not named is secret if it looks so), the
 /// project has the environment, and the environment is written to the
 /// file from then on. A new environment is local. `rename` names the part
-/// the project had, when this gives it a second (in the same change).
+/// the project had, when this gives it a second (in the same change), and
+/// `folder` the folder of its part, when the dialog chose one.
 #[tauri::command]
 #[expect(
     clippy::too_many_arguments,
@@ -471,6 +472,7 @@ pub async fn envs_files_adopt(
     target: ImportTarget,
     choices: Vec<ImportChoice>,
     rename: Option<PartRename>,
+    folder: Option<PartFolderChoice>,
 ) -> AppResult<EnvImported> {
     let files = Arc::clone(&files);
     blocking(&state, move |state| {
@@ -494,12 +496,14 @@ pub async fn envs_files_adopt(
             vault.name_first_part(rename.as_ref())?;
             let id = match &target {
                 // In the project whose folder has the file.
-                ImportTarget::New { part, name, .. } => {
+                ImportTarget::New {
+                    part, name, notes, ..
+                } => {
                     let id = vault.add_environment(&EnvInput {
                         project: Some(project.clone()),
                         part: part.clone(),
                         name: name.clone(),
-                        notes: String::new(),
+                        notes: notes.clone().unwrap_or_default(),
                     })?;
                     vault.set_env_kind(&id, EnvKind::Local)?;
                     id
@@ -511,6 +515,7 @@ pub async fn envs_files_adopt(
             };
             let counts = vault.import_env_variables(&id, &vars)?;
             vault.bind_env_file(&id, &file, &ctx)?;
+            super::projects::apply_folder_choice(vault, &id, folder.as_ref())?;
             Ok(EnvImported { id, counts })
         })?;
         // A folder whose AI tools' rules the user asked for gets its line.

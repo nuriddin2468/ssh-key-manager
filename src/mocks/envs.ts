@@ -23,6 +23,7 @@ import type { ImportChoice } from '@/bindings/ImportChoice';
 import type { ImportTarget } from '@/bindings/ImportTarget';
 import type { ItemSummary } from '@/bindings/ItemSummary';
 import type { ParseProblem } from '@/bindings/ParseProblem';
+import type { PartFolderChoice } from '@/bindings/PartFolderChoice';
 import type { PartRename } from '@/bindings/PartRename';
 import type { SharedValue } from '@/bindings/SharedValue';
 import type { TerminalEvent } from '@/bindings/TerminalEvent';
@@ -379,7 +380,18 @@ function setPart(ids: readonly string[], part: string): Promise<never> | undefin
     if (taken) return fail('already_exists', `${name} / ${item.name}`);
     changing.push(item);
   }
-  for (const item of changing) item.part = name;
+  const left = new Map<string, string>();
+  for (const item of changing) {
+    const owner = mockEnvOwner(item.id);
+    if (owner) left.set(`${owner}\n${partOf(item)}`, owner);
+    item.part = name;
+  }
+  // A part left without environments gives its folder to the new one.
+  for (const [key, owner] of left) {
+    const before = key.slice(owner.length + 1);
+    const emptied = !envs.some((e) => mockEnvOwner(e.id) === owner && same(partOf(e), before));
+    if (emptied) partMoved(owner, before, name);
+  }
   return undefined;
 }
 
@@ -470,17 +482,44 @@ export function mockEnvironment(part: string, name: string): [string, string][] 
   return item?.vars.map((x): [string, string] => [x.name, x.value]);
 }
 
-/**
- * The project's local environment, as `projects_open_terminal` picks it: a
- * local one by kind, the one named `local` if there are several, else the
- * first the project took.
- */
-export function mockLocalEnvironment(project: string): [string, string][] | undefined {
-  const local = mockOwnedEnvs(project)
-    .flatMap((id) => find(id) ?? [])
-    .filter((e) => kindOf(e) === 'local');
-  const item = local.find((e) => e.name.toLowerCase() === 'local') ?? local[0];
-  return item?.vars.map((x): [string, string] => [x.name, x.value]);
+/** A project's environment as `projects_places` reads it. */
+export interface ProjectEnv {
+  id: string;
+  part: string;
+  name: string;
+  kind: EnvKind;
+  files: { folder: string; path: string }[];
+}
+
+/** A project's environments outside the recycle bin, in the order the list shows them. */
+export function mockProjectEnvs(project: string): ProjectEnv[] {
+  return sorted()
+    .filter((e) => !e.inTrash && mockEnvOwner(e.id) === project)
+    .map((e) => ({ id: e.id, part: partOf(e), name: e.name, kind: kindOf(e), files: e.files }));
+}
+
+/** An environment's variables, as a shell gets them. */
+export const mockEnvVars = (id: string): [string, string][] | undefined =>
+  find(id)?.vars.map((x): [string, string] => [x.name, x.value]);
+
+/** Sets the folder of a project's part, as a dialog chose it (mocks/projects.ts does). */
+let partFolder: (project: string, part: string, choice: PartFolderChoice) => unknown = () =>
+  undefined;
+export function onMockPartFolder(listener: typeof partFolder) {
+  partFolder = listener;
+}
+/** The folder an environment's dialog chose for its part, if any. */
+export async function applyMockFolderChoice(item: Env, choice: unknown) {
+  if (!choice) return;
+  const owner = mockEnvOwner(item.id);
+  if (!owner) return fail('invalid_input', 'an environment in Personal has no folder');
+  await partFolder(owner, partOf(item), choice as PartFolderChoice);
+}
+
+/** Told when a project's part is left without environments for another, as its folder moves. */
+let partMoved: (project: string, from: string, to: string) => void = () => {};
+export function onMockPartMoved(listener: typeof partMoved) {
+  partMoved = listener;
 }
 
 export const envsHandlers: Record<string, Handler> = {
@@ -494,7 +533,7 @@ export const envsHandlers: Record<string, Handler> = {
     if (!item) return fail('not_found', `environment ${id}`);
     return detail(item);
   },
-  envs_create: async ({ input, rename }): Promise<EnvDetail> => {
+  envs_create: async ({ input, rename, folder }): Promise<EnvDetail> => {
     await requireUnlocked();
     return withRename(rename, async () => {
       const { project, part, name, notes } = input as EnvInput;
@@ -506,10 +545,17 @@ export const envsHandlers: Record<string, Handler> = {
       });
       envs.push(item);
       setMockEnvOwner(item.id, project);
+      try {
+        await applyMockFolderChoice(item, folder);
+      } catch (error) {
+        envs.splice(envs.indexOf(item), 1);
+        setMockEnvOwner(item.id, null);
+        throw error;
+      }
       return detail(item);
     });
   },
-  envs_update: async ({ id, input, rename }): Promise<EnvDetail> => {
+  envs_update: async ({ id, input, rename, folder }): Promise<EnvDetail> => {
     await requireUnlocked();
     const item = find(id);
     if (!item) return fail('not_found', `environment ${id}`);
@@ -519,6 +565,7 @@ export const envsHandlers: Record<string, Handler> = {
       Object.assign(item, { part: part.trim(), name: name.trim(), notes: notes.trimEnd() });
       // Into another project, or Personal: the project's record says so.
       if (project !== mockEnvOwner(item.id)) setMockEnvOwner(item.id, project);
+      await applyMockFolderChoice(item, folder);
       touch(item);
       return detail(item);
     });

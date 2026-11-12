@@ -3,4 +3,8 @@
 /**
  * Where an import goes.
  */
-export type ImportTarget = { "type": "new", project: string | null, part: string, name: string, } | { "type": "existing", id: string, };
+export type ImportTarget = { "type": "new", project: string | null, part: string, name: string, 
+/**
+ * Its notes, if any.
+ */
+notes?: string, } | { "type": "existing", id: string, };

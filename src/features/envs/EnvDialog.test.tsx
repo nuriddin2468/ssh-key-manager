@@ -1,7 +1,7 @@
 import { fireEvent, screen, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { EnvDialog } from './EnvDialog';
-import { ALL, answer, detailOf, renderIn, stubPointer, summary } from './testing';
+import { ALL, answer, detailOf, renderIn, SHOP, SITE, stubPointer, summary } from './testing';
 
 const api = vi.hoisted(() => ({
   vaultStatus: vi.fn(),
@@ -11,6 +11,10 @@ const api = vi.hoisted(() => ({
   envsCreate: vi.fn(),
   envsUpdate: vi.fn(),
   envsSetPart: vi.fn(),
+  envsGet: vi.fn(),
+  envsFilesAdopt: vi.fn(),
+  projectsPlaces: vi.fn(),
+  projectsPickPartFolder: vi.fn(),
 }));
 vi.mock('@/api/commands', () => ({ api }));
 
@@ -110,7 +114,11 @@ describe('a new environment', () => {
     click('Name it and continue');
     await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith('e3'));
     // The stage in the recycle bin takes the name too.
-    expect(api.envsCreate).toHaveBeenCalledWith(input, { ids: ['e1', 'e2', 'e9'], part: 'site' });
+    expect(api.envsCreate).toHaveBeenCalledWith(
+      input,
+      { ids: ['e1', 'e2', 'e9'], part: 'site' },
+      null,
+    );
     expect(api.envsSetPart).not.toHaveBeenCalled();
   });
 
@@ -119,7 +127,7 @@ describe('a new environment', () => {
     blogDev();
     click('Name it and continue');
     await vi.waitFor(() => expect(onDone).toHaveBeenCalled());
-    expect(api.envsCreate).toHaveBeenCalledWith(input, null);
+    expect(api.envsCreate).toHaveBeenCalledWith(input, null, null);
   });
 
   it('goes back to the form with Back, and with Escape', async () => {
@@ -166,6 +174,7 @@ describe('editing an environment', () => {
       'e1',
       { project: 'p-site', part: 'marketing-site', name: 'local', notes: '' },
       null,
+      null,
     );
   });
 
@@ -182,6 +191,7 @@ describe('editing an environment', () => {
       'e1',
       { project: 'p-site', part: 'blog', name: 'dev', notes: '' },
       { ids: ['e2', 'e9'], part: 'site' },
+      null,
     );
   });
 
@@ -192,5 +202,98 @@ describe('editing an environment', () => {
     click('Save changes');
     await vi.waitFor(() => expect(onDone).toHaveBeenCalled());
     expect(screen.queryByText(/gets a second part/)).not.toBeInTheDocument();
+  });
+});
+
+describe('the folder of its part', () => {
+  /** Shop holds `~/code/shop`; its `api` works in `services/api`, set by the user. */
+  function inShop(env: ReturnType<typeof detailOf> | null = null) {
+    const onDone = show({ env, defaultProject: 'p-shop' });
+    api.projectsList.mockResolvedValue([SITE, { ...SHOP, folders: ['~/code/shop'] }]);
+    api.projectsPlaces.mockResolvedValue([
+      { folder: '~/code/shop', path: '', parts: [], terminal: ['s1'], missing: false },
+      {
+        folder: '~/code/shop',
+        path: 'services/api',
+        parts: [
+          {
+            part: 'api',
+            source: 'set',
+            environments: ['s1'],
+            local: 's1',
+            automatic: { folder: '~/code/shop', path: '' },
+            automaticFromFile: false,
+            suggested: [],
+          },
+        ],
+        terminal: ['s1'],
+        missing: false,
+      },
+    ]);
+    api.envsFilesOverview.mockResolvedValue({
+      files: [],
+      unmanaged: [
+        {
+          project: 'p-shop',
+          file: { folder: '~/code/shop', path: 'apps/admin/.env.local' },
+          location: '/Users/dev/code/shop/apps/admin/.env.local',
+          cloud: null,
+          git: null,
+        },
+      ],
+      truncated: false,
+    });
+    return onDone;
+  }
+
+  it('names a new part after the folder picked, and takes its .env under management', async () => {
+    const onDone = inShop();
+    api.envsFilesAdopt.mockResolvedValue({ id: 'e7', counts: { added: 2, replaced: 0 } });
+    api.envsGet.mockResolvedValue(detailOf(summary('e7', 'p-shop', 'admin', 'local')));
+    fireEvent.click(await screen.findByRole('radio', { name: 'apps/admin' }));
+    expect(part().value).toBe('admin');
+    type(stage(), 'local');
+    const use = screen.getByRole('checkbox', { name: /^Use apps\/admin\/.env.local/ });
+    expect(use).toBeChecked();
+    click('Create environment');
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith('e7'));
+    expect(api.envsFilesAdopt).toHaveBeenCalledWith(
+      'p-shop',
+      { folder: '~/code/shop', path: 'apps/admin/.env.local' },
+      { type: 'new', project: 'p-shop', part: 'admin', name: 'local', notes: '' },
+      [],
+      null,
+      { type: 'folder', folder: '~/code/shop', path: 'apps/admin' },
+    );
+    expect(api.envsCreate).not.toHaveBeenCalled();
+  });
+
+  it('offers no file to a remote stage, nor when it is unchecked', async () => {
+    const onDone = inShop();
+    fireEvent.click(await screen.findByRole('radio', { name: 'apps/admin' }));
+    type(stage(), 'prod');
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    click('Create environment');
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(api.envsCreate).toHaveBeenCalledWith(
+      { project: 'p-shop', part: 'admin', name: 'prod', notes: '' },
+      null,
+      { type: 'folder', folder: '~/code/shop', path: 'apps/admin' },
+    );
+  });
+
+  it('starts an edited stage on its part’s folder, and sends only a change', async () => {
+    const onDone = inShop(detailOf(ALL[3] as never));
+    const set = await screen.findByRole('radio', { name: 'services/api' });
+    expect(set).toBeChecked();
+    fireEvent.click(screen.getByRole('radio', { name: 'Automatic' }));
+    click('Save changes');
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(api.envsUpdate).toHaveBeenCalledWith(
+      's1',
+      { project: 'p-shop', part: 'api', name: 'dev', notes: '' },
+      null,
+      { type: 'automatic' },
+    );
   });
 });

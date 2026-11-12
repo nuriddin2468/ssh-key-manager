@@ -127,7 +127,8 @@ The foundation for everything below.
    subfolders → stages, with Folder… on each part; an environment shows its folder. New
    environment asks for the part's folder (folders with `.env` files, the project's, or
    another) and can take a `.env` file it finds there under management. Not yet: "Open in
-   editor". PENDING_PR_LINK
+   editor". In review:
+   [#53](https://github.com/nuriddin2468/ssh-key-manager/pull/53).
 
 ### 3. Managed `.env` files — done
 

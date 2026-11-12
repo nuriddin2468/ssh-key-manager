@@ -81,6 +81,43 @@ export function placeOfPart(
   return undefined;
 }
 
+/**
+ * The part an edited environment's dialog shows the folder of: the part as
+ * typed, with the folder saving gives it. An environment that was the last
+ * of its part takes that part's folder along to another part of its project
+ * which has none set (`update_environment`), so the new name shows it too.
+ */
+export function placeAfterSave({
+  places,
+  all,
+  edited,
+  project,
+  part,
+}: {
+  places: readonly FolderPlace[] | undefined;
+  /** Every environment, those in the recycle bin too: they keep a part. */
+  all: readonly { id: string; project: string | null; part: string }[];
+  /** The environment edited, as it is saved now; none for a new one. */
+  edited: { id: string; project: string | null; part: string } | null;
+  /** The project as chosen: a folder stays in the project it was set in. */
+  project: string | null;
+  /** The part as typed. */
+  part: string;
+}): { place: FolderPlace; part: PartPlace } | undefined {
+  const typed = placeOfPart(places, part);
+  const name = part.trim();
+  const samePart = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  if (!edited || edited.project === null || edited.project !== project) return typed;
+  if (samePart(edited.part, name) || typed?.part.source === 'set') return typed;
+  const left = all.some(
+    (env) =>
+      env.id !== edited.id && env.project === edited.project && samePart(env.part, edited.part),
+  );
+  const own = placeOfPart(places, edited.part);
+  if (left || own?.part.source !== 'set') return typed;
+  return { place: own.place, part: { ...(typed?.part ?? own.part), part: name, source: 'set' } };
+}
+
 /** The folder a file of a project's folder is in. */
 export function fileFolder(file: { folder: string; path: string }): ProjectFolder {
   const at = file.path.lastIndexOf('/');

@@ -76,7 +76,7 @@ export function EnvDialog({ env, all, defaultProject, onDone, onSaved }: EnvDial
     all,
     part,
     stage: name,
-    creating: env === null,
+    edited: env,
     onPartName: (next) => {
       setPart(next);
       setServerTaken(false);

@@ -78,6 +78,12 @@ export function partsOf(envs: readonly EnvSummary[], project: string | null): st
   return parts;
 }
 
+/**
+ * The KeePass folder a new Personal environment without a part goes into
+ * (`Environments/Personal`), as the backend names it in every language.
+ */
+export const KEEPASS_PERSONAL = 'Personal';
+
 /** Where an environment is: `Shop · backend`, `Shop`, `backend`, or nothing. */
 export function whereLabel(project: string | null | undefined, part: string): string {
   return [project ?? '', part].filter(Boolean).join(' · ');
@@ -94,6 +100,113 @@ export function envLabel(
 ): string {
   const project = env.project ? names.get(env.project) : undefined;
   return whereLabel(whereLabel(project, shown ? env.part : '') || null, env.name);
+}
+
+/** The part a project's environments share, to name when it gets a second. */
+export interface FirstPart {
+  /** Its name so far. */
+  part: string;
+  /**
+   * Whether that is the name of their folder in KeePassXC (from before
+   * projects, the old group's), not one given since.
+   */
+  fromFolder: boolean;
+  /** The environments in it, those in the recycle bin too. */
+  ids: string[];
+  /** The parts coming, which it can't be called. */
+  coming: string[];
+}
+
+/**
+ * Whether environments coming into `project` (or Personal) in `parts` give
+ * it a second part: it has one now, counting the ones `moving` that are in
+ * it already, and more after. Then that part is named first, for every
+ * environment in it but the ones moving, those in the recycle bin too, so
+ * that a restore doesn't bring the old name back.
+ */
+export function secondPart(
+  envs: readonly EnvSummary[],
+  project: string | null,
+  parts: readonly string[],
+  moving: readonly string[] = [],
+): FirstPart | null {
+  const live = envs.filter((env) => !env.inTrash && env.project === project);
+  const before = distinct(live.map((env) => env.part));
+  const part = before[0];
+  if (before.length !== 1 || part === undefined) return null;
+  const staying = live.filter((env) => !moving.includes(env.id));
+  const coming = distinct(parts.map((item) => item.trim()));
+  const after = distinct([...staying.map((env) => env.part), ...coming]);
+  if (staying.length === 0 || after.length < 2) return null;
+  const kept = envs.filter(
+    (env) => env.project === project && same(env.part, part) && !moving.includes(env.id),
+  );
+  return {
+    part,
+    fromFolder: part !== '' && kept.some((env) => env.part === env.group),
+    ids: kept.map((env) => env.id),
+    coming: coming.filter((item) => !same(item, part)),
+  };
+}
+
+function distinct(parts: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const part of parts) if (!out.some((item) => same(item, part))) out.push(part);
+  return out;
+}
+
+/**
+ * Names a part could have, from a project's folders: the folder that has
+ * a `.env` file (`apps/backend/.env` → `backend`), without the parts it
+ * has. A file at the project folder's top names none.
+ */
+export function folderParts(paths: readonly string[], taken: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const path of paths) {
+    const folder = path.split('/').slice(0, -1).pop();
+    if (!folder || folder.startsWith('.')) continue;
+    if (taken.some((part) => same(part, folder)) || out.some((part) => same(part, folder))) {
+      continue;
+    }
+    out.push(folder);
+  }
+  return out;
+}
+
+/**
+ * The stages of `ids` that a part `part` of `project` (or Personal) has
+ * already, outside the recycle bin: renaming them into it would make two.
+ */
+export function stagesTaken(
+  envs: readonly EnvSummary[],
+  project: string | null,
+  ids: readonly string[],
+  part: string,
+): string[] {
+  const moving = envs.filter((env) => ids.includes(env.id) && !env.inTrash);
+  return moving
+    .filter((env) =>
+      envs.some(
+        (other) =>
+          !other.inTrash &&
+          !ids.includes(other.id) &&
+          other.project === project &&
+          same(other.part, part.trim()) &&
+          same(other.name, env.name),
+      ),
+    )
+    .map((env) => env.name);
+}
+
+/** The stages `env` compares with: the others of its project and part. */
+export function compareWith(envs: readonly EnvSummary[], env: EnvSummary): EnvSummary[] {
+  return envs.filter(
+    (other) =>
+      !other.inTrash &&
+      other.id !== env.id &&
+      other.project === env.project &&
+      same(other.part, env.part),
+  );
 }
 
 /** Whether a project (or Personal) has more than one part: only then are parts shown. */

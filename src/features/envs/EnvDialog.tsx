@@ -2,6 +2,7 @@ import { Pencil, Plus } from 'lucide-react';
 import { type FormEvent, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
+import { errorMessage } from '@/api/useAppMutation';
 import type { EnvDetail } from '@/bindings/EnvDetail';
 import type { EnvSummary } from '@/bindings/EnvSummary';
 import { Button } from '@/components/ui/Button';
@@ -9,10 +10,17 @@ import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/compone
 import { TextField } from '@/components/ui/TextField';
 import { Tile } from '@/components/ui/Tile';
 import { useVaultMutation } from '@/features/passwords/vault';
-import { cn } from '@/lib/cn';
-import { labelProblem, nameTaken, partsOf, whereLabel } from './model';
+import { FirstPartField, useFirstPart } from './FirstPart';
+import {
+  KEEPASS_PERSONAL,
+  labelProblem,
+  nameTaken,
+  partsOf,
+  secondPart,
+  whereLabel,
+} from './model';
 import { useProjectNames } from './useProjectNames';
-import { PERSONAL, partProblem, projectOf, WhereFields } from './WhereFields';
+import { PERSONAL, PickChip, partProblem, projectOf, WhereFields } from './WhereFields';
 
 /** Stages most projects use, offered as one-click fills. */
 const STAGES = ['local', 'dev', 'staging', 'prod'] as const;
@@ -30,8 +38,10 @@ interface EnvDialogProps {
 }
 
 /**
- * A new environment, or another project, part, stage or notes for one: in
- * a project (or Personal), an optional part, and its stage.
+ * A new environment in a project (or Personal), with an optional part and
+ * its stage; or another part, stage or notes for one (it moves to another
+ * project with Move to project…). When that gives the project its second
+ * part, the part its environments share is named first.
  */
 export function EnvDialog({ env, all, defaultProject, onDone, onSaved }: EnvDialogProps) {
   const { t } = useTranslation();
@@ -41,16 +51,28 @@ export function EnvDialog({ env, all, defaultProject, onDone, onSaved }: EnvDial
     env ? (env.project ?? PERSONAL) : (defaultProject ?? PERSONAL),
   );
   const projectId = projectOf(project);
-  const parts = partsOf(all, projectId);
   // With one part, a new environment starts in it.
-  const [part, setPart] = useState(env?.part ?? (parts.length === 1 ? (parts[0] ?? '') : ''));
+  const onlyPart = (choice: string) => {
+    const parts = partsOf(all, projectOf(choice));
+    return parts.length === 1 ? (parts[0] ?? '') : '';
+  };
+  const [part, setPart] = useState(() => env?.part ?? onlyPart(project));
   const [name, setName] = useState(env?.name ?? '');
   const [notes, setNotes] = useState(env?.notes ?? '');
   const [touched, setTouched] = useState(false);
+  // The backend found the stage in the part, perhaps since the list was fetched.
+  const [serverTaken, setServerTaken] = useState(false);
+  const firstPart = useFirstPart();
+  const naming = firstPart.naming;
+  // An edited one is in its project already: it counts there as it is.
+  const first = secondPart(all, projectId, [part], env ? [env.id] : []);
 
   const input = { project: projectId, part: part.trim(), name, notes };
   const save = useVaultMutation(
-    () => (env ? api.envsUpdate(env.id, input) : api.envsCreate(input)),
+    () =>
+      env
+        ? api.envsUpdate(env.id, input, firstPart.rename)
+        : api.envsCreate(input, firstPart.rename),
     {
       success: (saved) =>
         env ? t('envs.saved', { name: saved.name }) : t('envs.created', { name: saved.name }),
@@ -59,32 +81,62 @@ export function EnvDialog({ env, all, defaultProject, onDone, onSaved }: EnvDial
         onDone(saved.id);
       },
       onError: (error) => {
-        if (error.code !== 'already_exists') return false;
-        setTouched(true);
-        return true;
+        // The stage is taken: said at its field, in the form.
+        if (error.code === 'already_exists') {
+          firstPart.back();
+          setTouched(true);
+          setServerTaken(true);
+          return true;
+        }
+        if (naming && error.code === 'invalid_input') {
+          firstPart.refuse(errorMessage(t, error));
+          return true;
+        }
+        return false;
       },
     },
   );
 
   const placeProblem = partProblem(part);
   const nameProblem = labelProblem(name);
-  const taken = !nameProblem && !placeProblem && nameTaken(all, projectId, part, name, env?.id);
+  const taken =
+    !nameProblem &&
+    !placeProblem &&
+    (serverTaken || nameTaken(all, projectId, part, name, env?.id));
   const problemText = (problem: ReturnType<typeof labelProblem>) =>
     problem ? t(`envs.form.${problem}`) : undefined;
   const ready = !placeProblem && !nameProblem && !taken;
   const projectName = projectId ? names.get(projectId) : undefined;
   const where = whereLabel(projectName ?? t('projects.personal'), part.trim());
-  // Where KeePassXC shows a new one; an edited one stays where it is.
-  const path = [projectName, part.trim(), name.trim()].filter(Boolean).join(' / ');
+  // Where KeePassXC shows a new one (as the backend files it; Personal
+  // without a part has its own folder); an edited one stays where it is.
+  const folder = projectId ? [projectName, part.trim()] : [part.trim() || KEEPASS_PERSONAL];
+  const path = [...folder, name.trim()].filter(Boolean).join(' / ');
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    if (save.isPending) return;
+    if (naming) {
+      if (firstPart.confirm()) save.mutate(undefined);
+      return;
+    }
     setTouched(true);
-    if (ready && !save.isPending) save.mutate(undefined);
+    if (!ready) return;
+    // The project gets its second part: its first is named in the same save.
+    if (first) {
+      firstPart.ask(first);
+      return;
+    }
+    save.mutate(undefined);
   };
+  const projectTitle = projectName ?? t('projects.personal');
 
   return (
-    <DialogContent section="envs" className="max-w-[520px]">
+    <DialogContent
+      section="envs"
+      className="max-w-[520px]"
+      onBack={naming ? firstPart.back : undefined}
+    >
       <form onSubmit={submit} className="flex min-h-0 flex-col">
         <DialogHeader
           icon={
@@ -96,73 +148,98 @@ export function EnvDialog({ env, all, defaultProject, onDone, onSaved }: EnvDial
               )}
             </Tile>
           }
-          title={env ? t('envs.form.editTitle') : t('envs.form.newTitle')}
-          description={t('envs.form.description')}
+          title={
+            naming
+              ? t('envs.firstPart.title', { project: projectTitle })
+              : env
+                ? t('envs.form.editTitle')
+                : t('envs.form.newTitle')
+          }
+          description={naming ? t('envs.firstPart.text') : t('envs.form.description')}
         />
-        <DialogBody>
-          <WhereFields
-            all={all}
-            project={project}
-            part={part}
-            onProject={setProject}
-            onPart={setPart}
-            touched={touched}
-          />
-          <div className="flex flex-col gap-2">
-            <TextField
-              label={t('envs.form.name')}
-              value={name}
-              placeholder={t('envs.form.namePlaceholder')}
-              onChange={(event) => setName(event.target.value)}
-              error={
-                touched
-                  ? (problemText(nameProblem) ??
-                    (taken ? t('envs.form.taken', { where, stage: name.trim() }) : undefined))
-                  : undefined
-              }
+        {naming ? (
+          <DialogBody>
+            <FirstPartField state={firstPart} />
+          </DialogBody>
+        ) : (
+          <DialogBody>
+            <WhereFields
+              all={all}
+              project={project}
+              part={part}
+              onProject={(next) => {
+                setProject(next);
+                setPart(onlyPart(next));
+                setServerTaken(false);
+              }}
+              onPart={(next) => {
+                setPart(next);
+                setServerTaken(false);
+              }}
+              touched={touched}
+              partOnly={env !== null}
             />
-            <div className="flex flex-wrap items-center gap-1.5">
-              {STAGES.map((stage) => (
-                <button
-                  key={stage}
-                  type="button"
-                  aria-label={t('envs.form.useName', { name: stage })}
-                  onClick={() => setName(stage)}
-                  className={cn(
-                    'pressable rounded-full border px-2.5 py-0.5 font-mono text-[12px]',
-                    name === stage
-                      ? 'border-[rgb(var(--accent-rgb)/0.5)] bg-[rgb(var(--accent-rgb)/0.14)] text-[var(--accent-text)]'
-                      : 'border-white/10 bg-white/[0.04] text-fg-2 hover:bg-white/[0.08]',
-                  )}
-                >
-                  {stage}
-                </button>
-              ))}
+            <div className="flex flex-col gap-2">
+              <TextField
+                label={t('envs.form.name')}
+                value={name}
+                placeholder={t('envs.form.namePlaceholder')}
+                onChange={(event) => {
+                  setName(event.target.value);
+                  setServerTaken(false);
+                }}
+                error={
+                  touched
+                    ? (problemText(nameProblem) ??
+                      (taken ? t('envs.form.taken', { where, stage: name.trim() }) : undefined))
+                    : undefined
+                }
+              />
+              <div className="flex flex-wrap items-center gap-1.5">
+                {STAGES.map((stage) => (
+                  <PickChip
+                    key={stage}
+                    label={stage}
+                    ariaLabel={t('envs.form.useName', { name: stage })}
+                    pressed={name === stage}
+                    onClick={() => {
+                      setName(stage);
+                      setServerTaken(false);
+                    }}
+                  />
+                ))}
+              </div>
             </div>
-          </div>
-          {env || !name.trim() ? null : (
-            <p className="text-[12px] text-subtle">{t('envs.form.keepass', { path })}</p>
-          )}
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor={notesId} className="text-[12px] font-semibold text-fg-2">
-              {t('envs.form.notes')}
-            </label>
-            <textarea
-              id={notesId}
-              value={notes}
-              onChange={(event) => setNotes(event.target.value)}
-              rows={3}
-              placeholder={t('envs.form.notesPlaceholder')}
-              className="field min-h-[76px] resize-y rounded-[10px] px-[11px] py-2 text-fg outline-none focus:border-[rgb(var(--accent-rgb)/0.55)] focus:shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.15)]"
-            />
-          </div>
-        </DialogBody>
+            {env || !name.trim() ? null : (
+              <p className="text-[12px] text-subtle">{t('envs.form.keepass', { path })}</p>
+            )}
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor={notesId} className="text-[12px] font-semibold text-fg-2">
+                {t('envs.form.notes')}
+              </label>
+              <textarea
+                id={notesId}
+                value={notes}
+                onChange={(event) => setNotes(event.target.value)}
+                rows={3}
+                placeholder={t('envs.form.notesPlaceholder')}
+                className="field min-h-[76px] resize-y rounded-[10px] px-[11px] py-2 text-fg outline-none focus:border-[rgb(var(--accent-rgb)/0.55)] focus:shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.15)]"
+              />
+            </div>
+          </DialogBody>
+        )}
         <DialogFooter>
-          <Button size="lg" onClick={() => onDone()}>
-            {t('common.cancel')}
-          </Button>
+          {naming ? (
+            <Button size="lg" onClick={firstPart.back}>
+              {t('envs.firstPart.back')}
+            </Button>
+          ) : (
+            <Button size="lg" onClick={() => onDone()}>
+              {t('common.cancel')}
+            </Button>
+          )}
           <Button type="submit" variant="primary" size="lg" loading={save.isPending}>
-            {env ? t('common.save') : t('envs.form.create')}
+            {naming ? t('envs.firstPart.go') : env ? t('common.save') : t('envs.form.create')}
           </Button>
         </DialogFooter>
       </form>

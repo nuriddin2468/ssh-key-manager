@@ -1,0 +1,6 @@
+{
+  "kind": "improved",
+  "en": "Environments are listed by project, then by part. New environment asks for a project, an optional part and the stage, suggesting parts from the project's folders; when a project gets its second part, it asks what to call the first. An environment's menu has Move to project… and Rename part…, and Compare offers only the stages of the same part.",
+  "ru": "Окружения показаны по проектам, внутри — по частям. «Новое окружение» спрашивает проект, необязательную часть и стадию, подсказывая части из папок проекта; когда у проекта появляется вторая часть, просит назвать первую. В меню окружения есть «Перенести в проект…» и «Переименовать часть…», а сравнение предлагает только стадии той же части.",
+  "uz": "Muhitlar loyihalar, ichida qismlar boʻyicha koʻrsatiladi. «Yangi muhit» loyiha, ixtiyoriy qism va bosqichni soʻraydi, qismlarni loyiha papkalaridan taklif qiladi; loyihada ikkinchi qism paydo boʻlsa, birinchisini nomlashni soʻraydi. Muhit menyusida «Loyihaga koʻchirish…» va «Qismni qayta nomlash…» bor, solishtirish faqat shu qism bosqichlarini taklif qiladi."
+}

@@ -1,10 +1,12 @@
-import { ChevronRight, Trash2 } from 'lucide-react';
+import { ChevronRight, Plus, Trash2 } from 'lucide-react';
 import { type KeyboardEvent, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { EnvSummary } from '@/bindings/EnvSummary';
+import { IconButton } from '@/components/ui/IconButton';
 import { PersonalTile, ProjectTile } from '@/features/projects/ProjectTile';
 import { useProjects } from '@/features/projects/queries';
 import { cn } from '@/lib/cn';
+import { useFileStatuses } from './files/queries';
 import { envLabel, isProduction, type ProjectNames, type ProjectSection } from './model';
 
 interface EnvListProps {
@@ -13,16 +15,39 @@ interface EnvListProps {
   trash: EnvSummary[];
   selectedId: string | undefined;
   query: string;
+  /** Whether a project (or Personal) has more than one part, searched or not. */
+  showsParts: (project: string | null) => boolean;
   onSelect: (id: string) => void;
+  /** A new environment in a project, or Personal (`null`). */
+  onNew: (project: string | null) => void;
 }
 
 /**
  * Personal and the projects with their environments, by part when a project
  * has more than one, then the recycle bin, folded.
  */
-export function EnvList({ sections, names, trash, selectedId, query, onSelect }: EnvListProps) {
+export function EnvList({
+  sections,
+  names,
+  trash,
+  selectedId,
+  query,
+  showsParts,
+  onSelect,
+  onNew,
+}: EnvListProps) {
   const { t } = useTranslation();
   const projects = useProjects().data ?? [];
+  const statuses = useFileStatuses().data;
+  // A part's file, when all its stages write to the same one.
+  const fileOf = (envs: EnvSummary[]) => {
+    const paths = new Set(
+      (statuses ?? [])
+        .filter((status) => envs.some((env) => env.id === status.envId))
+        .map((status) => `${status.file.folder.replace(/\/$/, '')}/${status.file.path}`),
+    );
+    return paths.size === 1 ? [...paths][0] : undefined;
+  };
   const list = useRef<HTMLDivElement>(null);
   const trashId = useId();
   const [trashOpen, setTrashOpen] = useState(() => trash.some((env) => env.id === selectedId));
@@ -62,35 +87,67 @@ export function EnvList({ sections, names, trash, selectedId, query, onSelect }:
             ? (names.get(section.project) ?? '')
             : t('projects.personal');
           // Parts show when the project has more than one.
-          const withParts = section.parts.length > 1;
+          const withParts = showsParts(section.project);
+          const count = section.parts.reduce((sum, part) => sum + part.envs.length, 0);
           return (
             <section
               key={section.project ?? 'personal'}
               aria-label={title}
               className="flex flex-col gap-0.5"
             >
-              <h2 className="flex min-h-7 items-center gap-2 px-2.5 pt-1 pb-1 text-[12.5px] font-semibold">
-                {project ? <ProjectTile project={project} size={18} /> : <PersonalTile size={18} />}
-                <span className="min-w-0 truncate">{title}</span>
-              </h2>
-              {section.parts.map((part) => (
-                <div key={part.part} className="flex flex-col gap-0.5">
-                  {withParts ? (
-                    <h3 className="truncate px-2.5 pt-1.5 pl-[38px] font-mono text-[11.5px] font-semibold text-fg-2">
-                      {part.part || t('envs.noPart')}
-                    </h3>
-                  ) : null}
-                  {part.envs.map((env) => (
-                    <EnvRow
-                      key={env.id}
-                      env={env}
-                      part={withParts ? part.part : ''}
-                      selected={env.id === selectedId}
-                      onSelect={() => onSelect(env.id)}
-                    />
-                  ))}
-                </div>
-              ))}
+              <div className="flex min-h-7 items-center gap-2 pr-1 pl-2.5">
+                <h2 className="flex min-w-0 items-center gap-2 pt-1 pb-1 text-[12.5px] font-semibold">
+                  {project ? (
+                    <ProjectTile project={project} size={18} />
+                  ) : (
+                    <PersonalTile size={18} />
+                  )}
+                  <span className="min-w-0 truncate">{title}</span>
+                </h2>
+                <span aria-hidden="true" className="text-[12px] text-subtle tabular-nums">
+                  {count}
+                </span>
+                <span className="sr-only">{t('envs.meta', { count })}</span>
+                <IconButton
+                  label={t('envs.newIn', { project: title })}
+                  variant="ghost"
+                  className="ml-auto size-7"
+                  icon={<Plus className="size-3.5" strokeWidth={2.2} />}
+                  onClick={() => onNew(section.project)}
+                />
+              </div>
+              {section.parts.map((part) => {
+                const file = withParts ? fileOf(part.envs) : undefined;
+                return (
+                  <div key={part.part} className="flex flex-col gap-0.5">
+                    {withParts ? (
+                      <h3 className="flex min-w-0 items-baseline gap-2 px-2.5 pt-1.5 pl-[30px]">
+                        <span className="shrink-0 font-mono text-[11.5px] font-semibold text-fg-2">
+                          {part.part || t('envs.noPart')}
+                        </span>
+                        {file ? (
+                          <span
+                            title={file}
+                            className="min-w-0 truncate font-mono text-[11px] font-normal text-subtle"
+                          >
+                            {file}
+                          </span>
+                        ) : null}
+                      </h3>
+                    ) : null}
+                    {part.envs.map((env) => (
+                      <EnvRow
+                        key={env.id}
+                        env={env}
+                        part={withParts ? part.part : ''}
+                        inPart={withParts}
+                        selected={env.id === selectedId}
+                        onSelect={() => onSelect(env.id)}
+                      />
+                    ))}
+                  </div>
+                );
+              })}
             </section>
           );
         })}
@@ -139,10 +196,12 @@ interface EnvRowProps {
   label?: string;
   /** Its part, said to screen readers, when the list shows parts. */
   part?: string;
+  /** Under a part's heading: indented. */
+  inPart?: boolean;
   onSelect: () => void;
 }
 
-function EnvRow({ env, selected, label, part, onSelect }: EnvRowProps) {
+function EnvRow({ env, selected, label, part, inPart = false, onSelect }: EnvRowProps) {
   const { t } = useTranslation();
   const production = isProduction(env.name);
   return (
@@ -153,6 +212,7 @@ function EnvRow({ env, selected, label, part, onSelect }: EnvRowProps) {
       onClick={onSelect}
       className={cn(
         'pressable-soft flex min-h-[46px] w-full items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-left active:bg-white/[0.06]',
+        inPart && 'pl-[30px]',
         selected ? 'selected-row' : 'hover:bg-white/[0.04]',
       )}
     >

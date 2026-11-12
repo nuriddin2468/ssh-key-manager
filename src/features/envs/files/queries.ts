@@ -42,12 +42,12 @@ export function useFileRisks() {
  * The management center, of every project (`null`) or one. It looks through
  * the projects' folders and asks Git, so it isn't fetched again on focus.
  */
-export function useFilesOverview(project: string | null) {
+export function useFilesOverview(project: string | null, wanted = true) {
   const unlocked = useVaultStatus().data?.state === 'unlocked';
   return useQuery({
     queryKey: filesKeys.overview(project),
     queryFn: () => api.envsFilesOverview(project),
-    enabled: unlocked,
+    enabled: unlocked && wanted,
     staleTime: 30_000,
     refetchOnWindowFocus: false,
   });

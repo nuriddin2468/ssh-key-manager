@@ -48,6 +48,7 @@ import {
   partOf,
   touchMockEnv,
   type Variable,
+  withMockRename,
 } from './envs';
 import { mockProjectName, projectsHandlers } from './projects';
 import { isMockVaultUnlocked } from './vault';
@@ -564,7 +565,7 @@ export const envFilesHandlers: Record<string, Handler> = {
       problems,
     };
   },
-  envs_files_adopt: async ({ project, file, target, choices }): Promise<EnvImported> => {
+  envs_files_adopt: async ({ project, file, target, choices, rename }): Promise<EnvImported> => {
     await requireUnlocked();
     seed();
     const found = unmanagedFor(file as EnvFile);
@@ -574,19 +575,18 @@ export const envFilesHandlers: Record<string, Handler> = {
       (choices as ImportChoice[]).find((choice) => choice.name === name)?.secret ??
       mockLooksSecret(name, value);
     const to = target as ImportTarget;
-    let item: Env;
-    if (to.type === 'new') {
-      item = addMockEnv(String(project), to.part, to.name, []);
-    } else {
-      item = await findEnv(to.id);
-      const owner = mockEnvOwner(item.id);
+    const item = await withMockRename(rename, async (): Promise<Env> => {
+      if (to.type === 'new') return addMockEnv(String(project), to.part, to.name, []);
+      const existing = await findEnv(to.id);
+      const owner = mockEnvOwner(existing.id);
       if (owner !== null && owner !== project) {
         return fail('invalid_input', 'the environment is in another project: move it first');
       }
-      if (kindOf(item) === 'remote') {
+      if (kindOf(existing) === 'remote') {
         return fail('invalid_input', 'a remote environment has no files: make it local first');
       }
-    }
+      return existing;
+    });
     let added = 0;
     let replaced = 0;
     for (const read of vars) {

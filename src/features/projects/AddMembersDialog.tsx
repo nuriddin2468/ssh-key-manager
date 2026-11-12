@@ -1,13 +1,16 @@
 import { KeyRound, Network, RectangleEllipsis, Search, Server, Variable } from 'lucide-react';
 import { RadioGroup } from 'radix-ui';
-import { type ReactNode, useMemo, useState } from 'react';
+import { type ReactNode, useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
+import type { PartRename } from '@/bindings/PartRename';
 import type { Project } from '@/bindings/Project';
 import type { ProjectMember } from '@/bindings/ProjectMember';
 import { Button } from '@/components/ui/Button';
 import { Checkbox } from '@/components/ui/Checkbox';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
+import { FirstPartField, useFirstPart } from '@/features/envs/FirstPart';
+import { secondPart } from '@/features/envs/model';
 import { isValidName, listsSystemName, normalizeName } from '@/features/hostsFile/model';
 import { useVaultMutation } from '@/features/passwords/vault';
 import { cn } from '@/lib/cn';
@@ -114,14 +117,35 @@ export function AddMembersDialog({
   const [kind, setKind] = useState(initial);
   const [query, setQuery] = useState('');
   const [picked, setPicked] = useState<Map<string, ProjectMember>>(new Map());
+  const stepId = useId();
   const all = useMemo(() => choices(kind, project, library), [kind, project, library]);
   const needle = query.trim().toLowerCase();
   const shown = needle
     ? all.filter((c) => `${c.title} ${c.subtitle}`.toLowerCase().includes(needle))
     : all;
 
+  const firstPart = useFirstPart();
+  const naming = firstPart.naming;
+  // Environments keep their parts: those may give the project its second,
+  // whose first is named before.
+  const envs = library.envs ?? [];
+  const coming = envs.filter((env) =>
+    [...picked.values()].some((member) => member.type === 'environment' && member.id === env.id),
+  );
+  const first =
+    coming.length > 0
+      ? secondPart(
+          envs,
+          project.id,
+          coming.map((env) => env.part),
+          coming.map((env) => env.id),
+        )
+      : null;
+
+  // One call per member, as before; the part is named first.
   const add = useVaultMutation(
-    async (members: ProjectMember[]) => {
+    async ({ members, rename }: { members: ProjectMember[]; rename: PartRename | null }) => {
+      if (rename) await api.envsSetPart(rename.ids, rename.part);
       for (const member of members) await api.projectsSetMember(project.id, member, true);
       return members.length;
     },
@@ -134,6 +158,20 @@ export function AddMembersDialog({
     },
   );
 
+  const go = () => {
+    const members = [...picked.values()];
+    if (add.isPending || members.length === 0) return;
+    if (naming) {
+      if (firstPart.confirm()) add.mutate({ members, rename: firstPart.rename });
+      return;
+    }
+    if (first) {
+      firstPart.ask(first);
+      return;
+    }
+    add.mutate({ members, rename: null });
+  };
+
   const toggle = (choice: Choice) => {
     setPicked((current) => {
       const next = new Map(current);
@@ -145,102 +183,140 @@ export function AddMembersDialog({
   };
 
   return (
-    <DialogContent section="project" className="max-w-[560px]">
+    <DialogContent
+      section="project"
+      className="max-w-[560px]"
+      onBack={naming ? firstPart.back : undefined}
+    >
       <DialogHeader
         icon={<ProjectTile project={project} size={44} />}
-        title={t('projects.addTitle', { name: project.name })}
-        description={t('projects.addDescription')}
+        title={
+          naming
+            ? t('envs.firstPart.title', { project: project.name })
+            : t('projects.addTitle', { name: project.name })
+        }
+        description={naming ? t('envs.firstPart.text') : t('projects.addDescription')}
       />
-      <DialogBody className="gap-3">
-        <RadioGroup.Root
-          value={kind}
-          onValueChange={(next) => {
-            setKind(next as Exclude<MemberKind, 'folder'>);
-            setQuery('');
+      {naming ? (
+        <form
+          id={stepId}
+          className="contents"
+          onSubmit={(event) => {
+            event.preventDefault();
+            go();
           }}
-          aria-label={t('projects.addKinds')}
-          orientation="horizontal"
-          loop
-          className="flex flex-wrap gap-1.5"
         >
-          {KINDS.map((item) => (
-            <RadioGroup.Item
-              key={item.kind}
-              value={item.kind}
-              className={cn(
-                'pressable inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12.5px] outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]',
-                'border-white/10 bg-white/[0.04] text-fg-2 hover:bg-white/[0.08]',
-                'data-[state=checked]:border-[rgb(var(--accent-rgb)/0.5)] data-[state=checked]:bg-[rgb(var(--accent-rgb)/0.14)] data-[state=checked]:text-[var(--accent-text)]',
-              )}
-            >
-              {item.icon}
-              {t(`projects.cards.${item.kind}`)}
-            </RadioGroup.Item>
-          ))}
-        </RadioGroup.Root>
-        <label className="field flex h-9 items-center gap-2 rounded-[10px] px-2.5">
-          <Search aria-hidden="true" className="size-3.5 text-subtle" strokeWidth={2} />
-          <span className="sr-only">{t('projects.addSearch')}</span>
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={t('projects.addSearch')}
-            className="h-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-subtle"
-          />
-        </label>
-        <ul
-          aria-label={t(`projects.cards.${kind}`)}
-          className="flex max-h-[320px] min-h-[120px] flex-col overflow-y-auto rounded-xl border border-white/[0.06]"
-        >
-          {shown.length === 0 ? (
-            <li className="grid flex-1 place-items-center p-6 text-center text-[13px] text-subtle">
-              {all.length === 0 ? t('projects.addNothing') : t('projects.addNoMatch')}
-            </li>
-          ) : (
-            shown.map((choice) => {
-              const key = keyOf(choice.member);
-              const checked = picked.has(key);
-              return (
-                <li key={key} className="border-t border-white/[0.045] first:border-t-0">
-                  <Checkbox
-                    checked={checked}
-                    onCheckedChange={() => toggle(choice)}
-                    className="min-h-11 items-center px-3 py-1.5 hover:bg-white/[0.04]"
-                    label={
-                      <span className="block min-w-0">
-                        <span
-                          className={cn('block truncate', choice.mono && 'font-mono text-[12.5px]')}
-                        >
-                          {choice.title}
-                        </span>
-                        {choice.subtitle ? (
-                          <span className="block truncate text-[11.5px] leading-4 font-normal text-subtle">
-                            {choice.subtitle}
+          <DialogBody>
+            <FirstPartField state={firstPart} />
+          </DialogBody>
+        </form>
+      ) : (
+        <DialogBody className="gap-3">
+          <RadioGroup.Root
+            value={kind}
+            onValueChange={(next) => {
+              setKind(next as Exclude<MemberKind, 'folder'>);
+              setQuery('');
+            }}
+            aria-label={t('projects.addKinds')}
+            orientation="horizontal"
+            loop
+            className="flex flex-wrap gap-1.5"
+          >
+            {KINDS.map((item) => (
+              <RadioGroup.Item
+                key={item.kind}
+                value={item.kind}
+                className={cn(
+                  'pressable inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12.5px] outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]',
+                  'border-white/10 bg-white/[0.04] text-fg-2 hover:bg-white/[0.08]',
+                  'data-[state=checked]:border-[rgb(var(--accent-rgb)/0.5)] data-[state=checked]:bg-[rgb(var(--accent-rgb)/0.14)] data-[state=checked]:text-[var(--accent-text)]',
+                )}
+              >
+                {item.icon}
+                {t(`projects.cards.${item.kind}`)}
+              </RadioGroup.Item>
+            ))}
+          </RadioGroup.Root>
+          <label className="field flex h-9 items-center gap-2 rounded-[10px] px-2.5">
+            <Search aria-hidden="true" className="size-3.5 text-subtle" strokeWidth={2} />
+            <span className="sr-only">{t('projects.addSearch')}</span>
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={t('projects.addSearch')}
+              className="h-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-subtle"
+            />
+          </label>
+          <ul
+            aria-label={t(`projects.cards.${kind}`)}
+            className="flex max-h-[320px] min-h-[120px] flex-col overflow-y-auto rounded-xl border border-white/[0.06]"
+          >
+            {shown.length === 0 ? (
+              <li className="grid flex-1 place-items-center p-6 text-center text-[13px] text-subtle">
+                {all.length === 0 ? t('projects.addNothing') : t('projects.addNoMatch')}
+              </li>
+            ) : (
+              shown.map((choice) => {
+                const key = keyOf(choice.member);
+                const checked = picked.has(key);
+                return (
+                  <li key={key} className="border-t border-white/[0.045] first:border-t-0">
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={() => toggle(choice)}
+                      className="min-h-11 items-center px-3 py-1.5 hover:bg-white/[0.04]"
+                      label={
+                        <span className="block min-w-0">
+                          <span
+                            className={cn(
+                              'block truncate',
+                              choice.mono && 'font-mono text-[12.5px]',
+                            )}
+                          >
+                            {choice.title}
                           </span>
-                        ) : null}
-                      </span>
-                    }
-                  />
-                </li>
-              );
-            })
-          )}
-        </ul>
-      </DialogBody>
+                          {choice.subtitle ? (
+                            <span className="block truncate text-[11.5px] leading-4 font-normal text-subtle">
+                              {choice.subtitle}
+                            </span>
+                          ) : null}
+                        </span>
+                      }
+                    />
+                  </li>
+                );
+              })
+            )}
+          </ul>
+        </DialogBody>
+      )}
       <DialogFooter>
-        <Button variant="ghost" onClick={onDone}>
-          {t('common.cancel')}
-        </Button>
-        <Button
-          variant="primary"
-          disabled={picked.size === 0}
-          loading={add.isPending}
-          onClick={() => add.mutate([...picked.values()])}
-        >
-          {picked.size === 0
-            ? t('projects.addNone')
-            : t('projects.addCount', { count: picked.size })}
-        </Button>
+        {naming ? (
+          <Button variant="ghost" onClick={firstPart.back}>
+            {t('envs.firstPart.back')}
+          </Button>
+        ) : (
+          <Button variant="ghost" onClick={onDone}>
+            {t('common.cancel')}
+          </Button>
+        )}
+        {naming ? (
+          <Button type="submit" form={stepId} variant="primary" loading={add.isPending}>
+            {t('envs.firstPart.go')}
+          </Button>
+        ) : (
+          <Button
+            variant="primary"
+            disabled={picked.size === 0}
+            loading={add.isPending}
+            onClick={go}
+          >
+            {picked.size === 0
+              ? t('projects.addNone')
+              : t('projects.addCount', { count: picked.size })}
+          </Button>
+        )}
       </DialogFooter>
     </DialogContent>
   );

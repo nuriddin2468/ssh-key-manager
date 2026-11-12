@@ -146,6 +146,18 @@ pub struct EnvInput {
     pub notes: String,
 }
 
+/// A part to name with a change that gives a project its second part: the
+/// environments that share it (those in the recycle bin too) and its name
+/// ([`Vault::set_environment_part`]). Named in the same change, so neither
+/// happens without the other.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+pub struct PartRename {
+    pub ids: Vec<String>,
+    pub part: String,
+}
+
 /// A new variable, or the new state of one.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -662,11 +674,15 @@ impl Vault {
         Ok(())
     }
 
-    /// Gives environments the part `part` (or none): for the ones a project
-    /// had before it got a second part, named then.
+    /// Gives environments the part `part` (or none): a part renamed, or
+    /// the one a project had before it got a second, named then. Those in
+    /// the recycle bin take it too, so a restore doesn't bring the old name
+    /// back; their stages are checked when they are restored. All are
+    /// checked before any changes.
     pub fn set_environment_part(&mut self, ids: &[String], part: &str) -> Result<()> {
         let part = check_part(part)?;
         let envs = self.environments();
+        let mut changes = Vec::new();
         for id in ids {
             let env = envs
                 .iter()
@@ -675,19 +691,33 @@ impl Vault {
             if env.part == part {
                 continue;
             }
-            self.check_free(env.project.as_deref(), &part, &env.name, Some(id))?;
-            if envs.iter().any(|other| {
-                ids.contains(&other.id)
-                    && other.id != env.id
-                    && other.project == env.project
-                    && same(&other.name, &env.name)
-                    && !other.in_trash
-            }) {
-                return Err(Error::AlreadyExists(format!("{part} / {}", env.name)));
+            if !env.in_trash {
+                let taken = envs.iter().any(|other| {
+                    !other.in_trash
+                        && other.id != env.id
+                        && other.project == env.project
+                        && same(&other.name, &env.name)
+                        && (same(&other.part, &part) || ids.contains(&other.id))
+                });
+                if taken {
+                    return Err(Error::AlreadyExists(format!("{part} / {}", env.name)));
+                }
             }
-            self.put_part(parse_id(id)?, &part)?;
+            changes.push(parse_id(id)?);
+        }
+        for entry in changes {
+            self.put_part(entry, &part)?;
         }
         Ok(())
+    }
+
+    /// Names the part a project had, when what comes next gives it a
+    /// second one ([`PartRename`]); called in the same change.
+    pub fn name_first_part(&mut self, rename: Option<&PartRename>) -> Result<()> {
+        match rename {
+            Some(rename) => self.set_environment_part(&rename.ids, &rename.part),
+            None => Ok(()),
+        }
     }
 
     /// Keeps an environment's part on its entry, when it has none there yet

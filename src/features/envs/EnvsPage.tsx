@@ -27,7 +27,7 @@ import { FilesCenter } from './files/FilesCenter';
 import { needsAction, needsAttention, sameFile } from './files/model';
 import { useFileRisks, useFileStatuses } from './files/queries';
 import { ImportEnvDialog } from './ImportEnvDialog';
-import { sectionsOf, trashed } from './model';
+import { sectionsOf, showsParts, trashed } from './model';
 import { useEnvs } from './queries';
 import { useProjectNames } from './useProjectNames';
 import { type EnvsView, ViewTabs, viewPanelId } from './ViewTabs';
@@ -87,7 +87,8 @@ export function EnvsPage({ envId, view, project }: EnvsPageProps) {
 }
 
 type Editing =
-  | { kind: 'new' }
+  /** `project`: from a section's +, the project (or Personal, `null`) it starts in. */
+  | { kind: 'new'; project?: string | null }
   | { kind: 'edit'; env: EnvDetail }
   /** `into`: opened from an environment, which the import then goes to. */
   | { kind: 'import'; into?: EnvSummary };
@@ -224,6 +225,8 @@ function EnvBrowser({ envId, view, project }: EnvsPageProps) {
                 <EnvList
                   sections={sections}
                   names={names}
+                  showsParts={(section) => showsParts(all, section)}
+                  onNew={(section) => setDialog({ kind: 'new', project: section })}
                   trash={inTrash}
                   selectedId={selected?.id}
                   query={query}
@@ -254,7 +257,11 @@ function EnvBrowser({ envId, view, project }: EnvsPageProps) {
           <EnvDialog
             env={dialog.kind === 'edit' ? dialog.env : null}
             all={all}
-            defaultProject={selected?.project}
+            defaultProject={
+              dialog.kind === 'new' && dialog.project !== undefined
+                ? dialog.project
+                : selected?.project
+            }
             onDone={(id) => {
               setDialog(null);
               if (id) select(id);

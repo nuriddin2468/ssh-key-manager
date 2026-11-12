@@ -14,6 +14,11 @@ interface DialogContentProps {
   className?: string;
   /** `false` ignores Escape and clicks outside, for a step that must be finished. */
   dismissible?: boolean;
+  /**
+   * Escape goes back a step instead of closing, while this is set (a
+   * dialog's second step).
+   */
+  onBack?: () => void;
   children: ReactNode;
 }
 
@@ -21,9 +26,16 @@ export function DialogContent({
   section,
   className,
   dismissible = true,
+  onBack,
   children,
 }: DialogContentProps) {
   const block = dismissible ? undefined : (event: Event) => event.preventDefault();
+  const onEscape = onBack
+    ? (event: Event) => {
+        event.preventDefault();
+        if (dismissible) onBack();
+      }
+    : block;
   const returnFocus = useReturnFocus();
   return (
     <RDialog.Portal>
@@ -31,7 +43,7 @@ export function DialogContent({
       <div className="pointer-events-none fixed inset-0 z-50 grid place-items-center overflow-y-auto p-4">
         <RDialog.Content
           data-section={section}
-          onEscapeKeyDown={block}
+          onEscapeKeyDown={onEscape}
           onInteractOutside={block}
           // Start in the first field rather than on the close button. Radix
           // radios and checkboxes add hidden inputs (tabindex -1) to forms;

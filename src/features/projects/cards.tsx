@@ -960,7 +960,10 @@ function useFoldersCard(
       const root = places?.find((place) => place.folder === path && place.path === '');
       const inside = places?.filter((place) => place.folder === path && place.path !== '') ?? [];
       const missing = gone.has(path) || root?.missing === true;
-      const below = [...new Set(inside.flatMap((place) => place.parts.map((part) => part.part)))];
+      // Named parts only: a project's one unnamed part shows on its own row.
+      const below = [
+        ...new Set(inside.flatMap((place) => place.parts.map((part) => part.part))),
+      ].filter(Boolean);
       return {
         key: path,
         problem: missing || inside.some((place) => place.missing),

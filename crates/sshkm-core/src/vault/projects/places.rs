@@ -211,8 +211,9 @@ fn parent(path: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Parts compare as environments keep them: trimmed, without case.
 fn same(a: &str, b: &str) -> bool {
-    a.to_lowercase() == b.to_lowercase()
+    a.trim().to_lowercase() == b.trim().to_lowercase()
 }
 
 /// Whether `path` is below `under` in one folder (and not `under` itself).
@@ -463,9 +464,13 @@ impl Vault {
     ) -> Result<bool> {
         let part = envs::check_part(part)?;
         let mut stored = self.live_project(id)?;
+        let wanted_path = to
+            .map(|to| check_path(&to.path))
+            .transpose()?
+            .unwrap_or_default();
         let wanted = match to {
             Some(to) => {
-                let path = check_path(&to.path)?;
+                let path = wanted_path.clone();
                 if !stored
                     .members
                     .get(&format!("folder:{}", to.folder))
@@ -481,47 +486,46 @@ impl Vault {
             }
             None => None,
         };
-        // The part's folders present: the one wanted (in any case of the
-        // part's name), and the others, to take out.
-        let wanted_folder = wanted.as_deref().and_then(parse_key);
-        let is_wanted = |folder: &PartFolder| {
-            wanted_folder
-                .as_ref()
-                .is_some_and(|w| w.folder == folder.folder && w.path == folder.path)
+        // The part's folders present (in any case of the part's name).
+        let present: Vec<(String, PartFolder)> = stored
+            .members
+            .iter()
+            .filter(|(_, presence)| presence.present())
+            .filter_map(|(key, _)| {
+                parse_key(key)
+                    .filter(|f| same(&f.part, &part))
+                    .map(|f| (key.clone(), f))
+            })
+            .collect();
+        // Already so: nothing changes, not even a time.
+        let unchanged = match (&to, present.as_slice()) {
+            (None, []) => true,
+            (Some(to), [(_, only)]) => only.folder == to.folder && only.path == wanted_path,
+            _ => false,
         };
-        let mut wanted_in = wanted.is_none();
-        let mut others: Vec<String> = Vec::new();
-        for (key, presence) in &stored.members {
-            let Some(folder) = parse_key(key).filter(|f| same(&f.part, &part)) else {
-                continue;
-            };
-            if !presence.present() {
-                continue;
-            }
-            if is_wanted(&folder) && !wanted_in {
-                wanted_in = true;
-            } else {
-                others.push(key.clone());
-            }
-        }
-        if others.is_empty() && wanted_in {
+        if unchanged {
             return Ok(false);
         }
+        // Set now: the one wanted is put in last, whether or not it was
+        // there already, and the part's others are taken out.
         let t = stored.tick();
-        for key in others {
-            if let Some(presence) = stored.members.get_mut(&key) {
+        for (key, _) in &present {
+            if Some(key) != wanted.as_ref()
+                && let Some(presence) = stored.members.get_mut(key)
+            {
                 presence.r = Some(t);
             }
         }
-        if let Some(key) = wanted.filter(|_| !wanted_in) {
-            if stored.count(KIND_NAME) >= MAX_MEMBERS {
-                return Err(Error::invalid(format!(
-                    "a project holds at most {MAX_MEMBERS} folders of parts"
-                )));
-            }
+        if let Some(key) = wanted {
             let room = stored.members.len() < MAX_STORED_MEMBERS;
+            let full = stored.count(KIND_NAME) >= MAX_MEMBERS;
             match stored.members.get_mut(&key) {
                 Some(presence) => presence.a = t,
+                None if full => {
+                    return Err(Error::invalid(format!(
+                        "a project holds at most {MAX_MEMBERS} folders of parts"
+                    )));
+                }
                 None if room => {
                     stored.members.insert(key, Presence { a: t, r: None });
                 }

@@ -23,6 +23,9 @@ export function usePlaces(project: string | null | undefined) {
     queryKey: [...projectKeys.all, 'places', project ?? '', state ?? 'unknown'],
     queryFn: () => api.projectsPlaces(project ?? ''),
     enabled: Boolean(project) && state !== undefined,
+    // Each look checks the folders on disk: not on every focus.
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -176,24 +179,29 @@ export function unmanagedIn(
 }
 
 /**
- * Of the unmanaged files in a folder, the one a new stage would use: the one
- * whose name has the stage (`.env.local` for `local`, `.env.development`
- * for `dev`), else `.env`, else the first.
+ * Of the unmanaged files in a folder, the one a new local stage would use:
+ * only a file for local use (`.env`, `.env.local`, `.env.development…`, or
+ * named for the stage), never another stage's (`.env.production`,
+ * `.env.production.local`). The stage's own first, then `.env.local`, then
+ * the rest, `.env` last.
  */
 export function fileForStage<T extends { file: { path: string } }>(
   files: readonly T[],
   stage: string,
 ): T | undefined {
-  const name = (item: T) => lastName(item.file.path).toLowerCase();
-  const words =
-    stage.trim().toLowerCase() === 'dev' ? ['dev', 'development'] : [stage.trim().toLowerCase()];
+  const name = stage.trim().toLowerCase();
+  const own = name === 'dev' ? ['dev', 'development'] : [name];
+  const allowed = new Set(['local', 'dev', 'development', ...own]);
+  const words = (item: T) =>
+    lastName(item.file.path)
+      .toLowerCase()
+      .split('.')
+      .filter((word) => word !== '' && word !== 'env');
+  const fits = files.filter((item) => words(item).every((word) => allowed.has(word)));
   return (
-    files.find((item) =>
-      name(item)
-        .split('.')
-        .some((word) => word !== '' && words.includes(word)),
-    ) ??
-    files.find((item) => name(item) === '.env') ??
-    files[0]
+    fits.find((item) => words(item).some((word) => own.includes(word))) ??
+    fits.find((item) => words(item).join('.') === 'local') ??
+    fits.find((item) => words(item).length > 0) ??
+    fits[0]
   );
 }

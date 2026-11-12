@@ -100,7 +100,12 @@ describe('places', () => {
     const admin = unmanagedIn(overview, { folder: '~/shop', path: 'apps/admin' });
     expect(admin.map((f) => f.file.path)).toEqual(['apps/admin/.env', 'apps/admin/.env.local']);
     expect(fileForStage(admin, 'local')?.file.path).toBe('apps/admin/.env.local');
-    expect(fileForStage(admin, 'dev')?.file.path).toBe('apps/admin/.env');
+    expect(fileForStage(admin, 'dev')?.file.path).toBe('apps/admin/.env.local');
+    expect(fileForStage([unmanaged('x/.env')], 'dev')?.file.path).toBe('x/.env');
+    // Another stage's file is never offered to a local one.
+    for (const other of ['x/.env.production', 'x/.env.production.local', 'x/.env.staging']) {
+      expect(fileForStage([unmanaged(other)], 'local')).toBeUndefined();
+    }
     expect(fileForStage([unmanaged('x/.env.development.local')], 'dev')?.file.path).toBe(
       'x/.env.development.local',
     );

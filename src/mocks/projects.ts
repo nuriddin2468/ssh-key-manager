@@ -166,7 +166,7 @@ function mockPlaces(p: MockProject, unlocked: boolean): FolderPlace[] {
       else parts.push([env.part, [env]]);
     }
   } else {
-    for (const part of p.parts) parts.push([part.part, []]);
+    for (const part of p.parts) if (held(part.folder)) parts.push([part.part, []]);
   }
   const spots = (envs: ProjectEnv[]) => {
     const out: ProjectFolder[] = [];
@@ -238,7 +238,13 @@ function setPartFolder(
     if (!p.folders.includes(to.folder)) {
       return fail('invalid_input', 'not one of the project’s folders');
     }
-    if (to.path.split(/[\\/]/).some((x) => x === '..' || x === '.')) {
+    const names = to.path === '' ? [] : to.path.split(/[\\/]/);
+    const bad = (x: string) =>
+      ['', '.', '..'].includes(x) ||
+      x.toLowerCase() === '.git' ||
+      x.trim() !== x ||
+      x.includes(':');
+    if (names.some(bad)) {
       return fail('invalid_input', `not a folder in a project's folder: ${to.path}`);
     }
     if (missingHere(to)) return fail('not_found', `${to.folder}/${to.path} on this computer`);
@@ -272,7 +278,13 @@ onMockPartMoved((id, from, to) => {
 
 function view(p: MockProject, unlocked: boolean): Project {
   const { loginTitles: _, heldFolders: _held, ...rest } = p;
-  return { ...rest, environments: mockOwnedEnvs(p.id), logins: unlocked ? [...p.logins] : [] };
+  return {
+    ...rest,
+    environments: mockOwnedEnvs(p.id),
+    logins: unlocked ? [...p.logins] : [],
+    // A part's folder counts while the project holds the folder it's in.
+    parts: p.parts.filter((part) => p.folders.includes(part.folder)),
+  };
 }
 
 /** Moves renamed hosts in the projects that hold them, as `save_host` does. */

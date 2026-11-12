@@ -523,3 +523,60 @@ fn the_vault_finds_where_its_parts_work() {
     assert_eq!(places[1].path, "api");
     assert_eq!(places[1].terminal, [api]);
 }
+
+#[test]
+fn a_folder_picked_again_is_the_one_set_last() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut a, mut b) = (vault(&dir, "a"), vault(&dir, "b"));
+    let id = shop(&mut a);
+    settle(&mut a, &mut b);
+    let pause = || std::thread::sleep(std::time::Duration::from_millis(5));
+    let pick = |device: &mut Vault, path: &str| {
+        device
+            .set_part_folder(&id, "api", Some(&at("~/code/shop", path)))
+            .unwrap()
+    };
+    // Each sets one before they sync: both are in the records, `b` wins.
+    pick(&mut a, "a");
+    pause();
+    pick(&mut b, "b");
+    settle(&mut a, &mut b);
+    pause();
+    // B sets `c`; A, not having heard of it, picks `a` again, later.
+    pick(&mut b, "c");
+    pause();
+    assert!(pick(&mut a, "a"));
+    settle(&mut a, &mut b);
+    for device in [&a, &b] {
+        assert_eq!(
+            set(device, &id),
+            [("api".to_owned(), "~/code/shop/a".to_owned())]
+        );
+    }
+}
+
+#[test]
+fn an_edited_stage_takes_its_parts_folder_to_its_new_part() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "laptop");
+    let id = shop(&mut vault);
+    let local = env(&mut vault, &id, "api", "local");
+    vault
+        .set_part_folder(&id, "api", Some(&at("~/code/shop", "apps/api")))
+        .unwrap();
+    vault
+        .update_environment(
+            &local,
+            &EnvInput {
+                project: Some(id.clone()),
+                part: "backend".into(),
+                name: "local".into(),
+                notes: String::new(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        set(&vault, &id),
+        [("backend".to_owned(), "~/code/shop/apps/api".to_owned())]
+    );
+}

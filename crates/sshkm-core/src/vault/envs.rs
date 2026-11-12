@@ -722,6 +722,13 @@ impl Vault {
         }
         if part != current.summary.part {
             self.put_part(entry_id, &part)?;
+            // Its part's folder goes with it, when it was the last there.
+            if let Some(project) = &current.summary.project {
+                self.follow_part_folders(
+                    &[(project.clone(), current.summary.part.clone())],
+                    &part,
+                )?;
+            }
         }
         if input.project != current.summary.project {
             self.move_environment(id, input.project.as_deref())?;
@@ -734,8 +741,7 @@ impl Vault {
     /// the recycle bin take it too, so a restore doesn't bring the old name
     /// back; their stages are checked when they are restored. All are
     /// checked before any changes. A part left without environments gives
-    /// its folder to the new one ([`super::projects::places`]), unless that
-    /// one has its own.
+    /// its folder to the new one, unless that one has its own.
     pub fn set_environment_part(&mut self, ids: &[String], part: &str) -> Result<()> {
         let part = check_part(part)?;
         let envs = self.environments();
@@ -772,13 +778,20 @@ impl Vault {
         for entry in changes {
             self.put_part(entry, &part)?;
         }
+        self.follow_part_folders(&left, &part)
+    }
+
+    /// Gives the folder of each part `left` (by project) to `part`, which
+    /// its environments went to, once no environment is left in it
+    /// ([`super::projects::places`]).
+    fn follow_part_folders(&mut self, left: &[(String, String)], part: &str) -> Result<()> {
         let now = self.environments();
         for (project, before) in left {
             let emptied = !now
                 .iter()
-                .any(|env| env.project.as_ref() == Some(&project) && same(&env.part, &before));
+                .any(|env| env.project.as_ref() == Some(project) && same(&env.part, before));
             if emptied {
-                self.move_part_folder(&project, &before, &part)?;
+                self.move_part_folder(project, before, part)?;
             }
         }
         Ok(())

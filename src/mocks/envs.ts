@@ -562,7 +562,13 @@ export const envsHandlers: Record<string, Handler> = {
     return withRename(rename, async () => {
       const { project, part, name, notes } = input as EnvInput;
       await checkName(project, part, name, item.id);
+      const [owner, before] = [mockEnvOwner(item.id), partOf(item)];
       Object.assign(item, { part: part.trim(), name: name.trim(), notes: notes.trimEnd() });
+      // The last of its part takes the part's folder along.
+      const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+      if (owner && !envs.some((e) => mockEnvOwner(e.id) === owner && same(partOf(e), before))) {
+        partMoved(owner, before, part.trim());
+      }
       // Into another project, or Personal: the project's record says so.
       if (project !== mockEnvOwner(item.id)) setMockEnvOwner(item.id, project);
       await applyMockFolderChoice(item, folder);

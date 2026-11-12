@@ -769,7 +769,9 @@ fn find_place<'a>(places: &'a [FolderPlace], wanted: &ProjectFolder) -> AppResul
 
 /// The folder `place` names on this computer: one of the project's folders,
 /// found here, or a folder in it that is found here and stays inside it
-/// (no symbolic link leads out).
+/// (no symbolic link leads out). A folder in it comes back as it was
+/// checked, with links resolved, so one changed after the check can't
+/// lead elsewhere.
 pub(crate) fn place_path(
     project: &Project,
     place: &ProjectFolder,
@@ -796,7 +798,7 @@ pub(crate) fn place_path(
     if !real.is_dir() {
         return Err(gone());
     }
-    Ok(target)
+    Ok(real)
 }
 
 /// Where `place` would be on this computer, without checking it: for
@@ -1149,7 +1151,7 @@ mod tests {
         };
         assert_eq!(
             place_path(&project, &at("apps/api"), Some(home)).unwrap(),
-            shop.join("apps").join("api")
+            shop.join("apps").join("api").canonicalize().unwrap()
         );
         assert_eq!(place_path(&project, &at(""), Some(home)).unwrap(), shop);
         for bad in ["..", "apps/../..", "/etc"] {

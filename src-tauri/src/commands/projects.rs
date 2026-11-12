@@ -1151,7 +1151,8 @@ mod tests {
         };
         assert_eq!(
             place_path(&project, &at("apps/api"), Some(home)).unwrap(),
-            shop.join("apps").join("api").canonicalize().unwrap()
+            // As it was checked: links resolved, and on Windows `C:\…`, not `\\?\C:\…`.
+            fsutil::without_verbatim_prefix(shop.join("apps").join("api").canonicalize().unwrap())
         );
         assert_eq!(place_path(&project, &at(""), Some(home)).unwrap(), shop);
         for bad in ["..", "apps/../..", "/etc"] {

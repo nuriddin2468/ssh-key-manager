@@ -202,7 +202,8 @@ problems on All projects, and the review's leftovers:
    turning that off would stop. Windows offers no level 3 and says why. Checked on macOS
    with Node `dotenv` 18, `python-dotenv` 1.2, Docker Compose 5.5, direnv 2.38, Vite 8
    (`loadEnv` and its dev server), Next.js 16 (`@next/env` and `next dev`), and `source`
-   in bash and zsh. In review.
+   in bash and zsh. In review:
+   [#56](https://github.com/nuriddin2468/ssh-key-manager/pull/56).
 
 ### 5. Teams
 

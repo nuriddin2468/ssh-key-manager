@@ -1,4 +1,12 @@
-import { FilePlus2, FileText, GitBranch, LockKeyhole, MoreHorizontal, Unlink } from 'lucide-react';
+import {
+  Bot,
+  FilePlus2,
+  FileText,
+  GitBranch,
+  LockKeyhole,
+  MoreHorizontal,
+  Unlink,
+} from 'lucide-react';
 import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -26,6 +34,7 @@ import { Tile } from '@/components/ui/Tile';
 import { useVaultMutation } from '@/features/passwords/vault';
 import { cn } from '@/lib/cn';
 import { useEnvLabel } from '../useProjectNames';
+import { AGENT_NAMES, AgentRulesDialog, offered } from './AgentRulesDialog';
 import { announceSynced } from './announce';
 import { BindFileDialog } from './BindFileDialog';
 import { ignoreFailed, isFileConflict } from './errors';
@@ -43,10 +52,13 @@ import {
   stateText,
   TONE_CLASSES,
 } from './model';
-import { refreshFileReports, useFileRisks, useFileStatuses } from './queries';
+import { refreshFileReports, useAgentRules, useFileRisks, useFileStatuses } from './queries';
 import { useMakeLocal } from './useMakeLocal';
 
-type Open = { kind: 'bind' } | { kind: 'compare'; file: EnvFile };
+type Open =
+  | { kind: 'bind' }
+  | { kind: 'compare'; file: EnvFile }
+  | { kind: 'agents'; folder: string };
 
 interface FilesSectionProps {
   env: EnvSummary;
@@ -120,26 +132,41 @@ export function FilesSection({ env, files, whileUnlocked }: FilesSectionProps) {
           {t('envs.files.emptyText')}
         </p>
       ) : (
-        <ul
-          aria-label={t('envs.files.listLabel', { env: label })}
-          className="flex flex-col gap-1.5"
-        >
-          {files.map((file) => (
-            <FileRow
-              key={`${file.folder}\n${file.path}`}
-              envId={env.id}
-              file={file}
-              level={whileUnlocked.some((x) => sameFile(x, file)) ? 'whileUnlocked' : 'always'}
-              remote={env.kind === 'remote'}
-              status={statusOf(file)}
-              statusFailed={statuses.isError}
-              report={reportOf(file)}
-              onCompare={() => setOpen({ kind: 'compare', file })}
-              onIgnore={() => setIgnoring(file)}
-              onStop={() => setStopping(file)}
-            />
-          ))}
-        </ul>
+        <>
+          {env.project
+            ? [...new Set(files.map((file) => file.folder))].map((folder) => (
+                <AgentPrompt
+                  key={folder}
+                  project={env.project ?? ''}
+                  folder={folder}
+                  onChoose={() => setOpen({ kind: 'agents', folder })}
+                />
+              ))
+            : null}
+          <ul
+            aria-label={t('envs.files.listLabel', { env: label })}
+            className="flex flex-col gap-1.5"
+          >
+            {files.map((file) => (
+              <FileRow
+                key={`${file.folder}\n${file.path}`}
+                envId={env.id}
+                file={file}
+                level={whileUnlocked.some((x) => sameFile(x, file)) ? 'whileUnlocked' : 'always'}
+                remote={env.kind === 'remote'}
+                status={statusOf(file)}
+                statusFailed={statuses.isError}
+                report={reportOf(file)}
+                onCompare={() => setOpen({ kind: 'compare', file })}
+                onIgnore={() => setIgnoring(file)}
+                onAgents={
+                  env.project ? () => setOpen({ kind: 'agents', folder: file.folder }) : undefined
+                }
+                onStop={() => setStopping(file)}
+              />
+            ))}
+          </ul>
+        </>
       )}
 
       <Dialog open={open !== null} onOpenChange={(next) => (next ? undefined : setOpen(null))}>
@@ -152,6 +179,9 @@ export function FilesSection({ env, files, whileUnlocked }: FilesSectionProps) {
         ) : null}
         {open?.kind === 'compare' ? (
           <FileCompareDialog envId={env.id} file={open.file} onDone={() => setOpen(null)} />
+        ) : null}
+        {open?.kind === 'agents' && env.project ? (
+          <AgentRulesFor project={env.project} folder={open.folder} onDone={() => setOpen(null)} />
         ) : null}
       </Dialog>
       <StopDialog
@@ -191,6 +221,8 @@ interface FileRowProps {
   report: EnvFileReport | undefined;
   onCompare: () => void;
   onIgnore: () => void;
+  /** Opens the AI tools' rules of the file's folder; none outside a project. */
+  onAgents?: () => void;
   onStop: () => void;
 }
 
@@ -205,6 +237,7 @@ function FileRow({
   report,
   onCompare,
   onIgnore,
+  onAgents,
   onStop,
 }: FileRowProps) {
   const { t } = useTranslation();
@@ -330,6 +363,11 @@ function FileRow({
               {t('envs.files.level.makeAlways')}
             </MenuItem>
           )}
+          {onAgents ? (
+            <MenuItem icon={<Bot className="size-4" />} onSelect={onAgents}>
+              {t('envs.agents.menu')}
+            </MenuItem>
+          ) : null}
           <MenuItem icon={<Unlink className="size-4" />} onSelect={onStop}>
             {t('envs.files.stop')}
           </MenuItem>
@@ -432,5 +470,83 @@ function StopDialog({ envId, file, whileUnlocked, onDone }: StopDialogProps) {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+interface AgentPromptProps {
+  project: string;
+  folder: string;
+  onChoose: () => void;
+}
+
+/**
+ * Once per folder: AI tools used here could read its managed files, and
+ * their ignore files lack them. The user chooses, or says not here.
+ */
+function AgentPrompt({ project, folder, onChoose }: AgentPromptProps) {
+  const { t } = useTranslation();
+  const rules = useAgentRules(project, folder);
+  const decline = useVaultMutation(() => api.envsAgentsDecline(project, folder), {
+    success: () => t('envs.agents.declined', { folder }),
+    onSuccess: () => void refreshFileReports(),
+  });
+  const view = rules.data;
+  const tools = view ? offered(view) : [];
+  if (!view || view.choice !== null || tools.length === 0) return null;
+  return (
+    <div
+      role="note"
+      className="flex flex-col gap-2 rounded-xl border border-violet-400/25 bg-violet-400/[0.07] px-3 py-2.5"
+    >
+      <p className="flex items-start gap-2 text-[12.5px] leading-[18px] text-fg-2">
+        <Bot aria-hidden="true" className="mt-px size-4 shrink-0 text-violet-200" strokeWidth={2} />
+        <span className="min-w-0">
+          {t('envs.agents.prompt', {
+            count: tools.length,
+            tools: tools.map((x) => AGENT_NAMES[x.tool]).join(', '),
+            folder,
+          })}
+        </span>
+      </p>
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          loading={decline.isPending}
+          onClick={() => decline.mutate(undefined)}
+        >
+          {t('envs.agents.notHere')}
+        </Button>
+        <Button size="sm" onClick={onChoose}>
+          {t('envs.agents.choose')}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+interface AgentRulesForProps {
+  project: string;
+  folder: string;
+  onDone: () => void;
+}
+
+/** The AI tools' rules dialog of a folder, once they are read. */
+function AgentRulesFor({ project, folder, onDone }: AgentRulesForProps) {
+  const { t } = useTranslation();
+  const rules = useAgentRules(project, folder);
+  if (rules.data) return <AgentRulesDialog project={project} view={rules.data} onDone={onDone} />;
+  return (
+    <DialogContent section="envs" className="max-w-[460px]">
+      <DialogHeader
+        title={t('envs.agents.title')}
+        description={rules.isError ? t('envs.agents.unreadable', { folder }) : t('common.loading')}
+      />
+      <DialogFooter>
+        <Button size="lg" onClick={onDone}>
+          {t('common.close')}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
   );
 }

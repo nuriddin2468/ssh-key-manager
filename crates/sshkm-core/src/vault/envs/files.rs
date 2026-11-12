@@ -43,6 +43,7 @@
 //! nor does a file left without a variable, which is a conflict.
 //! Values never reach errors or logs.
 
+pub mod agents;
 mod cloud;
 mod disk;
 #[cfg(test)]
@@ -1813,6 +1814,22 @@ impl Vault {
             Disk::Missing => Err(Error::NotFound(target.display.display().to_string())),
             Disk::Refused(_) | Disk::Failed(_) => Err(Error::invalid("the file can't be read")),
         }
+    }
+
+    /// The files bound in the project folder `folder` (as projects keep it),
+    /// by every environment and at either level, as paths in the folder: the
+    /// files AI tools' rules name ([`agents`]). Only bindings the app would
+    /// write.
+    pub fn env_files_in_folder(&self, folder: &str) -> Vec<String> {
+        let mut paths: Vec<String> = self
+            .bound()
+            .into_iter()
+            .filter(|bound| bound.valid && !bound.in_trash && bound.file.folder == folder)
+            .map(|bound| bound.file.path)
+            .collect();
+        paths.sort();
+        paths.dedup();
+        paths
     }
 
     /// The project (by id) that has the environment `env` and `file`'s

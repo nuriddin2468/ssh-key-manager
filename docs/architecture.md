@@ -173,6 +173,12 @@ translates.
     `--sshkm-env-guard`, which sweeps the list when the pipe from the app closes; the
     next start sweeps it too. Level-2 files get the Time Machine, Dropbox and File
     Provider exclusion attributes on their temporary file, before it holds anything.
+  - AI tools' ignore rules (`files/agents.rs`, `commands/env_agents.rs`): with the
+    user's yes for a project folder, each chosen tool's ignore file there
+    (`.cursorignore`, `.aiderignore`…, Claude Code's `permissions.deny` in
+    `.claude/settings.local.json`, keys kept in order) gets a line per managed file;
+    the choice is kept per folder in `agent-rules.json` and followed for files bound
+    there later.
 - **Terminal.** `src-tauri/src/terminal/`: one pseudo-terminal per session (`portable-pty`,
   ConPTY on Windows) running `ssh -o ConnectTimeout=10 -- <alias>`, or the user's own
   shell with a secret environment's variables in its environment (`local.rs`).

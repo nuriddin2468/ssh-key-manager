@@ -13,8 +13,13 @@
 // that failure. A few `.env` files in the projects'
 // folders are unmanaged, to take under management. shop-api / staging, a
 // remote environment, has `.env.staging` only while the vault is unlocked.
-// Files exist only here: their variables are kept with each binding.
+// Files exist only here: their variables are kept with each binding. AI
+// tools' ignore files: Claude Code and Cursor are "on this computer", and
+// shop-api's `.cursorignore` has its `.env` line already.
 
+import type { AgentRules } from '@/bindings/AgentRules';
+import type { AgentRulesView } from '@/bindings/AgentRulesView';
+import type { AgentTool } from '@/bindings/AgentTool';
 import type { CloudService } from '@/bindings/CloudService';
 import type { EnvDetail } from '@/bindings/EnvDetail';
 import type { EnvFile } from '@/bindings/EnvFile';
@@ -31,6 +36,7 @@ import type { EnvUndo } from '@/bindings/EnvUndo';
 import type { ExampleCheck } from '@/bindings/ExampleCheck';
 import type { FileLevel } from '@/bindings/FileLevel';
 import type { FileState } from '@/bindings/FileState';
+import type { FolderChoice } from '@/bindings/FolderChoice';
 import type { GitInfo } from '@/bindings/GitInfo';
 import type { ImportChoice } from '@/bindings/ImportChoice';
 import type { ImportTarget } from '@/bindings/ImportTarget';
@@ -191,6 +197,75 @@ const UNMANAGED: { folder: string; path: string; text: string }[] = [
   },
 ];
 const adopted = new Set<string>();
+
+/** The AI tools and their ignore files, in the backend's order. */
+const AGENT_FILES: [AgentTool, string][] = [
+  ['claudeCode', '.claude/settings.local.json'],
+  ['cursor', '.cursorignore'],
+  ['windsurf', '.codeiumignore'],
+  ['aider', '.aiderignore'],
+  ['geminiCli', '.geminiignore'],
+  ['cline', '.clineignore'],
+  ['rooCode', '.rooignore'],
+  ['continue', '.continueignore'],
+  ['jetBrains', '.aiexclude'],
+];
+const AGENTS_FOUND: AgentTool[] = ['claudeCode', 'cursor'];
+/** Lines the ignore files have, by folder and tool. */
+const agentLines = new Map<string, Set<string>>([['~/code/shop-api\ncursor', new Set(['/.env'])]]);
+const agentChoices = new Map<string, FolderChoice>();
+
+const agentLine = (tool: AgentTool, path: string) =>
+  tool === 'claudeCode' ? `Read(/${path})` : `/${path}`;
+
+/** The managed files in a project folder, as the backend lists them. */
+function filesIn(folder: string): string[] {
+  const paths = mockEnvs()
+    .filter((item) => !item.inTrash)
+    .flatMap((item) => item.files)
+    .filter((file) => file.folder === folder)
+    .map((file) => file.path);
+  return [...new Set(paths)].sort();
+}
+
+function agentView(folder: string): AgentRulesView {
+  const files = filesIn(folder);
+  const tools: AgentRules[] = AGENT_FILES.map(([tool, file]) => {
+    const have = agentLines.get(`${folder}\n${tool}`);
+    return {
+      tool,
+      file,
+      exists: have !== undefined,
+      missing: files.map((path) => agentLine(tool, path)).filter((line) => !have?.has(line)),
+      found: AGENTS_FOUND.includes(tool),
+      problem: null,
+    };
+  });
+  return {
+    folder,
+    location: expand(folder),
+    files,
+    tools,
+    choice: agentChoices.get(folder) ?? null,
+  };
+}
+
+async function checkFolder(project: unknown, folder: unknown): Promise<string> {
+  const found = (await projects()).find((p) => p.id === project);
+  if (!found?.folders.includes(String(folder))) {
+    return fail('invalid_input', "the folder isn't in the project");
+  }
+  return String(folder);
+}
+
+function addAgentLines(folder: string, tools: AgentTool[]) {
+  for (const tool of tools) {
+    const key = `${folder}\n${tool}`;
+    const have = agentLines.get(key) ?? new Set<string>();
+    for (const path of filesIn(folder)) have.add(agentLine(tool, path));
+    agentLines.set(key, have);
+  }
+}
 
 async function projects(): Promise<Project[]> {
   return (await projectsHandlers.projects_list?.({})) as Project[];
@@ -387,6 +462,24 @@ async function reports(project: unknown, all: Project[]): Promise<EnvFileReport[
 }
 
 export const envFilesHandlers: Record<string, Handler> = {
+  envs_agents_rules: async ({ project, folder }): Promise<AgentRulesView> => {
+    await requireUnlocked();
+    return agentView(await checkFolder(project, folder));
+  },
+  envs_agents_add: async ({ project, folder, tools }): Promise<AgentRulesView> => {
+    await requireUnlocked();
+    const checked = await checkFolder(project, folder);
+    const chosen = [...new Set(tools as AgentTool[])].sort();
+    addAgentLines(checked, chosen);
+    agentChoices.set(checked, { type: 'added', tools: chosen });
+    return agentView(checked);
+  },
+  envs_agents_decline: async ({ project, folder }): Promise<AgentRulesView> => {
+    await requireUnlocked();
+    const checked = await checkFolder(project, folder);
+    agentChoices.set(checked, { type: 'declined' });
+    return agentView(checked);
+  },
   envs_files_check: async ({ id, file, level }): Promise<EnvFileCheck> => {
     await requireUnlocked();
     seed();
@@ -453,6 +546,9 @@ export const envFilesHandlers: Record<string, Handler> = {
     // Its kind stays as it is now, for good.
     item.kind = kindOf(item);
     item.files.push(checked);
+    // A folder whose AI tools' rules were asked for gets the new line.
+    const choice = agentChoices.get(checked.folder);
+    if (choice?.type === 'added') addAgentLines(checked.folder, choice.tools);
     if (level === 'whileUnlocked') item.whileUnlocked.push({ ...checked });
     disk.set(key(item.id, checked), {
       vars: varsOf(item),

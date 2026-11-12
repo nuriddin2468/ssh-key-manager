@@ -13,7 +13,7 @@ import {
   folderChange,
   folderOptions,
   lastName,
-  placeOfPart,
+  placeAfterSave,
   placeText,
   startOption,
   unmanagedIn,
@@ -30,8 +30,11 @@ interface FolderFieldOptions {
   part: string;
   /** The stage as typed: a local one may take a `.env` file found in the folder. */
   stage: string;
-  /** A new environment (an edited one changes only its part's folder). */
-  creating: boolean;
+  /**
+   * The environment edited, as it is saved now; none for a new one. An
+   * edited one changes only its part's folder.
+   */
+  edited: { id: string; project: string | null; part: string } | null;
   /** Names an empty part after a folder picked for it. */
   onPartName: (part: string) => void;
 }
@@ -56,7 +59,7 @@ export function useFolderField({
   all,
   part,
   stage,
-  creating,
+  edited,
   onPartName,
 }: FolderFieldOptions): FolderField {
   const { t } = useTranslation();
@@ -65,8 +68,15 @@ export function useFolderField({
   const [picked, setPicked] = useState<ProjectFolder | null>(null);
   const [value, setValue] = useState<string | null>(null);
   const [useFile, setUseFile] = useState(true);
+  const creating = edited === null;
   const folders = project?.folders ?? [];
-  const current = placeOfPart(places.data, part);
+  const current = placeAfterSave({
+    places: places.data,
+    all,
+    edited,
+    project: project?.id ?? null,
+    part,
+  });
   const options = folderOptions({ part: current, folders, overview, picked });
   const start = startOption(current);
   // A choice the options no longer have (another part typed) goes back to the start.

@@ -7,6 +7,7 @@ import {
   fileForStage,
   folderChange,
   folderOptions,
+  placeAfterSave,
   placeOfEnv,
   placeOfPart,
   placeText,
@@ -63,6 +64,50 @@ describe('places', () => {
     expect(placeOfEnv(places, 'a-prod')?.place.path).toBe('apps/api');
     expect(placeOfEnv(places, 'other')).toBeUndefined();
     expect(placeOfPart(places, ' API ')?.part.part).toBe('api');
+  });
+
+  it('show a part renamed in an edited environment with the folder saving gives it', () => {
+    const places = [
+      place('', [part({ part: 'web', source: 'project', environments: ['w-dev'] })]),
+      place('services/api', [part({ source: 'set', environments: ['a-local'] })]),
+      place('docs', [part({ part: 'docs', source: 'set', environments: ['d-dev'] })]),
+    ];
+    const env = (id: string, partName: string, project: string | null = 'p') => ({
+      id,
+      project,
+      part: partName,
+    });
+    const edited = env('a-local', 'api');
+    const all = [edited, env('w-dev', 'web')];
+    const shown = (typed: string, more: { project?: string | null; all?: typeof all } = {}) =>
+      placeAfterSave({
+        places,
+        all: more.all ?? all,
+        edited,
+        project: more.project === undefined ? 'p' : more.project,
+        part: typed,
+      });
+    // The last of `api`: its folder goes to the new name, and to a part with none set.
+    expect(shown(' backend ')).toMatchObject({
+      place: { path: 'services/api' },
+      part: { part: 'backend', source: 'set' },
+    });
+    expect(shown('web')).toMatchObject({
+      place: { path: 'services/api' },
+      part: { part: 'web', environments: ['w-dev'], source: 'set' },
+    });
+    // A part with its own folder keeps it.
+    expect(shown('docs')?.place.path).toBe('docs');
+    // Not when a stage is left in `api` (one in the recycle bin too), nor to another project.
+    expect(shown('backend', { all: [...all, env('a-old', 'API')] })).toBeUndefined();
+    expect(shown('backend', { project: 'q' })).toBeUndefined();
+    expect(shown('web', { project: null })?.part.source).toBe('project');
+    // Its own part, by any case, is where it is.
+    expect(shown('API')?.part).toMatchObject({ part: 'api', source: 'set' });
+    // A new environment shows the part as typed.
+    expect(
+      placeAfterSave({ places, all, edited: null, project: 'p', part: 'web' })?.part.source,
+    ).toBe('project');
   });
 
   it('offer automatic, the folder set, the files’ folders and the project’s, once each', () => {

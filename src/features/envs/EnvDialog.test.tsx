@@ -282,6 +282,22 @@ describe('the folder of its part', () => {
     );
   });
 
+  it('keeps the folder of a part renamed, which saving takes along', async () => {
+    const onDone = inShop(detailOf(ALL[3] as never));
+    await screen.findByRole('radio', { name: 'services/api' });
+    type(part(), 'backend');
+    expect(screen.getByRole('radio', { name: 'services/api' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Automatic' })).not.toBeChecked();
+    click('Save changes');
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(api.envsUpdate).toHaveBeenCalledWith(
+      's1',
+      { project: 'p-shop', part: 'backend', name: 'dev', notes: '' },
+      null,
+      null,
+    );
+  });
+
   it('starts an edited stage on its part’s folder, and sends only a change', async () => {
     const onDone = inShop(detailOf(ALL[3] as never));
     const set = await screen.findByRole('radio', { name: 'services/api' });

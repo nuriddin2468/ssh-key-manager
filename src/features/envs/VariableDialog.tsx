@@ -152,9 +152,11 @@ export function VariableDialog({ env, variable, onDone }: VariableDialogProps) {
               className="field min-h-[60px] resize-y rounded-[10px] px-[11px] py-2 font-mono text-[12.5px] text-fg outline-none focus:border-[rgb(var(--accent-rgb)/0.55)] focus:shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.15)]"
             />
             <p id={`${valueId}-hint`} className="text-[12px] text-subtle">
-              {variable && value === null
-                ? t('envs.varForm.keepHint')
-                : t('envs.varForm.valueHint')}
+              {variable?.shared
+                ? t('envs.shared.editHint')
+                : variable && value === null
+                  ? t('envs.varForm.keepHint')
+                  : t('envs.varForm.valueHint')}
             </p>
           </div>
           <SwitchGroup>

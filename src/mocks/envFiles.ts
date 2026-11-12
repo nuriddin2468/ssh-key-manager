@@ -369,7 +369,7 @@ function takeFile(item: Env, file: EnvFile, vars: Record<string, string>): EnvFi
     added,
     changed,
     removed,
-    undo: { envId: item.id, before: `rev-before-${after}`, after },
+    undo: { envId: item.id, before: `rev-before-${after}`, after, shared: [] },
   };
 }
 

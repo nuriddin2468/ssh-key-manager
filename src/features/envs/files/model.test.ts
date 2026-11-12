@@ -105,7 +105,7 @@ describe('managed files model', () => {
       added: ['A', 'B', 'C', 'D', 'E'],
       changed: ['PORT'],
       removed: [],
-      undo: { envId: 'env-1', before: 'x', after: 'y' },
+      undo: { envId: 'env-1', before: 'x', after: 'y', shared: [] },
     };
     expect(changeSummary(t, change)).toBe(
       'envs.files.savedChanged {"names":"PORT"} · envs.files.savedAdded {"names":"A, B, C, D, …"}',

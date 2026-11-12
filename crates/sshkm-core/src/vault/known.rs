@@ -4,7 +4,7 @@ use keepass::db::fields;
 use secrecy::{ExposeSecret, SecretString};
 
 use super::Vault;
-use super::envs::{is_environment, variables_of};
+use super::envs::{is_environment, is_shared};
 use crate::leaks::{KnownSecret, LeakSecret};
 
 impl Vault {
@@ -21,7 +21,14 @@ impl Vault {
                 if env.in_trash {
                     continue;
                 }
-                for var in variables_of(&entry) {
+                // Shared values resolved, one by one: found as the
+                // variables that use them, not as entries of their own; one
+                // that can't be resolved is left out alone.
+                let vars = super::envs::variables_of(&entry)
+                    .into_iter()
+                    .filter_map(|var| self.resolve(vec![var]).ok())
+                    .flatten();
+                for var in vars {
                     if !var.secret || var.value.expose_secret().is_empty() {
                         continue;
                     }
@@ -35,6 +42,9 @@ impl Vault {
                         value: var.value,
                     });
                 }
+                continue;
+            }
+            if is_shared(&entry) {
                 continue;
             }
             let summary = self.summary(&entry);
@@ -61,7 +71,7 @@ impl Vault {
     pub fn known_secret(&self, key: &str) -> Option<KnownSecret> {
         if let Some(id) = key.strip_prefix("entry:") {
             let entry = self.find(id).ok()?;
-            if is_environment(&entry) {
+            if is_environment(&entry) || is_shared(&entry) {
                 return None;
             }
             let summary = self.summary(&entry);

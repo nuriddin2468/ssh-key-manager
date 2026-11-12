@@ -321,6 +321,20 @@ pub struct EnvUndo {
     pub env_id: String,
     pub before: String,
     pub after: String,
+    /// The shared values the edit changed, which go back too.
+    #[serde(default)]
+    pub shared: Vec<SharedUndo>,
+}
+
+/// A shared value an edit of a file changed: its value before and after,
+/// as keyed hashes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+pub struct SharedUndo {
+    pub id: String,
+    pub before: String,
+    pub after: String,
 }
 
 /// Which side a conflict keeps.
@@ -753,6 +767,11 @@ fn revision(key: &[u8; 32], vars: &[(&str, &str)]) -> String {
     Base64::encode_string(&mac.finalize().into_bytes())
 }
 
+/// A keyed hash of one value, as a shared value's revision.
+fn value_revision(key: &[u8; 32], value: &str) -> String {
+    revision(key, &[("", value)])
+}
+
 /// A key no revision was made with: without a key yet, nothing was ever
 /// in step, and comparing with this one finds no agreement.
 fn made_up_key() -> Zeroizing<[u8; 32]> {
@@ -822,7 +841,8 @@ fn blocking(text: &str, parsed: &ParsedEnv, vault: &[EnvVariable]) -> Option<Vec
             ProblemKind::Unterminated
             | ProblemKind::TrailingText
             | ProblemKind::TooLong
-            | ProblemKind::TooMany => true,
+            | ProblemKind::TooMany
+            | ProblemKind::Reference => true,
             ProblemKind::NoEquals | ProblemKind::BadName => names_a_gone_one(problem.line),
             ProblemKind::Replaced => false,
         })
@@ -1242,7 +1262,10 @@ impl Vault {
                 continue;
             };
             let parsed = dotenv::parse(&text);
-            let vault = self.env_variables(&bound.env_id)?;
+            // A shared value that can't be resolved: the file waits.
+            let Ok(vault) = self.env_variables(&bound.env_id) else {
+                continue;
+            };
             if blocking(&text, &parsed, &vault).is_some() {
                 continue;
             }
@@ -1265,10 +1288,7 @@ impl Vault {
             }
             let remembered = self.remembered_variables(&bound.env_id);
             let (after, edit) = take_file(&vault, &parsed, &remembered);
-            self.edit_variables(&bound.env_id, |vars| {
-                *vars = after;
-                Ok(())
-            })?;
+            let shared = self.take_resolved(&key, &bound.env_id, after)?;
             let after_rev = revision(&key, &pairs(&self.env_variables(&bound.env_id)?));
             let agreed = Agreement {
                 rev: after_rev.clone(),
@@ -1288,6 +1308,7 @@ impl Vault {
                     env_id: bound.env_id.clone(),
                     before: vault_rev,
                     after: after_rev,
+                    shared,
                 },
             });
             pulled.vault_changed = true;
@@ -1400,18 +1421,45 @@ impl Vault {
         let key = self
             .revision_key()
             .ok_or_else(|| Error::NotFound("nothing to undo".into()))?;
+        let changed_since = || Error::Conflict("the environment changed again since".into());
+        if revision(&key, &pairs(&self.env_variables(&undo.env_id)?)) != undo.after {
+            return Err(changed_since());
+        }
+        // The shared values it changed go back first, all checked before.
+        let mut shared = Vec::new();
+        for change in &undo.shared {
+            let id = uuid::Uuid::parse_str(&change.id)
+                .map_err(|_| Error::invalid("not a shared value"))?;
+            let now = self
+                .shared_value(id)
+                .ok_or_else(|| Error::NotFound("the shared value".into()))?;
+            if value_revision(&key, &now) != change.after {
+                return Err(changed_since());
+            }
+            let earlier = self
+                .shared_history(id)
+                .into_iter()
+                .find(|value| value_revision(&key, value) == change.before)
+                .ok_or_else(|| {
+                    Error::NotFound("the earlier value isn't in the shared value's history".into())
+                })?;
+            shared.push((id, earlier));
+        }
+        for (id, earlier) in shared {
+            self.set_shared_value(id, &earlier)?;
+        }
+        if revision(&key, &pairs(&self.env_variables(&undo.env_id)?)) == undo.before {
+            return Ok(());
+        }
         let previous = {
             let entry = self.env_entry(&undo.env_id)?;
-            let now = revision(&key, &pairs(&variables_of(&entry)));
-            if now != undo.after {
-                return Err(Error::Conflict(
-                    "the environment changed again since".into(),
-                ));
-            }
             history_newest_first(&entry)
                 .into_iter()
                 .map(variables_of)
-                .find(|vars| revision(&key, &pairs(vars)) == undo.before)
+                .find(|vars| {
+                    let resolved = self.resolve(vars.iter().map(EnvVariable::duplicate).collect());
+                    resolved.is_ok_and(|vars| revision(&key, &pairs(&vars)) == undo.before)
+                })
                 .ok_or_else(|| {
                     Error::NotFound("the earlier version isn't in the entry's history".into())
                 })?
@@ -1420,6 +1468,47 @@ impl Vault {
             *vars = previous;
             Ok(())
         })
+    }
+
+    /// Writes `after`, the variables of the environment `id` with their
+    /// values as they are to be: a shared variable's value goes to its
+    /// shared value, for every environment that uses it, and the variable
+    /// keeps its reference. Returns the shared values it changed, for Undo.
+    fn take_resolved(
+        &mut self,
+        key: &[u8; 32],
+        id: &str,
+        after: Vec<EnvVariable>,
+    ) -> Result<Vec<SharedUndo>> {
+        let raw = self.raw_env_variables(id)?;
+        let mut changed = Vec::new();
+        let mut out = Vec::with_capacity(after.len());
+        for mut var in after {
+            let linked = raw
+                .iter()
+                .find(|old| old.name == var.name)
+                .and_then(|old| Some((old, self.shared_of(old.value.expose_secret())?)));
+            if let Some((old, shared)) = linked {
+                let value = var.value.expose_secret();
+                let before = self.shared_value(shared).unwrap_or_default();
+                // A reference written into the file isn't a value.
+                if before != value && super::shared::referenced(value).is_none() {
+                    self.set_shared_value(shared, value)?;
+                    changed.push(SharedUndo {
+                        id: shared.to_string(),
+                        before: value_revision(key, &before),
+                        after: value_revision(key, value),
+                    });
+                }
+                var.value = SecretString::from(old.value.expose_secret());
+            }
+            out.push(var);
+        }
+        self.edit_variables(id, |vars| {
+            *vars = out;
+            Ok(())
+        })?;
+        Ok(changed)
     }
 
     /// Compares the vault's variables of an environment (left) with those

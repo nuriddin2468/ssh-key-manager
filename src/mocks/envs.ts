@@ -3,7 +3,9 @@
 // read), exports (a `.env` lands in a Git working tree, to show the
 // warning) and a local shell that knows the variables. Values never leave
 // this file except through reveal and copy, as with the real backend.
-// The files environments are written to live in envFiles.ts.
+// The files environments are written to live in envFiles.ts. shop-api's
+// local and dev share STRIPE_SECRET_KEY: a shared value keeps its value
+// here, and each variable that uses it a copy, changed with it.
 
 import type { CopyResult } from '@/bindings/CopyResult';
 import type { EnvComparison } from '@/bindings/EnvComparison';
@@ -22,6 +24,7 @@ import type { ImportTarget } from '@/bindings/ImportTarget';
 import type { ItemSummary } from '@/bindings/ItemSummary';
 import type { ParseProblem } from '@/bindings/ParseProblem';
 import type { PartRename } from '@/bindings/PartRename';
+import type { SharedValue } from '@/bindings/SharedValue';
 import type { TerminalEvent } from '@/bindings/TerminalEvent';
 import type { VaultStatus } from '@/bindings/VaultStatus';
 import { isVariableName, looksSecretName } from '@/features/envs/model';
@@ -35,7 +38,15 @@ export interface Variable {
   value: string;
   secret: boolean;
   note: string;
+  /** The shared value it uses, by id. */
+  shared?: string;
 }
+
+/** Shared values by id: the name they were shared under, and whether in the recycle bin. */
+const sharedValues = new Map<string, { name: string; inTrash: boolean }>([
+  ['shared-0', { name: 'STRIPE_SECRET_KEY', inTrash: false }],
+]);
+let nextShared = 0;
 
 export interface Env {
   id: string;
@@ -89,6 +100,7 @@ const envs: Env[] = [
     v('NODE_ENV', 'development'),
     v('PORT', '3000'),
     v('DATABASE_URL', 'postgres://shop:local-pass@localhost:5432/shop', true),
+    { ...v('STRIPE_SECRET_KEY', 'sk_test_51Hx0dev', true), shared: 'shared-0' },
   ]),
   env(
     'shop-api',
@@ -98,7 +110,7 @@ const envs: Env[] = [
       v('PORT', '3000', false, 'API server'),
       v('DATABASE_URL', 'postgres://shop:dev-pass@localhost:5432/shop', true),
       v('REDIS_URL', 'redis://localhost:6379/0'),
-      v('STRIPE_SECRET_KEY', 'sk_test_51Hx0dev', true),
+      { ...v('STRIPE_SECRET_KEY', 'sk_test_51Hx0dev', true), shared: 'shared-0' },
       v('LOG_LEVEL', 'debug'),
       v('FEATURE_FLAGS', 'checkout-v2,search'),
     ],
@@ -288,11 +300,13 @@ function detail(item: Env): EnvDetail {
   return {
     ...summary(item),
     notes: item.notes,
-    variables: item.vars.map(({ name, secret, note, value }) => ({
+    variables: item.vars.map(({ name, secret, note, value, shared }) => ({
       name,
       secret,
       note,
       empty: value === '',
+      shared: shared ?? null,
+      unresolved: false,
     })),
     files: item.files.map((file) => ({ ...file })),
     whileUnlocked: item.whileUnlocked.map((file) => ({ ...file })),
@@ -525,10 +539,71 @@ export const envsHandlers: Record<string, Handler> = {
     const index = item.vars.findIndex((x) => x.name === previous);
     const value = change.value ?? item.vars[index]?.value ?? '';
     const next = v(change.name, value, change.secret, change.note);
+    const shared = item.vars[index]?.shared;
+    if (shared) {
+      // A shared value changes for every environment that uses it.
+      next.shared = shared;
+      for (const other of envs) {
+        for (const x of other.vars) if (x.shared === shared) x.value = value;
+      }
+    }
     if (index === -1) item.vars.push(next);
     else item.vars[index] = next;
     touch(item);
     return detail(item);
+  },
+  envs_shared_list: async (): Promise<SharedValue[]> => {
+    await requireUnlocked();
+    return [...sharedValues].map(([id, value]) => ({
+      id,
+      name: value.name,
+      empty: false,
+      inTrash: value.inTrash,
+      users: envs.flatMap((item) =>
+        item.vars
+          .filter((x) => x.shared === id)
+          .map((x) => ({ envId: item.id, variable: x.name, inTrash: item.inTrash })),
+      ),
+    }));
+  },
+  envs_share_var: async ({ id, name, others }): Promise<EnvDetail> => {
+    await requireUnlocked();
+    const item = find(id);
+    const source = item?.vars.find((x) => x.name === name);
+    if (!item || !source) return fail('not_found', `variable ${name}`);
+    if (!source.shared) {
+      nextShared += 1;
+      source.shared = `shared-${nextShared}`;
+      sharedValues.set(source.shared, { name: String(name), inTrash: false });
+    }
+    for (const otherId of others as string[]) {
+      const other = find(otherId);
+      if (!other || other.id === item.id) continue;
+      const known = other.vars.find((x) => x.name === name);
+      if (known)
+        Object.assign(known, { value: source.value, secret: source.secret, shared: source.shared });
+      else
+        other.vars.push({ ...v(String(name), source.value, source.secret), shared: source.shared });
+      touch(other);
+    }
+    touch(item);
+    return detail(item);
+  },
+  envs_unshare_var: async ({ id, name }): Promise<EnvDetail> => {
+    await requireUnlocked();
+    const item = find(id);
+    const variable = item?.vars.find((x) => x.name === name);
+    if (!item || !variable) return fail('not_found', `variable ${name}`);
+    delete variable.shared;
+    touch(item);
+    return detail(item);
+  },
+  envs_shared_delete: async ({ id }) => {
+    await requireUnlocked();
+    const value = sharedValues.get(String(id));
+    if (!value) return fail('not_found', `shared value ${id}`);
+    for (const item of envs) for (const x of item.vars) if (x.shared === id) delete x.shared;
+    value.inTrash = true;
   },
   envs_set_kind: async ({ id, kind }): Promise<EnvDetail> => {
     await requireUnlocked();

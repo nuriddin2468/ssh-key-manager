@@ -99,6 +99,7 @@ import type { SecretPreset } from '@/bindings/SecretPreset';
 import type { SendRequest } from '@/bindings/SendRequest';
 import type { ServerKeys } from '@/bindings/ServerKeys';
 import type { ServerKeysAction } from '@/bindings/ServerKeysAction';
+import type { SharedValue } from '@/bindings/SharedValue';
 import type { ShellInfo } from '@/bindings/ShellInfo';
 import type { SshPing } from '@/bindings/SshPing';
 import type { Strength } from '@/bindings/Strength';
@@ -497,6 +498,15 @@ export const api = {
   envsSetVar: (id: string, previous: string | null, input: EnvVarInput) =>
     call<EnvDetail>('envs_set_var', { id, previous, input }),
   envsRemoveVar: (id: string, name: string) => call<EnvDetail>('envs_remove_var', { id, name }),
+  /** Every shared value, with the variables that use it; no values. */
+  envsSharedList: () => call<SharedValue[]>('envs_shared_list'),
+  /** Shares a variable with other environments, which use one value from then on. */
+  envsShareVar: (id: string, name: string, others: string[]) =>
+    call<EnvDetail>('envs_share_var', { id, name, others }),
+  /** Gives a shared variable of one environment a value of its own. */
+  envsUnshareVar: (id: string, name: string) => call<EnvDetail>('envs_unshare_var', { id, name }),
+  /** Moves a shared value to the recycle bin, each user given a copy first. */
+  envsSharedDelete: (id: string) => call<void>('envs_shared_delete', { id }),
   envsReveal: (id: string, name: string) => call<string>('envs_reveal', { id, name }),
   envsCopy: (id: string, name: string) => call<CopyResult>('envs_copy', { id, name }),
   envsTrash: (id: string) => call<void>('envs_trash', { id }),

@@ -7,4 +7,13 @@ export type EnvVarInfo = { name: string, secret: boolean, note: string,
 /**
  * The value is empty.
  */
-empty: boolean, };
+empty: boolean, 
+/**
+ * The shared value it uses, by id.
+ */
+shared: string | null, 
+/**
+ * It refers to a value the vault doesn't have (deleted elsewhere):
+ * its environment's files wait until it gets one.
+ */
+unresolved: boolean, };

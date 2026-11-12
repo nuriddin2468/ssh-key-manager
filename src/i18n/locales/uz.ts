@@ -3709,6 +3709,8 @@ const uz = {
         replaced: '{{line}}-qator: {{name}} pastda yana berilgan, oʻsha qiymat amal qiladi.',
         tooMany:
           '{{line}}-qator va undan keyingilari: muhitda koʻpi bilan 1000 ta oʻzgaruvchi boʻladi.',
+        reference:
+          '{{line}}-qator: {{name}} ombor yozuviga havola qiladi, buni faqat omborning oʻzi belgilaydi.',
       },
     },
     export: {
@@ -3979,6 +3981,30 @@ const uz = {
       show: 'Koʻrsatish',
       written_one: '{{count}} ta fayl yozildi',
       written_other: '{{count}} ta fayl yozildi',
+    },
+    shared: {
+      title: '{{name}} qiymatini boshqa muhitlar bilan ulashish',
+      description:
+        'Bundan keyin ularda bitta qiymat boʻladi: uni bir marta — istalganida yoki uning faylida — oʻzgartirsangiz, hamma joyda oʻzgaradi.',
+      descriptionShared_one:
+        '{{count}} ta muhitda ishlatiladi. Uni bir marta oʻzgartirsangiz, ularning har birida va fayllarida oʻzgaradi.',
+      descriptionShared_other:
+        '{{count}} ta muhitda ishlatiladi. Uni bir marta oʻzgartirsangiz, ularning har birida va fayllarida oʻzgaradi.',
+      listLabel: 'Muhitlar',
+      noOthers: 'Ulashish uchun boshqa muhit yoʻq.',
+      uses: 'Allaqachon ishlatadi',
+      replaceNote:
+        '{{name}} bor muhit oʻz qiymati oʻrniga umumiy qiymatni ishlatadi; avvalgi qiymati uning tarixida qoladi.',
+      own: 'Bu yerda oʻz qiymati',
+      share: 'Ulashish',
+      done_one: '{{name}} yana {{count}} ta muhit bilan ulashildi',
+      done_other: '{{name}} yana {{count}} ta muhit bilan ulashildi',
+      ownDone: 'Endi {{name}} bu yerda oʻz qiymatiga ega',
+      badge_one: 'Umumiy qiymat, {{count}} ta muhitda ishlatiladi',
+      badge_other: 'Umumiy qiymat, {{count}} ta muhitda ishlatiladi',
+      gone: 'U bu yerda ishlatib boʻlmaydigan ombor yozuviga havola qiladi (oʻchirilgan yoki umumiy qiymat emas): oʻz qiymatini bering, shunda fayllari yana yoziladi',
+      shareLabel: '{{name}} qiymatini boshqa muhitlar bilan ulashish',
+      editHint: 'Umumiy qiymat: uni oʻzgartirish uni ishlatadigan barcha muhitlarda oʻzgartiradi.',
     },
     agents: {
       title: '.env fayllarni AI vositalaridan yashirish',

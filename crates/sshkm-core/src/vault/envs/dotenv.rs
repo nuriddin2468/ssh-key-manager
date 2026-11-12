@@ -70,6 +70,10 @@ pub enum ProblemKind {
     Replaced,
     /// More variables than an environment may hold; the rest were left out.
     TooMany,
+    /// The value is a reference to a vault entry (`{REF:P@I:…}`), which only
+    /// the vault sets: left out, so a file can't make a variable use another
+    /// entry's password.
+    Reference,
 }
 
 /// What a file holds.
@@ -112,15 +116,29 @@ pub fn parse(text: &str) -> ParsedEnv {
     );
     parsed.problems.sort_by_key(|problem| problem.line);
     let mut assignments: Vec<Option<Assignment>> = scan.assignments.into_iter().map(Some).collect();
+    let mut references = Vec::new();
     parsed.vars = effective
         .into_iter()
         .filter_map(|index| assignments[index].take())
+        .filter(|assignment| {
+            let reference = super::shared::referenced(&assignment.value).is_some();
+            if reference {
+                references.push(ParseProblem {
+                    line: assignment.line,
+                    kind: ProblemKind::Reference,
+                    name: Some(assignment.name.clone()),
+                });
+            }
+            !reference
+        })
         .map(|assignment| ParsedVar {
             name: assignment.name,
             value: assignment.value,
             line: assignment.line,
         })
         .collect();
+    parsed.problems.extend(references);
+    parsed.problems.sort_by_key(|problem| problem.line);
     parsed
 }
 

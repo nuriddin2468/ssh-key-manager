@@ -17,7 +17,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use sshkm_core::vault::envs::{
     self, EnvComparison, EnvDetail, EnvFormat, EnvImportPreview, EnvInput, EnvSummary, EnvVarInput,
-    ImportChoice, ImportCounts, PartRename,
+    ImportChoice, ImportCounts, PartRename, SharedValue,
 };
 use sshkm_core::{ExposeSecret, SecretString};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -206,6 +206,75 @@ pub async fn envs_remove_var(
         state.vault.change(&app, &state.backup_dir, |vault| {
             vault.remove_env_variable(&id, &name)?;
             Ok(vault.environment(&id)?)
+        })
+    })
+    .await
+}
+
+/// Every shared value, with the variables that use it; no values.
+#[tauri::command]
+pub async fn envs_shared_list(
+    app: AppHandle,
+    state: State<'_, Shared>,
+) -> AppResult<Vec<SharedValue>> {
+    blocking(&state, move |state| {
+        state
+            .vault
+            .with_quietly(&app, |vault| Ok(vault.shared_values()))
+    })
+    .await
+}
+
+/// Shares the variable `name` of the environment `id` with the
+/// environments `others`, which use it under the same name from then on:
+/// added where they lack it, their value replaced where they have it.
+#[tauri::command]
+pub async fn envs_share_var(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    id: String,
+    name: String,
+    others: Vec<String>,
+) -> AppResult<EnvDetail> {
+    blocking(&state, move |state| {
+        state.vault.change(&app, &state.backup_dir, |vault| {
+            vault.share_env_variable(&id, &name, &others)?;
+            Ok(vault.environment(&id)?)
+        })
+    })
+    .await
+}
+
+/// Gives a shared variable of an environment a value of its own, the
+/// shared value as it is now.
+#[tauri::command]
+pub async fn envs_unshare_var(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    id: String,
+    name: String,
+) -> AppResult<EnvDetail> {
+    blocking(&state, move |state| {
+        state.vault.change(&app, &state.backup_dir, |vault| {
+            vault.unshare_env_variable(&id, &name)?;
+            Ok(vault.environment(&id)?)
+        })
+    })
+    .await
+}
+
+/// Moves a shared value to the recycle bin, each variable that used it
+/// given a value of its own first.
+#[tauri::command]
+pub async fn envs_shared_delete(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    id: String,
+) -> AppResult<()> {
+    blocking(&state, move |state| {
+        state.vault.change(&app, &state.backup_dir, |vault| {
+            vault.delete_shared_value(&id)?;
+            Ok(())
         })
     })
     .await

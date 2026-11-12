@@ -225,7 +225,11 @@ impl Vault {
         let mut query = BreachQuery::new(cache);
         for entry in self.db.iter_all_entries() {
             let password = entry.get(fields::PASSWORD).unwrap_or_default();
-            if password.is_empty() || !entry.quality_check || self.summary(&entry).in_trash {
+            if password.is_empty()
+                || !entry.quality_check
+                || self.summary(&entry).in_trash
+                || super::envs::is_shared(&entry)
+            {
                 continue;
             }
             let fresh = cache

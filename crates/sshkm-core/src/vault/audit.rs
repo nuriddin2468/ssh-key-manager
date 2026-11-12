@@ -173,7 +173,8 @@ impl Vault {
             .iter_all_entries()
             .filter_map(|entry| {
                 let summary = self.summary(&entry);
-                if summary.in_trash {
+                // A shared value is an environment's value, not a password.
+                if summary.in_trash || super::envs::is_shared(&entry) {
                     return None;
                 }
                 let history = entry.history.as_ref().map(|h| h.get_entries().as_slice());

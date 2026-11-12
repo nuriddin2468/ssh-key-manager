@@ -153,10 +153,27 @@ problems on All projects, and the review's leftovers:
    rotation as the advice, Show file, and Redact in place for AI session files. No
    pre-commit check while there is no CLI. Cursor's chats (SQLite) aren't read yet.
    `crates/sshkm-core/src/leaks`, `src-tauri/src/commands/leaks.rs`.
-2. **Level 2** (file only while unlocked), exclusion from backups where the system allows
-   it (Time Machine, Dropbox), agents' ignore rules added with consent, and **shared
-   secrets**: one value used by several environments, so changing a key once updates
-   every file.
+2. **Level 2, backups, agents' ignore rules, shared secrets — done.**
+   - Level 2, a file only while the vault is unlocked, chosen per file; the only kind a
+     remote environment can have. Written on unlock; before every lock and on quit, one
+     last round takes its edits to the vault and it is removed; a guard process (the
+     app's own program) and the next start remove what a crash or a forced quit leaves,
+     only if it is as the app wrote it. One the vault couldn't take stays until the next
+     unlock, and the app says so. Kept out of Time Machine, Dropbox and the File
+     Provider folders (iCloud Drive, OneDrive on macOS); level-1 files are left as they
+     were. Older versions never see these files. Not yet: removing them _before_ the
+     computer sleeps (they go when the vault locks right after it wakes):
+     [#48](https://github.com/nuriddin2468/ssh-key-manager/pull/48).
+   - AI tools' ignore rules, per project folder with the user's yes, once: a line per
+     managed file where each tool reads them (`.cursorignore` and the like in the
+     folder, `.aiderignore` at the top of the working tree, Claude Code's deny rules by
+     full path in `~/.claude/settings.json`), followed for files added later:
+     [#49](https://github.com/nuriddin2468/ssh-key-manager/pull/49).
+   - Shared values: one value several environments of any project use, a KeePass entry
+     of its own that their variables refer to (`{REF:P@I:…}`), so changing it once — in
+     the app or in any of their files — changes every file, with Undo. The value lives
+     in one entry, so syncing converges; references are resolved wherever values leave
+     the vault: [#50](https://github.com/nuriddin2468/ssh-key-manager/pull/50).
 3. **Level 3**, the virtual `.env` on macOS and Linux: the app always in the tray; at once
    a placeholder when the vault is locked, never a hang; pipes removed on quit; one full
    answer per open; a list of tools it was checked with.

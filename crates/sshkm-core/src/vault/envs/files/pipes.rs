@@ -41,12 +41,7 @@ use crate::{Error, Result, fsutil};
 
 /// How long an answer waits for its reader to take it.
 pub const SERVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-/// How long the pipe rests after an answer, so the reader that took it can
-/// close it first: opened again while that reader still has it open, the
-/// pipe would give it a second answer after the first. (Whole, and the
-/// same, so every parser still reads the same values; a reader slower than
-/// this may still get one.)
-const REST: std::time::Duration = std::time::Duration::from_millis(25);
+
 /// Most pipes a list keeps.
 const MAX_PIPES: usize = 4096;
 
@@ -336,6 +331,13 @@ mod imp {
 
     use super::{Answer, PipeId, SERVE_TIMEOUT};
     use crate::{Error, Result};
+
+    /// How long the pipe rests after an answer, so the reader that took it
+    /// can close it first: opened again while that reader still has it
+    /// open, the pipe would give it a second answer after the first.
+    /// (Whole, and the same, so every parser still reads the same values; a
+    /// reader slower than this may still get one.)
+    const REST: Duration = Duration::from_millis(25);
 
     pub(super) fn mkfifo(path: &Path) -> Result<()> {
         use std::os::unix::ffi::OsStrExt;
@@ -643,7 +645,7 @@ mod imp {
             match served {
                 Served::Answered => {
                     pause = Duration::ZERO;
-                    std::thread::sleep(super::REST);
+                    std::thread::sleep(REST);
                 }
                 Served::Pending => {
                     pause = (pause * 2).clamp(Duration::from_millis(50), Duration::from_secs(1));

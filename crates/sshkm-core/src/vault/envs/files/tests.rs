@@ -173,6 +173,7 @@ impl Fixture {
             .collect()
     }
 
+    #[cfg(unix)]
     /// Serves the pipes of a round, as the app does: those it answers
     /// count as its own from then on, and the others it served go.
     fn serve(&mut self, synced: &EnvFilesSynced) {
@@ -181,6 +182,7 @@ impl Fixture {
         self.ctx.pipes.extend(now);
     }
 
+    #[cfg(unix)]
     /// Stops serving every pipe, as the app does before a level changes.
     fn stop_serving(&mut self, synced: &EnvFilesSynced) {
         for served in &synced.virtual_files {
@@ -189,6 +191,7 @@ impl Fixture {
         self.ctx.pipes.clear();
     }
 
+    #[cfg(unix)]
     /// Saves `text` over the file at `path`, by renaming, as editors do.
     fn save_over(&self, path: &str, text: &str) {
         let temp = self.path(&format!("{path}.saving"));

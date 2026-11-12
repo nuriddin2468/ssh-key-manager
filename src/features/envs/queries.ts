@@ -21,3 +21,13 @@ export function useEnv(id: string | undefined) {
     enabled: unlocked && Boolean(id),
   });
 }
+
+/** Every shared value and the variables that use it; refreshed with the environments. */
+export function useSharedValues() {
+  const unlocked = useVaultStatus().data?.state === 'unlocked';
+  return useQuery({
+    queryKey: ['vault', 'envs', 'shared'] as const,
+    queryFn: api.envsSharedList,
+    enabled: unlocked,
+  });
+}

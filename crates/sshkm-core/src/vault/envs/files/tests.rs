@@ -1710,3 +1710,221 @@ fn a_folders_files_are_listed_for_ai_tools_rules() {
     f.vault.trash_environment(&env).unwrap();
     assert_eq!(f.vault.env_files_in_folder(&folder), Vec::<String>::new());
 }
+
+impl Fixture {
+    /// Another environment in the project, `name`, with the variables
+    /// `vars`.
+    fn other_env(&mut self, name: &str, vars: &[(&str, &str, bool)]) -> String {
+        let id = self
+            .vault
+            .add_environment(&EnvInput {
+                project: Some(self.project.clone()),
+                part: String::new(),
+                name: name.into(),
+                notes: String::new(),
+            })
+            .unwrap();
+        for (var, value, secret) in vars {
+            self.vault
+                .set_env_variable(
+                    &id,
+                    None,
+                    &EnvVarInput {
+                        name: (*var).into(),
+                        value: Some(s(value)),
+                        secret: *secret,
+                        note: String::new(),
+                    },
+                )
+                .unwrap();
+        }
+        id
+    }
+
+    fn values_of(&self, id: &str) -> Vec<(String, String, bool)> {
+        self.vault
+            .env_variables(id)
+            .unwrap()
+            .into_iter()
+            .map(|var| (var.name, var.value.expose_secret().to_owned(), var.secret))
+            .collect()
+    }
+}
+
+#[test]
+fn a_shared_value_changes_once_for_every_environment() {
+    let mut f = Fixture::new();
+    let env = f.env.clone();
+    let other = f.other_env("test", &[("PORT", "4000", false)]);
+    let shared = f
+        .vault
+        .share_env_variable(&env, "API_TOKEN", std::slice::from_ref(&other))
+        .unwrap();
+    assert_eq!(
+        f.values_of(&other),
+        owned(&[("PORT", "4000", false), ("API_TOKEN", "tok-1", true)])
+    );
+    let info = f.vault.environment(&other).unwrap();
+    let token = info
+        .variables
+        .iter()
+        .find(|var| var.name == "API_TOKEN")
+        .unwrap();
+    assert_eq!(token.shared.as_deref(), Some(shared.as_str()));
+    assert!(!token.unresolved && !token.empty);
+
+    // Changed in one environment: changed in both, once.
+    f.set("API_TOKEN", "tok-2", true);
+    assert_eq!(
+        f.vault
+            .env_value(&other, "API_TOKEN")
+            .unwrap()
+            .expose_secret(),
+        "tok-2"
+    );
+    let listed = f.vault.shared_values();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].name, "API_TOKEN");
+    assert_eq!(listed[0].users.len(), 2);
+    // The shared value isn't a login, nor a password the scanner names.
+    assert!(f.vault.entries().iter().all(|entry| entry.id != shared));
+    let secrets = f.vault.known_secrets();
+    assert!(secrets.iter().all(|known| !matches!(&known.secret,
+        crate::leaks::LeakSecret::Password { entry_id, .. } if *entry_id == shared)));
+    let found: Vec<&str> = secrets
+        .iter()
+        .filter(|known| known.value.expose_secret() == "tok-2")
+        .map(|known| match &known.secret {
+            crate::leaks::LeakSecret::Variable { env_id, .. } => env_id.as_str(),
+            crate::leaks::LeakSecret::Password { .. } => "",
+        })
+        .collect();
+    assert_eq!(found.len(), 2);
+    assert!(found.contains(&env.as_str()) && found.contains(&other.as_str()));
+
+    // An import over it changes it too.
+    f.vault
+        .import_env_variables(
+            &other,
+            &[EnvVariable {
+                name: "API_TOKEN".into(),
+                value: s("tok-3"),
+                secret: true,
+                note: String::new(),
+            }],
+        )
+        .unwrap();
+    assert_eq!(
+        f.vault
+            .env_value(&env, "API_TOKEN")
+            .unwrap()
+            .expose_secret(),
+        "tok-3"
+    );
+
+    // One environment gets its own value: the other keeps the shared one.
+    f.vault.unshare_env_variable(&other, "API_TOKEN").unwrap();
+    f.set("API_TOKEN", "tok-4", true);
+    assert_eq!(
+        f.vault
+            .env_value(&other, "API_TOKEN")
+            .unwrap()
+            .expose_secret(),
+        "tok-3"
+    );
+    assert_eq!(f.vault.shared_values()[0].users.len(), 1);
+
+    // Deleted: each that used it keeps a copy.
+    f.vault.delete_shared_value(&shared).unwrap();
+    assert_eq!(
+        f.vault
+            .env_value(&env, "API_TOKEN")
+            .unwrap()
+            .expose_secret(),
+        "tok-4"
+    );
+    let info = f.vault.environment(&env).unwrap();
+    assert!(info.variables.iter().all(|var| var.shared.is_none()));
+    assert!(f.vault.shared_values()[0].in_trash);
+}
+
+#[test]
+fn a_file_edit_of_a_shared_value_reaches_every_file_and_undoes() {
+    let mut f = Fixture::new();
+    let env = f.env.clone();
+    let other = f.other_env("local", &[("PORT", "4000", false)]);
+    f.vault
+        .share_env_variable(&env, "API_TOKEN", std::slice::from_ref(&other))
+        .unwrap();
+    f.bind(".env");
+    f.vault
+        .bind_env_file(&other, &f.file(".env.test"), &f.ctx)
+        .unwrap();
+    f.sync();
+    // The files hold values, never references.
+    assert_eq!(read(&f.path(".env")), "PORT=3000\nAPI_TOKEN=tok-1\n");
+    assert_eq!(read(&f.path(".env.test")), "PORT=4000\nAPI_TOKEN=tok-1\n");
+
+    fs::write(f.path(".env"), "PORT=3000\nAPI_TOKEN=tok-9\n").unwrap();
+    let synced = f.sync();
+    assert_eq!(synced.changes.len(), 1);
+    let change = &synced.changes[0];
+    assert_eq!(change.changed, ["API_TOKEN"]);
+    assert_eq!(change.undo.shared.len(), 1);
+    // The other environment's file follows in the same round.
+    assert_eq!(read(&f.path(".env.test")), "PORT=4000\nAPI_TOKEN=tok-9\n");
+    // The variable still uses the shared value.
+    let raw = f.vault.raw_env_variables(&env).unwrap();
+    let token = raw.iter().find(|var| var.name == "API_TOKEN").unwrap();
+    assert!(super::super::shared::referenced(token.value.expose_secret()).is_some());
+
+    let undo = change.undo.clone();
+    f.vault.undo_env_file_change(&undo).unwrap();
+    f.sync();
+    assert_eq!(read(&f.path(".env")), "PORT=3000\nAPI_TOKEN=tok-1\n");
+    assert_eq!(read(&f.path(".env.test")), "PORT=4000\nAPI_TOKEN=tok-1\n");
+    // Twice is once too many.
+    assert!(f.vault.undo_env_file_change(&undo).is_err());
+}
+
+#[test]
+fn a_shared_value_that_is_gone_holds_its_files() {
+    let mut f = Fixture::new();
+    let env = f.env.clone();
+    let other = f.other_env("test", &[]);
+    let shared = f
+        .vault
+        .share_env_variable(&env, "API_TOKEN", std::slice::from_ref(&other))
+        .unwrap();
+    f.bind(".env");
+    f.sync();
+    // Deleted for good elsewhere, without giving the environments copies.
+    f.vault.trash_entry(&shared).unwrap();
+    assert_eq!(
+        f.vault
+            .env_value(&env, "API_TOKEN")
+            .unwrap()
+            .expose_secret(),
+        "tok-1"
+    );
+    f.vault.delete_entry(&shared).unwrap();
+    let info = f.vault.environment(&env).unwrap();
+    let token = info
+        .variables
+        .iter()
+        .find(|var| var.name == "API_TOKEN")
+        .unwrap();
+    assert!(token.unresolved);
+    assert!(f.vault.env_value(&env, "API_TOKEN").is_err());
+    fs::write(f.path(".env"), "PORT=3001\nAPI_TOKEN=tok-1\n").unwrap();
+    let synced = f.sync();
+    assert_eq!(synced.changes, []);
+    assert!(matches!(synced.files[0].state, FileState::Failed { .. }));
+    // The file is as the user left it.
+    assert_eq!(read(&f.path(".env")), "PORT=3001\nAPI_TOKEN=tok-1\n");
+    // A value of its own sets it free.
+    f.set("API_TOKEN", "tok-5", true);
+    let synced = f.sync();
+    assert_ne!(synced.files[0].state, FileState::InSync);
+    let _ = other;
+}

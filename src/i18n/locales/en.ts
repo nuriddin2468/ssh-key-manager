@@ -3918,6 +3918,30 @@ const en = {
       written_one: '{{count}} file written',
       written_other: '{{count}} files written',
     },
+    shared: {
+      title: 'Share {{name}} with other environments',
+      description:
+        'They use one value from then on: change it once, in any of them or in one of their files, and it changes everywhere.',
+      descriptionShared_one:
+        'Used by {{count}} environment. Change it once, and it changes in each of them and in their files.',
+      descriptionShared_other:
+        'Used by {{count}} environments. Change it once, and it changes in each of them and in their files.',
+      listLabel: 'Environments',
+      noOthers: 'There’s no other environment to share it with.',
+      uses: 'Uses it already',
+      replaceNote:
+        'An environment that has {{name}} uses the shared value in place of its own; its earlier value stays in its history.',
+      own: 'Use its own value here',
+      share: 'Share',
+      done_one: '{{name}} is shared with {{count}} more environment',
+      done_other: '{{name}} is shared with {{count}} more environments',
+      ownDone: '{{name}} has its own value here now',
+      badge_one: 'Shared value, used by {{count}} environment',
+      badge_other: 'Shared value, used by {{count}} environments',
+      gone: 'Its shared value is gone: give it a value of its own, and its files are written again',
+      shareLabel: 'Share {{name}} with other environments',
+      editHint: 'A shared value: changing it changes it in every environment that uses it.',
+    },
     agents: {
       title: 'Keep AI tools from reading .env files',
       description:

@@ -31,7 +31,7 @@ function change(after: string): EnvFileChange {
     added: ['DEBUG'],
     changed: [],
     removed: [],
-    undo: { envId: 'env-1', before: 'rev-0', after },
+    undo: { envId: 'env-1', before: 'rev-0', after, shared: [] },
   };
 }
 
@@ -106,7 +106,12 @@ describe('announcing rounds', () => {
   it('undoes with the revisions the edit came with, and says why it can’t', async () => {
     envsFilesUndo.mockResolvedValueOnce({});
     await undoChange(t, change('rev-c'));
-    expect(envsFilesUndo).toHaveBeenCalledWith({ envId: 'env-1', before: 'rev-0', after: 'rev-c' });
+    expect(envsFilesUndo).toHaveBeenCalledWith({
+      envId: 'env-1',
+      before: 'rev-0',
+      after: 'rev-c',
+      shared: [],
+    });
     expect(toast.success).toHaveBeenCalledWith('envs.files.undone {"env":"shop-api · dev"}');
 
     envsFilesUndo.mockRejectedValueOnce({

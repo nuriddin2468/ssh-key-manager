@@ -7,6 +7,7 @@ import {
   FileDown,
   FileUp,
   FolderInput,
+  Link2,
   Lock,
   MonitorSmartphone,
   MoreHorizontal,
@@ -17,6 +18,7 @@ import {
   Server,
   SquareTerminal,
   Trash2,
+  TriangleAlert,
   Undo2,
   Variable,
 } from 'lucide-react';
@@ -67,14 +69,16 @@ import {
   showsParts,
   whereLabel,
 } from './model';
-import { useEnv } from './queries';
+import { useEnv, useSharedValues } from './queries';
 import { RenamePartDialog } from './RenamePartDialog';
 import { RestoreEnvDialog } from './RestoreEnvDialog';
+import { ShareVariableDialog } from './ShareVariableDialog';
 import { useEnvLabel, useProjectNames } from './useProjectNames';
 import { VariableDialog } from './VariableDialog';
 
 type Open =
   | { kind: 'variable'; variable: EnvVarInfo | null }
+  | { kind: 'share'; variable: EnvVarInfo }
   | { kind: 'export' }
   | { kind: 'compare' }
   | { kind: 'send' }
@@ -487,6 +491,7 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
                   variable={variable}
                   readOnly={inTrash}
                   onEdit={() => setOpen({ kind: 'variable', variable })}
+                  onShare={() => setOpen({ kind: 'share', variable })}
                   onRemove={() => setRemoving(variable)}
                 />
               ))}
@@ -498,6 +503,9 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
       <Dialog open={open !== null} onOpenChange={(next) => (next ? undefined : setOpen(null))}>
         {open?.kind === 'variable' && env ? (
           <VariableDialog env={env} variable={open.variable} onDone={() => setOpen(null)} />
+        ) : null}
+        {open?.kind === 'share' && env ? (
+          <ShareVariableDialog env={env} variable={open.variable} onDone={() => setOpen(null)} />
         ) : null}
         {open?.kind === 'export' ? (
           <ExportEnvDialog env={summary} onDone={() => setOpen(null)} />
@@ -554,11 +562,21 @@ interface VariableRowProps {
   variable: EnvVarInfo;
   readOnly: boolean;
   onEdit: () => void;
+  onShare: () => void;
   onRemove: () => void;
 }
 
-function VariableRow({ envId, modified, variable, readOnly, onEdit, onRemove }: VariableRowProps) {
+function VariableRow({
+  envId,
+  modified,
+  variable,
+  readOnly,
+  onEdit,
+  onShare,
+  onRemove,
+}: VariableRowProps) {
   const { t } = useTranslation();
+  const shared = useSharedValues().data?.find((item) => item.id === variable.shared);
   const [revealed, setRevealed] = useState<string | null>(null);
   const reveal = useSecretCall(api.envsReveal);
 
@@ -614,6 +632,23 @@ function VariableRow({ envId, modified, variable, readOnly, onEdit, onRemove }: 
             <span title={t('envs.secretHint')} className="shrink-0 text-[var(--accent-text)]">
               <Lock aria-hidden="true" className="size-3.5" strokeWidth={2} />
               <span className="sr-only">{t('envs.secret')}</span>
+            </span>
+          ) : null}
+          {variable.shared ? (
+            <span
+              title={t('envs.shared.badge', { count: shared?.users.length ?? 1 })}
+              className="shrink-0 text-cyan-300"
+            >
+              <Link2 aria-hidden="true" className="size-3.5" strokeWidth={2} />
+              <span className="sr-only">
+                {t('envs.shared.badge', { count: shared?.users.length ?? 1 })}
+              </span>
+            </span>
+          ) : null}
+          {variable.unresolved ? (
+            <span title={t('envs.shared.gone')} className="shrink-0 text-warning">
+              <TriangleAlert aria-hidden="true" className="size-3.5" strokeWidth={2} />
+              <span className="sr-only">{t('envs.shared.gone')}</span>
             </span>
           ) : null}
         </span>
@@ -681,6 +716,11 @@ function VariableRow({ envId, modified, variable, readOnly, onEdit, onRemove }: 
                 label={t('envs.editVar', { name: variable.name })}
                 icon={<Pencil className="size-[15px]" strokeWidth={1.75} />}
                 onClick={onEdit}
+              />
+              <IconButton
+                label={t('envs.shared.shareLabel', { name: variable.name })}
+                icon={<Link2 className="size-[15px]" strokeWidth={1.75} />}
+                onClick={onShare}
               />
               <IconButton
                 label={t('envs.removeVarLabel', { name: variable.name })}

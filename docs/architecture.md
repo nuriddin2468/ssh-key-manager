@@ -173,6 +173,13 @@ translates.
     `--sshkm-env-guard`, which sweeps the list when the pipe from the app closes; the
     next start sweeps it too. Level-2 files get the Time Machine, Dropbox and File
     Provider exclusion attributes on their temporary file, before it holds anything.
+  - Shared values (`vault/envs/shared.rs`): a value several environments use is a
+    KeePass entry of its own (`sshkm.shared`, under `Environments/Shared`); a variable
+    that uses it holds the KeePass field reference `{REF:P@I:<uuid>}`. The value
+    lives in one entry, so merging entries converges; references are resolved
+    wherever values leave the vault (files, terminal, exports, leak scanner, another
+    computer), and an edit of a shared variable, in the app or a file, changes the
+    shared entry, with Undo covering it.
   - AI tools' ignore rules (`files/agents.rs`, `commands/env_agents.rs`): with the
     user's yes for a project folder, each chosen tool's file gets a line per managed
     file where that tool reads it: `.cursorignore` and the like in the folder,

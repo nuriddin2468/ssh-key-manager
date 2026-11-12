@@ -920,6 +920,9 @@ impl Vault {
             (true, ProjectMember::Login { id }) if envs::is_environment(&self.find(id)?) => {
                 Err(Error::invalid("an environment joins a project as one"))
             }
+            (true, ProjectMember::Login { id }) if envs::is_shared(&self.find(id)?) => Err(
+                Error::invalid("a shared value is in the projects of the environments that use it"),
+            ),
             (true, ProjectMember::Environment { id }) if !envs::is_environment(&self.find(id)?) => {
                 Err(Error::invalid("not an environment"))
             }
@@ -1449,7 +1452,7 @@ impl Vault {
         };
         let mut adopted: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for entry in self.db.iter_all_entries() {
-            if envs::is_environment(&entry) {
+            if !envs::is_login(&entry) {
                 continue;
             }
             let login = entry.id().uuid().to_string();
@@ -1573,7 +1576,7 @@ impl Vault {
             .collect();
         self.db
             .iter_all_entries()
-            .filter(|entry| !envs::is_environment(entry))
+            .filter(envs::is_login)
             .filter_map(|entry| {
                 let summary = self.summary(&entry);
                 (!summary.in_trash).then(|| suggest::LoginFacts {
@@ -1619,7 +1622,7 @@ impl Vault {
             let id = entry.id().uuid().to_string();
             if envs::is_environment(&entry) {
                 envs.insert(id);
-            } else {
+            } else if envs::is_login(&entry) {
                 logins.insert(id);
             }
         }

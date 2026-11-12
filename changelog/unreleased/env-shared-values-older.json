@@ -1,0 +1,6 @@
+{
+  "kind": "notice",
+  "en": "Older versions of the app read a shared variable as the text of its reference ({REF:…}), and would write that into its .env files: update the app on your other computers before sharing variables.",
+  "ru": "Старые версии приложения читают общую переменную как текст ссылки ({REF:…}) и записали бы его в файлы .env: обновите приложение на других компьютерах, прежде чем делиться переменными.",
+  "uz": "Ilovaning eski versiyalari umumiy oʻzgaruvchini havola matni ({REF:…}) sifatida oʻqiydi va uni .env fayllariga yozib qoʻyadi: oʻzgaruvchilarni ulashishdan oldin boshqa kompyuterlaringizda ilovani yangilang."
+}

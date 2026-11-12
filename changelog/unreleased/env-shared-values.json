@@ -1,0 +1,6 @@
+{
+  "kind": "new",
+  "en": "A variable can be shared with other environments, of any project: they use one value, so changing it once, in the app or in any of their .env files, changes it in all of them and in their files, with Undo. “Use its own value here” takes one back.",
+  "ru": "Переменной можно поделиться с другими окружениями любого проекта: у них одно значение, и, изменив его один раз — в приложении или в любом их файле .env, — вы меняете его во всех них и в их файлах, с отменой. «Своё значение здесь» возвращает одному окружению собственное значение.",
+  "uz": "Oʻzgaruvchini istalgan loyihaning boshqa muhitlari bilan ulashish mumkin: ularda bitta qiymat boʻladi, uni bir marta — ilovada yoki ularning istalgan .env faylida — oʻzgartirsangiz, hammasida va fayllarida oʻzgaradi, bekor qilish bilan. «Bu yerda oʻz qiymati» bitta muhitga oʻz qiymatini qaytaradi."
+}

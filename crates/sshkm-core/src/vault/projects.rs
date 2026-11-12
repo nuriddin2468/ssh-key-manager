@@ -718,7 +718,14 @@ impl Vault {
     /// step from groups placed that lose to a removed project's hold: the
     /// environment went to Personal with that project, and a device that
     /// hadn't heard of it yet doesn't get to place it elsewhere. One the user
-    /// placed stays.
+    /// placed stays, and a project joined into another isn't a removed one:
+    /// its holds live on in that one ([`Self::settle_projects`]).
+    ///
+    /// The records can't tell that removal from one made before the step ran
+    /// anywhere: if a device that had heard of it placed the environment
+    /// elsewhere while one that hadn't placed it in the removed project, it
+    /// goes to Personal too. Both take devices that rarely sync; Personal is
+    /// the outcome that keeps it out of a project nobody put it in.
     fn stale_holds(&self) -> Vec<(String, String)> {
         type Rank = ((bool, i64), std::cmp::Reverse<String>);
         let owners = self.environment_owners();
@@ -729,25 +736,26 @@ impl Vault {
                     let env = key.strip_prefix(ENV_KIND)?;
                     presence.present().then(|| {
                         let rank = (hold_rank(stored, *presence), std::cmp::Reverse(id.clone()));
-                        (id, stored.is_live(), key, env, rank)
+                        let removed = !stored.is_live() && stored.joined.is_none();
+                        (id, stored.is_live(), key, env, rank, removed)
                     })
                 })
             })
         };
         let mut removed: BTreeMap<&str, Rank> = BTreeMap::new();
-        for (_, live, _, env, rank) in holds() {
-            if !live && removed.get(env).is_none_or(|best| rank > *best) {
+        for (_, _, _, env, rank, gone) in holds() {
+            if gone && removed.get(env).is_none_or(|best| rank > *best) {
                 removed.insert(env, rank);
             }
         }
         holds()
-            .filter(|(id, live, _, env, rank)| {
+            .filter(|(id, live, _, env, rank, _)| {
                 let placed_by_step = !rank.0.0;
                 *live
                     && (owners.get(*env).is_some_and(|owner| owner != *id)
                         || placed_by_step && removed.get(env).is_some_and(|best| best > rank))
             })
-            .map(|(id, _, key, _, _)| (id.clone(), key.clone()))
+            .map(|(id, _, key, _, _, _)| (id.clone(), key.clone()))
             .collect()
     }
 

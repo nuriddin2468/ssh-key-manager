@@ -1781,3 +1781,38 @@ fn a_removed_projects_hold_leaves_one_the_user_placed() {
     assert_eq!(owner(&x, &env).as_deref(), Some(blog.as_str()));
     assert_eq!(owner(&z, &env).as_deref(), Some(blog.as_str()));
 }
+
+#[test]
+fn a_project_joined_into_another_of_its_name_isnt_a_removed_one() {
+    // x and z each make "Shop" and each takes the step into its own; the
+    // one joined away named the group first. Its hold lives on in the one
+    // it joined, so the environment stays in Shop.
+    for joined_named_first in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = VaultPaths::new(dir.path().join("vault.kdbx"));
+        let (mut vault, _) = Vault::create(&paths, &s("master")).unwrap();
+        let env = legacy_env(&mut vault, "shared", "dev");
+        vault.save(&dir.path().join("backups")).unwrap();
+        let mut x = Vault::unlock(&paths, &s("master")).unwrap();
+        let mut z = Vault::unlock(&paths, &s("master")).unwrap();
+        let a = x.add_project(&input("Shop")).unwrap();
+        let b = z.add_project(&input("Shop")).unwrap();
+        let keep = a.clone().min(b.clone());
+        let (early, late) = (at(-20), at(-10));
+        let keep_named_first = !joined_named_first;
+        let (ta, tb) = if (a == keep) == keep_named_first {
+            (early, late)
+        } else {
+            (late, early)
+        };
+        name_group_at(&mut x, &a, "shared", ta);
+        name_group_at(&mut z, &b, "shared", tb);
+        x.tidy_projects();
+        z.tidy_projects();
+        assert_eq!(owner(&x, &env).as_deref(), Some(a.as_str()));
+        assert_eq!(owner(&z, &env).as_deref(), Some(b.as_str()));
+        settle(&mut x, &mut z);
+        assert_eq!(owner(&x, &env).as_deref(), Some(keep.as_str()));
+        assert_eq!(owner(&z, &env).as_deref(), Some(keep.as_str()));
+    }
+}

@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use sshkm_core::config::{HostEntry, HostKind, SshConfig};
 use sshkm_core::hosts_file::{self, HostsAddressKind, HostsFile};
 use sshkm_core::paths::home_dir;
-use sshkm_core::vault::envs::{EnvKind, EnvSummary};
+use sshkm_core::vault::envs::{EnvKind, EnvSummary, PartRename};
 use sshkm_core::vault::projects::suggest::{self, Declined, HostFacts, ProjectSuggestion};
 use sshkm_core::vault::projects::{self, Project, ProjectInput, ProjectMember};
 use sshkm_core::{ErrorCode, SecretString, fsutil, keys};
@@ -416,7 +416,8 @@ pub async fn projects_suggestions(
 /// Makes the suggestion `key` a project named and colored as `input`, or
 /// adds to the existing project it names, with the `members` the user kept.
 /// Members that weren't in the suggestion are refused; those the user left
-/// out aren't suggested again.
+/// out aren't suggested again. `rename` names the part the existing project
+/// had, when the environments kept give it a second (in the same change).
 #[tauri::command]
 pub async fn projects_accept_suggestion(
     app: AppHandle,
@@ -424,6 +425,7 @@ pub async fn projects_accept_suggestion(
     key: String,
     input: ProjectInput,
     members: Vec<ProjectMember>,
+    rename: Option<PartRename>,
 ) -> AppResult<Project> {
     blocking(&state, move |state| {
         let (for_vault, suggestion) = {
@@ -441,6 +443,7 @@ pub async fn projects_accept_suggestion(
             }
             // Every member is checked before anything changes; a failure
             // after that is undone with the rest of the change.
+            vault.name_first_part(rename.as_ref())?;
             let id = vault.accept_suggestion(&suggestion, &input, &members)?;
             Ok(vault.project(&id)?)
         })?;

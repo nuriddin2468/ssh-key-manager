@@ -17,6 +17,7 @@ import {
   mockLocalEnvironment,
   mockOwnedEnvs,
   setMockEnvOwner,
+  withMockRename,
 } from './envs';
 import { findShell, openLocalShell } from './terminal';
 import { isMockEntry, isMockVaultUnlocked, mockEntryId } from './vault';
@@ -263,6 +264,17 @@ const candidates: ProjectSuggestion[] = [
   suggestion('dotfiles', 'dotfiles', [{ type: 'gitFolder', folder: '~/dotfiles' }], {
     folders: ['~/dotfiles'],
   }),
+  // Adds to Marketing site, of one part, Personal's `scripts`: its second
+  // part, so the first is named before.
+  suggestion(
+    'marketing site',
+    'marketing-site',
+    [{ type: 'gitFolder', folder: '~/code/marketing-site-scripts' }],
+    {
+      folders: ['~/code/marketing-site-scripts'],
+      environments: mockEnvsInGroup('scripts'),
+    },
+  ),
 ];
 /** Found once the user picks a folder to look into. */
 const inPickedFolder = suggestion(
@@ -363,6 +375,39 @@ function suggestions(): ProjectSuggestion[] {
   return offered;
 }
 
+/** Makes `s` a project named as `input`, or adds to the one it names. */
+function acceptSuggestion(s: ProjectSuggestion, input: unknown, members: unknown) {
+  const chosen = members as ProjectMember[];
+  const offeredKeys = new Set(memberList(s).map(memberKey));
+  // Every member is checked before anything changes, as the backend does.
+  for (const m of chosen) {
+    if (!offeredKeys.has(memberKey(m))) {
+      return fail('invalid_input', 'not part of the suggestion');
+    }
+    if (m.type === 'login' && !isMockEntry(m.id)) return fail('not_found', `entry ${m.id}`);
+  }
+  let target = s.existing ? projects.find((p) => p.id === s.existing) : undefined;
+  if (!target) {
+    const { name: text, color } = input as ProjectInput;
+    const name = checkName(text);
+    if (typeof name !== 'string') return name;
+    if (taken(name)) return fail('already_exists', name);
+    target = project(crypto.randomUUID(), name, color, {}, []);
+    projects.push(target);
+  }
+  for (const m of chosen) {
+    setMember(target, m, true);
+    if (m.type === 'folder') target.heldFolders.add(m.path);
+  }
+  target.modified = now();
+  const chosenKeys = new Set(chosen.map(memberKey));
+  const declined = leftOut.get(s.key) ?? new Set<string>();
+  for (const k of offeredKeys) if (!chosenKeys.has(k)) declined.add(k);
+  leftOut.set(s.key, declined);
+  offered = offered.filter((o) => o.key !== s.key);
+  return view(target, true);
+}
+
 export const projectsHandlers: Record<string, Handler> = {
   projects_list: () => {
     const unlocked = isMockVaultUnlocked();
@@ -414,39 +459,12 @@ export const projectsHandlers: Record<string, Handler> = {
     resolveLogins();
     return suggestions();
   },
-  projects_accept_suggestion: ({ key, input, members }) => {
+  projects_accept_suggestion: ({ key, input, members, rename }) => {
     if (!isMockVaultUnlocked()) return fail('vault_locked', 'the vault is locked');
     const s = offered.find((o) => o.key === key);
     if (!s) return fail('not_found', 'the suggestion; look for suggestions again');
-    const chosen = members as ProjectMember[];
-    const offeredKeys = new Set(memberList(s).map(memberKey));
-    // Every member is checked before anything changes, as the backend does.
-    for (const m of chosen) {
-      if (!offeredKeys.has(memberKey(m))) {
-        return fail('invalid_input', 'not part of the suggestion');
-      }
-      if (m.type === 'login' && !isMockEntry(m.id)) return fail('not_found', `entry ${m.id}`);
-    }
-    let target = s.existing ? projects.find((p) => p.id === s.existing) : undefined;
-    if (!target) {
-      const { name: text, color } = input as ProjectInput;
-      const name = checkName(text);
-      if (typeof name !== 'string') return name;
-      if (taken(name)) return fail('already_exists', name);
-      target = project(crypto.randomUUID(), name, color, {}, []);
-      projects.push(target);
-    }
-    for (const m of chosen) {
-      setMember(target, m, true);
-      if (m.type === 'folder') target.heldFolders.add(m.path);
-    }
-    target.modified = now();
-    const chosenKeys = new Set(chosen.map(memberKey));
-    const declined = leftOut.get(s.key) ?? new Set<string>();
-    for (const k of offeredKeys) if (!chosenKeys.has(k)) declined.add(k);
-    leftOut.set(s.key, declined);
-    offered = offered.filter((o) => o.key !== key);
-    return view(target, true);
+    // The part is named first, in the same change, as the backend does.
+    return withMockRename(rename, async () => acceptSuggestion(s, input, members));
   },
   projects_dismiss_suggestion: ({ key }) => {
     dismissed.add(String(key));

@@ -601,9 +601,14 @@ export const api = {
   /**
    * Creates the suggested project (or adds to the existing one it names)
    * with the members the user kept; anything not in the suggestion fails.
+   * `rename` names the existing project's part, when this gives it a second.
    */
-  projectsAcceptSuggestion: (key: string, input: ProjectInput, members: ProjectMember[]) =>
-    call<Project>('projects_accept_suggestion', { key, input, members }),
+  projectsAcceptSuggestion: (
+    key: string,
+    input: ProjectInput,
+    members: ProjectMember[],
+    rename: PartRename | null = null,
+  ) => call<Project>('projects_accept_suggestion', { key, input, members, rename }),
   projectsDismissSuggestion: (key: string) => call<void>('projects_dismiss_suggestion', { key }),
   projectsRestoreSuggestions: () => call<void>('projects_restore_suggestions'),
   /** Asks for a folder to look into for Git folders; `null` if cancelled. */

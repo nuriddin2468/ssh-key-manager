@@ -1424,29 +1424,146 @@ fn one_taken_out_long_ago_doesnt_come_back() {
     name_group_at(&mut vault, &shop, "shop-api", now_ms() - 800 * day);
     vault.tidy_projects();
     assert!(vault.move_environment(&api, None).unwrap());
-    // As if that was 401 days ago: the removal is pruned with anything that
-    // prunes (removing another project).
-    let mut stored = vault.stored_project(&shop).unwrap();
+    // As if that was 401 days ago: anything that prunes (removing another
+    // project) keeps the removal, as it keeps every word on an environment.
+    age_removal(&mut vault, &shop, &api, 401);
     let key = format!("envid:{api}");
-    stored.members.insert(
-        key.clone(),
-        Presence {
-            a: now_ms() - 800 * day,
-            r: Some(now_ms() - 401 * day),
-        },
-    );
-    vault.put_project(&shop, &stored).unwrap();
     vault.remove_project(&other).unwrap();
     assert!(
-        !vault
+        vault
             .stored_project(&shop)
             .unwrap()
             .members
             .contains_key(&key)
     );
+    assert!(
+        vault
+            .project_records()
+            .iter()
+            .any(|r| r.id == shop && r.record.contains(&key))
+    );
     // Placed by the user: its part is on the entry, and the step skips it.
     assert!(!vault.projects_untidy());
     assert_eq!(owner(&vault, &api), None);
+}
+
+/// Times a record's removal of `env` as if it was `days` ago.
+fn age_removal(vault: &mut Vault, project: &str, env: &str, days: i64) {
+    let day = 24 * 60 * 60 * 1000;
+    let mut stored = vault.stored_project(project).unwrap();
+    let presence = stored.members.get_mut(&format!("envid:{env}")).unwrap();
+    presence.a = presence.a.min(now_ms() - (days + 1) * day);
+    presence.r = Some(now_ms() - days * day);
+    vault.put_project(project, &stored).unwrap();
+}
+
+#[test]
+fn one_taken_out_long_ago_doesnt_come_back_on_a_peer() {
+    // Two own devices, each with its own copy of the vault (Nearby): the
+    // part goes on the entry where the user moved it, not on the other.
+    let dir = tempfile::tempdir().unwrap();
+    let paths = VaultPaths::new(dir.path().join("vault.kdbx"));
+    let (mut vault, _) = Vault::create(&paths, &s("master")).unwrap();
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    let other = vault.add_project(&input("Other")).unwrap();
+    let api = legacy_env(&mut vault, "shop-api", "local");
+    let day = 24 * 60 * 60 * 1000;
+    name_group_at(&mut vault, &shop, "shop-api", now_ms() - 800 * day);
+    vault.save(&dir.path().join("backups")).unwrap();
+    let mut laptop = Vault::unlock(&paths, &s("master")).unwrap();
+    let mut desktop = Vault::unlock(&paths, &s("master")).unwrap();
+    laptop.tidy_projects();
+    desktop.tidy_projects();
+    laptop.move_environment(&api, None).unwrap();
+    sync(&mut laptop, &mut desktop);
+    assert_eq!(owner(&desktop, &api), None);
+    assert!(
+        !desktop
+            .find(&api)
+            .unwrap()
+            .custom_data
+            .contains_key(envs::PART)
+    );
+    // 401 days on, both devices synced all along: the desktop prunes and
+    // tidies, and the two sync again.
+    age_removal(&mut laptop, &shop, &api, 401);
+    age_removal(&mut desktop, &shop, &api, 401);
+    desktop.remove_project(&other).unwrap();
+    assert!(!desktop.projects_untidy());
+    desktop.tidy_projects();
+    sync(&mut laptop, &mut desktop);
+    laptop.tidy_projects();
+    assert_eq!(owner(&laptop, &api), None);
+    assert_eq!(owner(&desktop, &api), None);
+}
+
+#[test]
+fn a_deleted_projects_environment_stays_personal_for_good() {
+    // Shop and Blog both named the group, the step put the environment in
+    // Shop (named first), and Shop was deleted long ago.
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "laptop");
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    let blog = vault.add_project(&input("Blog")).unwrap();
+    let other = vault.add_project(&input("Other")).unwrap();
+    let env = legacy_env(&mut vault, "shared", "dev");
+    let day = 24 * 60 * 60 * 1000;
+    name_group_at(&mut vault, &shop, "shared", now_ms() - 900 * day);
+    name_group_at(&mut vault, &blog, "shared", now_ms() - 850 * day);
+    vault.tidy_projects();
+    assert_eq!(owner(&vault, &env).as_deref(), Some(shop.as_str()));
+    vault.remove_project(&shop).unwrap();
+    assert_eq!(owner(&vault, &env), None);
+    let mut stored = vault.stored_project(&shop).unwrap();
+    stored.name.t = now_ms() - 900 * day;
+    stored.color.t = now_ms() - 900 * day;
+    stored.removed = Some(now_ms() - 401 * day);
+    vault.put_project(&shop, &stored).unwrap();
+    // Anything that prunes keeps the tombstone, which says where it was.
+    vault.remove_project(&other).unwrap();
+    assert!(vault.stored_project(&shop).is_some());
+    assert!(vault.project_records().iter().any(|r| r.id == shop));
+    assert!(vault.project(&shop).is_err());
+    assert!(!vault.projects_untidy());
+    vault.tidy_projects();
+    assert_eq!(owner(&vault, &env), None);
+}
+
+#[test]
+fn a_hold_settled_at_an_old_group_time_stays_out_on_a_third_device() {
+    // Blog and Shop named the group over 400 days ago; x has heard of both,
+    // z only of Shop's.
+    let dir = tempfile::tempdir().unwrap();
+    let paths = VaultPaths::new(dir.path().join("vault.kdbx"));
+    let (mut vault, _) = Vault::create(&paths, &s("master")).unwrap();
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    let blog = vault.add_project(&input("Blog")).unwrap();
+    let env = legacy_env(&mut vault, "shared", "dev");
+    vault.save(&dir.path().join("backups")).unwrap();
+    let day = 24 * 60 * 60 * 1000;
+    let (g_blog, g_shop) = (now_ms() - 500 * day, now_ms() - 450 * day);
+    let mut x = Vault::unlock(&paths, &s("master")).unwrap();
+    let mut z = Vault::unlock(&paths, &s("master")).unwrap();
+    name_group_at(&mut x, &blog, "shared", g_blog);
+    name_group_at(&mut x, &shop, "shared", g_shop);
+    name_group_at(&mut z, &shop, "shared", g_shop);
+    x.tidy_projects();
+    z.tidy_projects();
+    assert_eq!(owner(&x, &env).as_deref(), Some(blog.as_str()));
+    assert_eq!(owner(&z, &env).as_deref(), Some(shop.as_str()));
+    // x hears of z's hold: it loses, and is taken out at the group's time,
+    // older than the window, and kept.
+    x.merge_projects(&z.project_records()).unwrap();
+    let held = x.stored_project(&shop).unwrap().members[&format!("envid:{env}")];
+    assert!(!held.present());
+    // The user takes it out of Blog on x, and the two sync.
+    x.move_environment(&env, None).unwrap();
+    for _ in 0..2 {
+        sync(&mut x, &mut z);
+    }
+    assert_eq!(owner(&x, &env), None);
+    assert_eq!(owner(&z, &env), None);
+    assert_eq!(x.project_records(), z.project_records());
 }
 
 #[test]

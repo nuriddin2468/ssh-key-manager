@@ -30,7 +30,8 @@
 //! was added and removed, so additions and removals made on two computers
 //! before they synced all survive. A removed project stays as a tombstone
 //! for a while ([`KEEP_REMOVED_MS`]) so that a sync doesn't bring it back;
-//! a change made after the removal does. Two live projects with one name
+//! a change made after the removal does. What records say about
+//! environments is kept for good, tombstones that say it included. Two live projects with one name
 //! are one label: whichever computer finds them joins them into the one
 //! with the smaller id, and a project joined into another keeps passing on
 //! what it is given, so every computer ends up with the same.
@@ -85,7 +86,9 @@ const GROUP_KIND: &str = "env:";
 /// How records name an environment.
 const ENV_KIND: &str = "envid:";
 /// How long a removed project or member is remembered, in milliseconds: a
-/// device that syncs after longer than that may bring it back.
+/// device that syncs after longer than that may bring it back. Environments
+/// are the exception: where a record put one, or took it out, stays for good
+/// ([`Stored::prune`]).
 pub const KEEP_REMOVED_MS: i64 = 400 * 24 * 60 * 60 * 1000;
 
 /// A project's color, a name the UI maps to its palette.
@@ -450,15 +453,21 @@ impl Stored {
 
     /// Forgets removals older than `before`: the members, and the whole
     /// record once it is removed. A member's removal later than the
-    /// project's is kept, since it may be what keeps the project. Returns
-    /// `false` for a record to drop.
+    /// project's is kept, since it may be what keeps the project. What a
+    /// record says about an environment (`envid:`, in or taken out) is never
+    /// forgotten, nor is a removed project that says something about one:
+    /// that is what keeps the step from groups ([`Vault::adopt_environments`])
+    /// from putting it back, on a device whose copy of the entry doesn't keep
+    /// its part. Returns `false` for a record to drop.
     fn prune(&mut self, before: i64) -> bool {
+        let decides = |key: &String| key.starts_with(ENV_KIND);
         if !self.is_live() {
-            return self.removed.is_none_or(|r| r >= before);
+            return self.removed.is_none_or(|r| r >= before) || self.members.keys().any(decides);
         }
         let removed = self.removed;
-        self.members.retain(|_, p| {
+        self.members.retain(|key, p| {
             p.present()
+                || decides(key)
                 || p.r
                     .is_none_or(|r| r >= before || removed.is_some_and(|gone| r > gone))
         });
@@ -1081,7 +1090,8 @@ impl Vault {
     }
 
     /// Every record, tombstones too, to send to another own device; those
-    /// removed longer ago than [`KEEP_REMOVED_MS`] are left out.
+    /// removed longer ago than [`KEEP_REMOVED_MS`] are left out, unless they
+    /// say where an environment is ([`Stored::prune`]).
     pub fn project_records(&self) -> Vec<ProjectRecord> {
         let before = now_ms() - KEEP_REMOVED_MS;
         let mut kept: Vec<(String, Stored)> = self

@@ -51,7 +51,7 @@ Environments' Run in terminal: PowerShell 7, Windows PowerShell, Command Prompt,
 and WSL distributions on Windows; the user's shell, `/etc/shells` and Homebrew's on macOS
 and Linux. Settings → Terminal → Default shell. `src-tauri/src/terminal/shells.rs`.
 
-### 2. Projects — in review
+### 2. Projects — done
 
 The foundation for everything below.
 
@@ -75,8 +75,8 @@ The foundation for everything below.
    rest; two columns that don't push each other down; an item's name opens it in its
    Library section, with a way back to the project; Add also makes a new host, key, login
    or environment in the Library's own dialogs, and it joins the project; a project folder
-   can be shown in Finder, Explorer or Files (the backend checks it is the project's). In
-   review:
+   can be shown in Finder, Explorer or Files (the backend checks it is the project's).
+   Done:
    [#39](https://github.com/nuriddin2468/ssh-key-manager/pull/39).
 5. **Hosts file entries in projects**: a project holds names of the system hosts file
    (`hostsfile:<name>`, synced like its other members); its page shows their entries, name
@@ -86,7 +86,7 @@ The foundation for everything below.
    switch turns all of a project's entries on or off: one review that names what else it
    touches, one password, Undo through the backup. Lines that also list a system name
    (`127.0.0.1 localhost app.test`) are left as they are. Not yet: a name renamed in the
-   Hosts file section isn't followed; the project flags the old one as gone. In review:
+   Hosts file section isn't followed; the project flags the old one as gone. Done:
    [#41](https://github.com/nuriddin2468/ssh-key-manager/pull/41).
 6. **All projects, the home screen**: the app opens on it and ⌘1 comes back (it was the
    project used last). A card per project, Personal first: what it holds, its problems
@@ -95,7 +95,7 @@ The foundation for everything below.
    Finder, Explorer or Files, a session to its first host with a shell. Above the cards:
    Audit's numbers (or "No issues found"), one Unlock prompt while the vault is locked,
    and the suggestions. The first run explains projects and leads with Generate key while
-   there are no keys. In review:
+   there are no keys. Done:
    [#42](https://github.com/nuriddin2468/ssh-key-manager/pull/42).
 7. **Environments by project**: an environment belongs to one project (or Personal) by
    its entry id, as logins do, and "group" leaves the app. Within a project it may have a
@@ -104,11 +104,15 @@ The foundation for everything below.
    its group, whose name is its part, and gets the `project/<name>` tag; new ones are
    filed under `Environments/<project>/<part>`. The step from groups runs on every unlock,
    changes only project records and gives the same result on two devices at once; older
-   versions keep seeing the groups. Core and app: in review,
+   versions keep seeing the groups. Core and app:
    [#44](https://github.com/nuriddin2468/ssh-key-manager/pull/44). The Environments page by
    project and part, creating with a part (naming the first when a project gets a
-   second), Move to project… and Rename part…: in review,
-   [#45](https://github.com/nuriddin2468/ssh-key-manager/pull/45).
+   second), Move to project… and Rename part…:
+   [#45](https://github.com/nuriddin2468/ssh-key-manager/pull/45). Where a record put an
+   environment, or took it out, is kept for good, so the step never brings one back after
+   the 400 days other removals are kept; a suggestion that adds to a project of one part
+   names the first part too, and shows environments by part and stage:
+   [#46](https://github.com/nuriddin2468/ssh-key-manager/pull/46).
 
 ### 3. Managed `.env` files — done
 

@@ -3,6 +3,7 @@
 // choices. No React here.
 
 import type { EnvImportPreview } from '@/bindings/EnvImportPreview';
+import type { EnvKind } from '@/bindings/EnvKind';
 import type { EnvSummary } from '@/bindings/EnvSummary';
 import type { ImportChoice } from '@/bindings/ImportChoice';
 
@@ -156,24 +157,6 @@ function distinct(parts: readonly string[]): string[] {
 }
 
 /**
- * Names a part could have, from a project's folders: the folder that has
- * a `.env` file (`apps/backend/.env` → `backend`), without the parts it
- * has. A file at the project folder's top names none.
- */
-export function folderParts(paths: readonly string[], taken: readonly string[]): string[] {
-  const out: string[] = [];
-  for (const path of paths) {
-    const folder = path.split('/').slice(0, -1).pop();
-    if (!folder || folder.startsWith('.')) continue;
-    if (taken.some((part) => same(part, folder)) || out.some((part) => same(part, folder))) {
-      continue;
-    }
-    out.push(folder);
-  }
-  return out;
-}
-
-/**
  * The stages of `ids` that a part `part` of `project` (or Personal) has
  * already, outside the recycle bin: renaming them into it would make two.
  */
@@ -224,6 +207,11 @@ function same(a: string, b: string): boolean {
 }
 
 /** Production environments get a warning colour, so they are hard to mistake. */
+/** The kind an environment has until the user sets one, as the backend gives it. */
+export function kindFromName(name: string): EnvKind {
+  return ['local', 'dev', 'development'].includes(name.trim().toLowerCase()) ? 'local' : 'remote';
+}
+
 export function isProduction(name: string): boolean {
   return /^(prod|production|live)$/i.test(name.trim());
 }

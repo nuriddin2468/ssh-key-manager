@@ -15,15 +15,18 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use sshkm_core::paths::home_dir;
 use sshkm_core::vault::envs::{
     self, EnvComparison, EnvDetail, EnvFormat, EnvImportPreview, EnvInput, EnvSummary, EnvVarInput,
     ImportChoice, ImportCounts, PartRename, SharedValue,
 };
+use sshkm_core::vault::projects::{PartFolderChoice, places};
 use sshkm_core::{ExposeSecret, SecretString};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
+use super::projects::{apply_folder_choice, place_path};
 use super::{Shared, blocking};
 use crate::confirm::Localized;
 use crate::error::{AppError, AppResult};
@@ -62,6 +65,10 @@ pub enum ImportTarget {
         #[serde(default)]
         part: String,
         name: String,
+        /// Its notes, if any.
+        #[serde(default)]
+        #[cfg_attr(test, ts(optional))]
+        notes: Option<String>,
     },
     /// An existing one: values of names it has are replaced.
     Existing { id: String },
@@ -130,11 +137,13 @@ pub async fn envs_create(
     state: State<'_, Shared>,
     input: EnvInput,
     rename: Option<PartRename>,
+    folder: Option<PartFolderChoice>,
 ) -> AppResult<EnvDetail> {
     blocking(&state, move |state| {
         state.vault.change(&app, &state.backup_dir, |vault| {
             vault.name_first_part(rename.as_ref())?;
             let id = vault.add_environment(&input)?;
+            apply_folder_choice(vault, &id, folder.as_ref())?;
             Ok(vault.environment(&id)?)
         })
     })
@@ -149,11 +158,13 @@ pub async fn envs_update(
     id: String,
     input: EnvInput,
     rename: Option<PartRename>,
+    folder: Option<PartFolderChoice>,
 ) -> AppResult<EnvDetail> {
     blocking(&state, move |state| {
         state.vault.change(&app, &state.backup_dir, |vault| {
             vault.name_first_part(rename.as_ref())?;
             vault.update_environment(&id, &input)?;
+            apply_folder_choice(vault, &id, folder.as_ref())?;
             Ok(vault.environment(&id)?)
         })
     })
@@ -424,11 +435,12 @@ pub async fn envs_import(
                     project,
                     part,
                     name,
+                    notes,
                 } => vault.add_environment(&EnvInput {
                     project: project.clone(),
                     part: part.clone(),
                     name: name.clone(),
-                    notes: String::new(),
+                    notes: notes.clone().unwrap_or_default(),
                 })?,
                 ImportTarget::Existing { id } => id.clone(),
             };
@@ -507,7 +519,10 @@ pub async fn envs_export_anyway(app: AppHandle, state: State<'_, Shared>) -> App
 
 /// Opens a shell in the app's terminal with the environment's variables in
 /// its environment, and nowhere else: `shell` (an id from `terminal_shells`)
-/// or the default one. Output and events arrive on `events`, as for
+/// or the default one. It starts where the environment works
+/// (`sshkm_core::vault::projects::places`): its part's folder, else the
+/// first of the project's folders found here; one in Personal, or with none
+/// here, in the home folder. Output and events arrive on `events`, as for
 /// `terminal_open`.
 #[tauri::command]
 pub async fn envs_run(
@@ -521,20 +536,39 @@ pub async fn envs_run(
 ) -> AppResult<TerminalInfo> {
     let shared = Arc::clone(&state);
     blocking(&state, move |state| {
-        let (label, vars) = state.vault.with(&app, |vault| {
+        let (label, vars, places) = state.vault.with(&app, |vault| {
             let env = vault.environment(&id)?.summary;
             let vars: Vec<(String, SecretString)> = vault
                 .env_variables(&id)?
                 .into_iter()
                 .map(|var| (var.name, var.value))
                 .collect();
-            Ok((envs::label(Some(&vault.env_label(&env)), &env.name), vars))
+            let places = match &env.project {
+                Some(project) if !env.in_trash => Some((
+                    vault.project(project)?,
+                    places::env_folders(&vault.project_places(project)?, &id),
+                )),
+                _ => None,
+            };
+            Ok((
+                envs::label(Some(&vault.env_label(&env)), &env.name),
+                vars,
+                places,
+            ))
         })?;
+        let home = home_dir();
+        let folder = places
+            .and_then(|(project, folders)| {
+                folders
+                    .iter()
+                    .find_map(|folder| place_path(&project, folder, home.as_deref()).ok())
+            })
+            .unwrap_or_else(|| state.paths.home.clone());
         let shell = shells::find(shell.as_deref())?;
         let sink: Arc<dyn Sink> = Arc::new(events);
         shared
             .terminals
-            .open_local(&label, &shell, &vars, &state.paths.home, (cols, rows), sink)
+            .open_local(&label, &shell, &vars, &folder, (cols, rows), sink)
     })
     .await
 }

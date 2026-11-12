@@ -33,6 +33,22 @@ const BACKUP_TS: &[FormatItem<'static>] =
 /// If the file exists its permission bits are kept; otherwise it is created
 /// with `new_file_mode` (Unix only — on Windows the file inherits the ACL of its
 /// directory). Symbolic links are followed and the link target is replaced.
+/// `C:\…` for `\\?\C:\…`, which [`fs::canonicalize`] returns on Windows and
+/// not every tool takes (Command Prompt refuses it as a working folder);
+/// other paths are returned unchanged.
+pub fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest)
+            if rest.as_bytes().get(1) == Some(&b':')
+                && rest.as_bytes().first().is_some_and(u8::is_ascii_alphabetic) =>
+        {
+            PathBuf::from(rest)
+        }
+        _ => path,
+    }
+}
+
 pub fn atomic_write(path: &Path, bytes: &[u8], new_file_mode: u32) -> Result<()> {
     let target = resolve_symlinks(path)?;
     let existing = match fs::metadata(&target) {

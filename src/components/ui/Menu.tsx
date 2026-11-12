@@ -56,6 +56,15 @@ export function MenuItem({ icon, destructive, disabled, onSelect, children }: Me
   );
 }
 
+/** A heading over some of a menu's items, e.g. what a choice is about. */
+export function MenuLabel({ children }: { children: ReactNode }) {
+  return (
+    <DropdownMenu.Label className="px-2.5 pt-1 pb-1.5 text-[11px] font-semibold text-subtle">
+      {children}
+    </DropdownMenu.Label>
+  );
+}
+
 export function MenuSeparator() {
   return <DropdownMenu.Separator className="my-1 h-px bg-white/[0.07]" />;
 }

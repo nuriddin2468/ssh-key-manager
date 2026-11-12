@@ -44,6 +44,7 @@ import type { KeepSide } from '@/bindings/KeepSide';
 import type { Project } from '@/bindings/Project';
 import {
   addMockEnv,
+  applyMockFolderChoice,
   type Env,
   kindOf,
   mockEnv,
@@ -719,7 +720,14 @@ export const envFilesHandlers: Record<string, Handler> = {
       problems,
     };
   },
-  envs_files_adopt: async ({ project, file, target, choices, rename }): Promise<EnvImported> => {
+  envs_files_adopt: async ({
+    project,
+    file,
+    target,
+    choices,
+    rename,
+    folder,
+  }): Promise<EnvImported> => {
     await requireUnlocked();
     seed();
     const found = unmanagedFor(file as EnvFile);
@@ -730,7 +738,11 @@ export const envFilesHandlers: Record<string, Handler> = {
       mockLooksSecret(name, value);
     const to = target as ImportTarget;
     const item = await withMockRename(rename, async (): Promise<Env> => {
-      if (to.type === 'new') return addMockEnv(String(project), to.part, to.name, []);
+      if (to.type === 'new') {
+        const made = addMockEnv(String(project), to.part, to.name, []);
+        made.notes = to.notes ?? '';
+        return made;
+      }
       const existing = await findEnv(to.id);
       const owner = mockEnvOwner(existing.id);
       if (owner !== null && owner !== project) {
@@ -773,6 +785,7 @@ export const envFilesHandlers: Record<string, Handler> = {
       cloud: null,
       example: null,
     });
+    await applyMockFolderChoice(item, folder);
     touchMockEnv(item);
     return { id: item.id, added, replaced };
   },

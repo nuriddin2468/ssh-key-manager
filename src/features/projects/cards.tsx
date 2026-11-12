@@ -4,11 +4,15 @@ import {
   ArrowLeftRight,
   ChevronDown,
   Copy,
+  CornerDownRight,
   Folder,
+  FolderInput,
   FolderOpen,
   FolderPlus,
+  FolderSync,
   KeyRound,
   LockKeyhole,
+  MoreHorizontal,
   Network,
   Play,
   Plus,
@@ -37,24 +41,37 @@ import { toastError } from '@/api/useAppMutation';
 import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
 import type { CopyField } from '@/bindings/CopyField';
+import type { EnvSummary } from '@/bindings/EnvSummary';
+import type { FolderPlace } from '@/bindings/FolderPlace';
 import type { HostEntry } from '@/bindings/HostEntry';
 import type { HostsFileEntry } from '@/bindings/HostsFileEntry';
+import type { PartPlace } from '@/bindings/PartPlace';
 import type { Project } from '@/bindings/Project';
+import type { ProjectFolder } from '@/bindings/ProjectFolder';
 import type { ProjectMember } from '@/bindings/ProjectMember';
 import type { Severity } from '@/bindings/Severity';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Dialog } from '@/components/ui/Dialog';
 import { IconButton } from '@/components/ui/IconButton';
+import {
+  Menu,
+  MenuContent,
+  MenuItem,
+  MenuLabel,
+  MenuSeparator,
+  MenuTrigger,
+} from '@/components/ui/Menu';
 import { MixedSwitch, Switch } from '@/components/ui/Switch';
 import { findingTitle } from '@/features/audit/model';
 import { useVaultAudit } from '@/features/audit/queries';
 import { vaultFindingTitle } from '@/features/audit/vaultModel';
 import { FileStateLine } from '@/features/envs/files/FileStateLine';
+import { isProduction } from '@/features/envs/model';
 import { editOf } from '@/features/hostsFile/draft';
 import { isSystemName, listsSystemName, normalizeName } from '@/features/hostsFile/model';
 import { ReviewDialog, type ReviewNote } from '@/features/hostsFile/ReviewDialog';
-import { toastVaultError } from '@/features/passwords/vault';
+import { toastVaultError, useVaultMutation } from '@/features/passwords/vault';
 import { useTerminals } from '@/features/terminal/TerminalProvider';
 import { cn } from '@/lib/cn';
 import { fileManagerName } from '@/lib/platform';
@@ -77,8 +94,11 @@ import {
   problemsFirst,
   projectFindings,
 } from './model';
+import { PartFolderDialog } from './PartFolderDialog';
 import { AddToProjectButton } from './ProjectMenu';
+import { envFolderText, placeOfEnv, placeText, usePlaces } from './places';
 import { useProjects } from './queries';
+import { TerminalButton } from './TerminalButton';
 
 const COPIED = {
   username: 'passwords.copiedUsername',
@@ -173,12 +193,14 @@ export function Cards({ project, members, library, goneFolders, locked, made, on
 
   const hosts = useHostsCard(origin, members.hosts, gone.hosts);
   const hostsFile = useHostsFileCard(origin, members.hostsFile, gone.hostsFile);
-  const folders = useFoldersCard(project, members.folders, gone.folders, locked, library);
+  const places = usePlaces(project?.id).data;
+  const folders = useFoldersCard(project, members.folders, gone.folders, locked, library, places);
   const environments = useEnvironmentsCard(
     origin,
     locked ? [] : members.environments,
     gone.environments,
     library,
+    places,
   );
   const logins = useLoginsCard(origin, locked ? [] : members.logins, library);
   const keys = useKeysCard(origin, members.keys, gone.keys, library);
@@ -340,6 +362,7 @@ interface Opener {
  * actions on the right.
  */
 function Row({
+  as: Tag = 'li',
   leading,
   title,
   subtitle,
@@ -348,6 +371,8 @@ function Row({
   open,
   children,
 }: {
+  /** `div` for a row that is the head of a list item (a folder with its subfolders). */
+  as?: 'li' | 'div';
   leading?: ReactNode;
   title: ReactNode;
   subtitle?: ReactNode;
@@ -358,7 +383,12 @@ function Row({
 }) {
   const text = cn('truncate font-medium', mono && 'font-mono text-[12.5px]');
   return (
-    <li className="flex min-h-11 items-center gap-2.5 border-t border-white/[0.045] px-1 py-1.5 first:border-t-0">
+    <Tag
+      className={cn(
+        'flex min-h-11 items-center gap-2.5 px-1 py-1.5',
+        Tag === 'li' && 'border-t border-white/[0.045] first:border-t-0',
+      )}
+    >
       {leading}
       <div className="min-w-0 flex-1">
         {open ? (
@@ -384,7 +414,7 @@ function Row({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-1.5">{children}</div>
-    </li>
+    </Tag>
   );
 }
 
@@ -850,82 +880,256 @@ function useFoldersCard(
   gone: Set<string>,
   locked: boolean,
   library: Library,
+  places: FolderPlace[] | undefined,
 ): CardSpec | null {
   const { t } = useTranslation();
-  const { navigate } = useRouter();
-  const terminals = useTerminals();
   const reveal = useMutation({
-    mutationFn: ({ id, path }: { id: string; path: string }) => api.projectsRevealFolder(id, path),
+    mutationFn: ({ id, place }: { id: string; place: ProjectFolder }) =>
+      api.projectsRevealFolder(id, place),
     onError: (error) => toastError(t, error),
   });
   if (!project || folders.length === 0) return null;
-  const hasLocal =
-    !locked &&
-    (library.envs ?? []).some(
-      (env) =>
-        !env.inTrash && env.name.toLowerCase() === 'local' && project.environments.includes(env.id),
+  const envs = locked ? [] : (library.envs ?? []);
+  // Parts show when the project has more than one.
+  const parts = new Set(
+    envs
+      .filter((env) => project.environments.includes(env.id))
+      .map((env) => env.part.toLowerCase()),
+  );
+  const withParts = parts.size > 1;
+  const labelOf = (id: string) => {
+    const env = envs.find((item) => item.id === id);
+    return env ? [withParts ? env.part : '', env.name].filter(Boolean).join(' · ') : id;
+  };
+  const actions = (place: FolderPlace) => {
+    const text = placeText(place, project.folders);
+    return (
+      <>
+        <IconButton
+          label={t('projects.showFolderIn', { name: text, app: fileManagerName })}
+          tooltip={t('keys.showIn', { app: fileManagerName })}
+          variant="ghost"
+          icon={<FolderOpen className="size-4" strokeWidth={1.9} />}
+          onClick={() =>
+            reveal.mutate({ id: project.id, place: { folder: place.folder, path: place.path } })
+          }
+        />
+        <TerminalButton project={project} place={place} labelOf={labelOf} />
+      </>
     );
+  };
+  // The stages of the parts that work in a place, by part: named where the
+  // row doesn't name them already (a project folder, or a folder of several).
+  const stages = (place: FolderPlace) =>
+    place.parts.some((part) => part.environments.length > 0) ? (
+      <span className="flex flex-col gap-1 py-0.5">
+        {place.parts.map((part) => (
+          <span key={part.part} className="flex min-w-0 flex-wrap items-center gap-1">
+            {withParts && part.part && (place.path === '' || place.parts.length > 1) ? (
+              <span className="mr-0.5 font-mono text-[11.5px] text-fg-2">{part.part}</span>
+            ) : null}
+            {part.environments.flatMap((id) => {
+              const env = envs.find((item) => item.id === id);
+              return env ? (
+                <StageChip key={id} env={env} label={labelOf(id)} back={project.id} />
+              ) : (
+                []
+              );
+            })}
+          </span>
+        ))}
+      </span>
+    ) : undefined;
+  const partsLine = (place: FolderPlace) =>
+    place.parts
+      .map((part) =>
+        part.source === 'set'
+          ? part.part
+          : part.part
+            ? t('projects.partAutomatic', { part: part.part })
+            : t('projects.automaticShort'),
+      )
+      .filter(Boolean)
+      .join(', ');
   return {
     id: 'folders',
     icon: <FolderOpen className="size-3.5 text-[#86EFAC]" strokeWidth={2.2} />,
     title: t('projects.cards.folders'),
     count: folders.length,
     rows: folders.map((path) => {
-      const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-      const problem = gone.has(path);
+      const root = places?.find((place) => place.folder === path && place.path === '');
+      const inside = places?.filter((place) => place.folder === path && place.path !== '') ?? [];
+      const missing = gone.has(path) || root?.missing === true;
+      // Named parts only: a project's one unnamed part shows on its own row.
+      const below = [
+        ...new Set(inside.flatMap((place) => place.parts.map((part) => part.part))),
+      ].filter(Boolean);
       return {
         key: path,
-        problem,
+        problem: missing || inside.some((place) => place.missing),
         node: (
-          <Row
-            mono
-            leading={
-              <Folder
-                aria-hidden="true"
-                className="size-4 shrink-0 text-subtle"
-                strokeWidth={1.9}
-              />
-            }
-            title={path}
-            subtitle={
-              problem ? (
-                <Problem text={t('projects.folderGone')} />
-              ) : hasLocal ? (
-                t('projects.withLocal')
-              ) : undefined
-            }
-          >
-            {problem ? (
-              <RemoveButton project={project} member={{ type: 'folder', path }} name={path} />
-            ) : (
-              <>
-                <IconButton
-                  label={t('projects.showFolderIn', { name: path, app: fileManagerName })}
-                  tooltip={t('keys.showIn', { app: fileManagerName })}
-                  variant="ghost"
-                  icon={<FolderOpen className="size-4" strokeWidth={1.9} />}
-                  onClick={() => reveal.mutate({ id: project.id, path })}
+          <li className="border-t border-white/[0.045] first:border-t-0">
+            <Row
+              as="div"
+              mono
+              leading={
+                <Folder
+                  aria-hidden="true"
+                  className="size-4 shrink-0 text-subtle"
+                  strokeWidth={1.9}
                 />
-                <Button
-                  size="sm"
-                  icon={<SquareTerminal className="size-3.5" strokeWidth={2} />}
-                  aria-label={t('projects.openTerminalIn', { name: path })}
-                  onClick={() => {
-                    terminals.openLocal({
-                      folder: { project: project.id, path, label: `${project.name} · ${name}` },
-                    });
-                    navigate({ page: 'terminal' });
-                  }}
-                >
-                  {t('projects.openTerminal')}
-                </Button>
-              </>
-            )}
-          </Row>
+              }
+              title={path}
+              subtitle={
+                missing ? (
+                  <Problem text={t('projects.folderGone')} />
+                ) : root && root.parts.length === 0 && below.length > 0 ? (
+                  t('projects.partsInside', { list: below.join(', ') })
+                ) : undefined
+              }
+              detail={root && !missing ? stages(root) : undefined}
+            >
+              {missing ? (
+                <RemoveButton project={project} member={{ type: 'folder', path }} name={path} />
+              ) : (
+                <>
+                  {root ? (
+                    actions(root)
+                  ) : (
+                    // The places load: the folder shows, its terminal waits.
+                    <TerminalButton project={project} place={undefined} labelOf={labelOf} />
+                  )}
+                  {root && !locked && root.parts.length > 0 ? (
+                    <PartMenu project={project} place={root} />
+                  ) : null}
+                </>
+              )}
+            </Row>
+            {inside.length > 0 ? (
+              <ul className="mb-1 ml-[9px] border-l border-white/[0.07] pl-3">
+                {inside.map((place) => (
+                  <Row
+                    key={place.path}
+                    mono
+                    leading={
+                      <CornerDownRight
+                        aria-hidden="true"
+                        className="size-3.5 shrink-0 text-subtle"
+                        strokeWidth={2}
+                      />
+                    }
+                    title={place.path}
+                    subtitle={
+                      place.missing ? (
+                        <Problem text={t('projects.folderGone')} />
+                      ) : (
+                        <span className="font-sans">{partsLine(place)}</span>
+                      )
+                    }
+                    detail={place.missing ? undefined : stages(place)}
+                  >
+                    {place.missing || missing ? null : actions(place)}
+                    {locked ? null : <PartMenu project={project} place={place} />}
+                  </Row>
+                ))}
+              </ul>
+            ) : null}
+          </li>
         ),
       };
     }),
   };
+}
+
+/** A stage's pill, its link to the environment in the Environments section. */
+function StageChip({ env, label, back }: { env: EnvSummary; label: string; back: string }) {
+  const { t } = useTranslation();
+  const { navigate } = useRouter();
+  const open = t('projects.openIn', { name: label, section: t('nav.envs') });
+  return (
+    <button
+      type="button"
+      title={open}
+      aria-label={open}
+      onClick={() => navigate({ page: 'envs', envId: env.id, back })}
+      className={cn(
+        'pressable inline-flex h-[22px] min-w-12 max-w-[140px] shrink-0 items-center justify-center rounded-full px-2 font-mono text-[11.5px] outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]',
+        isProduction(env.name)
+          ? 'bg-[rgb(225_29_72/0.18)] text-[#fecdd3] hover:bg-[rgb(225_29_72/0.28)]'
+          : 'bg-white/[0.06] text-fg-2 hover:bg-white/[0.12]',
+      )}
+    >
+      <span className="truncate">{env.name}</span>
+    </button>
+  );
+}
+
+/**
+ * The folder of the parts that work in a place: Change folder… opens the
+ * part's folder dialog; Use automatic folder takes out the one the user set.
+ */
+function PartMenu({ project, place }: { project: Project; place: FolderPlace }) {
+  const { t } = useTranslation();
+  const [editing, setEditing] = useState<string | null>(null);
+  const automatic = useVaultMutation(
+    (part: string) => api.projectsSetPartFolder(project.id, part, null),
+    {
+      success: (_, part) => t('projects.partFolder.automaticDone', { part: part || project.name }),
+    },
+  );
+  const name = (part: string) => part || project.name;
+  const items = (part: PartPlace) => (
+    <>
+      <MenuItem
+        icon={<FolderInput className="size-4" strokeWidth={1.9} />}
+        onSelect={() => setEditing(part.part)}
+      >
+        {t('projects.partFolder.change')}
+      </MenuItem>
+      {part.source === 'set' ? (
+        <MenuItem
+          icon={<FolderSync className="size-4" strokeWidth={1.9} />}
+          onSelect={() => automatic.mutate(part.part)}
+        >
+          {t('projects.partFolder.automaticMenu')}
+        </MenuItem>
+      ) : null}
+    </>
+  );
+  const several = place.parts.length > 1;
+  return (
+    <>
+      <Menu>
+        <MenuTrigger asChild>
+          <IconButton
+            label={t('projects.partFolder.more', {
+              name: place.parts.map((part) => name(part.part)).join(', '),
+            })}
+            variant="ghost"
+            icon={<MoreHorizontal className="size-4" strokeWidth={1.9} />}
+          />
+        </MenuTrigger>
+        <MenuContent onCloseAutoFocus={(event) => editing !== null && event.preventDefault()}>
+          {place.parts.map((part, index) => (
+            <Fragment key={part.part}>
+              {several ? (
+                <>
+                  {index > 0 ? <MenuSeparator /> : null}
+                  <MenuLabel>{name(part.part)}</MenuLabel>
+                </>
+              ) : null}
+              {items(part)}
+            </Fragment>
+          ))}
+        </MenuContent>
+      </Menu>
+      <Dialog open={editing !== null} onOpenChange={(open) => !open && setEditing(null)}>
+        {editing !== null ? (
+          <PartFolderDialog project={project} part={editing} onDone={() => setEditing(null)} />
+        ) : null}
+      </Dialog>
+    </>
+  );
 }
 
 function useEnvironmentsCard(
@@ -933,12 +1137,12 @@ function useEnvironmentsCard(
   ids: string[],
   gone: Set<string>,
   library: Library,
+  places: FolderPlace[] | undefined,
 ): CardSpec | null {
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const terminals = useTerminals();
   if (ids.length === 0) return null;
-  const section = t('nav.envs');
   const envs = ids.flatMap((id) => library.envs?.find((env) => env.id === id) ?? []);
   // Parts show when the project has more than one.
   const parts = new Set(envs.map((env) => env.part.toLowerCase()));
@@ -946,6 +1150,14 @@ function useEnvironmentsCard(
   const firstOfPart = new Set(
     [...parts].flatMap((part) => envs.find((env) => env.part.toLowerCase() === part)?.id ?? []),
   );
+  // Where it works, when that says something: a folder in the project's,
+  // or which of several.
+  const folderOf = (id: string) => {
+    const at = project ? placeOfEnv(places, id) : undefined;
+    if (!project || !at) return undefined;
+    const text = envFolderText(at.place, project.folders);
+    return text ? { text, title: placeText(at.place, [at.place.folder]) } : undefined;
+  };
   const rows = ids.flatMap((id): CardRow[] => {
     const member: ProjectMember = { type: 'environment', id };
     if (!library.envs) {
@@ -966,7 +1178,8 @@ function useEnvironmentsCard(
       ];
     }
     const label = [withParts ? env.part : '', env.name].filter(Boolean).join(' · ');
-    const open = t('projects.openIn', { name: label, section });
+    // Once per part: on the row that names it (the first of the part).
+    const where = firstOfPart.has(env.id) ? folderOf(env.id) : undefined;
     return [
       {
         key: env.id,
@@ -975,30 +1188,30 @@ function useEnvironmentsCard(
           <Row
             leading={
               // The environment's stage is its link to the Environments section.
-              <button
-                type="button"
-                title={open}
-                aria-label={open}
-                onClick={() => navigate({ page: 'envs', envId: env.id, back })}
-                className={cn(
-                  'pressable inline-flex h-[22px] min-w-12 max-w-[140px] shrink-0 items-center justify-center rounded-full px-2 font-mono text-[11.5px] outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]',
-                  ['prod', 'production', 'live'].includes(env.name.toLowerCase())
-                    ? 'bg-[rgb(225_29_72/0.18)] text-[#fecdd3] hover:bg-[rgb(225_29_72/0.28)]'
-                    : 'bg-white/[0.06] text-fg-2 hover:bg-white/[0.12]',
-                )}
-              >
-                <span className="truncate">{env.name}</span>
-              </button>
+              <StageChip env={env} label={label} back={back} />
             }
             title={withParts && firstOfPart.has(env.id) ? env.part : ''}
             mono
             subtitle={
-              env.secretCount
-                ? t('envs.countsWithSecrets', {
-                    count: env.variableCount,
-                    secrets: env.secretCount,
-                  })
-                : t('envs.counts', { count: env.variableCount })
+              <>
+                {where ? (
+                  <>
+                    <span className="font-mono" title={where.title}>
+                      <span className="sr-only">
+                        {t('projects.partFolder.folderOf', { path: where.text })}
+                      </span>
+                      <span aria-hidden="true">{where.text}</span>
+                    </span>
+                    {' · '}
+                  </>
+                ) : null}
+                {env.secretCount
+                  ? t('envs.countsWithSecrets', {
+                      count: env.variableCount,
+                      secrets: env.secretCount,
+                    })
+                  : t('envs.counts', { count: env.variableCount })}
+              </>
             }
             // Where its .env files stand; one that needs the user leads to them.
             detail={

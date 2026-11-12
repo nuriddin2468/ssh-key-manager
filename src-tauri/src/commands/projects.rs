@@ -11,7 +11,7 @@
 //! Suggestions (`sshkm_core::vault::projects::suggest`) change nothing by
 //! themselves: the user accepts or dismisses each one.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -19,9 +19,12 @@ use serde::{Deserialize, Serialize};
 use sshkm_core::config::{HostEntry, HostKind, SshConfig};
 use sshkm_core::hosts_file::{self, HostsAddressKind, HostsFile};
 use sshkm_core::paths::home_dir;
-use sshkm_core::vault::envs::{EnvKind, EnvSummary, PartRename};
+use sshkm_core::vault::envs::PartRename;
 use sshkm_core::vault::projects::suggest::{self, Declined, HostFacts, ProjectSuggestion};
-use sshkm_core::vault::projects::{self, Project, ProjectInput, ProjectMember};
+use sshkm_core::vault::projects::{
+    self, FolderPlace, PartFolderChoice, Project, ProjectFolder, ProjectInput, ProjectMember,
+    places,
+};
 use sshkm_core::{ErrorCode, SecretString, fsutil, keys};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Manager, State};
@@ -86,27 +89,19 @@ pub async fn projects_missing_folders(
                 .unwrap_or_default(),
             other => other?,
         };
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let home = home_dir();
-            for folder in folders {
-                let found =
-                    projects::folder_path(&folder, home.as_deref()).is_some_and(|p| p.is_dir());
-                if tx.send((folder, found)).is_err() {
-                    return;
-                }
-            }
-        });
-        let deadline = std::time::Instant::now() + FOLDER_CHECK;
-        let mut gone = Vec::new();
-        while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
-            match rx.recv_timeout(left) {
-                Ok((folder, false)) => gone.push(folder),
-                Ok((_, true)) => {}
-                Err(_) => break,
-            }
-        }
-        Ok(gone)
+        let home = home_dir();
+        let gone = missing_dirs(
+            folders
+                .iter()
+                .map(|folder| projects::folder_path(folder, home.as_deref()))
+                .collect(),
+        );
+        Ok(folders
+            .into_iter()
+            .enumerate()
+            .filter(|(index, _)| gone.contains(index))
+            .map(|(_, folder)| folder)
+            .collect())
     })
     .await
 }
@@ -203,7 +198,7 @@ pub async fn projects_add_folder(
             format!("Добавить папку в {name}"),
             format!("{name} loyihasiga papka qo‘shish"),
         );
-        let Some(folder) = pick_folder(&app, title.pick())? else {
+        let Some(folder) = pick_folder(&app, title.pick(), None)? else {
             return Ok(None);
         };
         let text = projects::folder_text(&folder, home_dir().as_deref())?;
@@ -216,10 +211,12 @@ pub async fn projects_add_folder(
     .await
 }
 
-fn pick_folder(app: &AppHandle, title: &str) -> AppResult<Option<PathBuf>> {
+/// Asks for a folder in a system dialog, opened in `start` or the home
+/// folder.
+fn pick_folder(app: &AppHandle, title: &str, start: Option<PathBuf>) -> AppResult<Option<PathBuf>> {
     let mut dialog = app.dialog().file().set_title(title);
-    if let Some(home) = home_dir() {
-        dialog = dialog.set_directory(home);
+    if let Some(start) = start.or_else(home_dir) {
+        dialog = dialog.set_directory(start);
     }
     if let Some(window) = app.get_webview_window("main") {
         dialog = dialog.set_parent(&window);
@@ -503,7 +500,7 @@ pub async fn projects_suggest_in_folder(
             "Выберите папку с вашим кодом",
             "Kodingiz joylashgan papkani tanlang",
         );
-        let Some(folder) = pick_folder(&app, title.pick())? else {
+        let Some(folder) = pick_folder(&app, title.pick(), None)? else {
             return Ok(None);
         };
         let mut prefs = load_prefs(state);
@@ -516,12 +513,110 @@ pub async fn projects_suggest_in_folder(
     .await
 }
 
-/// Starts a shell in one of a project's folders, as `terminal_open_local`
-/// does: `shell` or the default one, in a `cols`×`rows` terminal. `folder`
-/// is the folder as the project keeps it; nothing outside the project's
-/// folders opens. While the vault is unlocked, the shell gets the variables
-/// of the project's `local` environment, if it has one; while it is locked
-/// the project comes from the copy kept for then, and the shell gets none.
+/// Where the project's parts work (`sshkm_core::vault::projects::places`):
+/// each of its folders, and the folders in them where parts work, with what
+/// a terminal there gets. Those this computer doesn't have are marked. While
+/// the vault is locked, from the copy kept for then: the folders the user
+/// set for parts, without environments. Quiet: the page asks often.
+#[tauri::command]
+pub async fn projects_places(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    id: String,
+) -> AppResult<Vec<FolderPlace>> {
+    blocking(&state, move |state| {
+        let opened = state
+            .vault
+            .with_quietly(&app, |vault| Ok(vault.project_places(&id)?));
+        let mut places = match opened {
+            Err(error) if error.code() == ErrorCode::VaultLocked => {
+                let project = copied(state, &id)?;
+                places::places(&project, None, &BTreeMap::new())
+            }
+            other => other?,
+        };
+        let home = home_dir();
+        let paths = places
+            .iter()
+            .map(|place| place_path_text(&place.folder, &place.path, home.as_deref()))
+            .collect();
+        for index in missing_dirs(paths) {
+            if let Some(place) = places.get_mut(index) {
+                place.missing = true;
+            }
+        }
+        Ok(places)
+    })
+    .await
+}
+
+/// Sets the folder a part of the project's environments works in (`part`,
+/// empty for its one unnamed part): one of the project's folders, or a
+/// folder in it, found on this computer and not leading out of it through a
+/// symbolic link. `None` goes back to where it works by itself: where its
+/// local environment's `.env` file is, else the project's first folder.
+#[tauri::command]
+pub async fn projects_set_part_folder(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    id: String,
+    part: String,
+    folder: Option<ProjectFolder>,
+) -> AppResult<Project> {
+    blocking(&state, move |state| {
+        state.vault.change(&app, &state.backup_dir, |vault| {
+            if let Some(folder) = &folder {
+                place_path(&vault.project(&id)?, folder, home_dir().as_deref())?;
+            }
+            vault.set_part_folder(&id, &part, folder.as_ref())?;
+            Ok(vault.project(&id)?)
+        })
+    })
+    .await
+}
+
+/// Asks for a folder in a system dialog, opened in the project's first
+/// folder found here, and returns it as a folder of the project or a folder
+/// in one: for the page to offer as a part's folder. `None` when the dialog
+/// was cancelled; refused when the folder isn't in one of the project's.
+#[tauri::command]
+pub async fn projects_pick_part_folder(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    id: String,
+) -> AppResult<Option<ProjectFolder>> {
+    blocking(&state, move |state| {
+        // No dialog while the vault is locked, or for a project that's gone.
+        let project = state.vault.with(&app, |vault| Ok(vault.project(&id)?))?;
+        let home = home_dir();
+        let start = project
+            .folders
+            .iter()
+            .filter_map(|folder| projects::folder_path(folder, home.as_deref()))
+            .find(|path| path.is_dir());
+        let title = Localized::new(
+            format!("Choose a folder in {}", project.name),
+            format!("Выберите папку в проекте {}", project.name),
+            format!("{} loyihasidagi papkani tanlang", project.name),
+        );
+        let Some(picked) = pick_folder(&app, title.pick(), start)? else {
+            return Ok(None);
+        };
+        let folder = folder_in_project(&project, &picked, home.as_deref())?;
+        place_path(&project, &folder, home.as_deref())?;
+        Ok(Some(folder))
+    })
+    .await
+}
+
+/// Starts a shell in one of a project's folders, or a folder in one where
+/// parts of its environments work, as `terminal_open_local` does: `shell`
+/// or the default one, in a `cols`×`rows` terminal. `folder` is the folder
+/// as the project keeps it and `path` one in it (empty for the folder
+/// itself), as the project's places name them; nothing else opens. The
+/// shell gets the variables of `env`, which must be one of those the place
+/// offers a terminal (a local one), or none. While the vault is locked the
+/// project comes from the copy kept for then, and the shell gets none.
 #[tauri::command]
 #[expect(
     clippy::too_many_arguments,
@@ -532,23 +627,50 @@ pub async fn projects_open_terminal(
     state: State<'_, Shared>,
     id: String,
     folder: String,
+    path: Option<String>,
+    env: Option<String>,
     shell: Option<String>,
     cols: u16,
     rows: u16,
     events: Channel<InvokeResponseBody>,
 ) -> AppResult<TerminalInfo> {
     let shared = Arc::clone(&state);
+    let place = ProjectFolder {
+        folder,
+        path: path.unwrap_or_default(),
+    };
     blocking(&state, move |state| {
         let opened = state.vault.with(&app, |vault| {
             let project = vault.project(&id)?;
-            let vars = local_variables(vault, &project)?;
-            Ok((project, vars))
+            let places = vault.project_places(&id)?;
+            let vars = match &env {
+                Some(env) => {
+                    if !find_place(&places, &place)?.terminal.contains(env) {
+                        return Err(AppError::invalid(
+                            "not an environment for a terminal in this folder",
+                        ));
+                    }
+                    variables(vault, env)?
+                }
+                None => Vec::new(),
+            };
+            Ok((project, places, vars))
         });
-        let (project, vars) = with_copy(opened, || state.vault.projects_copy(), &id)?;
-        let path = terminal_folder(&project, &folder, home_dir().as_deref())?;
-        let name = path
-            .file_name()
-            .map_or_else(|| folder.clone(), |n| n.to_string_lossy().into_owned());
+        let (project, places, vars) = match opened {
+            // Asked for variables: none while locked would be a surprise.
+            Err(error) if error.code() == ErrorCode::VaultLocked && env.is_none() => {
+                let project = copied(state, &id)?;
+                let places = places::places(&project, None, &BTreeMap::new());
+                (project, places, Vec::new())
+            }
+            other => other?,
+        };
+        find_place(&places, &place)?;
+        let path = place_path(&project, &place, home_dir().as_deref())?;
+        let name = path.file_name().map_or_else(
+            || place.folder.clone(),
+            |n| n.to_string_lossy().into_owned(),
+        );
         let shell = shells::find(shell.as_deref())?;
         let sink: Arc<dyn Sink> = Arc::new(events);
         shared.terminals.open_local(
@@ -563,46 +685,195 @@ pub async fn projects_open_terminal(
     .await
 }
 
-/// Shows one of the project's folders in the file manager (Finder,
-/// Explorer, Files). As for its terminal, the page names the project and
-/// the folder as the project keeps it; only a folder the project holds and
-/// this computer has is shown, never a path the page made up.
+/// Shows one of the project's folders, or a folder in one where parts of
+/// its environments work, in the file manager (Finder, Explorer, Files). As
+/// for its terminal, the page names the project and the place as the
+/// project's places name it; only one of those that this computer has is
+/// shown, never a path the page made up.
 #[tauri::command]
 pub async fn projects_reveal_folder(
     app: AppHandle,
     state: State<'_, Shared>,
     id: String,
     folder: String,
+    path: Option<String>,
 ) -> AppResult<()> {
+    let place = ProjectFolder {
+        folder,
+        path: path.unwrap_or_default(),
+    };
     blocking(&state, move |state| {
-        let opened = state
-            .vault
-            .with(&app, |vault| Ok((vault.project(&id)?, Vec::new())));
-        let (project, _) = with_copy(opened, || state.vault.projects_copy(), &id)?;
-        let path = terminal_folder(&project, &folder, home_dir().as_deref())?;
+        let opened = state.vault.with(&app, |vault| {
+            Ok((vault.project(&id)?, vault.project_places(&id)?))
+        });
+        let (project, places) = match opened {
+            Err(error) if error.code() == ErrorCode::VaultLocked => {
+                let project = copied(state, &id)?;
+                let places = places::places(&project, None, &BTreeMap::new());
+                (project, places)
+            }
+            other => other?,
+        };
+        find_place(&places, &place)?;
+        let path = place_path(&project, &place, home_dir().as_deref())?;
         tauri_plugin_opener::reveal_item_in_dir(&path)
             .map_err(|error| AppError::new(ErrorCode::Io, error.to_string()))
     })
     .await
 }
 
-/// The variables of the project's `local` environment: the first of its
-/// environments' groups that has one outside the recycle bin.
-/// The project from the vault, or while it is locked from the copy kept
-/// for then, without variables.
-fn with_copy(
-    opened: AppResult<(Project, Vec<(String, SecretString)>)>,
-    copy: impl FnOnce() -> Vec<Project>,
-    id: &str,
-) -> AppResult<(Project, Vec<(String, SecretString)>)> {
-    match opened {
-        Err(error) if error.code() == ErrorCode::VaultLocked => copy()
-            .into_iter()
-            .find(|p| p.id == id)
-            .map(|project| (project, Vec::new()))
-            .ok_or_else(|| AppError::not_found(format!("project {id}"))),
-        other => other,
+/// Sets the folder of the part the environment `env` is in, as a dialog
+/// that made or edited it chose (`None` leaves it): one of its project's
+/// folders, or one in it found here ([`place_path`]), or back to automatic.
+/// An environment in Personal has no folder.
+pub(crate) fn apply_folder_choice(
+    vault: &mut sshkm_core::vault::Vault,
+    env: &str,
+    choice: Option<&PartFolderChoice>,
+) -> AppResult<()> {
+    let Some(choice) = choice else {
+        return Ok(());
+    };
+    let summary = vault.environment(env)?.summary;
+    let Some(project) = summary.project else {
+        return Err(AppError::invalid(
+            "an environment in Personal has no folder",
+        ));
+    };
+    let place = choice.place();
+    if let Some(place) = &place {
+        place_path(&vault.project(&project)?, place, home_dir().as_deref())?;
     }
+    vault.set_part_folder(&project, &summary.part, place.as_ref())?;
+    Ok(())
+}
+
+/// The project from the copy kept for while the vault is locked.
+fn copied(state: &AppState, id: &str) -> AppResult<Project> {
+    state
+        .vault
+        .projects_copy()
+        .into_iter()
+        .find(|p| p.id == id)
+        .ok_or_else(|| AppError::not_found(format!("project {id}")))
+}
+
+/// The place `wanted` names among a project's places: one of its folders,
+/// or a folder in one where parts work.
+fn find_place<'a>(places: &'a [FolderPlace], wanted: &ProjectFolder) -> AppResult<&'a FolderPlace> {
+    places
+        .iter()
+        .find(|place| place.folder == wanted.folder && place.path == wanted.path)
+        .ok_or_else(|| AppError::invalid("not one of the project's folders"))
+}
+
+/// The folder `place` names on this computer: one of the project's folders,
+/// found here, or a folder in it that is found here and stays inside it
+/// (no symbolic link leads out). A folder in it comes back as it was
+/// checked, with links resolved, so one changed after the check can't
+/// lead elsewhere.
+pub(crate) fn place_path(
+    project: &Project,
+    place: &ProjectFolder,
+    home: Option<&Path>,
+) -> AppResult<PathBuf> {
+    let root = terminal_folder(project, &place.folder, home)?;
+    let path = places::check_path(&place.path)?;
+    if path.is_empty() {
+        return Ok(root);
+    }
+    let target = path
+        .split('/')
+        .fold(root.clone(), |dir, name| dir.join(name));
+    let gone = || AppError::not_found(format!("{}/{path} on this computer", place.folder));
+    let (real_root, real) = (
+        root.canonicalize().map_err(|_| gone())?,
+        target.canonicalize().map_err(|_| gone())?,
+    );
+    if !real.starts_with(&real_root) {
+        return Err(AppError::invalid(
+            "the folder leads out of the project's folder",
+        ));
+    }
+    if !real.is_dir() {
+        return Err(gone());
+    }
+    Ok(fsutil::without_verbatim_prefix(real))
+}
+
+/// Where `place` would be on this computer, without checking it: for
+/// telling whether it is here.
+fn place_path_text(folder: &str, path: &str, home: Option<&Path>) -> Option<PathBuf> {
+    let root = projects::folder_path(folder, home)?;
+    let path = places::check_path(path).ok()?;
+    Some(
+        path.split('/')
+            .filter(|name| !name.is_empty())
+            .fold(root, |dir, name| dir.join(name)),
+    )
+}
+
+/// `picked` (from the folder dialog) as one of the project's folders, or a
+/// folder in one: in the deepest of them that holds it, compared as they
+/// are on disk.
+fn folder_in_project(
+    project: &Project,
+    picked: &Path,
+    home: Option<&Path>,
+) -> AppResult<ProjectFolder> {
+    let real = picked
+        .canonicalize()
+        .map_err(|_| AppError::not_found(format!("{}", picked.display())))?;
+    project
+        .folders
+        .iter()
+        .filter_map(|folder| {
+            let root = projects::folder_path(folder, home)?.canonicalize().ok()?;
+            let rest = real.strip_prefix(&root).ok()?;
+            let names: Option<Vec<&str>> =
+                rest.components().map(|c| c.as_os_str().to_str()).collect();
+            let path = places::check_path(&names?.join("/")).ok()?;
+            Some((root.components().count(), folder, path))
+        })
+        .max_by_key(|(depth, _, _)| *depth)
+        .map(|(_, folder, path)| ProjectFolder {
+            folder: folder.clone(),
+            path,
+        })
+        .ok_or_else(|| AppError::invalid("choose a folder inside one of the project's folders"))
+}
+
+/// Which of `paths` this computer doesn't have as folders, by index; one
+/// that isn't a path here counts as missing. A check that doesn't finish
+/// within [`FOLDER_CHECK`] counts as there: unknown is not missing.
+fn missing_dirs(paths: Vec<Option<PathBuf>>) -> BTreeSet<usize> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let count = paths.len();
+    std::thread::spawn(move || {
+        for (index, path) in paths.into_iter().enumerate() {
+            let found = path.is_some_and(|path| path.is_dir());
+            if tx.send((index, found)).is_err() {
+                return;
+            }
+        }
+    });
+    let deadline = std::time::Instant::now() + FOLDER_CHECK;
+    let mut gone = BTreeSet::new();
+    let mut seen = 0;
+    while seen < count
+        && let Some(left) = deadline.checked_duration_since(std::time::Instant::now())
+    {
+        match rx.recv_timeout(left) {
+            Ok((index, found)) => {
+                seen += 1;
+                if !found {
+                    gone.insert(index);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    gone
 }
 
 /// The folder a terminal opens in, or the file manager shows: one of the
@@ -616,35 +887,13 @@ fn terminal_folder(project: &Project, folder: &str, home: Option<&Path>) -> AppR
         .ok_or_else(|| AppError::not_found(format!("{folder} on this computer")))
 }
 
-/// The project's local environment: a local one (its kind, not its name)
-/// outside the recycle bin, the one named `local` if there are several, else
-/// the first the project took. A remote environment never goes into a shell
-/// on this computer.
-fn local_environment<'a>(project: &Project, envs: &'a [EnvSummary]) -> Option<&'a EnvSummary> {
-    let local: Vec<&EnvSummary> = project
-        .environments
-        .iter()
-        .filter_map(|id| envs.iter().find(|env| env.id == *id))
-        .filter(|env| !env.in_trash && env.kind == EnvKind::Local)
-        .collect();
-    local
-        .iter()
-        .find(|env| env.name.eq_ignore_ascii_case("local"))
-        .or(local.first())
-        .copied()
-}
-
-/// The variables of the project's `local` environment ([`local_environment`]).
-fn local_variables(
+/// An environment's variables, as a shell gets them.
+fn variables(
     vault: &mut sshkm_core::vault::Vault,
-    project: &Project,
+    env: &str,
 ) -> AppResult<Vec<(String, SecretString)>> {
-    let envs = vault.environments();
-    let Some(local) = local_environment(project, &envs) else {
-        return Ok(Vec::new());
-    };
     Ok(vault
-        .env_variables(&local.id)?
+        .env_variables(env)?
         .into_iter()
         .map(|var| (var.name, var.value))
         .collect())
@@ -856,22 +1105,8 @@ mod tests {
             environments: envs.iter().map(|e| (*e).to_owned()).collect(),
             logins: Vec::new(),
             hosts_file: Vec::new(),
+            parts: Vec::new(),
             modified: String::new(),
-        }
-    }
-
-    fn env(id: &str, part: &str, name: &str, in_trash: bool) -> EnvSummary {
-        EnvSummary {
-            id: id.into(),
-            project: Some("p".into()),
-            part: part.into(),
-            group: part.into(),
-            name: name.into(),
-            kind: EnvKind::from_name(name),
-            variable_count: 0,
-            secret_count: 0,
-            in_trash,
-            modified: None,
         }
     }
 
@@ -903,55 +1138,73 @@ mod tests {
     }
 
     #[test]
-    fn a_locked_vault_opens_from_the_copy_without_variables() {
-        let locked = || Err(AppError::new(ErrorCode::VaultLocked, "locked"));
-        let (found, vars) = with_copy(locked(), || vec![project(&["~/x"], &[])], "p").unwrap();
-        assert_eq!(found.folders, ["~/x"]);
-        assert!(vars.is_empty());
-        let missing = with_copy(locked(), Vec::new, "p").unwrap_err();
-        assert_eq!(missing.code(), ErrorCode::NotFound);
-        let other = with_copy(
-            Err(AppError::invalid("bad")),
-            || vec![project(&[], &[])],
-            "p",
-        )
-        .unwrap_err();
-        assert_eq!(other.code(), ErrorCode::InvalidInput);
+    fn a_folder_in_a_project_folder_opens_only_inside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let shop = home.join("code").join("shop");
+        std::fs::create_dir_all(shop.join("apps").join("api")).unwrap();
+        std::fs::create_dir_all(home.join("outside")).unwrap();
+        let project = project(&["~/code/shop"], &[]);
+        let at = |path: &str| ProjectFolder {
+            folder: "~/code/shop".into(),
+            path: path.into(),
+        };
+        assert_eq!(
+            place_path(&project, &at("apps/api"), Some(home)).unwrap(),
+            // As it was checked: links resolved, and on Windows `C:\…`, not `\\?\C:\…`.
+            fsutil::without_verbatim_prefix(shop.join("apps").join("api").canonicalize().unwrap())
+        );
+        assert_eq!(place_path(&project, &at(""), Some(home)).unwrap(), shop);
+        for bad in ["..", "apps/../..", "/etc"] {
+            let refused = place_path(&project, &at(bad), Some(home)).unwrap_err();
+            assert_eq!(refused.code(), ErrorCode::InvalidInput, "{bad}");
+        }
+        let gone = place_path(&project, &at("apps/web"), Some(home)).unwrap_err();
+        assert_eq!(gone.code(), ErrorCode::NotFound);
+        #[cfg(unix)]
+        {
+            // A symbolic link in the project that leads out of it.
+            std::os::unix::fs::symlink(home.join("outside"), shop.join("out")).unwrap();
+            let out = place_path(&project, &at("out"), Some(home)).unwrap_err();
+            assert_eq!(out.code(), ErrorCode::InvalidInput);
+        }
     }
 
     #[test]
-    fn the_local_environment_is_the_one_named_local_else_the_first_the_project_took() {
-        let envs = [
-            env("a-local", "api", "LOCAL", false),
-            env("w-local", "web", "local", false),
-            env("w-old", "web", "local", true),
-            env("w-dev", "web", "dev", false),
-        ];
-        let shop = project(&[], &["w-dev", "w-old", "w-local", "a-local"]);
-        assert_eq!(local_environment(&shop, &envs).unwrap().id, "w-local");
-        let api_first = project(&[], &["a-local", "w-local"]);
-        assert_eq!(local_environment(&api_first, &envs).unwrap().id, "a-local");
-        let no_local = project(&[], &["w-old", "w-dev"]);
-        assert_eq!(local_environment(&no_local, &envs).unwrap().id, "w-dev");
-        assert!(local_environment(&project(&[], &["other"]), &envs).is_none());
+    fn a_picked_folder_is_found_in_the_deepest_project_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let api = home.join("code").join("shop").join("apps").join("api");
+        std::fs::create_dir_all(&api).unwrap();
+        std::fs::create_dir_all(home.join("blog")).unwrap();
+        let project = project(&["~/code", "~/code/shop"], &[]);
+        assert_eq!(
+            folder_in_project(&project, &api, Some(home)).unwrap(),
+            ProjectFolder {
+                folder: "~/code/shop".into(),
+                path: "apps/api".into(),
+            }
+        );
+        assert_eq!(
+            folder_in_project(&project, &home.join("code"), Some(home)).unwrap(),
+            ProjectFolder {
+                folder: "~/code".into(),
+                path: String::new(),
+            }
+        );
+        let outside = folder_in_project(&project, &home.join("blog"), Some(home)).unwrap_err();
+        assert_eq!(outside.code(), ErrorCode::InvalidInput);
     }
 
-    /// The kind decides, not the name: a `local` the user made remote never
-    /// goes into the shell, and a `dev` that is local does when there's no
-    /// `local`.
     #[test]
-    fn the_local_environment_is_one_whose_kind_is_local() {
-        let mut remote_local = env("w-local", "web", "local", false);
-        remote_local.kind = EnvKind::Remote;
-        let envs = [
-            remote_local,
-            env("w-dev", "web", "dev", false),
-            env("w-prod", "web", "prod", false),
-        ];
-        let shop = project(&[], &["w-local", "w-dev", "w-prod"]);
-        assert_eq!(local_environment(&shop, &envs).unwrap().id, "w-dev");
-        let only_remote = [env("w-prod", "web", "prod", false)];
-        assert!(local_environment(&shop, &only_remote).is_none());
+    fn folders_not_here_are_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let gone = missing_dirs(vec![
+            Some(dir.path().to_path_buf()),
+            Some(dir.path().join("gone")),
+            None,
+        ]);
+        assert_eq!(gone.into_iter().collect::<Vec<_>>(), [1, 2]);
     }
 
     fn hosts(text: &str) -> Vec<HostEntry> {

@@ -5,8 +5,11 @@
 // Suggestions: a few Git folders, one of them for the existing Shop, and
 // what a folder picked to look into finds.
 
+import type { FolderPlace } from '@/bindings/FolderPlace';
+import type { PartPlace } from '@/bindings/PartPlace';
 import type { Project } from '@/bindings/Project';
 import type { ProjectColor } from '@/bindings/ProjectColor';
+import type { ProjectFolder } from '@/bindings/ProjectFolder';
 import type { ProjectInput } from '@/bindings/ProjectInput';
 import type { ProjectMember } from '@/bindings/ProjectMember';
 import type { ProjectSuggestion } from '@/bindings/ProjectSuggestion';
@@ -14,8 +17,12 @@ import type { TerminalEvent } from '@/bindings/TerminalEvent';
 import {
   mockEnvOwner,
   mockEnvsInGroup,
-  mockLocalEnvironment,
+  mockEnvVars,
   mockOwnedEnvs,
+  mockProjectEnvs,
+  onMockPartFolder,
+  onMockPartMoved,
+  type ProjectEnv,
   setMockEnvOwner,
   withMockRename,
 } from './envs';
@@ -40,7 +47,9 @@ function project(
   id: string,
   name: string,
   color: ProjectColor,
-  members: Partial<Pick<MockProject, 'folders' | 'hosts' | 'keys' | 'environments' | 'hostsFile'>>,
+  members: Partial<
+    Pick<MockProject, 'folders' | 'hosts' | 'keys' | 'environments' | 'hostsFile' | 'parts'>
+  >,
   loginTitles: string[],
 ): MockProject {
   return {
@@ -52,6 +61,7 @@ function project(
     keys: [],
     environments: [],
     hostsFile: [],
+    parts: [],
     ...members,
     loginTitles,
     logins: [],
@@ -72,6 +82,13 @@ const projects: MockProject[] = [
       environments: ['shop-api', 'shop-web', 'shop-jobs'],
       // The second isn't in the sample hosts file: it shows as missing.
       hostsFile: ['staging-api.internal', 'shop-cdn.internal', 'shop.test'],
+      // A monorepo: the API and the jobs in folders of their own, so a
+      // terminal at its root asks which environment.
+      parts: [
+        { part: 'shop-api', folder: '~/code/shop-api', path: 'apps/api' },
+        { part: 'shop-jobs', folder: '~/code/shop-api', path: 'apps/worker' },
+        { part: 'shop-web', folder: '~/code/shop-web', path: '' },
+      ],
     },
     ['AWS console', 'prod-api'],
   ),
@@ -125,9 +142,149 @@ function resolveLogins() {
 /** Folders the preview pretends aren't on this computer. */
 const MISSING_FOLDERS = new Set(['~/code/shop-web']);
 
+const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+const parentOf = (path: string) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
+const below = (path: string, under: string) =>
+  path !== '' && (under === '' || path.startsWith(`${under}/`));
+const missingHere = (place: ProjectFolder) =>
+  MISSING_FOLDERS.has(place.folder) || place.path.split('/').includes('gone');
+
+/**
+ * Where the project's parts work, as `places` does: the folder set, else
+ * where a local stage's first file is, else the project's first folder.
+ * While locked, only the folders set, without environments.
+ */
+function mockPlaces(p: MockProject, unlocked: boolean): FolderPlace[] {
+  const held = (folder: string) => p.folders.includes(folder);
+  const first = p.folders[0];
+  const root = first === undefined ? undefined : { folder: first, path: '' };
+  const parts: [string, ProjectEnv[]][] = [];
+  if (unlocked) {
+    for (const env of mockProjectEnvs(p.id)) {
+      const group = parts.find(([part]) => same(part, env.part));
+      if (group) group[1].push(env);
+      else parts.push([env.part, [env]]);
+    }
+  } else {
+    for (const part of p.parts) if (held(part.folder)) parts.push([part.part, []]);
+  }
+  const spots = (envs: ProjectEnv[]) => {
+    const out: ProjectFolder[] = [];
+    for (const file of envs.flatMap((env) => env.files)) {
+      if (!held(file.folder)) continue;
+      const spot = { folder: file.folder, path: parentOf(file.path) };
+      if (!out.some((s) => s.folder === spot.folder && s.path === spot.path)) out.push(spot);
+    }
+    return out;
+  };
+  const placed: { at: ProjectFolder; part: PartPlace }[] = [];
+  for (const [part, list] of parts) {
+    const set = p.parts.find((x) => same(x.part, part) && held(x.folder));
+    const isLocal = (env: ProjectEnv) => Number(env.name.toLowerCase() === 'local');
+    const locals = list
+      .filter((env) => env.kind === 'local')
+      .sort((a, b) => isLocal(b) - isLocal(a));
+    const fromFile = spots(locals)[0];
+    const at = set ? { folder: set.folder, path: set.path } : (fromFile ?? root);
+    if (!at) continue;
+    placed.push({
+      at,
+      part: {
+        part,
+        source: set ? 'set' : fromFile ? 'file' : 'project',
+        environments: list.map((env) => env.id),
+        local: locals[0]?.id ?? null,
+        automatic: fromFile ?? root ?? null,
+        automaticFromFile: fromFile !== undefined,
+        suggested: spots([...locals, ...list.filter((env) => env.kind !== 'local')]),
+      },
+    });
+  }
+  return p.folders.flatMap((folder) => {
+    const inside = placed.filter((x) => x.at.folder === folder);
+    const paths = [...new Set(inside.map((x) => x.at.path).filter(Boolean))].sort();
+    return ['', ...paths].map((path): FolderPlace => {
+      const here = inside.filter((x) => x.at.path === path).map((x) => x.part);
+      let terminal = here.flatMap((x) => x.local ?? []);
+      if (terminal.length === 0) {
+        terminal = inside.filter((x) => below(x.at.path, path)).flatMap((x) => x.part.local ?? []);
+      }
+      return { folder, path, parts: here, terminal, missing: missingHere({ folder, path }) };
+    });
+  });
+}
+
+/** The place the page names, among the project's, or the failure the backend gives. */
+function placeOf(p: MockProject, args: Record<string, unknown>): FolderPlace | Promise<never> {
+  const folder = String(args.folder);
+  const path = String(args.path ?? '');
+  const place = mockPlaces(p, isMockVaultUnlocked()).find(
+    (x) => x.folder === folder && x.path === path,
+  );
+  if (!place) return fail('invalid_input', 'not one of the project’s folders');
+  if (place.missing) return fail('not_found', `${folder}/${path} on this computer`);
+  return place;
+}
+
+/** Sets (or with `null` takes out) the folder of a part, checked as the backend does. */
+function setPartFolder(
+  p: MockProject,
+  part: string,
+  to: ProjectFolder | null,
+): Promise<never> | undefined {
+  const name = part.trim();
+  if (name.includes('/')) return fail('invalid_input', 'a part can’t have /');
+  if (to) {
+    if (!p.folders.includes(to.folder)) {
+      return fail('invalid_input', 'not one of the project’s folders');
+    }
+    const names = to.path === '' ? [] : to.path.split(/[\\/]/);
+    const bad = (x: string) =>
+      ['', '.', '..'].includes(x) ||
+      x.toLowerCase() === '.git' ||
+      x.trim() !== x ||
+      x.includes(':');
+    if (names.some(bad)) {
+      return fail('invalid_input', `not a folder in a project's folder: ${to.path}`);
+    }
+    if (missingHere(to)) return fail('not_found', `${to.folder}/${to.path} on this computer`);
+  }
+  p.parts = p.parts.filter((x) => !same(x.part, name));
+  if (to) p.parts.push({ part: name, folder: to.folder, path: to.path.replace(/\\/g, '/') });
+  p.modified = now();
+  return undefined;
+}
+
+// What an environment's dialog chose for its part's folder.
+onMockPartFolder((id, part, choice) => {
+  const p = editable(id);
+  if (p instanceof Promise) return p;
+  return setPartFolder(
+    p,
+    part,
+    choice.type === 'folder' ? { folder: choice.folder, path: choice.path } : null,
+  );
+});
+
+// A part left without environments gives its folder to the new one, as
+// `set_environment_part` does.
+onMockPartMoved((id, from, to) => {
+  const p = projects.find((x) => x.id === id);
+  const current = p?.parts.find((x) => same(x.part, from));
+  if (!p || !current || same(from, to)) return;
+  p.parts = p.parts.filter((x) => !same(x.part, from));
+  if (!p.parts.some((x) => same(x.part, to))) p.parts.push({ ...current, part: to });
+});
+
 function view(p: MockProject, unlocked: boolean): Project {
   const { loginTitles: _, heldFolders: _held, ...rest } = p;
-  return { ...rest, environments: mockOwnedEnvs(p.id), logins: unlocked ? [...p.logins] : [] };
+  return {
+    ...rest,
+    environments: mockOwnedEnvs(p.id),
+    logins: unlocked ? [...p.logins] : [],
+    // A part's folder counts while the project holds the folder it's in.
+    parts: p.parts.filter((part) => p.folders.includes(part.folder)),
+  };
 }
 
 /** Moves renamed hosts in the projects that hold them, as `save_host` does. */
@@ -481,30 +638,50 @@ export const projectsHandlers: Record<string, Handler> = {
     return suggestions();
   },
   // Stands in for Finder: checks the folder as the backend does.
-  projects_reveal_folder: ({ id, folder }) => {
-    const p = projects.find((x) => x.id === id);
-    if (!p) return fail('not_found', `project ${id}`);
-    const path = String(folder);
-    if (!p.folders.includes(path)) return fail('invalid_input', 'not one of the project’s folders');
-    if (MISSING_FOLDERS.has(path)) return fail('not_found', `${path} on this computer`);
-    return null;
+  projects_reveal_folder: (args) => {
+    const p = projects.find((x) => x.id === args.id);
+    if (!p) return fail('not_found', `project ${args.id}`);
+    const place = placeOf(p, args);
+    return place instanceof Promise ? place : null;
   },
   projects_missing_folders: ({ id }) =>
     (projects.find((x) => x.id === id)?.folders ?? []).filter((f) => MISSING_FOLDERS.has(f)),
-  projects_open_terminal: ({ id, folder, shell, events }) => {
+  projects_places: ({ id }) => {
     const p = projects.find((x) => x.id === id);
     if (!p) return fail('not_found', `project ${id}`);
-    const path = String(folder);
-    if (!p.folders.includes(path)) return fail('invalid_input', 'not one of the project’s folders');
-    if (MISSING_FOLDERS.has(path)) return fail('not_found', `${path} on this computer`);
-    const found = findShell(shell);
+    return mockPlaces(p, isMockVaultUnlocked());
+  },
+  projects_set_part_folder: ({ id, part, folder }) => {
+    const p = editable(id);
+    if (p instanceof Promise) return p;
+    const failed = setPartFolder(p, String(part ?? ''), folder as ProjectFolder | null);
+    return failed ?? view(p, true);
+  },
+  // Stands in for the system folder dialog: a folder in the project's first one.
+  projects_pick_part_folder: ({ id }) => {
+    const p = editable(id);
+    if (p instanceof Promise) return p;
+    const folder = p.folders.find((f) => !MISSING_FOLDERS.has(f));
+    return folder ? { folder, path: 'packages/shared' } : null;
+  },
+  projects_open_terminal: (args) => {
+    const p = projects.find((x) => x.id === args.id);
+    if (!p) return fail('not_found', `project ${args.id}`);
+    const env = args.env == null ? null : String(args.env);
+    if (env && !isMockVaultUnlocked()) return fail('vault_locked', 'the vault is locked');
+    const place = placeOf(p, args);
+    if (place instanceof Promise) return place;
+    if (env && !place.terminal.includes(env)) {
+      return fail('invalid_input', 'not an environment for a terminal in this folder');
+    }
+    const found = findShell(args.shell);
     if (!found) return fail('not_found', 'this shell isn’t on this computer anymore');
-    const local = isMockVaultUnlocked() ? mockLocalEnvironment(p.id) : undefined;
+    const name = (place.path || place.folder).split('/').pop() ?? place.folder;
     return openLocalShell(
-      `${p.name} · ${path.split('/').pop() ?? path}`,
+      `${p.name} · ${name}`,
       found,
-      local ?? [],
-      events as (message: ArrayBuffer | TerminalEvent) => void,
+      env ? (mockEnvVars(env) ?? []) : [],
+      args.events as (message: ArrayBuffer | TerminalEvent) => void,
     );
   },
   // Stands in for the system folder dialog: picks a new folder under ~/code.

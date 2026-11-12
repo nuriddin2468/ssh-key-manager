@@ -37,6 +37,7 @@ const project = (patch: Partial<Project>): Project => ({
   environments: [],
   logins: [],
   hostsFile: [],
+  parts: [],
   modified: '2026-11-10T10:00:00Z',
   ...patch,
 });

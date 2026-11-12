@@ -36,6 +36,9 @@
 //! with the smaller id, and a project joined into another keeps passing on
 //! what it is given, so every computer ends up with the same.
 //!
+//! A part of a project's environments may have a folder of its own in one
+//! of the project's folders: a member of its own kind too ([`places`]).
+//!
 //! What the app shows while the vault is locked is a copy without secrets
 //! ([`save_copy`]): names, colors and references.
 
@@ -52,7 +55,12 @@ use super::envs;
 use super::{Vault, in_group};
 use crate::{Error, Result, fsutil};
 
+pub mod places;
 pub mod suggest;
+
+pub use self::places::{
+    FolderPlace, PartFolder, PartFolderChoice, PartPlace, PlaceSource, ProjectFolder,
+};
 
 const PREFIX: &str = "sshkm.project.";
 /// What a project's logins are tagged with in KeePass, before its name.
@@ -79,7 +87,8 @@ const MAX_REFERENCE: usize = 4096;
 const MAX_AHEAD_MS: i64 = 5 * 60 * 1000;
 /// The kinds of member this version knows, as records name them.
 /// (`env:<group>`, from before environments were held by id, is kept as an
-/// unknown kind: passed on, not shown.)
+/// unknown kind: passed on, not shown. A part's folder, `partdir:`, is read
+/// by [`places`].)
 const KINDS: &[&str] = &["host", "key", "login", "envid", "folder", "hostsfile"];
 /// How records named an environments' group before ([`Vault::adopt_environments`]).
 const GROUP_KIND: &str = "env:";
@@ -187,6 +196,11 @@ pub struct Project {
     /// none.
     #[serde(default)]
     pub hosts_file: Vec<String>,
+    /// The folders the user set for parts of its environments, while it
+    /// holds the folder each is in ([`places`]). A copy kept by an older
+    /// version has none.
+    #[serde(default)]
+    pub parts: Vec<PartFolder>,
     /// RFC 3339, UTC.
     pub modified: String,
 }
@@ -547,6 +561,7 @@ fn parse(id: &str, json: &str) -> Option<Stored> {
     stored.members.retain(|key, _| {
         key.len() <= MAX_REFERENCE + 16
             && match key.split_once(':') {
+                Some((places::KIND_NAME, _)) => places::parse_key(key).is_some(),
                 Some((kind, _)) if KINDS.contains(&kind) => parse_member(key).is_some(),
                 Some((kind, _)) => !kind.is_empty(),
                 None => false,
@@ -630,6 +645,7 @@ fn project_view(id: String, stored: &Stored, held: &Held) -> Project {
         environments: Vec::new(),
         logins: Vec::new(),
         hosts_file: Vec::new(),
+        parts: stored.part_folders(),
         modified,
     };
     for member in stored.present() {

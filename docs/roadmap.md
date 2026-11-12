@@ -116,6 +116,19 @@ The foundation for everything below.
    hold outranks one the step placed on a device that hadn't heard of it, so the
    environment stays in Personal:
    [#47](https://github.com/nuriddin2468/ssh-key-manager/pull/47).
+8. **Environments follow folders**: a part of a project can have a folder of its own,
+   one of the project's folders or a folder in it (`apps/api`), kept in the project's
+   record as a member of its own kind, so it syncs with the project, the one set last
+   wins on every device, and older versions pass it on. Without one, a part works where
+   its local stage's `.env` file is, else in the project's first folder. Run in terminal
+   opens there (every stage, remote ones too); Open terminal in a folder gets the local
+   stage of the part that works there, and in a folder with several parts (a monorepo's
+   root) asks which, or none. The project page's Folders card is a tree, folder → part
+   subfolders → stages, with Folder… on each part; an environment shows its folder. New
+   environment asks for the part's folder (folders with `.env` files, the project's, or
+   another) and can take a `.env` file it finds there under management. Not yet: "Open in
+   editor". In review:
+   [#53](https://github.com/nuriddin2468/ssh-key-manager/pull/53).
 
 ### 3. Managed `.env` files — done
 

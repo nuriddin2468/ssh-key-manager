@@ -580,3 +580,34 @@ fn an_edited_stage_takes_its_parts_folder_to_its_new_part() {
         [("backend".to_owned(), "~/code/shop/apps/api".to_owned())]
     );
 }
+
+#[test]
+fn a_stage_moved_to_another_project_leaves_its_parts_folder_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "laptop");
+    let shop = shop(&mut vault);
+    let blog = vault
+        .add_project(&ProjectInput {
+            name: "Blog".into(),
+            color: ProjectColor::Green,
+        })
+        .unwrap();
+    let api = env(&mut vault, &shop, "api", "local");
+    env(&mut vault, &shop, "web", "local");
+    vault
+        .set_part_folder(&shop, "api", Some(&at("~/code/shop", "apps/api")))
+        .unwrap();
+    // To Blog's `web`: Shop's own `web` keeps working where it did.
+    vault
+        .update_environment(
+            &api,
+            &EnvInput {
+                project: Some(blog),
+                part: "web".into(),
+                name: "local".into(),
+                notes: String::new(),
+            },
+        )
+        .unwrap();
+    assert!(set(&vault, &shop).iter().all(|(part, _)| part != "web"));
+}

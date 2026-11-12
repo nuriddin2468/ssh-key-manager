@@ -197,7 +197,7 @@ pub fn fix_inside(ssh_dir: &Path, path: &Path, kind: PermKind) -> Result<()> {
     if !inside {
         return Err(refuse());
     }
-    fix(&without_verbatim_prefix(target), kind)
+    fix(&crate::fsutil::without_verbatim_prefix(target), kind)
 }
 
 /// Creates the new file `path` for writing so that, from the first moment,
@@ -212,21 +212,6 @@ pub fn fix_inside(ssh_dir: &Path, path: &Path, kind: PermKind) -> Result<()> {
 #[cfg(windows)]
 pub(crate) fn create_private(path: &Path) -> std::io::Result<fs::File> {
     imp::create_private(path)
-}
-
-/// `C:\…` for `\\?\C:\…`, which [`fs::canonicalize`] returns on Windows and
-/// not every tool takes; other paths are returned unchanged.
-fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
-    let text = path.to_string_lossy();
-    match text.strip_prefix(r"\\?\") {
-        Some(rest)
-            if rest.as_bytes().get(1) == Some(&b':')
-                && rest.as_bytes().first().is_some_and(u8::is_ascii_alphabetic) =>
-        {
-            PathBuf::from(rest)
-        }
-        _ => path,
-    }
 }
 
 #[cfg(unix)]
@@ -752,7 +737,7 @@ mod tests {
     #[test]
     fn verbatim_prefix_is_dropped_for_drive_paths_only() {
         assert_eq!(
-            without_verbatim_prefix(PathBuf::from(r"\\?\C:\Users\me\.ssh\id")),
+            crate::fsutil::without_verbatim_prefix(PathBuf::from(r"\\?\C:\Users\me\.ssh\id")),
             PathBuf::from(r"C:\Users\me\.ssh\id")
         );
         for kept in [
@@ -761,7 +746,7 @@ mod tests {
             "/home/me/.ssh/id",
         ] {
             assert_eq!(
-                without_verbatim_prefix(PathBuf::from(kept)),
+                crate::fsutil::without_verbatim_prefix(PathBuf::from(kept)),
                 PathBuf::from(kept)
             );
         }

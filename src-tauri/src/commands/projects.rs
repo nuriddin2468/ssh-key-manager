@@ -798,7 +798,7 @@ pub(crate) fn place_path(
     if !real.is_dir() {
         return Err(gone());
     }
-    Ok(real)
+    Ok(fsutil::without_verbatim_prefix(real))
 }
 
 /// Where `place` would be on this computer, without checking it: for

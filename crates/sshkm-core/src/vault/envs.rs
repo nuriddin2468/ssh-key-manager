@@ -722,8 +722,11 @@ impl Vault {
         }
         if part != current.summary.part {
             self.put_part(entry_id, &part)?;
-            // Its part's folder goes with it, when it was the last there.
-            if let Some(project) = &current.summary.project {
+            // Its part's folder goes with it, when it was the last there
+            // and stays in its project (a folder is the project's).
+            if let Some(project) = &current.summary.project
+                && input.project.as_ref() == Some(project)
+            {
                 self.follow_part_folders(
                     &[(project.clone(), current.summary.part.clone())],
                     &part,

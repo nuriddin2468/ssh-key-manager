@@ -566,7 +566,12 @@ export const envsHandlers: Record<string, Handler> = {
       Object.assign(item, { part: part.trim(), name: name.trim(), notes: notes.trimEnd() });
       // The last of its part takes the part's folder along.
       const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-      if (owner && !envs.some((e) => mockEnvOwner(e.id) === owner && same(partOf(e), before))) {
+      const stays = project === owner;
+      if (
+        owner &&
+        stays &&
+        !envs.some((e) => mockEnvOwner(e.id) === owner && same(partOf(e), before))
+      ) {
         partMoved(owner, before, part.trim());
       }
       // Into another project, or Personal: the project's record says so.

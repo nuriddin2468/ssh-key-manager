@@ -347,6 +347,14 @@ impl Stored {
         self.removed.is_none_or(|removed| self.latest() > removed)
     }
 
+    /// Whether its names are still the app's, for `project/` tags: a live
+    /// record, or one removed within [`KEEP_REMOVED_MS`] of `now`. A
+    /// tombstone kept longer only for what it says about environments
+    /// ([`Self::prune`]) lets its names go, as it would have gone itself.
+    fn names_count(&self, now: i64) -> bool {
+        self.is_live() || self.removed.is_none_or(|r| r >= now - KEEP_REMOVED_MS)
+    }
+
     /// A time for a change now, later than every time it holds, so that a
     /// change here always wins over what it changes.
     fn tick(&self) -> i64 {
@@ -1404,11 +1412,13 @@ impl Vault {
             live.entry(stored.name.v.to_lowercase())
                 .or_insert(id.as_str());
         }
+        let now = now_ms();
         let decided = |name: &str, login: &str| {
             let key = format!("login:{login}");
             all.iter().any(|(_, stored)| {
-                (same_name(&stored.name.v, name)
-                    || stored.aka.iter().any(|old| same_name(old, name)))
+                stored.names_count(now)
+                    && (same_name(&stored.name.v, name)
+                        || stored.aka.iter().any(|old| same_name(old, name)))
                     && stored.members.contains_key(&key)
             })
         };
@@ -1471,9 +1481,12 @@ impl Vault {
         let mut known: BTreeSet<String> = BTreeSet::new();
         let mut wanted: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let mut names: BTreeMap<String, String> = BTreeMap::new();
+        let now = now_ms();
         for (id, stored) in self.stored_projects() {
-            known.insert(stored.name.v.to_lowercase());
-            known.extend(stored.aka.iter().map(|name| name.to_lowercase()));
+            if stored.names_count(now) {
+                known.insert(stored.name.v.to_lowercase());
+                known.extend(stored.aka.iter().map(|name| name.to_lowercase()));
+            }
             if !stored.is_live() {
                 continue;
             }
@@ -1525,9 +1538,11 @@ impl Vault {
     /// for a name no record knows counts as the tag `<name>`; the app's own
     /// `project/` tags don't count.
     pub fn suggestion_logins(&self) -> Vec<suggest::LoginFacts> {
+        let now = now_ms();
         let known: BTreeSet<String> = self
             .stored_projects()
             .iter()
+            .filter(|(_, stored)| stored.names_count(now))
             .flat_map(|(_, stored)| std::iter::once(&stored.name.v).chain(&stored.aka))
             .map(|name| name.to_lowercase())
             .collect();

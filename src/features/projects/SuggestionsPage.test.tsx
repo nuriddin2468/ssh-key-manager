@@ -97,6 +97,11 @@ describe('adding a suggestion’s environments to a project of one part', () => 
     await screen.findByText('scripts · local');
     fireEvent.click(await screen.findByRole('button', { name: 'Add to Site' }));
     await screen.findByText('Site gets a second part');
+    // Escape goes back, as Back does.
+    fireEvent.keyDown(field(), { key: 'Escape' });
+    expect(screen.queryByText('Site gets a second part')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Add to Site' }));
+    await screen.findByText('Site gets a second part');
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'scripts · local' }));
@@ -109,5 +114,21 @@ describe('adding a suggestion’s environments to a project of one part', () => 
       [{ type: 'folder', path: '~/code/site' }],
       null,
     );
+  });
+
+  it('waits for the environments before it can tell', async () => {
+    let send: (envs: typeof ALL) => void = () => undefined;
+    api.envsList.mockReturnValue(
+      new Promise((resolve) => {
+        send = resolve;
+      }),
+    );
+    show();
+    const add = await screen.findByRole('button', { name: 'Add to Site' });
+    expect(add).toBeDisabled();
+    send(ALL);
+    await vi.waitFor(() => expect(add).toBeEnabled());
+    fireEvent.click(add);
+    expect(await screen.findByText('Site gets a second part')).toBeInTheDocument();
   });
 });

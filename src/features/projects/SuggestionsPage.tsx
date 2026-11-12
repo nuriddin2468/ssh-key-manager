@@ -193,7 +193,10 @@ function SuggestionCard({
 
   // Environments keep their parts: those kept may give the project its
   // second, whose first is named before, in the same change.
-  const envs = useEnvs().data ?? [];
+  const envList = useEnvs().data;
+  const envs = envList ?? [];
+  // Whether they give it a second part is known once the list is in.
+  const waiting = Boolean(existing) && suggestion.environments.length > 0 && !envList;
   const projectNames = new Map(projects.map((p) => [p.id, p.name]));
   const firstPart = useFirstPart();
   const naming = firstPart.naming;
@@ -311,6 +314,12 @@ function SuggestionCard({
             event.preventDefault();
             go();
           }}
+          // As in the dialogs, Escape goes back to the card.
+          onKeyDown={(event) => {
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            firstPart.back();
+          }}
         >
           <div className="flex flex-col gap-1">
             <h3 className="text-[13px] font-semibold">
@@ -379,7 +388,7 @@ function SuggestionCard({
             again. Enter in the step's one field sends its form. */}
         <Button
           variant="primary"
-          disabled={!naming && (kept.length === 0 || problem !== null || taken)}
+          disabled={!naming && (kept.length === 0 || problem !== null || taken || waiting)}
           loading={accept.isPending}
           onClick={go}
         >

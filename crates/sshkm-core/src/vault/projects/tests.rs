@@ -1682,3 +1682,44 @@ fn a_file_an_older_environment_is_written_to_works_once_it_takes_the_step() {
     assert!(vault.tidy_projects());
     assert!(!matches!(states(&vault)[..], [FileState::Inactive { .. }]));
 }
+
+#[test]
+fn a_tombstone_kept_for_its_environments_lets_its_name_go() {
+    // Shop held an environment and was deleted 401 days ago: its tombstone
+    // stays for the environment, but `project/Shop` is the user's tag again,
+    // as it was once the tombstone went.
+    let dir = tempfile::tempdir().unwrap();
+    let mut vault = vault(&dir, "vault");
+    let shop = vault.add_project(&input("Shop")).unwrap();
+    let other = vault.add_project(&input("Other")).unwrap();
+    new_env(&mut vault, Some(&shop), "", "dev").unwrap();
+    vault.remove_project(&shop).unwrap();
+    let day = 24 * 60 * 60 * 1000;
+    let mut stored = vault.stored_project(&shop).unwrap();
+    stored.name.t = now_ms() - 900 * day;
+    stored.color.t = now_ms() - 900 * day;
+    for presence in stored.members.values_mut() {
+        presence.a = now_ms() - 900 * day;
+    }
+    stored.removed = Some(now_ms() - 401 * day);
+    vault.put_project(&shop, &stored).unwrap();
+    vault.remove_project(&other).unwrap();
+    assert!(vault.stored_project(&shop).is_some());
+    let db = login(&mut vault, "db");
+    set_tags(&mut vault, &db, &["project/Shop", "mine"]);
+    assert!(!vault.projects_untidy());
+    vault.tidy_projects();
+    assert_eq!(tags(&vault, &db), ["project/Shop", "mine"]);
+    assert!(
+        vault
+            .suggestion_logins()
+            .iter()
+            .any(|l| l.id == db && l.tags.iter().any(|t| t == "Shop"))
+    );
+    // A new Shop takes the login its tag names.
+    let again = vault.add_project(&input("Shop")).unwrap();
+    assert_eq!(
+        vault.project(&again).unwrap().logins,
+        std::slice::from_ref(&db)
+    );
+}

@@ -2123,3 +2123,43 @@ fn a_shared_value_still_in_use_is_never_lost() {
     );
     assert!(typed.is_err());
 }
+
+#[test]
+fn undo_takes_a_shared_value_out_of_the_recycle_bin() {
+    let mut f = Fixture::new();
+    let env = f.env.clone();
+    let shared = f.vault.share_env_variable(&env, "API_TOKEN", &[]).unwrap();
+    f.bind(".env");
+    f.sync();
+    // Its only line removed from the file: the shared value goes to the
+    // recycle bin.
+    fs::write(f.path(".env"), "PORT=3000\n").unwrap();
+    let synced = f.sync();
+    let in_trash = |f: &Fixture| {
+        f.vault
+            .shared_values()
+            .iter()
+            .any(|value| value.id == shared && value.in_trash)
+    };
+    assert!(in_trash(&f));
+    // Undone: the variable uses it again, and it is back.
+    f.vault
+        .undo_env_file_change(&synced.changes[0].undo)
+        .unwrap();
+    assert!(!in_trash(&f));
+    let info = f.vault.environment(&env).unwrap();
+    let token = info
+        .variables
+        .iter()
+        .find(|var| var.name == "API_TOKEN")
+        .unwrap();
+    assert_eq!(token.shared.as_deref(), Some(shared.as_str()));
+    // Emptying the recycle bin leaves it be.
+    f.vault.empty_trash().unwrap();
+    assert!(
+        f.vault
+            .shared_values()
+            .iter()
+            .any(|value| value.id == shared)
+    );
+}

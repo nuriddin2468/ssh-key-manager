@@ -263,6 +263,19 @@ impl Vault {
         Ok(())
     }
 
+    /// Takes the shared value `shared` out of the recycle bin, if it is
+    /// there: a variable uses it again.
+    pub(super) fn restore_shared(&mut self, shared: Uuid) -> Result<()> {
+        let id = shared.to_string();
+        let in_trash = self.db.entry(EntryId::from(shared)).is_some_and(|entry| {
+            in_group(entry.parent().id(), self.db.meta.recyclebin_uuid, &self.db)
+        });
+        if in_trash {
+            self.restore_entry(&id)?;
+        }
+        Ok(())
+    }
+
     /// Gives every variable that uses the shared value `shared` a copy of
     /// it, in the recycle bin too: before it goes for good.
     pub(in crate::vault) fn release_shared(&mut self, shared: &str) -> Result<()> {

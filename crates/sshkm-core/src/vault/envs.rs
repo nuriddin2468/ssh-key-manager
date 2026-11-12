@@ -1018,14 +1018,25 @@ impl Vault {
     }
 
     /// Takes an environment out of the recycle bin, back into its project
-    /// and part, unless that part has one of its stage now.
+    /// and part, unless that part has one of its stage now; the shared
+    /// values it uses come back too.
     pub fn restore_environment(&mut self, id: &str) -> Result<()> {
         let env = self.environment(id)?.summary;
         if !env.in_trash {
             return Ok(());
         }
         self.check_free(env.project.as_deref(), &env.part, &env.name, Some(id))?;
-        self.restore_entry(id)
+        self.restore_entry(id)?;
+        // The shared values it uses come back with it.
+        let shared: Vec<uuid::Uuid> = self
+            .raw_env_variables(id)?
+            .iter()
+            .filter_map(|var| self.shared_of(var.value.expose_secret()))
+            .collect();
+        for shared in shared {
+            self.restore_shared(shared)?;
+        }
+        Ok(())
     }
 
     /// Where an environment is, for people: `Shop · backend`, `Shop`, a
@@ -1179,6 +1190,10 @@ impl Vault {
         let shared_before = before
             .iter()
             .any(|var| self.shared_of(var.value.expose_secret()).is_some());
+        let shared_after: Vec<uuid::Uuid> = after
+            .iter()
+            .filter_map(|var| self.shared_of(var.value.expose_secret()))
+            .collect();
         {
             let mut entry = self
                 .db
@@ -1188,7 +1203,11 @@ impl Vault {
             write_variables(&mut tracked, &before, &after);
         }
         self.settle_history(entry_id, true);
-        // A shared value it no longer uses may be used by none.
+        // A shared value it uses again (an Undo) comes out of the recycle
+        // bin; one it no longer uses may be used by none.
+        for shared in shared_after {
+            self.restore_shared(shared)?;
+        }
         if shared_before {
             self.trash_unused_shared()?;
         }

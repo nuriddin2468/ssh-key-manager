@@ -200,7 +200,7 @@ const adopted = new Set<string>();
 
 /** The AI tools and their ignore files, in the backend's order. */
 const AGENT_FILES: [AgentTool, string][] = [
-  ['claudeCode', '.claude/settings.local.json'],
+  ['claudeCode', '~/.claude/settings.json'],
   ['cursor', '.cursorignore'],
   ['windsurf', '.codeiumignore'],
   ['aider', '.aiderignore'],
@@ -215,8 +215,9 @@ const AGENTS_FOUND: AgentTool[] = ['claudeCode', 'cursor'];
 const agentLines = new Map<string, Set<string>>([['~/code/shop-api\ncursor', new Set(['/.env'])]]);
 const agentChoices = new Map<string, FolderChoice>();
 
-const agentLine = (tool: AgentTool, path: string) =>
-  tool === 'claudeCode' ? `Read(/${path})` : `/${path}`;
+/** As the backend writes them: Claude Code's by full path. */
+const agentLine = (tool: AgentTool, folder: string, path: string) =>
+  tool === 'claudeCode' ? `Read(/${expand(folder)}/${path})` : `/${path}`;
 
 /** The managed files in a project folder, as the backend lists them. */
 function filesIn(folder: string): string[] {
@@ -236,7 +237,9 @@ function agentView(folder: string): AgentRulesView {
       tool,
       file,
       exists: have !== undefined,
-      missing: files.map((path) => agentLine(tool, path)).filter((line) => !have?.has(line)),
+      missing: files
+        .map((path) => agentLine(tool, folder, path))
+        .filter((line) => !have?.has(line)),
       found: AGENTS_FOUND.includes(tool),
       problem: null,
     };
@@ -247,6 +250,7 @@ function agentView(folder: string): AgentRulesView {
     files,
     tools,
     choice: agentChoices.get(folder) ?? null,
+    failed: [],
   };
 }
 
@@ -262,7 +266,7 @@ function addAgentLines(folder: string, tools: AgentTool[]) {
   for (const tool of tools) {
     const key = `${folder}\n${tool}`;
     const have = agentLines.get(key) ?? new Set<string>();
-    for (const path of filesIn(folder)) have.add(agentLine(tool, path));
+    for (const path of filesIn(folder)) have.add(agentLine(tool, folder, path));
     agentLines.set(key, have);
   }
 }
@@ -469,7 +473,13 @@ export const envFilesHandlers: Record<string, Handler> = {
   envs_agents_add: async ({ project, folder, tools }): Promise<AgentRulesView> => {
     await requireUnlocked();
     const checked = await checkFolder(project, folder);
-    const chosen = [...new Set(tools as AgentTool[])].sort();
+    // With those chosen before, in the backend's order.
+    const before = agentChoices.get(checked);
+    const wanted = new Set([
+      ...(tools as AgentTool[]),
+      ...(before?.type === 'added' ? before.tools : []),
+    ]);
+    const chosen = AGENT_FILES.map(([tool]) => tool).filter((tool) => wanted.has(tool));
     addAgentLines(checked, chosen);
     agentChoices.set(checked, { type: 'added', tools: chosen });
     return agentView(checked);

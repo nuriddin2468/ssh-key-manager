@@ -3,4 +3,4 @@
 /**
  * Why a tool's rules file can't be changed.
  */
-export type RulesProblem = "link" | "notAFile" | "unreadable";
+export type RulesProblem = "link" | "notAFile" | "unreadable" | "noPlace";

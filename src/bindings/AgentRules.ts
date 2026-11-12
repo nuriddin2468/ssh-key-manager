@@ -3,12 +3,11 @@ import type { AgentTool } from "./AgentTool";
 import type { RulesProblem } from "./RulesProblem";
 
 /**
- * A tool's rules file in a folder, and what it lacks for the folder's
- * managed files.
+ * A tool's rules file, and what it lacks for the folder's managed files.
  */
 export type AgentRules = { tool: AgentTool, 
 /**
- * The file in the folder: `.cursorignore`.
+ * The file: `.cursorignore` in the folder, `~/.claude/settings.json`.
  */
 file: string, 
 /**

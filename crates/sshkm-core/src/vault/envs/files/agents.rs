@@ -1,28 +1,36 @@
 //! AI tools' own ignore rules for a folder's managed `.env` files, added
 //! only when the user says so for that folder.
 //!
-//! Most tools read a file of `.gitignore` patterns at the top of the
-//! project: Cursor `.cursorignore`, Windsurf `.codeiumignore`, Aider
-//! `.aiderignore`, Gemini CLI `.geminiignore`, Cline `.clineignore`, Roo
-//! Code `.rooignore`, Continue `.continueignore`, `JetBrains` AI Assistant and
-//! Gemini Code Assist `.aiexclude`. Claude Code reads deny rules from its
-//! settings: `Read(/apps/web/.env.local)` in `.claude/settings.local.json`,
-//! the user's own settings for the project (a path starting with `/` is from
-//! the folder the settings are for). Each file gets one line (or rule) per
-//! managed file, naming that file alone, as the line the app adds to
-//! `.gitignore` does ([`super::ignore_in_git`]); lines it has already are
-//! left alone, and nothing else in the file changes (a settings file keeps
-//! its keys in their order). A file is never written through a link.
-//! Codex and GitHub Copilot have no such file.
+//! Each tool reads its rules where it looks for them:
+//!
+//! - `.gitignore` patterns at the top of the project folder: Cursor
+//!   `.cursorignore`, Windsurf `.codeiumignore`, Gemini CLI `.geminiignore`,
+//!   Cline `.clineignore`, Roo Code `.rooignore`, Continue `.continueignore`,
+//!   `JetBrains` AI Assistant and Gemini Code Assist `.aiexclude`;
+//! - Aider: `.aiderignore` at the top of the Git working tree;
+//! - Claude Code: deny rules in the user's own settings,
+//!   `~/.claude/settings.json` (`$CLAUDE_CONFIG_DIR` if set), naming each
+//!   file by its full path (`Read(//Users/me/code/shop/.env)`), so they hold
+//!   wherever Claude Code is started and whichever settings the project has.
+//!
+//! Each file gets one line (or rule) per managed file, naming that file
+//! alone, as the line the app adds to `.gitignore` does
+//! ([`super::ignore_in_git`]); lines it has already are left alone, and
+//! nothing else in the file changes (a settings file keeps its keys in their
+//! order and its line ends). A file in a project folder is never written
+//! through a link; the user's own settings may be one (a dotfiles folder).
+//! A file that can't be changed is passed over, and the others still get
+//! their lines. Codex and GitHub Copilot have no such file.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use super::disk::ignore_pattern;
+use crate::vault::projects;
 use crate::{Error, Result, fsutil};
 
 /// Largest rules file that is read.
@@ -59,10 +67,10 @@ impl AgentTool {
         Self::JetBrains,
     ];
 
-    /// The tool's rules file in a folder, with `/` between parts.
-    pub fn rules_file(self) -> &'static str {
+    /// The name of the tool's rules file.
+    fn file_name(self) -> &'static str {
         match self {
-            Self::ClaudeCode => ".claude/settings.local.json",
+            Self::ClaudeCode => "settings.json",
             Self::Cursor => ".cursorignore",
             Self::Windsurf => ".codeiumignore",
             Self::Aider => ".aiderignore",
@@ -90,6 +98,67 @@ impl AgentTool {
     }
 }
 
+/// Where a folder's AI tools read their rules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RulesPlaces {
+    /// The project folder, on this computer.
+    pub folder: PathBuf,
+    /// The top of the Git working tree the folder is in, if any.
+    pub repository: Option<PathBuf>,
+    /// Claude Code's user settings, if there is a home folder.
+    pub claude_settings: Option<PathBuf>,
+    /// The home folder, to show files as `~/…`.
+    pub home: Option<PathBuf>,
+}
+
+impl RulesPlaces {
+    /// The places for the project folder `folder` on this computer.
+    pub fn of(folder: &Path, home: Option<&Path>) -> Self {
+        let claude = std::env::var_os("CLAUDE_CONFIG_DIR")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .or_else(|| home.map(|home| home.join(".claude")));
+        Self {
+            folder: folder.to_path_buf(),
+            repository: super::super::git_work_tree(folder),
+            claude_settings: claude.map(|dir| dir.join("settings.json")),
+            home: home.map(Path::to_path_buf),
+        }
+    }
+
+    /// The tool's rules file, and the folder its lines' paths start from
+    /// (`None`: they are full paths).
+    fn place(&self, tool: AgentTool) -> Option<(PathBuf, Option<PathBuf>)> {
+        match tool {
+            AgentTool::ClaudeCode => Some((self.claude_settings.clone()?, None)),
+            AgentTool::Aider => {
+                let base = self
+                    .repository
+                    .clone()
+                    .unwrap_or_else(|| self.folder.clone());
+                Some((base.join(tool.file_name()), Some(base)))
+            }
+            _ => Some((
+                self.folder.join(tool.file_name()),
+                Some(self.folder.clone()),
+            )),
+        }
+    }
+
+    /// The file as the dialog names it: by its name in the project folder,
+    /// else `~/…` or in full.
+    fn shown(&self, path: &Path) -> String {
+        if path.parent() == Some(self.folder.as_path()) {
+            return path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+        }
+        projects::folder_text(path, self.home.as_deref())
+            .unwrap_or_else(|_| path.display().to_string())
+    }
+}
+
 /// Why a tool's rules file can't be changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -101,16 +170,17 @@ pub enum RulesProblem {
     NotAFile,
     /// It can't be read as text, or as settings for Claude Code.
     Unreadable,
+    /// There is no place for it on this computer (no home folder).
+    NoPlace,
 }
 
-/// A tool's rules file in a folder, and what it lacks for the folder's
-/// managed files.
+/// A tool's rules file, and what it lacks for the folder's managed files.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
 pub struct AgentRules {
     pub tool: AgentTool,
-    /// The file in the folder: `.cursorignore`.
+    /// The file: `.cursorignore` in the folder, `~/.claude/settings.json`.
     pub file: String,
     /// The file is there already.
     pub exists: bool,
@@ -132,9 +202,8 @@ pub enum FolderChoice {
     Declined,
 }
 
-/// The users' choices by project folder, as projects keep folders
-/// (`~/code/shop`): kept by the app, one per computer, since the rules
-/// files are this computer's (or come with the repository).
+/// The user's choices by project folder, as projects keep folders
+/// (`~/code/shop`): kept by the app, one per computer.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentChoices {
     #[serde(default)]
@@ -142,13 +211,16 @@ pub struct AgentChoices {
 }
 
 impl AgentChoices {
-    /// The choices kept at `path`; none if there are none or they can't be
-    /// read.
-    pub fn load(path: &Path) -> Self {
-        fsutil::read_limited(path, 4 * 1024 * 1024)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default()
+    /// The choices kept at `path`; none if there is no file. Fails if one
+    /// is there that can't be read, so it isn't written over.
+    pub fn load(path: &Path) -> Result<Self> {
+        match fs::symlink_metadata(path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
+            _ => {}
+        }
+        let bytes = fsutil::read_limited(path, 4 * 1024 * 1024)?;
+        serde_json::from_slice(&bytes)
+            .map_err(|_| Error::Parse(format!("{} can't be read", path.display())))
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
@@ -165,22 +237,84 @@ impl AgentChoices {
     }
 }
 
-/// The line `.gitignore`-like files get for the managed file `path`, a
-/// path in the folder with `/` between parts.
-fn ignore_line(path: &str) -> String {
-    format!("/{}", ignore_pattern(path))
+/// What adding rules did, by tool.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RulesAdded {
+    /// The tools whose file changed.
+    pub changed: Vec<AgentTool>,
+    /// The tools whose file couldn't be changed, passed over.
+    pub failed: Vec<AgentTool>,
 }
 
-/// Claude Code's deny rule for the managed file `path`.
-fn claude_rule(path: &str) -> String {
-    format!("Read(/{})", ignore_pattern(path))
+/// A path's parts, in Unicode, or `None`.
+fn parts(path: &Path) -> Option<Vec<String>> {
+    path.components()
+        .filter_map(|part| match part {
+            Component::Normal(name) => Some(name.to_str().map(str::to_owned)),
+            _ => None,
+        })
+        .collect()
 }
 
-/// What each tool's rules file in `folder` lacks for the managed files
-/// `files` (paths in it, with `/` between parts). `found` names the tools
-/// used on this computer; a sign of a tool in the folder counts too.
+/// The line `.gitignore`-like files in `base` get for the managed file
+/// `path` of `folder`.
+fn ignore_line(base: &Path, folder: &Path, path: &str) -> Option<String> {
+    let mut all = parts(folder.strip_prefix(base).ok()?)?;
+    all.extend(path.split('/').map(str::to_owned));
+    Some(format!("/{}", ignore_pattern(&all.join("/"))))
+}
+
+/// Claude Code's deny rules for the managed file `path` of `folder`, by its
+/// full path as Claude Code writes paths (`C:\x` is `/c/x`): the folder as
+/// given and, if links lead elsewhere, as it is on disk.
+fn claude_rules(folder: &Path, path: &str) -> Vec<String> {
+    let mut folders = vec![folder.to_path_buf()];
+    if let Ok(real) = fs::canonicalize(folder)
+        && real != folder
+    {
+        folders.push(real);
+    }
+    folders
+        .iter()
+        .filter_map(|folder| {
+            let mut all = Vec::new();
+            for part in folder.components() {
+                match part {
+                    Component::Prefix(prefix) => {
+                        let drive = prefix.as_os_str().to_str()?.trim_start_matches(r"\\?\");
+                        all.push(drive.trim_end_matches(':').to_lowercase());
+                    }
+                    Component::Normal(name) => all.push(name.to_str()?.to_owned()),
+                    _ => {}
+                }
+            }
+            all.extend(path.split('/').map(str::to_owned));
+            Some(format!("Read(//{})", ignore_pattern(&all.join("/"))))
+        })
+        .collect()
+}
+
+/// The lines a tool's file should have for `files`: from `base`, or full
+/// paths for Claude Code (`base` is `None`).
+fn wanted(places: &RulesPlaces, base: Option<&Path>, files: &[String]) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    files
+        .iter()
+        .flat_map(|path| match base {
+            None => claude_rules(&places.folder, path),
+            Some(base) => ignore_line(base, &places.folder, path)
+                .into_iter()
+                .collect(),
+        })
+        .filter(|line| seen.insert(line.clone()))
+        .collect()
+}
+
+/// What each tool's rules file lacks for the managed files `files` (paths
+/// in the folder, with `/` between parts). `found` names the tools used on
+/// this computer; a sign of a tool in the folder counts too.
 pub fn agent_rules(
-    folder: &Path,
+    places: &RulesPlaces,
     files: &[String],
     found: &BTreeSet<AgentTool>,
 ) -> Vec<AgentRules> {
@@ -190,68 +324,70 @@ pub fn agent_rules(
             let used_here = tool
                 .folder_signs()
                 .iter()
-                .any(|sign| fs::symlink_metadata(folder.join(sign)).is_ok());
-            let (exists, missing, problem) = match read_rules(folder, tool) {
+                .any(|sign| fs::symlink_metadata(places.folder.join(sign)).is_ok());
+            let found = used_here || found.contains(&tool);
+            let Some((path, base)) = places.place(tool) else {
+                return AgentRules {
+                    tool,
+                    file: tool.file_name().to_owned(),
+                    exists: false,
+                    missing: Vec::new(),
+                    found,
+                    problem: Some(RulesProblem::NoPlace),
+                };
+            };
+            let (exists, missing, problem) = match read_rules(&path, tool) {
                 Ok(current) => (
                     current.is_some(),
-                    lacking(tool, current.as_ref(), files),
+                    lacking(current.as_ref(), wanted(places, base.as_deref(), files)),
                     None,
                 ),
                 Err(problem) => (true, Vec::new(), Some(problem)),
             };
             AgentRules {
                 tool,
-                file: tool.rules_file().to_owned(),
+                file: places.shown(&path),
                 exists,
                 missing,
-                found: used_here || found.contains(&tool),
+                found,
                 problem,
             }
         })
         .collect()
 }
 
-/// Adds to the rules files of `tools` in `folder` what they lack for the
-/// managed files `files`, making a file that isn't there. Returns the tools
-/// whose file changed. One whose file can't be changed fails the call, after
-/// those before it are written.
-pub fn add_agent_rules(
-    folder: &Path,
-    files: &[String],
-    tools: &[AgentTool],
-) -> Result<Vec<AgentTool>> {
-    let mut changed = Vec::new();
+/// Adds to the rules files of `tools` what they lack for the managed files
+/// `files`, making a file that isn't there. One that can't be changed is
+/// passed over, and named.
+pub fn add_agent_rules(places: &RulesPlaces, files: &[String], tools: &[AgentTool]) -> RulesAdded {
+    let mut added = RulesAdded::default();
     for &tool in tools {
-        let current = read_rules(folder, tool).map_err(|problem| {
-            Error::invalid(format!(
-                "{} can't be changed: {}",
-                tool.rules_file(),
-                match problem {
-                    RulesProblem::Link => "it is a symbolic link",
-                    RulesProblem::NotAFile => "it isn't a regular file",
-                    RulesProblem::Unreadable => "it can't be read",
-                }
-            ))
-        })?;
-        let missing = lacking(tool, current.as_ref(), files);
-        if missing.is_empty() {
-            continue;
+        match add_one(places, files, tool) {
+            Ok(true) => added.changed.push(tool),
+            Ok(false) => {}
+            Err(_) => added.failed.push(tool),
         }
-        let text = if tool == AgentTool::ClaudeCode {
-            let mut settings = match current {
-                Some(Rules::Settings(settings)) => settings,
-                _ => Json::Object(Vec::new()),
-            };
-            add_deny_rules(&mut settings, &missing)?;
-            let mut text = serde_json::to_string_pretty(&settings)
-                .map_err(|e| Error::Parse(format!("{e}")))?;
-            text.push('\n');
-            text
-        } else {
-            let mut text = match current {
-                Some(Rules::Lines(text)) => text,
-                _ => String::new(),
-            };
+    }
+    added
+}
+
+/// Adds to one tool's file what it lacks. Returns whether it changed.
+fn add_one(places: &RulesPlaces, files: &[String], tool: AgentTool) -> Result<bool> {
+    let (path, base) = places
+        .place(tool)
+        .ok_or_else(|| Error::invalid("no place for the file"))?;
+    let current =
+        read_rules(&path, tool).map_err(|problem| Error::invalid(format!("{problem:?}")))?;
+    let missing = lacking(current.as_ref(), wanted(places, base.as_deref(), files));
+    if missing.is_empty() {
+        return Ok(false);
+    }
+    let text = match current {
+        Some(Rules::Settings(mut settings, crlf)) => settings_text(&mut settings, &missing, crlf)?,
+        None if tool == AgentTool::ClaudeCode => {
+            settings_text(&mut Json::Object(Vec::new()), &missing, false)?
+        }
+        Some(Rules::Lines(mut text)) => {
             let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
             if !text.is_empty() && !text.ends_with('\n') {
                 text.push_str(eol);
@@ -261,80 +397,84 @@ pub fn add_agent_rules(
                 text.push_str(eol);
             }
             text
-        };
-        let path = rules_path(folder, tool);
-        ensure_folder(folder, &path)?;
-        fsutil::atomic_write(&path, text.as_bytes(), 0o644)?;
-        changed.push(tool);
+        }
+        None => {
+            let mut text = missing.join("\n");
+            text.push('\n');
+            text
+        }
+    };
+    if tool == AgentTool::ClaudeCode
+        && let Some(dir) = path.parent()
+    {
+        fs::create_dir_all(dir).map_err(|e| Error::io(e, dir))?;
     }
-    Ok(changed)
+    fsutil::atomic_write(&path, text.as_bytes(), 0o644)?;
+    Ok(true)
+}
+
+/// Claude Code's settings with `missing` added to `permissions.deny`, as
+/// text with the line ends the file had.
+fn settings_text(settings: &mut Json, missing: &[String], crlf: bool) -> Result<String> {
+    add_deny_rules(settings, missing)?;
+    let mut text =
+        serde_json::to_string_pretty(settings).map_err(|e| Error::Parse(format!("{e}")))?;
+    text.push('\n');
+    Ok(if crlf {
+        text.replace('\n', "\r\n")
+    } else {
+        text
+    })
 }
 
 /// A rules file as read.
 enum Rules {
     Lines(String),
-    Settings(Json),
+    /// Claude Code's settings, and whether its lines end with CRLF.
+    Settings(Json, bool),
 }
 
-fn rules_path(folder: &Path, tool: AgentTool) -> PathBuf {
-    let mut path = folder.to_path_buf();
-    path.extend(tool.rules_file().split('/'));
-    path
-}
-
-/// The tool's rules file in `folder`; `None` if there is none yet.
-fn read_rules(folder: &Path, tool: AgentTool) -> std::result::Result<Option<Rules>, RulesProblem> {
-    let path = rules_path(folder, tool);
-    // The folder on the way (`.claude`), if any, is a real folder.
-    if let Some(parent) = path.parent().filter(|parent| *parent != folder) {
-        match fs::symlink_metadata(parent) {
-            Ok(meta) if meta.file_type().is_symlink() => return Err(RulesProblem::Link),
-            Ok(meta) if !meta.is_dir() => return Err(RulesProblem::NotAFile),
-            Ok(_) => {}
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(_) => return Err(RulesProblem::Unreadable),
-        }
-    }
-    match fs::symlink_metadata(&path) {
+/// The tool's rules file at `path`; `None` if there is none yet. A file in
+/// a project folder is never one through a link; Claude Code's user
+/// settings may be.
+fn read_rules(path: &Path, tool: AgentTool) -> std::result::Result<Option<Rules>, RulesProblem> {
+    let own = tool == AgentTool::ClaudeCode;
+    let meta = if own {
+        fs::metadata(path)
+    } else {
+        fs::symlink_metadata(path)
+    };
+    match meta {
         Ok(meta) if meta.file_type().is_symlink() => return Err(RulesProblem::Link),
         Ok(meta) if !meta.is_file() => return Err(RulesProblem::NotAFile),
         Ok(_) => {}
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(RulesProblem::Unreadable),
     }
-    let bytes =
-        fsutil::read_limited(&path, MAX_RULES_FILE).map_err(|_| RulesProblem::Unreadable)?;
+    let bytes = fsutil::read_limited(path, MAX_RULES_FILE).map_err(|_| RulesProblem::Unreadable)?;
     let text = String::from_utf8(bytes).map_err(|_| RulesProblem::Unreadable)?;
-    if tool != AgentTool::ClaudeCode {
+    if !own {
         return Ok(Some(Rules::Lines(text)));
     }
+    let crlf = text.contains("\r\n");
     if text.trim().is_empty() {
-        return Ok(Some(Rules::Settings(Json::Object(Vec::new()))));
+        return Ok(Some(Rules::Settings(Json::Object(Vec::new()), crlf)));
     }
     let settings: Json = serde_json::from_str(&text).map_err(|_| RulesProblem::Unreadable)?;
     if !matches!(settings, Json::Object(_)) || deny_list(&settings).is_err() {
         return Err(RulesProblem::Unreadable);
     }
-    Ok(Some(Rules::Settings(settings)))
+    Ok(Some(Rules::Settings(settings, crlf)))
 }
 
-/// What the rules file `current` lacks for `files`.
-fn lacking(tool: AgentTool, current: Option<&Rules>, files: &[String]) -> Vec<String> {
-    let mut seen = BTreeSet::new();
-    files
-        .iter()
-        .map(|path| {
-            if tool == AgentTool::ClaudeCode {
-                claude_rule(path)
-            } else {
-                ignore_line(path)
-            }
-        })
-        .filter(|wanted| seen.insert(wanted.clone()))
+/// The lines of `wanted` the rules file `current` lacks.
+fn lacking(current: Option<&Rules>, wanted: Vec<String>) -> Vec<String> {
+    wanted
+        .into_iter()
         .filter(|wanted| match current {
             None => true,
             Some(Rules::Lines(text)) => !text.lines().any(|line| line.trim_end() == wanted),
-            Some(Rules::Settings(settings)) => {
+            Some(Rules::Settings(settings, _)) => {
                 !deny_list(settings).ok().flatten().is_some_and(|rules| {
                     rules
                         .iter()
@@ -363,7 +503,7 @@ fn deny_list(settings: &Json) -> std::result::Result<Option<&Vec<Json>>, ()> {
 
 /// Adds `rules` to the end of `permissions.deny`, making either if needed.
 fn add_deny_rules(settings: &mut Json, rules: &[String]) -> Result<()> {
-    let unreadable = || Error::invalid(".claude/settings.local.json can't be read");
+    let unreadable = || Error::invalid("Claude Code's settings can't be read");
     let Json::Object(fields) = settings else {
         return Err(unreadable());
     };
@@ -391,25 +531,6 @@ fn entry<'a>(
         fields.len() - 1
     };
     &mut fields[index].1
-}
-
-/// Makes the folder on the way to `path` (`.claude`), inside `folder`, if
-/// it isn't there; never through a link.
-fn ensure_folder(folder: &Path, path: &Path) -> Result<()> {
-    let Some(parent) = path.parent().filter(|parent| *parent != folder) else {
-        return Ok(());
-    };
-    match fs::symlink_metadata(parent) {
-        Ok(meta) if meta.is_dir() => Ok(()),
-        Ok(_) => Err(Error::invalid(format!(
-            "{} isn't a folder",
-            parent.display()
-        ))),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            fs::create_dir(parent).map_err(|e| Error::io(e, parent))
-        }
-        Err(e) => Err(Error::io(e, parent)),
-    }
 }
 
 /// The AI tools used on this computer, by their own folders: `home` is the
@@ -573,122 +694,171 @@ mod tests {
         vec![".env".into(), "apps/web/.env.local".into()]
     }
 
-    fn rules_of(folder: &Path, tool: AgentTool) -> AgentRules {
-        agent_rules(folder, &files(), &BTreeSet::new())
+    /// A folder `shop` in a working tree `repo`, and Claude Code's settings
+    /// in a home folder of its own.
+    fn places(dir: &Path) -> RulesPlaces {
+        let folder = dir.join("repo").join("shop");
+        fs::create_dir_all(&folder).unwrap();
+        RulesPlaces {
+            folder,
+            repository: Some(dir.join("repo")),
+            claude_settings: Some(dir.join("home").join(".claude").join("settings.json")),
+            home: Some(dir.join("home")),
+        }
+    }
+
+    fn rules_of(places: &RulesPlaces, tool: AgentTool) -> AgentRules {
+        agent_rules(places, &files(), &BTreeSet::new())
             .into_iter()
             .find(|rules| rules.tool == tool)
             .unwrap()
     }
 
+    /// Claude Code's rule for `file` in `folder`, as the app writes it.
+    #[cfg(unix)]
+    fn full(folder: &Path, file: &str) -> String {
+        let text = folder.to_str().unwrap().trim_start_matches('/');
+        format!("Read(//{})", ignore_pattern(&format!("{text}/{file}")))
+    }
+
     #[test]
-    fn ignore_files_get_one_line_per_file_once() {
+    fn ignore_files_get_one_line_per_file_once_where_each_tool_reads_them() {
         let dir = tempfile::tempdir().unwrap();
-        let folder = dir.path();
-        fs::write(folder.join(".cursorignore"), "node_modules\r\n/.env").unwrap();
-        let cursor = rules_of(folder, AgentTool::Cursor);
+        let places = places(dir.path());
+        fs::write(places.folder.join(".cursorignore"), "node_modules\r\n/.env").unwrap();
+        let cursor = rules_of(&places, AgentTool::Cursor);
+        assert_eq!(cursor.file, ".cursorignore");
         assert!(cursor.exists);
         assert_eq!(cursor.missing, ["/apps/web/.env.local"]);
         assert!(cursor.found, "its own file is a sign");
-        let aider = rules_of(folder, AgentTool::Aider);
+        // Aider reads its file at the top of the working tree.
+        let aider = rules_of(&places, AgentTool::Aider);
         assert!(!aider.exists && !aider.found);
-        assert_eq!(aider.missing, ["/.env", "/apps/web/.env.local"]);
+        assert_eq!(aider.missing, ["/shop/.env", "/shop/apps/web/.env.local"]);
 
-        let changed =
-            add_agent_rules(folder, &files(), &[AgentTool::Cursor, AgentTool::Aider]).unwrap();
-        assert_eq!(changed, [AgentTool::Cursor, AgentTool::Aider]);
+        let added = add_agent_rules(&places, &files(), &[AgentTool::Cursor, AgentTool::Aider]);
+        assert_eq!(added.changed, [AgentTool::Cursor, AgentTool::Aider]);
+        assert_eq!(added.failed, []);
         // Its line ends kept, its lines as they were.
         assert_eq!(
-            fs::read_to_string(folder.join(".cursorignore")).unwrap(),
+            fs::read_to_string(places.folder.join(".cursorignore")).unwrap(),
             "node_modules\r\n/.env\r\n/apps/web/.env.local\r\n"
         );
         assert_eq!(
-            fs::read_to_string(folder.join(".aiderignore")).unwrap(),
-            "/.env\n/apps/web/.env.local\n"
+            fs::read_to_string(dir.path().join("repo").join(".aiderignore")).unwrap(),
+            "/shop/.env\n/shop/apps/web/.env.local\n"
         );
         // Nothing to add a second time.
+        let again = add_agent_rules(&places, &files(), &[AgentTool::Cursor]);
+        assert_eq!(again, RulesAdded::default());
         assert_eq!(
-            add_agent_rules(folder, &files(), &[AgentTool::Cursor]).unwrap(),
-            []
-        );
-        assert_eq!(
-            rules_of(folder, AgentTool::Cursor).missing,
+            rules_of(&places, AgentTool::Cursor).missing,
             Vec::<String>::new()
         );
     }
 
+    #[cfg(unix)]
     #[test]
-    fn claude_code_settings_keep_their_keys_in_order() {
+    fn claude_code_gets_full_paths_in_the_users_settings_keys_in_order() {
         let dir = tempfile::tempdir().unwrap();
-        let folder = dir.path();
+        let places = places(dir.path());
+        let real = fs::canonicalize(&places.folder).unwrap();
+        let rules_for = |file: &str| {
+            let mut rules = vec![full(&places.folder, file)];
+            if real != places.folder {
+                rules.push(full(&real, file));
+            }
+            rules
+        };
+        let claude = rules_of(&places, AgentTool::ClaudeCode);
+        assert_eq!(claude.file, "~/.claude/settings.json");
         // None yet: made, with its folder.
-        add_agent_rules(folder, &[".env".into()], &[AgentTool::ClaudeCode]).unwrap();
-        let path = folder.join(".claude").join("settings.local.json");
+        let added = add_agent_rules(&places, &[".env".into()], &[AgentTool::ClaudeCode]);
+        assert_eq!(added.changed, [AgentTool::ClaudeCode]);
+        let path = places.claude_settings.clone().unwrap();
+        let settings_now = || -> serde_json::Value {
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap()
+        };
         assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            "{\n  \"permissions\": {\n    \"deny\": [\n      \"Read(/.env)\"\n    ]\n  }\n}\n"
+            settings_now(),
+            serde_json::json!({ "permissions": { "deny": rules_for(".env") } })
         );
+
+        // The user's own settings: keys in their order, line ends kept.
+        let first = rules_for(".env")[0].clone();
         fs::write(
             &path,
-            r#"{"z": 1, "permissions": {"allow": ["Bash(ls)"], "deny": ["Read(/.env)"]}, "a": [true, null, 1.5]}"#,
+            format!(
+                "{{\r\n\"z\": 1, \"permissions\": {{\"allow\": [\"Bash(ls)\"], \"deny\": [\"{first}\"]}}, \"a\": [true, null, 1.5]}}\r\n"
+            ),
         )
         .unwrap();
-        let claude = rules_of(folder, AgentTool::ClaudeCode);
-        assert_eq!(claude.missing, ["Read(/apps/web/.env.local)"]);
-        add_agent_rules(folder, &files(), &[AgentTool::ClaudeCode]).unwrap();
+        add_agent_rules(&places, &files(), &[AgentTool::ClaudeCode]);
         let text = fs::read_to_string(&path).unwrap();
-        let settings: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(text.contains("\r\n") && !text.replace("\r\n", "").contains('\n'));
+        let mut deny = rules_for(".env");
+        deny.extend(rules_for("apps/web/.env.local"));
         assert_eq!(
-            settings,
+            settings_now(),
             serde_json::json!({
                 "z": 1,
-                "permissions": {
-                    "allow": ["Bash(ls)"],
-                    "deny": ["Read(/.env)", "Read(/apps/web/.env.local)"]
-                },
+                "permissions": { "allow": ["Bash(ls)"], "deny": deny },
                 "a": [true, null, 1.5]
             })
         );
         let at = |key: &str| text.find(key).unwrap();
         assert!(at("\"z\"") < at("\"permissions\"") && at("\"permissions\"") < at("\"a\""));
 
-        // Settings it can't read are left alone.
+        // Settings it can't read are left alone, and the others go on.
         fs::write(&path, r#"{"permissions": {"deny": "Read(/.env)"}}"#).unwrap();
         assert_eq!(
-            rules_of(folder, AgentTool::ClaudeCode).problem,
+            rules_of(&places, AgentTool::ClaudeCode).problem,
             Some(RulesProblem::Unreadable)
         );
-        assert!(add_agent_rules(folder, &files(), &[AgentTool::ClaudeCode]).is_err());
+        let added = add_agent_rules(
+            &places,
+            &files(),
+            &[AgentTool::ClaudeCode, AgentTool::Cline],
+        );
+        assert_eq!(added.failed, [AgentTool::ClaudeCode]);
+        assert_eq!(added.changed, [AgentTool::Cline]);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            r#"{"permissions": {"deny": "Read(/.env)"}}"#
+        );
     }
 
     #[cfg(unix)]
     #[test]
-    fn rules_files_are_never_written_through_a_link() {
+    fn project_files_are_never_written_through_a_link() {
         let dir = tempfile::tempdir().unwrap();
-        let folder = dir.path().join("shop");
-        fs::create_dir(&folder).unwrap();
+        let places = places(dir.path());
         let elsewhere = dir.path().join("elsewhere");
         fs::write(&elsewhere, "x\n").unwrap();
-        std::os::unix::fs::symlink(&elsewhere, folder.join(".geminiignore")).unwrap();
-        std::os::unix::fs::symlink(dir.path(), folder.join(".claude")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, places.folder.join(".geminiignore")).unwrap();
         assert_eq!(
-            rules_of(&folder, AgentTool::GeminiCli).problem,
+            rules_of(&places, AgentTool::GeminiCli).problem,
             Some(RulesProblem::Link)
         );
-        assert_eq!(
-            rules_of(&folder, AgentTool::ClaudeCode).problem,
-            Some(RulesProblem::Link)
-        );
-        assert!(add_agent_rules(&folder, &files(), &[AgentTool::GeminiCli]).is_err());
-        assert!(add_agent_rules(&folder, &files(), &[AgentTool::ClaudeCode]).is_err());
+        let added = add_agent_rules(&places, &files(), &[AgentTool::GeminiCli]);
+        assert_eq!(added.failed, [AgentTool::GeminiCli]);
         assert_eq!(fs::read_to_string(&elsewhere).unwrap(), "x\n");
-        assert!(!dir.path().join("settings.local.json").exists());
+        // The user's own settings may be a link, to a dotfiles folder.
+        let dotfiles = dir.path().join("dotfiles.json");
+        fs::write(&dotfiles, "{}").unwrap();
+        let settings = places.claude_settings.clone().unwrap();
+        fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&dotfiles, &settings).unwrap();
+        let added = add_agent_rules(&places, &files(), &[AgentTool::ClaudeCode]);
+        assert_eq!(added.changed, [AgentTool::ClaudeCode]);
+        assert!(fs::read_to_string(&dotfiles).unwrap().contains("Read(//"));
     }
 
     #[test]
-    fn choices_are_kept_by_folder() {
+    fn choices_are_kept_by_folder_and_never_written_over_unread() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent-rules.json");
-        assert_eq!(AgentChoices::load(&path), AgentChoices::default());
+        assert_eq!(AgentChoices::load(&path).unwrap(), AgentChoices::default());
         let mut choices = AgentChoices::default();
         let added = FolderChoice::Added {
             tools: vec![AgentTool::Cursor, AgentTool::ClaudeCode],
@@ -696,10 +866,17 @@ mod tests {
         choices.set("~/code/shop", added.clone());
         choices.set("~/code/blog", FolderChoice::Declined);
         choices.save(&path).unwrap();
-        let loaded = AgentChoices::load(&path);
+        let loaded = AgentChoices::load(&path).unwrap();
         assert_eq!(loaded.get("~/code/shop"), Some(&added));
         assert_eq!(loaded.get("~/code/blog"), Some(&FolderChoice::Declined));
         assert_eq!(loaded.get("~/code/other"), None);
+        // One a later version wrote, with a tool this one doesn't know.
+        fs::write(
+            &path,
+            r#"{"folders": {"~/x": {"type": "added", "tools": ["zed"]}}}"#,
+        )
+        .unwrap();
+        assert!(AgentChoices::load(&path).is_err());
     }
 
     #[test]
@@ -720,5 +897,13 @@ mod tests {
         assert!(found.contains(&AgentTool::Cursor));
         assert!(found.contains(&AgentTool::Cline));
         assert!(!found.contains(&AgentTool::Aider));
+    }
+
+    #[test]
+    fn windows_paths_are_written_as_claude_code_reads_them() {
+        if cfg!(windows) {
+            let rules = claude_rules(Path::new(r"C:\Users\me\code\shop"), "apps/.env");
+            assert_eq!(rules[0], "Read(//c/Users/me/code/shop/apps/.env)");
+        }
     }
 }

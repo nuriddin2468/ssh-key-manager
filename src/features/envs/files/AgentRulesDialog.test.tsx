@@ -42,12 +42,16 @@ const view: AgentRulesView = {
   location: '/Users/dev/code/shop',
   files: ['.env'],
   tools: [
-    rules('claudeCode', '.claude/settings.local.json', { found: true, missing: ['Read(/.env)'] }),
+    rules('claudeCode', '~/.claude/settings.json', {
+      found: true,
+      missing: ['Read(//Users/dev/code/shop/.env)'],
+    }),
     rules('cursor', '.cursorignore', { found: true, exists: true, missing: [] }),
     rules('aider', '.aiderignore'),
     rules('geminiCli', '.geminiignore', { problem: 'link' }),
   ],
   choice: null,
+  failed: [],
 };
 
 function show(shown = view) {
@@ -73,7 +77,7 @@ describe('AI tools’ ignore rules for a folder', () => {
     const onDone = show();
     const claude = screen.getByRole('checkbox', { name: /Claude Code/ });
     expect(claude).toBeChecked();
-    expect(screen.getByText('Read(/.env)')).toBeInTheDocument();
+    expect(screen.getByText('Read(//Users/dev/code/shop/.env)')).toBeInTheDocument();
     // Cursor ignores them already: nothing to choose.
     expect(screen.getByRole('checkbox', { name: /Cursor/ })).toBeDisabled();
     expect(screen.getByText('Ignores these files already')).toBeInTheDocument();
@@ -99,8 +103,17 @@ describe('AI tools’ ignore rules for a folder', () => {
     expect(api.envsAgentsDecline).toHaveBeenCalledWith('p1', '~/code/shop');
   });
 
-  it('doesn’t ask again where the user said already', () => {
-    show({ ...view, choice: { type: 'added', tools: ['claudeCode'] } });
+  it('lets a yes be taken back, and names the tools whose file couldn’t be changed', async () => {
+    api.envsAgentsAdd.mockResolvedValue({ ...view, failed: ['claudeCode'] });
+    const onDone = show({ ...view, choice: { type: 'added', tools: ['cursor'] } });
     expect(screen.queryByRole('button', { name: 'Not for this folder' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Stop adding lines here' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add lines' }));
+    await vi.waitFor(() => expect(toast.warning).toHaveBeenCalled());
+    expect(toast.warning).toHaveBeenCalledWith(
+      'Couldn’t change the file of Claude Code: the other tools got their lines',
+    );
+    // It stays open, to see why.
+    expect(onDone).not.toHaveBeenCalled();
   });
 });

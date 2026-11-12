@@ -14,7 +14,7 @@ use serde::Serialize;
 use sshkm_core::paths::home_dir;
 use sshkm_core::vault::Vault;
 use sshkm_core::vault::envs::files::agents::{
-    self, AgentChoices, AgentRules, AgentTool, FolderChoice,
+    self, AgentChoices, AgentRules, AgentTool, FolderChoice, RulesPlaces,
 };
 use sshkm_core::vault::projects;
 use tauri::AppHandle;
@@ -24,8 +24,9 @@ use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
 const CHOICES_FILE: &str = "agent-rules.json";
-/// Held while the choices are read, changed and written.
-static CHOICES: Mutex<()> = Mutex::new(());
+/// Held while the choices or a tool's rules file are read, changed and
+/// written, so two changes don't lose each other's lines.
+static HELD: Mutex<()> = Mutex::new(());
 
 /// A project folder's AI tools' rules: what each tool's file lacks for the
 /// folder's managed files, and what the user said about the folder.
@@ -42,10 +43,12 @@ pub struct AgentRulesView {
     pub tools: Vec<AgentRules>,
     /// `None` until the user says.
     pub choice: Option<FolderChoice>,
+    /// The tools whose file couldn't be changed just now, passed over.
+    pub failed: Vec<AgentTool>,
 }
 
-/// What each AI tool's ignore file in a project folder lacks for its
-/// managed files, and what the user said about the folder.
+/// What each AI tool's ignore file lacks for a project folder's managed
+/// files, and what the user said about the folder.
 #[tauri::command]
 pub async fn envs_agents_rules(
     app: AppHandle,
@@ -60,14 +63,16 @@ pub async fn envs_agents_rules(
                 vault.env_files_in_folder(&folder),
             ))
         })?;
-        Ok(view(state, folder, location, files))
+        let _held = held();
+        Ok(view(state, folder, location, files, Vec::new()))
     })
     .await
 }
 
-/// Adds to the ignore files of `tools` in a project folder the lines its
-/// managed files need, after the user said to, and remembers it for files
-/// bound there later.
+/// Adds to the ignore files of `tools` the lines a project folder's managed
+/// files need, after the user said to, and remembers it, with the tools
+/// chosen before, for files bound there later. A file that can't be changed
+/// is passed over and named.
 #[tauri::command]
 pub async fn envs_agents_add(
     app: AppHandle,
@@ -83,20 +88,32 @@ pub async fn envs_agents_add(
                 vault.env_files_in_folder(&folder),
             ))
         })?;
-        let mut tools = tools;
-        tools.sort();
-        tools.dedup();
-        let result = agents::add_agent_rules(&location, &files, &tools);
-        // Kept as the user said, even if a file couldn't be changed.
-        set_choice(state, &folder, FolderChoice::Added { tools })?;
-        result?;
-        Ok(view(state, folder, location, files))
+        let _held = held();
+        let path = choices_path(state);
+        let mut choices = AgentChoices::load(&path)?;
+        let mut chosen = tools;
+        if let Some(FolderChoice::Added { tools: before }) = choices.get(&folder) {
+            chosen.extend(before.iter().copied());
+        }
+        chosen.sort();
+        chosen.dedup();
+        choices.set(
+            &folder,
+            FolderChoice::Added {
+                tools: chosen.clone(),
+            },
+        );
+        choices.save(&path)?;
+        let places = RulesPlaces::of(&location, home_dir().as_deref());
+        let added = agents::add_agent_rules(&places, &files, &chosen);
+        Ok(view(state, folder, location, files, added.failed))
     })
     .await
 }
 
 /// Remembers that the user doesn't want AI tools' rules in a project
-/// folder: they aren't offered there again.
+/// folder, or no longer: they aren't offered there again, nor added for
+/// files bound there later. Lines added before stay.
 #[tauri::command]
 pub async fn envs_agents_decline(
     app: AppHandle,
@@ -111,8 +128,12 @@ pub async fn envs_agents_decline(
                 vault.env_files_in_folder(&folder),
             ))
         })?;
-        set_choice(state, &folder, FolderChoice::Declined)?;
-        Ok(view(state, folder, location, files))
+        let _held = held();
+        let path = choices_path(state);
+        let mut choices = AgentChoices::load(&path)?;
+        choices.set(&folder, FolderChoice::Declined);
+        choices.save(&path)?;
+        Ok(view(state, folder, location, files, Vec::new()))
     })
     .await
 }
@@ -121,11 +142,8 @@ pub async fn envs_agents_decline(
 /// rules there, the tools they chose get its line too. Best effort: a file
 /// that can't be changed is logged.
 pub(crate) fn follow_choice(app: &AppHandle, state: &AppState, folder: &str) {
-    let Some(FolderChoice::Added { tools }) = choices(state).get(folder).cloned() else {
-        return;
-    };
     let Some(location) =
-        projects::folder_path(folder, home_dir().as_deref()).filter(|p| p.is_dir())
+        projects::folder_path(folder, home_dir().as_deref()).filter(|path| path.is_dir())
     else {
         return;
     };
@@ -135,8 +153,20 @@ pub(crate) fn follow_choice(app: &AppHandle, state: &AppState, folder: &str) {
     else {
         return;
     };
-    if let Err(error) = agents::add_agent_rules(&location, &files, &tools) {
-        log::warn!("agent rules: {error}");
+    let _held = held();
+    let Ok(choices) = AgentChoices::load(&choices_path(state)) else {
+        return;
+    };
+    let Some(FolderChoice::Added { tools }) = choices.get(folder) else {
+        return;
+    };
+    let places = RulesPlaces::of(&location, home_dir().as_deref());
+    let added = agents::add_agent_rules(&places, &files, tools);
+    if !added.failed.is_empty() {
+        log::warn!(
+            "agent rules: not changed for {:?} in {folder}",
+            added.failed
+        );
     }
 }
 
@@ -150,17 +180,31 @@ fn located(vault: &Vault, project: &str, folder: &str) -> AppResult<PathBuf> {
         .ok_or_else(|| AppError::invalid("the folder isn't on this computer"))
 }
 
-fn view(state: &AppState, folder: String, location: PathBuf, files: Vec<String>) -> AgentRulesView {
-    let found = match home_dir() {
-        Some(home) => agents::agent_tools_found(&home, dirs::config_dir().as_deref()),
+/// The view of a folder, with `HELD` held.
+fn view(
+    state: &AppState,
+    folder: String,
+    location: PathBuf,
+    files: Vec<String>,
+    failed: Vec<AgentTool>,
+) -> AgentRulesView {
+    let home = home_dir();
+    let found = match &home {
+        Some(home) => agents::agent_tools_found(home, dirs::config_dir().as_deref()),
         None => std::collections::BTreeSet::new(),
     };
+    let places = RulesPlaces::of(&location, home.as_deref());
+    // Choices that can't be read count as none, and aren't written over.
+    let choice = AgentChoices::load(&choices_path(state))
+        .ok()
+        .and_then(|choices| choices.get(&folder).cloned());
     AgentRulesView {
-        tools: agents::agent_rules(&location, &files, &found),
-        choice: choices(state).get(&folder).cloned(),
+        tools: agents::agent_rules(&places, &files, &found),
+        choice,
         folder,
         location,
         files,
+        failed,
     }
 }
 
@@ -168,20 +212,6 @@ fn choices_path(state: &AppState) -> PathBuf {
     state.vault.data_dir().join(CHOICES_FILE)
 }
 
-fn choices(state: &AppState) -> AgentChoices {
-    let _held = held();
-    AgentChoices::load(&choices_path(state))
-}
-
-fn set_choice(state: &AppState, folder: &str, choice: FolderChoice) -> AppResult<()> {
-    let _held = held();
-    let path = choices_path(state);
-    let mut choices = AgentChoices::load(&path);
-    choices.set(folder, choice);
-    choices.save(&path)?;
-    Ok(())
-}
-
 fn held() -> MutexGuard<'static, ()> {
-    CHOICES.lock().unwrap_or_else(PoisonError::into_inner)
+    HELD.lock().unwrap_or_else(PoisonError::into_inner)
 }

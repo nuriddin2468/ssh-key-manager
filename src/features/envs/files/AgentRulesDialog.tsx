@@ -1,6 +1,7 @@
 import { Bot, ChevronDown } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import { api } from '@/api/commands';
 import type { AgentRules } from '@/bindings/AgentRules';
 import type { AgentRulesView } from '@/bindings/AgentRulesView';
@@ -54,14 +55,31 @@ export function AgentRulesDialog({ project, view, onDone }: AgentRulesDialogProp
   const add = useVaultMutation(
     (tools: AgentTool[]) => api.envsAgentsAdd(project, view.folder, tools),
     {
-      success: (_, tools) =>
-        t('envs.agents.added', {
-          count: tools.length,
-          tools: tools.map((tool) => AGENT_NAMES[tool]).join(', '),
-        }),
-      onSuccess: () => {
+      success: (result, tools) =>
+        result.failed.length > 0
+          ? undefined
+          : t('envs.agents.added', {
+              count: tools.length,
+              tools: tools.map((tool) => AGENT_NAMES[tool]).join(', '),
+            }),
+      onSuccess: (result) => {
         void refreshFileReports();
+        if (result.failed.length > 0) {
+          // The others got their lines; these are named, and stay to see why.
+          toast.warning(
+            t('envs.agents.failed', {
+              count: result.failed.length,
+              tools: result.failed.map((tool) => AGENT_NAMES[tool]).join(', '),
+            }),
+          );
+          return;
+        }
         onDone();
+      },
+      onError: () => {
+        // The choice may be kept even so: what the folder says now.
+        void refreshFileReports();
+        return false;
       },
     },
   );
@@ -130,7 +148,7 @@ export function AgentRulesDialog({ project, view, onDone }: AgentRulesDialogProp
         <p className="text-[12px] leading-[17px] text-subtle">{t('envs.agents.later')}</p>
       </DialogBody>
       <DialogFooter>
-        {view.choice === null ? (
+        {view.choice?.type !== 'declined' ? (
           <Button
             size="lg"
             variant="ghost"
@@ -139,7 +157,7 @@ export function AgentRulesDialog({ project, view, onDone }: AgentRulesDialogProp
             disabled={busy}
             onClick={() => decline.mutate(undefined)}
           >
-            {t('envs.agents.notHere')}
+            {view.choice === null ? t('envs.agents.notHere') : t('envs.agents.stopHere')}
           </Button>
         ) : null}
         <Button size="lg" disabled={busy} onClick={onDone}>

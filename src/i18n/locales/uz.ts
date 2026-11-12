@@ -3951,6 +3951,8 @@ const uz = {
         text: 'Fayl oʻz holicha qoladi, undagi tahrirlar esa endi omborga yetib bormaydi.',
         delete: 'Faylni ham oʻchirish',
         deleteHint: 'Faqat unda aynan ombordagi qiymatlar boʻlsa, hech narsa yoʻqolmasligi uchun.',
+        keepWhileUnlocked:
+          'Hozir u faqat ombor ochiqligida diskda boʻladi. Qoldirilsa, ombor qulflanganda ham qoladi va ilova uni oʻchirmaydi.',
         confirm: 'Yozishni toʻxtatish',
         done: '{{file}} endi yozilmaydi',
         deleted: '{{file}} oʻchirildi',

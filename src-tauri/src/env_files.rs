@@ -219,6 +219,9 @@ impl EnvFiles {
             log::warn!("env files: the revisions were not kept: {error}");
         }
         let leftovers = Leftovers::new(synced.unlocked.clone());
+        // Those whose binding went since the last round go now: nothing
+        // else would remove them.
+        Leftovers::load(&self.leftovers_path).sweep_dropped(&leftovers, &synced.always);
         if let Err(error) = leftovers.save(&self.leftovers_path) {
             log::warn!("env files: the files written while unlocked were not listed: {error}");
         }
@@ -241,6 +244,11 @@ impl EnvFiles {
     pub fn put_away(&self, app: &AppHandle, shared: &AppState) -> PutAway {
         let mut state = lock(&self.state);
         if self.away.swap(true, Ordering::SeqCst) {
+            return PutAway::default();
+        }
+        // No level-2 file on disk as the app wrote it: none to take edits
+        // from or to remove, and the lock doesn't wait for a round.
+        if Leftovers::load(&self.leftovers_path).is_empty() {
             return PutAway::default();
         }
         let away = match self.round(&mut state, app, shared, None, false) {
@@ -267,6 +275,26 @@ impl EnvFiles {
             let _ = app.emit(LEFT_EVENT, &away.kept);
         }
         away
+    }
+
+    /// Runs `unbind`, which stops writing a level-2 file the user keeps (at
+    /// `location`), while no round runs, then takes the file off the list,
+    /// so no sweep removes it.
+    pub fn keep_file<T>(
+        &self,
+        location: &Path,
+        unbind: impl FnOnce() -> AppResult<T>,
+    ) -> AppResult<T> {
+        let _state = lock(&self.state);
+        let result = unbind()?;
+        let real = std::fs::canonicalize(location).unwrap_or_else(|_| location.to_path_buf());
+        let mut list = Leftovers::load(&self.leftovers_path);
+        if list.forget(&real)
+            && let Err(error) = list.save(&self.leftovers_path)
+        {
+            log::warn!("env files: the list of files written while unlocked stays: {error}");
+        }
+        Ok(result)
     }
 
     /// After an unlock: rounds run again, and write the level-2 files.

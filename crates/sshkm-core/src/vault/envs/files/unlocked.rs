@@ -31,6 +31,11 @@ pub struct Leftover {
 
 /// What a file is on disk: which file (device and inode on Unix, its
 /// creation time on Windows), how long, and when its contents last changed.
+/// An edit changes the time and usually the length; on a file system that
+/// keeps times to two seconds (FAT, exFAT), an edit of the same length
+/// within those two seconds, followed at once by a crash, isn't told apart.
+/// No more is kept, since anything made from the contents (a hash) would
+/// let values be guessed from the list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Stamp {
     id: String,
@@ -106,34 +111,11 @@ impl Leftover {
         if !named_so {
             return false;
         }
-        self.sweep_temporaries();
+        fsutil::sweep_private_temps(&self.path);
         if Stamp::of(&self.path).as_ref() != Some(&self.stamp) {
             return false;
         }
         fs::remove_file(&self.path).is_ok()
-    }
-
-    /// Removes the temporary files of the file's writes a crash left next
-    /// to it: they hold its values in plain text.
-    fn sweep_temporaries(&self) {
-        let (Some(dir), Some(name)) = (
-            self.path.parent(),
-            self.path.file_name().and_then(|name| name.to_str()),
-        ) else {
-            return;
-        };
-        let Ok(entries) = fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.filter_map(std::result::Result::ok) {
-            let leftover = entry
-                .file_name()
-                .to_str()
-                .is_some_and(|found| fsutil::is_private_temp(found, name));
-            if leftover && entry.file_type().is_ok_and(|kind| kind.is_file()) {
-                let _ = fs::remove_file(entry.path());
-            }
-        }
     }
 }
 
@@ -188,6 +170,29 @@ impl Leftovers {
         let removed = self.files.iter().filter(|file| file.remove()).count();
         self.files.clear();
         removed
+    }
+
+    /// Removes the files of this list, the one kept before a round, that the
+    /// round's list `now` no longer has and that aren't level-1 files
+    /// (`always`), if they are still as they were: their binding went (it
+    /// was removed here or on another computer, or its environment was
+    /// deleted), so nothing would remove them later. Returns how many it
+    /// removed.
+    pub fn sweep_dropped(&self, now: &Self, always: &[PathBuf]) -> usize {
+        self.files
+            .iter()
+            .filter(|file| !now.files.iter().any(|kept| kept.path == file.path))
+            .filter(|file| !always.contains(&file.path))
+            .filter(|file| file.remove())
+            .count()
+    }
+
+    /// Forgets the file at `path`, which the user keeps: no sweep removes
+    /// it. Returns whether it was listed.
+    pub fn forget(&mut self, path: &Path) -> bool {
+        let before = self.files.len();
+        self.files.retain(|file| file.path != path);
+        self.files.len() != before
     }
 
     /// Removes the files kept at `path` that are still as they were, and
@@ -309,5 +314,32 @@ mod tests {
         // A list that can't be read is no list.
         fs::write(&list_path, "{").unwrap();
         assert!(Leftovers::load(&list_path).is_empty());
+    }
+
+    #[test]
+    fn files_no_longer_listed_go_unless_bound_otherwise() {
+        let dir = tempfile::tempdir().unwrap();
+        let [a, b, c] = [".env", ".env.local", ".env.test"].map(|name| dir.path().join(name));
+        for path in [&a, &b, &c] {
+            fs::write(path, "A=1\n").unwrap();
+        }
+        let mut before = Leftovers::new(
+            [&a, &b, &c]
+                .map(|path| Leftover::of(path).unwrap())
+                .to_vec(),
+        );
+        // `b` is still listed; `c` is a level-1 file now.
+        let now = Leftovers::new(vec![Leftover::of(&b).unwrap()]);
+        assert_eq!(before.sweep_dropped(&now, std::slice::from_ref(&c)), 1);
+        assert!(!a.exists());
+        assert!(b.exists() && c.exists());
+        // One the user keeps is forgotten, and no sweep takes it.
+        assert!(before.forget(&b));
+        assert!(!before.forget(&b));
+        assert_eq!(
+            before.sweep_dropped(&Leftovers::default(), std::slice::from_ref(&c)),
+            0
+        );
+        assert!(b.exists());
     }
 }

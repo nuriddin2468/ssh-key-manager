@@ -393,7 +393,7 @@ fn lock_on_minimize(window: &tauri::Window, event: &WindowEvent) {
         && let Some(state) = window.try_state::<Arc<AppState>>()
         && state.vault.settings().lock_on_minimize
     {
-        state.vault.lock(window.app_handle(), LockReason::Minimize);
+        vault::lock_in_background(window.app_handle(), LockReason::Minimize);
     }
 }
 

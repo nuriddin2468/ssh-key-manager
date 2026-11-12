@@ -3889,6 +3889,8 @@ const en = {
         text: 'The file stays as it is, and edits made in it no longer reach the vault.',
         delete: 'Delete the file too',
         deleteHint: 'Only if it holds exactly the vault’s values, so nothing is lost.',
+        keepWhileUnlocked:
+          'It’s on disk only while the vault is unlocked. Kept, it stays when the vault locks, and the app won’t remove it.',
         confirm: 'Stop writing',
         done: '{{file}} isn’t written anymore',
         deleted: '{{file}} deleted',

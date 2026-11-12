@@ -631,7 +631,10 @@ export const envFilesHandlers: Record<string, Handler> = {
         return fail('invalid_input', 'the environment is in another project: move it first');
       }
       if (kindOf(existing) === 'remote') {
-        return fail('invalid_input', 'a remote environment has no files: make it local first');
+        return fail(
+          'invalid_input',
+          'a remote environment has a file only while the vault is unlocked',
+        );
       }
       return existing;
     });

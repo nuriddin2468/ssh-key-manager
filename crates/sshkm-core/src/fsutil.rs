@@ -76,6 +76,27 @@ pub fn is_private_temp(name: &str, of: &str) -> bool {
         .is_some_and(|rest| rest.len() > PRIVATE_TEMP.1.len() && rest.ends_with(PRIVATE_TEMP.1))
 }
 
+/// Removes the temporary files of [`replace_private`]'s writes to `path`
+/// that a crash left next to it: they may hold its contents in plain text.
+/// Only regular files are removed.
+pub fn sweep_private_temps(path: &Path) {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(std::result::Result::ok) {
+        let leftover = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|found| is_private_temp(found, name));
+        if leftover && entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// Replaces `path` with a new file that holds `bytes` and that only this
 /// user can read: mode 0600 on Unix; on Windows an access list for nobody
 /// but the user, `SYSTEM` and `Administrators`, set as the file is made,
@@ -154,6 +175,11 @@ fn write_private_at(
         }
         Err(e) => return Err(Error::io(e, dir)),
     };
+    // Out of copies before it holds anything, where the stream can be
+    // written while the file is open; else once it is closed, below.
+    if keep_out {
+        keep_out_of_copies_at(&tmp);
+    }
     // No one else may open the file while `file` is open, so it is closed
     // before `tmp` renames it, or removes it when dropped on an error.
     let written = file.write_all(bytes).and_then(|()| file.sync_all());
@@ -240,14 +266,19 @@ fn keep_out_of_copies(file: &fs::File) {
 }
 
 /// Keeps the file at `path` out of backups and cloud folders, as
-/// [`keep_out_of_copies`] does, without following a link at `path`.
+/// [`keep_out_of_copies`] does, without following a link at `path`. Only
+/// the attributes it lacks are set: setting one is a change the file's
+/// watcher reports, and one the file system refuses is not set again and
+/// again.
 pub fn keep_out_of_copies_at(path: &Path) {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     for (name, value) in COPIES_ATTRIBUTES {
-        let _ = xattr::set(path, name, value);
+        if xattr::get(path, name).ok().flatten().as_deref() != Some(value) {
+            let _ = xattr::set(path, name, value);
+        }
     }
     #[cfg(windows)]
-    if fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file()) {
+    if fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file()) && !is_kept_out_of_copies(path) {
         let mut stream = path.as_os_str().to_owned();
         stream.push(DROPBOX_STREAM);
         let _ = fs::write(PathBuf::from(stream), b"1");

@@ -386,6 +386,11 @@ pub struct EnvFilesSynced {
     #[serde(skip)]
     #[cfg_attr(feature = "ts", ts(skip))]
     pub unlocked: Vec<Leftover>,
+    /// The level-1 files on this computer, in their folders with links
+    /// resolved: a level-2 file that was one of them stays.
+    #[serde(skip)]
+    #[cfg_attr(feature = "ts", ts(skip))]
+    pub always: Vec<PathBuf>,
 }
 
 /// A template next to a file (`.env.example`) and the names it sets that
@@ -491,6 +496,10 @@ struct Agreement {
     rev: String,
     #[serde(default)]
     dir: String,
+    /// The app kept the file out of backups and cloud folders, as a level-2
+    /// file: let back in once it is at level 1, whoever changed its level.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    out: bool,
 }
 
 /// Most keys a [`SyncState`] keeps revisions for.
@@ -523,6 +532,15 @@ impl SyncState {
             .get(file)
             .filter(|agreed| agreed.dir == dir)
             .map(|agreed| agreed.rev.as_str())
+    }
+
+    /// Whether the app kept `file` out of copies, by the agreement made with
+    /// the key `key_id`.
+    fn kept_out(&self, key_id: &str, file: &str) -> bool {
+        self.keys
+            .get(key_id)
+            .and_then(|keyed| keyed.files.get(file))
+            .is_some_and(|agreed| agreed.out)
     }
 
     /// The revisions made with the key `key_id`, to change; the oldest
@@ -1234,6 +1252,7 @@ impl Vault {
                 let agreed = Agreement {
                     rev: vault_rev,
                     dir,
+                    out: state.kept_out(&id, &bound.state_key()),
                 };
                 pulled.updates.push((bound.state_key(), agreed));
                 continue;
@@ -1253,6 +1272,7 @@ impl Vault {
             let agreed = Agreement {
                 rev: after_rev.clone(),
                 dir,
+                out: state.kept_out(&id, &bound.state_key()),
             };
             pulled.updates.push((bound.state_key(), agreed));
             pulled.changes.push(EnvFileChange {
@@ -1325,8 +1345,29 @@ impl Vault {
                         .get(&state_key)
                         .filter(|agreed| agreed.dir == dir)
                         .map(|agreed| agreed.rev.clone());
+                    let was_out = files.get(&state_key).is_some_and(|agreed| agreed.out);
                     let (file_state, agreed) =
                         self.settle(&key, &planned.bound, target, base.as_deref(), prefer, true);
+                    let in_sync = file_state == FileState::InSync;
+                    let mut out = was_out;
+                    match planned.bound.level {
+                        FileLevel::WhileUnlocked if in_sync => {
+                            // One that was at level 1 until now gets them too.
+                            disk::keep_out(target);
+                            out = true;
+                            synced
+                                .unlocked
+                                .extend(self.leftover(&key, &planned.bound, target));
+                        }
+                        FileLevel::WhileUnlocked => {}
+                        FileLevel::Always => {
+                            synced.always.push(target.real.clone());
+                            if was_out && in_sync {
+                                fsutil::let_into_copies_at(&target.real);
+                                out = false;
+                            }
+                        }
+                    }
                     if let Some(agreed) = agreed {
                         written = agreed.written;
                         files.insert(
@@ -1334,15 +1375,9 @@ impl Vault {
                             Agreement {
                                 rev: agreed.revision,
                                 dir,
+                                out,
                             },
                         );
-                    }
-                    if planned.bound.level == FileLevel::WhileUnlocked
-                        && file_state == FileState::InSync
-                    {
-                        // One that was at level 1 until now.
-                        disk::keep_out(target);
-                        synced.unlocked.extend(Leftover::of(&target.real));
                     }
                     file_state
                 }
@@ -1450,8 +1485,11 @@ impl Vault {
         };
         let write = |current: Option<&str>| -> (FileState, Option<Agreed>) {
             if !act {
+                // A level-2 file that isn't there is written by the next
+                // round: it is missing only while the vault is locked.
+                let pending = current.is_some() || bound.level == FileLevel::WhileUnlocked;
                 return (
-                    if current.is_some() {
+                    if pending {
                         FileState::VaultChanged
                     } else {
                         FileState::Missing
@@ -1561,6 +1599,19 @@ impl Vault {
                 }
             })
             .collect()
+    }
+
+    /// The level-2 file of `bound` as it is on disk now, if it holds what the
+    /// vault holds: read again after its stamp is taken, so an edit made
+    /// meanwhile isn't taken for the app's own write.
+    fn leftover(&self, key: &[u8; 32], bound: &Bound, target: &Target) -> Option<Leftover> {
+        let left = Leftover::of(&target.real)?;
+        let Disk::Text(text) = disk::read(&target.real) else {
+            return None;
+        };
+        let vault = self.env_variables(&bound.env_id).ok()?;
+        let parsed = dotenv::parse(&text);
+        (revision(key, &parsed_pairs(&parsed)) == revision(key, &pairs(&vault))).then_some(left)
     }
 
     /// Removes the level-2 file of a binding that isn't kept in step any

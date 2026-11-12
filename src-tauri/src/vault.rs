@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 use sshkm_core::vault::projects::{self, Project};
 use sshkm_core::vault::{self as core_vault, Vault, VaultPaths};
 use sshkm_core::{ErrorCode, ExposeSecret, SecretString, fsutil};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::error::{AppError, AppResult};
 
@@ -234,6 +234,29 @@ impl VaultRuntime {
     /// Runs `hooks` when the vault opens and closes, from then on.
     pub fn set_hooks(&self, hooks: VaultHooks) {
         let _ = self.hooks.set(hooks);
+    }
+
+    /// Puts the `.env` files written only while the vault is unlocked away,
+    /// as before a lock ([`VaultHooks::before_lock`]), for a change that
+    /// may take the vault away (another vault file). [`Self::resume_files`]
+    /// takes it back if the vault stays.
+    pub fn put_files_away(&self) {
+        if self.is_unlocked()
+            && let Some(hooks) = self.hooks.get()
+        {
+            (hooks.before_lock)();
+        }
+    }
+
+    /// After [`Self::put_files_away`], when the vault stayed unlocked: the
+    /// files are written again.
+    pub fn resume_files(&self) {
+        if self.is_unlocked() {
+            if let Some(hooks) = self.hooks.get() {
+                (hooks.after_unlock)();
+            }
+            self.changed();
+        }
     }
 
     /// Tells the hooks the vault went without warning
@@ -715,6 +738,18 @@ fn load_settings(path: &Path) -> VaultSettings {
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default()
+}
+
+/// Locks the vault on a thread of its own, for the window's and the tray's
+/// events: a lock may first take the last edits of the `.env` files written
+/// only while it is unlocked, which must not hold up the main thread.
+pub fn lock_in_background(app: &AppHandle, reason: LockReason) {
+    let app = app.clone();
+    thread::spawn(move || {
+        if let Some(state) = app.try_state::<Arc<crate::state::AppState>>() {
+            state.vault.lock(&app, reason);
+        }
+    });
 }
 
 fn locked() -> AppError {

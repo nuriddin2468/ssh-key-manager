@@ -154,7 +154,14 @@ export function FilesSection({ env, files, whileUnlocked }: FilesSectionProps) {
           <FileCompareDialog envId={env.id} file={open.file} onDone={() => setOpen(null)} />
         ) : null}
       </Dialog>
-      <StopDialog envId={env.id} file={stopping} onDone={() => setStopping(null)} />
+      <StopDialog
+        // Opened afresh for each file, so its choice starts from that file's level.
+        key={stopping ? `${stopping.folder}\n${stopping.path}` : 'none'}
+        envId={env.id}
+        file={stopping}
+        whileUnlocked={stopping !== null && whileUnlocked.some((x) => sameFile(x, stopping))}
+        onDone={() => setStopping(null)}
+      />
       <ConfirmDialog
         open={ignoring !== null}
         onOpenChange={(next) => (next ? undefined : setIgnoring(null))}
@@ -335,17 +342,23 @@ function FileRow({
 interface StopDialogProps {
   envId: string;
   file: EnvFile | null;
+  /** It is on disk only while the vault is unlocked: deleting it is the default. */
+  whileUnlocked: boolean;
   onDone: () => void;
 }
 
-/** Stops writing to a file, and deletes it too if asked (only when nothing is lost). */
-function StopDialog({ envId, file, onDone }: StopDialogProps) {
+/**
+ * Stops writing to a file, and deletes it too if asked (only when nothing is
+ * lost). A file kept only while the vault is unlocked is deleted unless the
+ * user keeps it: the app wouldn't remove it any more.
+ */
+function StopDialog({ envId, file, whileUnlocked, onDone }: StopDialogProps) {
   const { t } = useTranslation();
-  const [deleteFile, setDeleteFile] = useState(false);
+  const [deleteFile, setDeleteFile] = useState(whileUnlocked);
   const [notDeleted, setNotDeleted] = useState(false);
   const name = file ? fileName(file) : '';
   const close = () => {
-    setDeleteFile(false);
+    setDeleteFile(whileUnlocked);
     setNotDeleted(false);
     onDone();
   };
@@ -397,6 +410,11 @@ function StopDialog({ envId, file, onDone }: StopDialogProps) {
               label={t('envs.files.unbind.delete')}
             />
             <p className="pl-[28px] text-[12px] text-subtle">{t('envs.files.unbind.deleteHint')}</p>
+            {whileUnlocked && !deleteFile ? (
+              <p className="pl-[28px] text-[12px] text-warning">
+                {t('envs.files.unbind.keepWhileUnlocked')}
+              </p>
+            ) : null}
           </div>
         </DialogBody>
         <DialogFooter>

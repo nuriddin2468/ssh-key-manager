@@ -15,7 +15,6 @@ use std::time::Duration;
 
 use serde::Serialize;
 use sshkm_core::ErrorCode;
-use sshkm_core::fsutil;
 use sshkm_core::paths::home_dir;
 use sshkm_core::vault::envs::files::{
     self as managed, CloudRoots, CloudService, EnvFile, EnvFileComparison, EnvFileReport,
@@ -136,24 +135,20 @@ pub async fn envs_files_set_level(
     let files = Arc::clone(&files);
     blocking(&state, move |state| {
         let file = managed::check_env_file(&file)?;
-        let changed = state.vault.change(&app, &state.backup_dir, |vault| {
+        state.vault.change(&app, &state.backup_dir, |vault| {
             Ok(vault.set_env_file_level(&id, &file, level)?)
         })?;
+        // The round puts the attributes on or takes them off.
         let synced = files.sync(&app, state, None, true)?;
-        let status = status_of(synced, &id, &file)?;
-        if changed
-            && level == FileLevel::Always
-            && let Some(location) = status.location.as_deref()
-        {
-            fsutil::let_into_copies_at(location);
-        }
-        Ok(status)
+        status_of(synced, &id, &file)
     })
     .await
 }
 
 /// Stops writing an environment to `file`. With `delete_file`, the file
-/// is deleted first, only if it holds exactly what the vault has.
+/// is deleted first, only if it holds exactly what the vault has. Without,
+/// a file kept only while the vault is unlocked stays from then on, as the
+/// user's own.
 #[tauri::command]
 pub async fn envs_files_unbind(
     app: AppHandle,
@@ -171,10 +166,25 @@ pub async fn envs_files_unbind(
                 .vault
                 .with(&app, |vault| Ok(vault.delete_env_file(&id, &file, &ctx)?))?;
         }
-        let detail = state.vault.change(&app, &state.backup_dir, |vault| {
-            vault.unbind_env_file(&id, &file)?;
-            Ok(vault.environment(&id)?)
+        let unbind = || {
+            state.vault.change(&app, &state.backup_dir, |vault| {
+                vault.unbind_env_file(&id, &file)?;
+                Ok(vault.environment(&id)?)
+            })
+        };
+        let kept = files.state();
+        let level_two = state.vault.with(&app, |vault| {
+            Ok(vault
+                .env_files_status(&ctx, &kept)
+                .into_iter()
+                .find(|status| status.env_id == id && status.file == file)
+                .filter(|status| status.level == FileLevel::WhileUnlocked)
+                .and_then(|status| status.location))
         })?;
+        let detail = match level_two {
+            Some(location) if !delete_file => files.keep_file(&location, unbind)?,
+            _ => unbind()?,
+        };
         files.request();
         Ok(detail)
     })

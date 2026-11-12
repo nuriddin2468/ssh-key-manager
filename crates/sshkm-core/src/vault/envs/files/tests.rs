@@ -1455,6 +1455,8 @@ fn level_two_files_come_and_go_with_the_vault() {
     assert_eq!(away.removed, 1);
     assert_eq!(away.kept, []);
     assert!(!path.exists());
+    // Unlocked again, it is to be written, not deleted.
+    assert_eq!(f.states(), [FileState::VaultChanged]);
 
     // Unlocked again: written again, though the app wrote it before.
     let synced = f.sync();
@@ -1660,4 +1662,31 @@ fn cloud_folders_that_leave_out_level_two_files_are_no_risk_for_them() {
             (".env.local".to_owned(), Some(CloudService::OneDrive)),
         ]
     );
+}
+
+#[test]
+fn a_file_back_at_level_one_goes_back_to_backups() {
+    let mut f = Fixture::new();
+    let file = f.bind_at(".env", FileLevel::WhileUnlocked);
+    f.sync();
+    let path = f.path(".env");
+    if !fsutil::is_kept_out_of_copies(&path) {
+        // A file system that keeps no attributes: nothing to take off.
+        let kept_by_system: bool = cfg!(target_os = "macos");
+        assert!(!kept_by_system);
+        return;
+    }
+    // As another computer would: only the binding changes.
+    let env = f.env.clone();
+    f.vault
+        .set_env_file_level(&env, &file, FileLevel::Always)
+        .unwrap();
+    let synced = f.sync();
+    assert_eq!(synced.unlocked, []);
+    assert_eq!(synced.always.len(), 1);
+    assert!(!fsutil::is_kept_out_of_copies(&path));
+    // A level-1 file the app never kept out is left as it is.
+    fsutil::keep_out_of_copies_at(&path);
+    f.sync();
+    assert!(fsutil::is_kept_out_of_copies(&path));
 }

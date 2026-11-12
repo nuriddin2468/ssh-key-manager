@@ -235,7 +235,7 @@ fn hide(window: &Window) {
     if let Some(state) = app.try_state::<Shared>()
         && state.vault.settings().lock_on_minimize
     {
-        state.vault.lock(app, LockReason::Minimize);
+        crate::vault::lock_in_background(app, LockReason::Minimize);
     }
     let _ = window.hide();
     refresh(app);
@@ -423,9 +423,7 @@ fn act(app: &AppHandle, id: &str) {
         // window stays as it is.
         menu::UNLOCK => crate::browser::unlock::ask(app, crate::browser::unlock::Asker::Tray),
         menu::LOCK => {
-            if let Some(state) = app.try_state::<Shared>() {
-                state.vault.lock(app, LockReason::Manual);
-            }
+            crate::vault::lock_in_background(app, LockReason::Manual);
         }
         menu::QUIT => quit(app),
         menu::TUNNELS => page("tool:tunnels"),

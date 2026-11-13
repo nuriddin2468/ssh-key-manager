@@ -106,7 +106,7 @@ export function SessionView({
         />
       ) : null}
       {tab.state.phase === 'ended' ? (
-        <div className="flex flex-wrap items-center gap-2.5 border-t border-white/[0.06] bg-white/[0.03] px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2.5 border-t border-line-soft bg-fill-subtle px-4 py-3">
           <span className="text-fg-2">
             {[
               t(tab.local ? 'terminal.local.ended.title' : 'terminal.ended.title'),
@@ -251,7 +251,7 @@ function SessionDiagnosis({
 function FailedCard({ tab, children }: { tab: Tab; children: ReactNode }) {
   return (
     <div className="absolute inset-0 overflow-y-auto bg-terminal p-6">
-      <div className="mx-auto mt-[8vh] flex max-w-[520px] flex-col gap-3 rounded-[18px] border border-white/[0.07] bg-white/[0.02] p-[18px]">
+      <div className="mx-auto mt-[8vh] flex max-w-[520px] flex-col gap-3 rounded-[18px] border border-ink/[0.07] bg-ink/[0.02] p-[18px]">
         <div className="flex items-center gap-2">
           <StatusDot tab={tab} />
           <span className="font-mono">{tab.alias}</span>
@@ -275,7 +275,7 @@ function FailedPlain({ tab, failure, onReconnect, onCompare }: FailedProps) {
   };
   return (
     <div className="absolute inset-0 overflow-y-auto bg-terminal p-6">
-      <div className="mx-auto mt-[8vh] flex max-w-[520px] flex-col gap-3 rounded-[18px] border border-white/[0.07] bg-white/[0.02] p-[18px]">
+      <div className="mx-auto mt-[8vh] flex max-w-[520px] flex-col gap-3 rounded-[18px] border border-ink/[0.07] bg-ink/[0.02] p-[18px]">
         <div className="flex items-center gap-2">
           <StatusDot tab={tab} />
           <span className="font-mono">{tab.alias}</span>
@@ -315,7 +315,7 @@ function FailedPlain({ tab, failure, onReconnect, onCompare }: FailedProps) {
           )}
         </div>
         {outputShown && output ? (
-          <pre className="selectable max-h-[240px] overflow-auto rounded-[11px] border border-white/[0.07] bg-black/30 px-3 py-2.5 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap text-fg-2">
+          <pre className="selectable max-h-[240px] overflow-auto rounded-[11px] border border-ink/[0.07] bg-well px-3 py-2.5 font-mono text-[12px] leading-[1.55] whitespace-pre-wrap text-fg-2">
             {output}
           </pre>
         ) : null}
@@ -337,7 +337,7 @@ export function LoginBanner({ tab, onDismiss }: { tab: Tab; onDismiss: () => voi
   return (
     <div
       role="status"
-      className="mx-3 mt-2.5 flex animate-fade-in items-center gap-2.5 rounded-[11px] border border-[rgb(74_222_128/0.22)] bg-[rgb(74_222_128/0.08)] px-3 py-2 text-[var(--accent-text)]"
+      className="mx-3 mt-2.5 flex animate-fade-in items-center gap-2.5 rounded-[11px] border border-[rgb(var(--accent-rgb)/0.22)] bg-[rgb(var(--accent-rgb)/0.08)] px-3 py-2 text-[var(--accent-text)]"
     >
       <Check aria-hidden="true" className="size-[15px] shrink-0 text-online" strokeWidth={2.4} />
       <span className="min-w-0 flex-1">{signInText(t, signIn, i18n.language)}</span>
@@ -345,7 +345,7 @@ export function LoginBanner({ tab, onDismiss }: { tab: Tab; onDismiss: () => voi
         type="button"
         aria-label={t('terminal.banner.dismiss')}
         onClick={onDismiss}
-        className="pressable grid size-6 shrink-0 place-items-center rounded-md text-[#86efac] hover:bg-white/[0.06]"
+        className="pressable grid size-6 shrink-0 place-items-center rounded-md text-[var(--accent-fg)] hover:bg-fill"
       >
         <X aria-hidden="true" className="size-3.5" strokeWidth={2.2} />
       </button>
@@ -364,7 +364,7 @@ export function StatusBar({ tab, onFind, onOpenHost, onDisconnect }: StatusBarPr
   const { t } = useTranslation();
   const live = tab.state.phase === 'connecting' || tab.state.phase === 'connected';
   return (
-    <div className="flex min-h-8 flex-wrap items-center gap-x-3.5 gap-y-1 border-t border-white/[0.06] px-3.5 py-1.5 text-[12px] text-subtle">
+    <div className="flex min-h-8 flex-wrap items-center gap-x-3.5 gap-y-1 border-t border-line-soft px-3.5 py-1.5 text-[12px] text-subtle">
       <span className="min-w-0 truncate font-mono" title={statusLine(t, tab)}>
         {statusLine(t, tab)}
       </span>
@@ -393,7 +393,7 @@ export function StatusBar({ tab, onFind, onOpenHost, onDisconnect }: StatusBarPr
         <button
           type="button"
           onClick={onDisconnect}
-          className="rounded px-1 text-critical hover:text-[#ffbdbd]"
+          className="rounded px-1 text-critical hover:text-critical-strong"
         >
           {t(tab.local ? 'terminal.local.status.stop' : 'terminal.status.disconnect')}
         </button>
@@ -433,7 +433,7 @@ export function FindBar({ screen, onClose }: { screen: Screen; onClose: () => vo
   };
 
   return (
-    <search className="absolute top-2 right-3 z-10 flex items-center gap-1 rounded-[10px] border border-white/10 bg-popover p-1 shadow-xl shadow-black/40">
+    <search className="absolute top-2 right-3 z-10 flex items-center gap-1 rounded-[10px] border border-line-strong bg-popover p-1 shadow-xl shadow-shade/40">
       <label className="flex items-center gap-1.5 pl-1.5">
         <Search aria-hidden="true" className="size-3.5 text-subtle" />
         <span className="sr-only">{t('terminal.find.placeholder')}</span>

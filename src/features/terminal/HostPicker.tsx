@@ -111,7 +111,7 @@ export function HostPicker({
         onClick={() => pick(choice)}
         className={cn(
           'flex h-[38px] min-w-0 shrink-0 items-center gap-2.5 rounded-[10px] px-2.5',
-          choice === current ? 'selected-row' : 'hover:bg-white/[0.04]',
+          choice === current ? 'selected-row' : 'hover:bg-ink/[0.04]',
         )}
       >
         {choice.type === 'shell' ? (

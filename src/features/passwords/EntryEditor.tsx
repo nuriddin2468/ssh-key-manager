@@ -373,7 +373,7 @@ export function EntryEditor({ entry, onDone }: EntryEditorProps) {
               value={form.notes}
               onChange={(event) => set({ notes: event.target.value })}
               rows={3}
-              className="field min-h-[76px] resize-y rounded-[10px] px-[11px] py-2 text-fg outline-none focus:border-[rgb(var(--accent-rgb)/0.55)] focus:shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.15)]"
+              className="field min-h-[76px] resize-y rounded-[10px] px-[11px] py-2 text-fg outline-none focus:border-[rgb(var(--accent-rgb)/var(--edge-alpha))] focus:shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.15)]"
             />
           </div>
         </DialogBody>

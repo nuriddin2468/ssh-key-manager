@@ -160,7 +160,7 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
         action: { label: t('envs.undo'), onClick: () => void undo() },
         classNames: {
           actionButton:
-            '!h-7 !rounded-lg !border !border-white/15 !bg-white/10 !px-2.5 !text-[12.5px] !font-medium !text-fg hover:!bg-white/15',
+            '!h-7 !rounded-lg !border !border-ink/15 !bg-ink/10 !px-2.5 !text-[12.5px] !font-medium !text-fg hover:!bg-ink/15',
         },
       });
     },
@@ -200,7 +200,7 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
       aria-label={label}
       className="glass-raised relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl"
     >
-      <header className="relative flex flex-col gap-3.5 border-b border-white/[0.07] px-5 pt-5 pb-4">
+      <header className="relative flex flex-col gap-3.5 border-b border-ink/[0.07] px-5 pt-5 pb-4">
         <div className="flex items-start gap-3">
           <Tile tone="lime" size={44}>
             <Variable className="size-[22px]" strokeWidth={2} />
@@ -471,7 +471,7 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
             <Spinner className="size-5" />
           </div>
         ) : env && env.variables.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-white/[0.14] px-4 py-8 text-center">
+          <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-ink/[0.14] px-4 py-8 text-center">
             <p className="font-semibold">{t('envs.noVarsTitle')}</p>
             <p className="max-w-[380px] text-[12.5px] text-muted">{t('envs.noVarsText')}</p>
             {inTrash ? null : (
@@ -503,7 +503,7 @@ export function EnvPane({ summary, all, onEdit, onGone, onImport }: EnvPaneProps
               <col className="w-[76px]" />
             </colgroup>
             <thead>
-              <tr className="h-8 border-b border-white/[0.07] text-[11.5px] font-medium tracking-[0.02em] text-subtle">
+              <tr className="h-8 border-b border-ink/[0.07] text-[11.5px] font-medium tracking-[0.02em] text-subtle">
                 <th scope="col" className="px-2.5 font-medium">
                   {t('envs.colName')}
                 </th>
@@ -659,7 +659,7 @@ function VariableRow({
   };
 
   return (
-    <tr className="h-11 border-t border-white/[0.05] align-middle first:border-t-0 hover:bg-white/[0.03]">
+    <tr className="h-11 border-t border-ink/[0.05] align-middle first:border-t-0 hover:bg-fill-subtle">
       <td className="px-2.5 py-1">
         <span className="flex min-w-0 items-center gap-1.5">
           <span
@@ -677,7 +677,8 @@ function VariableRow({
           {variable.shared ? (
             <span
               title={t('envs.shared.badge', { count: users })}
-              className="shrink-0 text-cyan-300"
+              data-hue="tools"
+              className="shrink-0 text-[var(--accent-fg)]"
             >
               <Link2 aria-hidden="true" className="size-3.5" strokeWidth={2} />
               <span className="sr-only">{t('envs.shared.badge', { count: users })}</span>

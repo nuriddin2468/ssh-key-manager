@@ -108,8 +108,8 @@ export function SessionTabs({
               className={cn(
                 'inline-flex h-[30px] max-w-full items-center rounded-[9px] border transition-[background-color,border-color] duration-[120ms] ease-out',
                 selected
-                  ? 'border-[rgb(74_222_128/0.45)] bg-[rgb(74_222_128/0.13)] text-[#dcfce7]'
-                  : 'border-transparent text-muted hover:bg-white/[0.05]',
+                  ? 'border-[rgb(var(--accent-rgb)/0.45)] bg-[rgb(var(--accent-rgb)/0.13)] text-[var(--accent-text)]'
+                  : 'border-transparent text-muted hover:bg-ink/[0.05]',
               )}
             >
               {tab.alias.length > 22 ? <Tooltip content={tab.alias}>{name}</Tooltip> : name}
@@ -119,8 +119,8 @@ export function SessionTabs({
                 aria-label={t('terminal.closeSession', { alias: tab.alias })}
                 onClick={() => onClose(tab.key)}
                 className={cn(
-                  'pressable mr-1 grid size-[22px] shrink-0 place-items-center rounded-md hover:bg-white/[0.08]',
-                  selected ? 'text-[#86efac]' : 'text-subtle',
+                  'pressable mr-1 grid size-[22px] shrink-0 place-items-center rounded-md hover:bg-ink/[0.08]',
+                  selected ? 'text-[var(--accent-fg)]' : 'text-subtle',
                 )}
               >
                 <X aria-hidden="true" className="size-3.5" strokeWidth={2.2} />
@@ -137,7 +137,7 @@ export function SessionTabs({
           type="button"
           aria-label={t('terminal.newSession')}
           onClick={onNew}
-          className="pressable ml-0.5 grid size-7 place-items-center rounded-lg text-muted hover:bg-white/[0.06] hover:text-fg"
+          className="pressable ml-0.5 grid size-7 place-items-center rounded-lg text-muted hover:bg-fill hover:text-fg"
         >
           <Plus aria-hidden="true" className="size-4" strokeWidth={2} />
         </button>

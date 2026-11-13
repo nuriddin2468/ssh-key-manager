@@ -11,31 +11,73 @@ import { type ILinkHandler, type ITheme, Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { platform } from '@/lib/platform';
+import { currentTheme, subscribeTheme, type Theme } from '@/lib/theme';
 
-export const THEME: ITheme = {
-  background: '#06080d',
-  foreground: '#d7dde8',
-  cursor: '#d7dde8',
-  cursorAccent: '#06080d',
-  selectionBackground: 'rgb(147 197 253 / 0.28)',
-  black: '#1c2230',
-  red: '#ff9b9b',
-  green: '#86efac',
-  yellow: '#ffc266',
-  blue: '#93c5fd',
-  magenta: '#c4b5fd',
-  cyan: '#5eead4',
-  white: '#d7dde8',
-  // Dim text from programs: still 4.5:1 on the background.
-  brightBlack: '#7c869a',
-  brightRed: '#ffbdbd',
-  brightGreen: '#bbf7d0',
-  brightYellow: '#ffd699',
-  brightBlue: '#bfdbfe',
-  brightMagenta: '#ddd6fe',
-  brightCyan: '#99f6e4',
-  brightWhite: '#f2f4f8',
+/**
+ * The terminal's colours in each theme. xterm needs plain colour values, so
+ * these are the one palette outside `src/styles/app.css`; the backgrounds
+ * match `--color-terminal` there.
+ */
+export const THEMES: Record<Theme, ITheme> = {
+  dark: {
+    background: '#06080d',
+    foreground: '#d7dde8',
+    cursor: '#d7dde8',
+    cursorAccent: '#06080d',
+    selectionBackground: 'rgb(147 197 253 / 0.28)',
+    black: '#1c2230',
+    red: '#ff9b9b',
+    green: '#86efac',
+    yellow: '#ffc266',
+    blue: '#93c5fd',
+    magenta: '#c4b5fd',
+    cyan: '#5eead4',
+    white: '#d7dde8',
+    // Dim text from programs: still 4.5:1 on the background.
+    brightBlack: '#7c869a',
+    brightRed: '#ffbdbd',
+    brightGreen: '#bbf7d0',
+    brightYellow: '#ffd699',
+    brightBlue: '#bfdbfe',
+    brightMagenta: '#ddd6fe',
+    brightCyan: '#99f6e4',
+    brightWhite: '#f2f4f8',
+  },
+  // Every colour at 5:1 or more on the background, the bright ones darker
+  // still; white and bright white are greys, so text in them stays readable
+  // and black text on them too.
+  light: {
+    background: '#fbfbfc',
+    foreground: '#1f2430',
+    cursor: '#1f2430',
+    cursorAccent: '#fbfbfc',
+    selectionBackground: 'rgb(37 99 235 / 0.2)',
+    black: '#1f2430',
+    red: '#c0262d',
+    green: '#1a7a3a',
+    yellow: '#8a5600',
+    blue: '#1d5fd1',
+    magenta: '#7c3aed',
+    cyan: '#0e7490',
+    white: '#5d6779',
+    brightBlack: '#5f6878',
+    brightRed: '#a21b22',
+    brightGreen: '#116330',
+    brightYellow: '#6f4500',
+    brightBlue: '#1749a6',
+    brightMagenta: '#6025c4',
+    brightCyan: '#0b5d75',
+    brightWhite: '#8a93a3',
+  },
 };
+
+/**
+ * In the light theme xterm darkens any text below 4.5:1, such as a program's
+ * own pale truecolor; the dark theme shows programs' colours as they are.
+ */
+function themeOptions(theme: Theme) {
+  return { theme: THEMES[theme], minimumContrastRatio: theme === 'light' ? 4.5 : 1 };
+}
 
 const FONT = '"Geist Mono Variable", ui-monospace, Menlo, Consolas, monospace';
 
@@ -94,10 +136,11 @@ export class Screen {
   private resizeObserver: ResizeObserver | null = null;
   private fitTimer: ReturnType<typeof setTimeout> | undefined;
   private label = '';
+  private readonly unsubscribeTheme: () => void;
 
   constructor(handlers: ScreenHandlers) {
     this.term = new Terminal({
-      theme: THEME,
+      ...themeOptions(currentTheme()),
       fontFamily: FONT,
       fontSize: 13,
       lineHeight: 1.25,
@@ -118,6 +161,9 @@ export class Screen {
     this.term.onData(handlers.onInput);
     this.term.onResize(({ cols, rows }) => handlers.onResize(cols, rows));
     this.term.attachCustomKeyEventHandler((event) => this.key(event, handlers));
+    this.unsubscribeTheme = subscribeTheme(() => {
+      Object.assign(this.term.options, themeOptions(currentTheme()));
+    });
   }
 
   /**
@@ -236,6 +282,7 @@ export class Screen {
   }
 
   dispose(): void {
+    this.unsubscribeTheme();
     this.detach();
     this.term.dispose();
   }

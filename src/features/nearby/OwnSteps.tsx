@@ -113,7 +113,7 @@ export function TransferStep({ done, total }: { done: number; total: number }) {
         aria-valuemax={100}
         aria-valuenow={value}
         aria-labelledby={labelId}
-        className="h-1.5 overflow-hidden rounded-full bg-white/[0.08]"
+        className="h-1.5 overflow-hidden rounded-full bg-ink/[0.08]"
       >
         <div
           className="h-full rounded-full bg-[var(--accent-2)] transition-[width] duration-200"

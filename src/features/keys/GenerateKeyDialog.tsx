@@ -309,7 +309,7 @@ export function GenerateKeyDialog({ onDone, onCreated }: GenerateKeyDialogProps)
             <span className="text-[12px] font-semibold tracking-[0.02em] text-subtle">
               {t('generate.command')}
             </span>
-            <code className="selectable block rounded-xl border border-white/[0.06] bg-black/40 px-[13px] py-[11px] font-mono text-[12px] leading-[18px] break-all text-fg-2">
+            <code className="selectable block rounded-xl border border-line-soft bg-shade/40 px-[13px] py-[11px] font-mono text-[12px] leading-[18px] break-all text-fg-2">
               <span className="text-ok">$</span> {command}
             </code>
           </div>
@@ -361,7 +361,7 @@ function SizePicker({ label, options, value, onChange }: SizePickerProps) {
               'pressable h-7 rounded-full border px-[11px] font-mono text-[12px] font-medium',
               option.value === value
                 ? 'border-[rgb(var(--accent-rgb)/0.55)] bg-[rgb(var(--accent-rgb)/0.12)] text-[var(--accent-text)]'
-                : 'border-white/10 bg-white/[0.04] text-fg-2 hover:bg-white/[0.07]',
+                : 'border-line-strong bg-ink/[0.04] text-fg-2 hover:bg-ink/[0.07]',
             )}
           >
             {option.label}

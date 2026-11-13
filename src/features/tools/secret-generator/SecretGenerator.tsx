@@ -179,8 +179,8 @@ export function SecretGenerator() {
                     aria-label={`${text.title}. ${text.hint}`}
                     className={cn(
                       'pressable-soft flex items-center gap-2.5 rounded-xl px-2 py-1.5 text-left outline-none',
-                      'focus-visible:shadow-[0_0_0_2px_rgb(var(--accent-rgb)/0.55)]',
-                      id === preset ? 'selected-row' : 'hover:bg-white/[0.05]',
+                      'focus-visible:shadow-[0_0_0_2px_rgb(var(--focus-rgb)/var(--edge-alpha))]',
+                      id === preset ? 'selected-row' : 'hover:bg-ink/[0.05]',
                     )}
                   >
                     <Tile tone={look.tone} size={28}>
@@ -215,7 +215,7 @@ export function SecretGenerator() {
             </header>
 
             <div className="flex flex-col gap-1.5">
-              <div className="flex min-h-[52px] items-center gap-2 rounded-xl border border-white/[0.08] bg-black/35 py-2 pr-1.5 pl-3">
+              <div className="flex min-h-[52px] items-center gap-2 rounded-xl border border-line bg-shade/35 py-2 pr-1.5 pl-3">
                 <span className="sr-only">{t('toolGenerator.output')}: </span>
                 <span className="selectable min-w-0 flex-1 font-mono text-[15px] leading-[22px] font-medium [overflow-wrap:anywhere] text-fg">
                   {value || ' '}
@@ -236,7 +236,7 @@ export function SecretGenerator() {
 
             <Options id={id} choices={choices} onChange={setChoices} />
 
-            <div className="flex flex-col gap-3 border-t border-white/[0.06] pt-4">
+            <div className="flex flex-col gap-3 border-t border-line-soft pt-4">
               <div className="flex flex-wrap items-start gap-2.5">
                 <Select
                   label={t('toolGenerator.copyAs')}
@@ -264,7 +264,7 @@ export function SecretGenerator() {
                   <span className="text-[12px] font-semibold text-fg-2">
                     {t('toolGenerator.preview')}
                   </span>
-                  <code className="selectable rounded-lg border border-white/[0.06] bg-black/25 px-2.5 py-1.5 font-mono text-[12px] leading-[18px] text-fg-2 [overflow-wrap:anywhere]">
+                  <code className="selectable rounded-lg border border-line-soft bg-shade/25 px-2.5 py-1.5 font-mono text-[12px] leading-[18px] text-fg-2 [overflow-wrap:anywhere]">
                     {text}
                   </code>
                 </div>
@@ -419,7 +419,7 @@ function SaveButton({ disabled, onSave }: { disabled: boolean; onSave: () => voi
         <button
           type="button"
           onClick={() => navigate({ page: 'passwords' })}
-          className="text-left underline decoration-white/30 underline-offset-2 hover:text-fg"
+          className="text-left underline decoration-ink/30 underline-offset-2 hover:text-fg"
         >
           {t('toolGenerator.noVault')}
         </button>

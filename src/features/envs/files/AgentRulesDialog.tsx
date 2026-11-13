@@ -198,7 +198,7 @@ function ToolRow({ rules, checked, disabled, onChange }: ToolRowProps) {
         ? t('envs.agents.adds', { count: rules.missing.length })
         : t('envs.agents.makes');
   return (
-    <li className="rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-2">
+    <li className="rounded-xl border border-ink/[0.07] bg-ink/[0.025] px-3 py-2">
       <Checkbox
         checked={can && checked}
         disabled={disabled || !can}

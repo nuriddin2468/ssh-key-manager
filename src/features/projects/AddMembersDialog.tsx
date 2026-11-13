@@ -228,8 +228,8 @@ export function AddMembersDialog({
                 key={item.kind}
                 value={item.kind}
                 className={cn(
-                  'pressable inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12.5px] outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]',
-                  'border-white/10 bg-white/[0.04] text-fg-2 hover:bg-white/[0.08]',
+                  'pressable inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12.5px] outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--focus-rgb)/var(--ring-alpha))]',
+                  'border-line-strong bg-ink/[0.04] text-fg-2 hover:bg-ink/[0.08]',
                   'data-[state=checked]:border-[rgb(var(--accent-rgb)/0.5)] data-[state=checked]:bg-[rgb(var(--accent-rgb)/0.14)] data-[state=checked]:text-[var(--accent-text)]',
                 )}
               >
@@ -250,7 +250,7 @@ export function AddMembersDialog({
           </label>
           <ul
             aria-label={t(`projects.cards.${kind}`)}
-            className="flex max-h-[320px] min-h-[120px] flex-col overflow-y-auto rounded-xl border border-white/[0.06]"
+            className="flex max-h-[320px] min-h-[120px] flex-col overflow-y-auto rounded-xl border border-line-soft"
           >
             {shown.length === 0 ? (
               <li className="grid flex-1 place-items-center p-6 text-center text-[13px] text-subtle">
@@ -261,11 +261,11 @@ export function AddMembersDialog({
                 const key = keyOf(choice.member);
                 const checked = picked.has(key);
                 return (
-                  <li key={key} className="border-t border-white/[0.045] first:border-t-0">
+                  <li key={key} className="border-t border-ink/[0.045] first:border-t-0">
                     <Checkbox
                       checked={checked}
                       onCheckedChange={() => toggle(choice)}
-                      className="min-h-11 items-center px-3 py-1.5 hover:bg-white/[0.04]"
+                      className="min-h-11 items-center px-3 py-1.5 hover:bg-ink/[0.04]"
                       label={
                         <span className="block min-w-0">
                           <span

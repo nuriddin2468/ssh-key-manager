@@ -1327,7 +1327,7 @@ impl Vault {
             let (Ok(target), bound) = (planned.located, planned.bound) else {
                 continue;
             };
-            let Disk::Text(text) = disk::read(&target.real) else {
+            let Disk::Text(text) = disk::read_checked(&target) else {
                 continue;
             };
             let parsed = dotenv::parse(&text);
@@ -1662,7 +1662,7 @@ impl Vault {
         let target = planned
             .located
             .map_err(|_| Error::invalid("the file can't be reached"))?;
-        let text = match disk::read(&target.real) {
+        let text = match disk::read_checked(&target) {
             Disk::Text(text) => Some(text),
             Disk::Missing => None,
             Disk::Refused(_) | Disk::Failed(_) => {
@@ -1711,7 +1711,7 @@ impl Vault {
         if target.pipe.is_some() {
             return (FileState::VaultChanged, None);
         }
-        let text = match disk::read(&target.real) {
+        let text = match disk::read_checked(target) {
             Disk::Text(text) => Some(text),
             Disk::Missing => None,
             Disk::Refused(reason) => return (FileState::Refused { reason }, None),
@@ -1843,7 +1843,7 @@ impl Vault {
         if let Some(id) = target.pipe {
             return (served_state(&vault), agreed(false), Some(serve(id, answer)));
         }
-        let text = match disk::read(&target.real) {
+        let text = match disk::read_checked(target) {
             Disk::Text(text) => Some(text),
             Disk::Missing => None,
             Disk::Refused(reason) => return (FileState::Refused { reason }, None, None),
@@ -1958,7 +1958,7 @@ impl Vault {
     /// meanwhile isn't taken for the app's own write.
     fn leftover(&self, key: &[u8; 32], bound: &Bound, target: &Target) -> Option<Leftover> {
         let left = Leftover::of(&target.real)?;
-        let Disk::Text(text) = disk::read(&target.real) else {
+        let Disk::Text(text) = disk::read_checked(target) else {
             return None;
         };
         let vault = self.env_variables(&bound.env_id).ok()?;
@@ -2161,7 +2161,7 @@ impl Vault {
         }
         let target = disk::locate(&file, ctx, &self.paths)
             .map_err(|_| Error::invalid("the file can't be reached"))?;
-        match disk::read(&target.real) {
+        match disk::read_checked(&target) {
             Disk::Text(text) => Ok((target.display, dotenv::parse(&text))),
             Disk::Missing => Err(Error::NotFound(target.display.display().to_string())),
             Disk::Refused(_) | Disk::Failed(_) => Err(Error::invalid("the file can't be read")),

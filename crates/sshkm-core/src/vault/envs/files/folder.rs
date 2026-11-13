@@ -11,6 +11,13 @@
 //! nothing: what was opened stays the folder that was checked, wherever its
 //! path leads by then.
 //!
+//! A new file or pipe is made in a staging folder of the app's own inside
+//! that folder (`Staging`): mode 0700 and, on macOS, its
+//! access list emptied before anything is made in it, so nothing a
+//! folder's list hands down (which macOS checks before the mode) is on the
+//! file at any moment. It is then renamed into place, and the staging
+//! folder removed; one a crash leaves is swept ([`sweep_staging`]).
+//!
 //! On Windows the folder is held open, without letting it be renamed or
 //! deleted, for as long as it is used, and the folder held is checked by
 //! the path Windows gives for its handle: the folder found, inside the
@@ -20,13 +27,15 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+#[cfg(unix)]
 use crate::fsutil;
 
-/// What a temporary file of a write to `name` is called: `name` with
+/// What a staging folder of a write to `name` is called: `name` with
 /// [`fsutil::PRIVATE_TEMP`] around a random tag (`.env.sshkm-Ab12Cd.tmp`),
-/// so the sweeps of what a crash left find it
-/// ([`fsutil::sweep_private_temps`]).
-pub(super) fn temp_name(name: &str) -> String {
+/// as the app's temporary files are, so the sweeps of what a crash left
+/// find it ([`sweep_staging`]).
+#[cfg(unix)]
+fn temp_name(name: &str) -> String {
     format!(
         "{name}{}{}{}",
         fsutil::PRIVATE_TEMP.0,
@@ -35,6 +44,7 @@ pub(super) fn temp_name(name: &str) -> String {
     )
 }
 
+#[cfg(unix)]
 fn random_tag() -> String {
     use rand_core::{OsRng, RngCore};
     const LETTERS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -52,11 +62,14 @@ pub(super) enum Kind {
     File,
     Folder,
     Link,
+    #[cfg_attr(not(unix), allow(dead_code, reason = "no pipes in folders there"))]
     Pipe,
     Other,
 }
 
-pub(super) use imp::Folder;
+#[cfg(unix)]
+pub(super) use imp::Staging;
+pub(super) use imp::{Folder, sweep_staging};
 
 impl Folder {
     /// The folder `dir`, held, if it is still the folder whose identity
@@ -198,53 +211,46 @@ mod imp {
             Ok(fs::File::from(fd))
         }
 
-        /// A new file in the folder for a write to `name`, readable and
-        /// writable by its owner only, where nothing was: its name
-        /// ([`temp_name`]) and the file.
-        pub fn create_temp(&self, name: &str) -> io::Result<(String, fs::File)> {
+        /// A staging folder for a new file that is to take the place of
+        /// `name` in this folder ([`Staging`]).
+        pub fn staging(&self, name: &str) -> io::Result<Staging<'_>> {
             let mut tries = 0;
-            loop {
-                let temp = temp_name(name);
-                match rustix::fs::openat(
-                    &self.fd,
-                    temp.as_str(),
-                    OFlags::WRONLY
-                        | OFlags::CREATE
-                        | OFlags::EXCL
-                        | OFlags::NOFOLLOW
-                        | OFlags::CLOEXEC,
-                    Mode::from_raw_mode(0o600),
-                ) {
-                    Ok(fd) => return Ok((temp, fs::File::from(fd))),
+            let made = loop {
+                let made = temp_name(name);
+                match rustix::fs::mkdirat(&self.fd, made.as_str(), Mode::from_raw_mode(0o700)) {
+                    Ok(()) => break made,
                     Err(Errno::EXIST) if tries < 16 => tries += 1,
                     Err(e) => return Err(e.into()),
                 }
-            }
-        }
-
-        /// Renames `from` to `to` in the folder. Without `replace`, fails
-        /// with [`io::ErrorKind::AlreadyExists`] if something is at `to`.
-        pub fn rename(&self, from: &str, to: &str, replace: bool) -> io::Result<()> {
-            if replace {
-                return Ok(rustix::fs::renameat(&self.fd, from, &self.fd, to)?);
-            }
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
-            match rustix::fs::renameat_with(
+            };
+            let opened = rustix::fs::openat(
                 &self.fd,
-                from,
-                &self.fd,
-                to,
-                rustix::fs::RenameFlags::NOREPLACE,
-            ) {
-                Ok(()) => return Ok(()),
-                // Not where the file system can't: a link and an unlink,
-                // as `tempfile` does.
-                Err(Errno::INVAL | Errno::NOSYS | Errno::NOTSUP) => {}
-                Err(e) => return Err(e.into()),
-            }
-            rustix::fs::linkat(&self.fd, from, &self.fd, to, AtFlags::empty())?;
-            let _ = rustix::fs::unlinkat(&self.fd, from, AtFlags::empty());
-            Ok(())
+                made.as_str(),
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            );
+            let fd = match opened {
+                Ok(fd) => fd,
+                Err(e) => {
+                    let _ = rustix::fs::unlinkat(&self.fd, made.as_str(), AtFlags::REMOVEDIR);
+                    return Err(e.into());
+                }
+            };
+            let staging = Staging {
+                folder: Folder {
+                    fd,
+                    path: self.path.join(&made),
+                },
+                parent: self,
+                name: made,
+            };
+            // Made 0700; set again in case a umask took more. Then, on
+            // macOS, what the folder's access list handed down goes, before
+            // anything is made in it. A failure removes it (`Drop`).
+            rustix::fs::fchmod(&staging.folder.fd, Mode::from_raw_mode(0o700))?;
+            #[cfg(target_os = "macos")]
+            crate::perms::extended_acl::clear(&fs::File::from(staging.folder.fd.try_clone()?))?;
+            Ok(staging)
         }
 
         /// Removes `name`, not a folder, from the folder.
@@ -255,6 +261,127 @@ mod imp {
         /// Flushes the folder's entries (best effort).
         pub fn sync(&self) {
             let _ = rustix::fs::fsync(&self.fd);
+        }
+    }
+
+    /// A folder of the app's own, made inside a held folder for a new file
+    /// to be made in and then renamed into place: mode 0700, and on macOS
+    /// with its access list emptied before anything is made in it, so a
+    /// file made there gets nothing a folder's list hands down, at no
+    /// moment, not even before its own list could be emptied (macOS checks
+    /// such entries before the mode, and a descriptor opened in that moment
+    /// would stay open). It is named as the app's temporary files are
+    /// (`<name>.sshkm-….tmp`), so one a crash leaves is swept
+    /// ([`sweep_staging`]), and it goes, with what is left in it, when it
+    /// is dropped.
+    pub struct Staging<'a> {
+        /// The staging folder, opened.
+        pub folder: Folder,
+        parent: &'a Folder,
+        name: String,
+    }
+
+    impl Staging<'_> {
+        /// Renames `name`, made in the staging folder, to `to` in the
+        /// folder it is in. Without `replace`, fails with
+        /// [`io::ErrorKind::AlreadyExists`] if something is at `to`.
+        pub fn place(&self, name: &str, to: &str, replace: bool) -> io::Result<()> {
+            rename_at(self.folder.fd(), name, self.parent.fd(), to, replace)
+        }
+    }
+
+    impl Drop for Staging<'_> {
+        fn drop(&mut self) {
+            remove_staging(self.parent, &self.name, &self.folder);
+        }
+    }
+
+    /// Renames `from` in the folder `from_dir` to `to` in `to_dir`. Without
+    /// `replace`, fails with [`io::ErrorKind::AlreadyExists`] if something
+    /// is at `to`.
+    fn rename_at(
+        from_dir: BorrowedFd<'_>,
+        from: &str,
+        to_dir: BorrowedFd<'_>,
+        to: &str,
+        replace: bool,
+    ) -> io::Result<()> {
+        if replace {
+            return Ok(rustix::fs::renameat(from_dir, from, to_dir, to)?);
+        }
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        match rustix::fs::renameat_with(
+            from_dir,
+            from,
+            to_dir,
+            to,
+            rustix::fs::RenameFlags::NOREPLACE,
+        ) {
+            Ok(()) => return Ok(()),
+            // Not where the file system can't: a link and an unlink, as
+            // `tempfile` does.
+            Err(Errno::INVAL | Errno::NOSYS | Errno::NOTSUP) => {}
+            Err(e) => return Err(e.into()),
+        }
+        rustix::fs::linkat(from_dir, from, to_dir, to, AtFlags::empty())?;
+        let _ = rustix::fs::unlinkat(from_dir, from, AtFlags::empty());
+        Ok(())
+    }
+
+    /// Removes the staging folder `name` of `parent`, opened as `staging`,
+    /// with what is in it that isn't a folder (nothing else is ever made in
+    /// one).
+    fn remove_staging(parent: &Folder, name: &str, staging: &Folder) {
+        if let Ok(entries) = rustix::fs::Dir::read_from(&staging.fd) {
+            let names: Vec<std::ffi::CString> = entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.file_name().to_owned())
+                .filter(|name| !matches!(name.as_bytes(), b"." | b".."))
+                .collect();
+            for name in names {
+                let _ = rustix::fs::unlinkat(&staging.fd, name.as_c_str(), AtFlags::empty());
+            }
+        }
+        let _ = rustix::fs::unlinkat(&parent.fd, name, AtFlags::REMOVEDIR);
+    }
+
+    /// Removes the staging folders of writes to `path` that a crash left
+    /// next to it ([`Staging`]), with what they hold: a file's values in
+    /// plain text, or a pipe. Only folders, never through a link.
+    pub fn sweep_staging(path: &Path) {
+        let Ok((parent, name)) = super::open_parent(path) else {
+            return;
+        };
+        let Ok(entries) = fs::read_dir(parent.path()) else {
+            return;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let Some(found) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if !fsutil::is_private_temp(&found, name) {
+                continue;
+            }
+            let is_folder = parent
+                .entry(&found)
+                .ok()
+                .flatten()
+                .is_some_and(|entry| entry.kind == Kind::Folder);
+            if !is_folder {
+                continue;
+            }
+            if let Ok(fd) = rustix::fs::openat(
+                &parent.fd,
+                found.as_str(),
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            ) {
+                let staging = Folder {
+                    fd,
+                    path: parent.path.join(&found),
+                };
+                remove_staging(&parent, &found, &staging);
+            }
         }
     }
 
@@ -364,17 +491,27 @@ mod imp {
         keep_out: bool,
         placing: impl FnOnce(&fs::Metadata) -> crate::Result<()>,
     ) -> crate::Result<bool> {
-        let (temp, mut file) = folder
-            .create_temp(name)
+        // Made in a staging folder of its own, where nothing is handed down
+        // to it, then renamed into place.
+        let staging = folder
+            .staging(name)
             .map_err(|e| Error::io(e, folder.path()))?;
-        let temp_path = folder.path().join(&temp);
+        let temp_path = staging.folder.path().join(name);
+        let mut file = fs::File::from(
+            rustix::fs::openat(
+                staging.folder.fd(),
+                name,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::from_raw_mode(0o600),
+            )
+            .map_err(|e| Error::io(e.into(), &temp_path))?,
+        );
         let written = (|| -> crate::Result<()> {
-            // Made 0600; set again in case a umask took more.
+            // Made 0600; set again in case a umask took more. Its access
+            // list is empty already, made where none is handed down; it is
+            // emptied once more all the same (macOS).
             file.set_permissions(fs::Permissions::from_mode(0o600))
                 .map_err(|e| Error::io(e, &temp_path))?;
-            // Without the entries a folder's access list handed down, which
-            // macOS checks before the mode, before it holds anything (Linux
-            // masks a POSIX list's entries with the mode's group bits).
             #[cfg(target_os = "macos")]
             crate::perms::extended_acl::clear(&file).map_err(|e| Error::io(e, &temp_path))?;
             if keep_out {
@@ -387,15 +524,15 @@ mod imp {
             placing(&meta)
         })();
         drop(file);
-        let placed = written.and_then(|()| match folder.rename(&temp, name, overwrite) {
+        let placed = written.and_then(|()| match staging.place(name, name, overwrite) {
             Ok(()) => Ok(true),
             Err(e) if !overwrite && e.kind() == io::ErrorKind::AlreadyExists => Ok(false),
             Err(e) => Err(Error::io(e, &folder.path().join(name))),
         });
+        // The staging folder goes, and what is left in it.
+        drop(staging);
         if matches!(placed, Ok(true)) {
             folder.sync();
-        } else {
-            let _ = folder.remove(&temp);
         }
         placed
     }
@@ -411,14 +548,14 @@ mod imp {
     use std::fs;
     use std::io;
     use std::os::windows::ffi::OsStringExt as _;
-    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+    use std::os::windows::fs::OpenOptionsExt as _;
     use std::os::windows::io::AsRawHandle as _;
     use std::path::{Path, PathBuf};
 
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Storage::FileSystem::{
-        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_NAME_NORMALIZED, FILE_SHARE_READ, FILE_SHARE_WRITE, GetFinalPathNameByHandleW,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_NAME_NORMALIZED,
+        FILE_SHARE_READ, FILE_SHARE_WRITE, GetFinalPathNameByHandleW,
     };
 
     use crate::fsutil;
@@ -432,15 +569,20 @@ mod imp {
 
     impl Folder {
         /// The folder at `path`, held open without letting it be renamed
-        /// or deleted, and never a link or junction itself.
+        /// or deleted, and never a link, junction or mount point itself
+        /// (a reparse point that names another place). A folder that is a
+        /// reparse point of another kind, such as `OneDrive`'s folders
+        /// kept in the cloud, is a folder like any other.
         pub fn open(path: &Path) -> io::Result<Self> {
             let held = fs::OpenOptions::new()
                 .read(true)
                 .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE).0)
                 .custom_flags((FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT).0)
                 .open(path)?;
-            let meta = held.metadata()?;
-            if !meta.is_dir() || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+            let kind = held.metadata()?.file_type();
+            // `is_symlink`: a name-surrogate reparse point, as `disk::read`
+            // refuses for a file.
+            if kind.is_symlink() || !kind.is_dir() {
                 return Err(io::Error::other("not a folder"));
             }
             Ok(Self {
@@ -498,15 +640,11 @@ mod imp {
         pub fn remove(&self, name: &str) -> io::Result<()> {
             fs::remove_file(self.path.join(name))
         }
-
-        pub fn rename(&self, from: &str, to: &str, replace: bool) -> io::Result<()> {
-            let to = self.path.join(to);
-            if !replace && fs::symlink_metadata(&to).is_ok() {
-                return Err(io::ErrorKind::AlreadyExists.into());
-            }
-            fs::rename(self.path.join(from), to)
-        }
     }
+
+    /// No staging folders here: a private file gets its own access list as
+    /// it is made ([`fsutil::replace_private`]).
+    pub fn sweep_staging(_: &Path) {}
 
     /// What a name in a folder is, not following a link.
     pub struct Entry {
@@ -586,11 +724,9 @@ mod imp {
         pub fn remove(&self, _: &str) -> io::Result<()> {
             Err(io::Error::other("not on this system"))
         }
-
-        pub fn rename(&self, _: &str, _: &str, _: bool) -> io::Result<()> {
-            Err(io::Error::other("not on this system"))
-        }
     }
+
+    pub fn sweep_staging(_: &Path) {}
 
     pub struct Entry {
         pub kind: super::Kind,
@@ -658,29 +794,56 @@ mod tests {
 
     /// A folder whose access list lets everyone read what is made in it
     /// hands nothing down to a file written through it, nor to a pipe
-    /// made in it (macOS checks those entries before the mode).
+    /// made in it (macOS checks those entries before the mode), at no
+    /// moment: they are made in a staging folder that has no entry from
+    /// the moment anything can be made in it.
     #[cfg(target_os = "macos")]
     #[test]
-    fn files_and_pipes_made_in_a_folder_drop_what_it_hands_down() {
+    fn files_and_pipes_made_in_a_folder_never_carry_what_it_hands_down() {
         use crate::perms::extended_acl::testing::{entries, sharing_folder};
         let dir = sharing_folder();
         let folder = Folder::open(dir.path()).unwrap();
+        // A file made in a staging folder, as it is made: nothing on it,
+        // though nothing has emptied its list.
+        {
+            let staging = folder.staging(".env").unwrap();
+            assert_eq!(entries(staging.folder.path()), 0);
+            let fd = rustix::fs::openat(
+                staging.folder.fd(),
+                "made",
+                rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CREATE,
+                rustix::fs::Mode::from_raw_mode(0o600),
+            )
+            .unwrap();
+            drop(fd);
+            assert_eq!(entries(&staging.folder.path().join("made")), 0);
+        }
+        let leftovers = || {
+            fs::read_dir(dir.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .filter(|name| name.to_string_lossy().ends_with(".tmp"))
+                .count()
+        };
+        assert_eq!(leftovers(), 0);
         let mut seen = None;
         assert!(
             folder
                 .write_private(".env", b"A=1\n", false, true, |_| {
-                    // The temporary file, before it takes its place.
+                    // The staging folder and the new file in it, before it
+                    // takes its place.
                     seen = fs::read_dir(dir.path())
                         .unwrap()
                         .map(|entry| entry.unwrap().path())
                         .find(|path| path.to_string_lossy().ends_with(".tmp"))
-                        .map(|temp| entries(&temp));
+                        .map(|staging| (entries(&staging), entries(&staging.join(".env"))));
                     Ok(())
                 })
                 .unwrap()
         );
-        assert_eq!(seen, Some(0));
+        assert_eq!(seen, Some((0, 0)));
         assert_eq!(entries(&dir.path().join(".env")), 0);
+        assert_eq!(leftovers(), 0);
         // Rewritten, too.
         assert!(
             folder
@@ -699,9 +862,66 @@ mod tests {
             Some(made)
         );
         assert_eq!(entries(&dir.path().join(".env")), 0);
+        assert_eq!(leftovers(), 0);
         // A file made the ordinary way there still gets the entry.
         fs::write(dir.path().join("other"), "").unwrap();
         assert_eq!(entries(&dir.path().join("other")), 1);
+    }
+
+    /// A junction, which names another place, is never held as the folder;
+    /// a plain folder is, by the path Windows gives for it.
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_is_never_held_as_a_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let target = root.join("target");
+        fs::create_dir(&target).unwrap();
+        let held = Folder::open(&target).unwrap();
+        assert_eq!(
+            held.token().unwrap(),
+            target.to_string_lossy().to_lowercase()
+        );
+        let junction = root.join("junction");
+        let made = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(&junction)
+            .arg(&target)
+            .output()
+            .is_ok_and(|out| out.status.success());
+        if made {
+            assert!(Folder::open(&junction).is_err());
+        }
+    }
+
+    /// A staging folder a crash left, with the values in it, is swept;
+    /// a folder of the user's is left alone.
+    #[cfg(unix)]
+    #[test]
+    fn staging_folders_a_crash_left_are_swept() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = Folder::open(dir.path()).unwrap();
+        let staging = folder.staging(".env").unwrap();
+        let left = staging.folder.path().to_path_buf();
+        fs::write(left.join(".env"), "API_TOKEN=tok-1\n").unwrap();
+        // The app went before it could remove it.
+        std::mem::forget(staging);
+        let mine = dir.path().join("keep.tmp");
+        fs::create_dir(&mine).unwrap();
+        fs::write(mine.join(".env"), "MINE=1\n").unwrap();
+        sweep_staging(&dir.path().join(".env"));
+        assert!(!left.exists());
+        assert!(mine.join(".env").exists());
+        // Nor is the staging folder of another file swept for this one.
+        let other = folder.staging(".env.local").unwrap();
+        let other_path = other.folder.path().to_path_buf();
+        std::mem::forget(other);
+        sweep_staging(&dir.path().join(".env"));
+        assert!(other_path.exists());
+        sweep_staging(&dir.path().join(".env.local"));
+        assert!(!other_path.exists());
     }
 
     #[cfg(unix)]

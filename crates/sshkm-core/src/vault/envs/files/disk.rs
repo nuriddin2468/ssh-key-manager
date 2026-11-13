@@ -382,10 +382,11 @@ pub(super) fn keep_out(target: &Target) {
     fsutil::keep_out_of_copies_at(&target.real);
 }
 
-/// Removes the temporary files of the target's writes that a crash left
-/// next to it: they hold its values in plain text.
+/// Removes the temporary files and staging folders of the target's writes
+/// that a crash left next to it: they hold its values in plain text.
 pub(super) fn sweep(target: &Target) {
     fsutil::sweep_private_temps(&target.real);
+    super::folder::sweep_staging(&target.real);
 }
 
 /// Deletes the target, a regular file, through its folder held and checked

@@ -171,6 +171,7 @@ impl Leftover {
             return false;
         }
         fsutil::sweep_private_temps(&self.path);
+        folder::sweep_staging(&self.path);
         if self.stamp.id.is_empty() {
             return false;
         }

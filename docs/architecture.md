@@ -174,7 +174,9 @@ translates.
   written, made a pipe or removed through its folder, opened once and checked as it
   was opened (`vault/envs/files/folder.rs`: `openat`/`renameat` relative to that
   folder on macOS and Linux; on Windows the folder is held open, not to be renamed
-  or deleted, and checked by its handle's path).
+  or deleted, and checked by its handle's path). On macOS and Linux a new file or
+  pipe is made in a staging folder of the app's own inside it (0700, its access list
+  emptied on macOS before anything is made in it) and renamed into place.
   - A file kept only while the vault is unlocked (level 2) is written by the round
     after an unlock and removed before the vault locks (`VaultHooks::before_lock`
     runs one last round first) and when the app quits. Each round lists those files,

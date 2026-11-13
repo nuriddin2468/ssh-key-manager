@@ -1174,62 +1174,151 @@ fn only_the_environments_own_files_are_compared() {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn a_folder_swapped_while_its_file_is_written_gets_nothing() {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::time::{Duration, Instant};
-
-    use rustix::fs::{CWD, RenameFlags, renameat_with};
-
     let mut f = Fixture::new();
     let outside = f.dir.path().join("outside");
     fs::create_dir_all(f.path("sub")).unwrap();
     fs::create_dir_all(&outside).unwrap();
-    std::os::unix::fs::symlink(&outside, f.path("swap")).unwrap();
     // Level 2: a missing file is written again by every round.
     f.bind_at("sub/.env", FileLevel::WhileUnlocked);
-    let stop = Arc::new(AtomicBool::new(false));
-    let pause = Arc::new(AtomicBool::new(false));
-    // Swaps made; even when `sub` is the folder again.
-    let swaps = Arc::new(AtomicUsize::new(0));
-    let swapper = {
-        let (stop, pause, swaps) = (Arc::clone(&stop), Arc::clone(&pause), Arc::clone(&swaps));
-        let (a, b) = (f.path("sub"), f.path("swap"));
-        std::thread::spawn(move || {
-            while !stop.load(Ordering::SeqCst) {
-                if pause.load(Ordering::SeqCst) && swaps.load(Ordering::SeqCst).is_multiple_of(2) {
-                    std::thread::yield_now();
-                    continue;
-                }
-                if renameat_with(CWD, &a, CWD, &b, RenameFlags::EXCHANGE).is_ok() {
-                    swaps.fetch_add(1, Ordering::SeqCst);
-                }
-            }
-        })
-    };
-    let started = Instant::now();
-    let mut rounds = 0;
+    let swapper = Swapper::start(&f.path("sub"), &outside, &f.path("swap"));
     let mut leaked = Vec::new();
-    while rounds < 400 && started.elapsed() < Duration::from_secs(6) && leaked.is_empty() {
-        rounds += 1;
+    let rounds = swapper.rounds(|hold| {
         f.sync();
         // Held with `sub` the folder again: look, and start over.
-        pause.store(true, Ordering::SeqCst);
-        while !swaps.load(Ordering::SeqCst).is_multiple_of(2) {
-            std::thread::yield_now();
-        }
+        hold();
         leaked = fs::read_dir(&outside)
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .collect();
         let _ = fs::remove_file(f.path("sub/.env"));
-        pause.store(false, Ordering::SeqCst);
-    }
-    stop.store(true, Ordering::SeqCst);
-    swapper.join().unwrap();
+        leaked.is_empty()
+    });
     assert!(
         leaked.is_empty(),
         "after {rounds} rounds, written outside the project: {leaked:?}"
     );
+}
+
+/// Read only through the folder that was checked, however fast the folder
+/// is swapped for a link to another and back: a file in the other folder
+/// is never taken for an edit of the bound one, so nothing of it reaches
+/// the vault (or, from there, other files and computers).
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn a_folder_swapped_while_its_file_is_read_gives_the_vault_nothing() {
+    let mut f = Fixture::new();
+    let outside = f.dir.path().join("outside");
+    fs::create_dir_all(f.path("sub")).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    f.bind("sub/.env");
+    f.sync();
+    // What a round would take for a small edit of the bound file.
+    fs::write(outside.join(".env"), "PORT=3000\nAPI_TOKEN=elsewhere\n").unwrap();
+    let swapper = Swapper::start(&f.path("sub"), &outside, &f.path("swap"));
+    let mut taken = false;
+    let rounds = swapper.rounds(|hold| {
+        f.sync();
+        hold();
+        taken = f.values().iter().any(|(_, value, _)| value == "elsewhere");
+        !taken
+    });
+    assert!(
+        !taken,
+        "after {rounds} rounds, the vault took the other file"
+    );
+    assert_eq!(read(&f.path("sub/.env")), "PORT=3000\nAPI_TOKEN=tok-1\n");
+}
+
+/// Swaps a folder with a link to another, again and again, from a thread
+/// of its own, as fast as the system lets it (`RENAME_SWAP` on macOS,
+/// `RENAME_EXCHANGE` on Linux, each atomic).
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+struct Swapper {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pause: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Swaps made; even when the folder is itself again.
+    swaps: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+impl Swapper {
+    /// Swaps `folder` with `link`, made as a link to `other`.
+    fn start(folder: &Path, other: &Path, link: &Path) -> Self {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        use rustix::fs::{CWD, RenameFlags, renameat_with};
+
+        std::os::unix::fs::symlink(other, link).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let pause = Arc::new(AtomicBool::new(false));
+        let swaps = Arc::new(AtomicUsize::new(0));
+        let thread = {
+            let (stop, pause, swaps) = (Arc::clone(&stop), Arc::clone(&pause), Arc::clone(&swaps));
+            let (a, b) = (folder.to_path_buf(), link.to_path_buf());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::SeqCst) {
+                    if pause.load(Ordering::SeqCst)
+                        && swaps.load(Ordering::SeqCst).is_multiple_of(2)
+                    {
+                        std::thread::yield_now();
+                        continue;
+                    }
+                    if renameat_with(CWD, &a, CWD, &b, RenameFlags::EXCHANGE).is_ok() {
+                        swaps.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+            })
+        };
+        Self {
+            stop,
+            pause,
+            swaps,
+            thread: Some(thread),
+        }
+    }
+
+    /// Runs `round` while the folder is being swapped, until it returns
+    /// `false`, for at most 400 rounds or six seconds; `round` is given a
+    /// call that holds the swapping with the folder itself again, to look
+    /// at what the round did. Returns how many rounds ran.
+    fn rounds(mut self, mut round: impl FnMut(&dyn Fn()) -> bool) -> usize {
+        use std::sync::atomic::Ordering;
+        use std::time::{Duration, Instant};
+
+        let started = Instant::now();
+        let mut rounds = 0;
+        while rounds < 400 && started.elapsed() < Duration::from_secs(6) {
+            rounds += 1;
+            self.pause.store(false, Ordering::SeqCst);
+            let hold = || {
+                self.pause.store(true, Ordering::SeqCst);
+                while !self.swaps.load(Ordering::SeqCst).is_multiple_of(2) {
+                    std::thread::yield_now();
+                }
+            };
+            if !round(&hold) {
+                break;
+            }
+        }
+        self.finish();
+        rounds
+    }
+
+    fn finish(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            thread.join().unwrap();
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+impl Drop for Swapper {
+    fn drop(&mut self) {
+        self.finish();
+    }
 }
 
 #[cfg(unix)]

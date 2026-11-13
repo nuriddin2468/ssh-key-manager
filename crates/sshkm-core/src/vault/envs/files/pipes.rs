@@ -322,22 +322,40 @@ pub fn make(path: &Path) -> Result<PipeId> {
 
 /// Makes a pipe named `name` in `folder`, held, as [`make`] does: made
 /// and looked at through the folder, so it is in that folder whatever its
-/// path leads to meanwhile, and this user's alone: mode 0600, and on macOS
-/// without the entries a folder's access list hands down, which macOS
-/// checks before the mode.
+/// path leads to meanwhile ([`staged_pipe`]).
+#[cfg(unix)]
 pub(super) fn make_in(folder: &Folder, name: &str) -> Result<PipeId> {
-    let path = folder.path().join(name);
-    imp::mkfifo_in(folder, name).map_err(|e| Error::io(e, &path))?;
-    let made = PipeId::in_folder(folder, name)
-        .ok_or_else(|| Error::invalid(format!("{} isn't a pipe", path.display())))?;
-    if let Err(error) = imp::owner_only(folder, name, made) {
-        // Not served, nor left for anyone to open.
-        if PipeId::in_folder(folder, name) == Some(made) {
-            let _ = folder.remove(name);
-        }
-        return Err(Error::io(error, &path));
-    }
+    let (staging, made) = staged_pipe(folder, name)?;
+    staging
+        .place(name, name, false)
+        .map_err(|e| Error::io(e, &folder.path().join(name)))?;
     Ok(made)
+}
+
+/// A pipe for the place of `name` in `folder`, made in a staging folder of
+/// its own inside it ([`folder::Staging`]), where nothing is handed down to
+/// it, and made this user's alone there (mode 0600, and on macOS no entry
+/// in its access list, which macOS checks before the mode) before anyone
+/// can reach it. It is renamed into place by the caller; the staging
+/// folder goes, with the pipe if it is still there, when dropped.
+#[cfg(unix)]
+fn staged_pipe<'a>(folder: &'a Folder, name: &str) -> Result<(folder::Staging<'a>, PipeId)> {
+    let path = folder.path().join(name);
+    let staging = folder
+        .staging(name)
+        .map_err(|e| Error::io(e, folder.path()))?;
+    imp::mkfifo_in(&staging.folder, name).map_err(|e| Error::io(e, &path))?;
+    let made = PipeId::in_folder(&staging.folder, name)
+        .ok_or_else(|| Error::invalid(format!("{} isn't a pipe", path.display())))?;
+    imp::owner_only(&staging.folder, name, made).map_err(|e| Error::io(e, &path))?;
+    Ok((staging, made))
+}
+
+#[cfg(not(unix))]
+pub(super) fn make_in(_: &Folder, _: &str) -> Result<PipeId> {
+    Err(Error::Unsupported(
+        "virtual files work on macOS and Linux".into(),
+    ))
 }
 
 /// Puts a pipe in place of the regular file at `path`, only if it still
@@ -351,11 +369,9 @@ pub fn make_over(path: &Path, expected: &[u8]) -> Result<Option<PipeId>> {
 
 /// Puts a pipe in place of the regular file `name` in `folder`, held, as
 /// [`make_over`] does.
+#[cfg(unix)]
 pub(super) fn make_over_in(folder: &Folder, name: &str, expected: &[u8]) -> Result<Option<PipeId>> {
-    // Named as the app's own writes are, so a crash's leftover is swept
-    // with theirs (`fsutil::sweep_private_temps`).
-    let temp = folder::temp_name(name);
-    let id = make_in(folder, &temp)?;
+    let (staging, made) = staged_pipe(folder, name)?;
     // Read as a binding's file is: no link followed, no pipe waited on.
     let path = folder.path().join(name);
     let same = matches!(
@@ -363,14 +379,19 @@ pub(super) fn make_over_in(folder: &Folder, name: &str, expected: &[u8]) -> Resu
         super::disk::Disk::Text(text) if text.as_bytes() == expected
     );
     if !same {
-        let _ = folder.remove(&temp);
         return Ok(None);
     }
-    if let Err(e) = folder.rename(&temp, name, true) {
-        let _ = folder.remove(&temp);
-        return Err(Error::io(e, &path));
-    }
-    Ok(Some(id))
+    staging
+        .place(name, name, true)
+        .map_err(|e| Error::io(e, &path))?;
+    Ok(Some(made))
+}
+
+#[cfg(not(unix))]
+pub(super) fn make_over_in(_: &Folder, _: &str, _: &[u8]) -> Result<Option<PipeId>> {
+    Err(Error::Unsupported(
+        "virtual files work on macOS and Linux".into(),
+    ))
 }
 
 /// The folder of `path`, opened, and the name of `path` in it.
@@ -477,12 +498,14 @@ mod imp {
         )?)
     }
 
-    /// Drops the entries the folder's access list handed down to the pipe
-    /// `id` just made as `name` in `folder` (macOS checks them before the
-    /// mode). The pipe is opened through the folder, without following a
-    /// link and without waiting: no server answers it yet, so opening it
-    /// to read hands nothing out. Elsewhere there is nothing to drop: Linux
-    /// masks a POSIX access list's entries with the mode's group bits.
+    /// Empties the access list of the pipe `id` just made as `name` in
+    /// `folder`, a staging folder where nothing is handed down, so there is
+    /// nothing to drop: once more all the same (macOS checks such entries
+    /// before the mode). The pipe is opened through the folder, without
+    /// following a link and without waiting: no server answers it yet, so
+    /// opening it to read hands nothing out. Elsewhere there is nothing to
+    /// drop: Linux masks a POSIX access list's entries with the mode's
+    /// group bits.
     #[cfg(target_os = "macos")]
     pub(super) fn owner_only(folder: &super::Folder, name: &str, id: PipeId) -> io::Result<()> {
         use rustix::fs::{Mode, OFlags};
@@ -1047,18 +1070,6 @@ mod imp {
 
     fn unsupported() -> Error {
         Error::Unsupported("virtual files work on macOS and Linux".into())
-    }
-
-    pub(super) fn mkfifo_in(_: &super::Folder, _: &str) -> std::io::Result<()> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            unsupported().to_string(),
-        ))
-    }
-
-    #[allow(clippy::unnecessary_wraps, reason = "the same as on macOS")]
-    pub(super) fn owner_only(_: &super::Folder, _: &str, _: PipeId) -> std::io::Result<()> {
-        Ok(())
     }
 
     pub(super) fn open_if_read(_: &Path, _: PipeId) -> Option<File> {

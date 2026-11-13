@@ -150,11 +150,18 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     removed through its folder held open in the same way, and only if it is still the
     file or pipe the app listed. On Windows the folder is held open, so it can't be
     renamed or deleted while the file is written, and checked by the path Windows
-    gives for the folder held; the file is then written by its path. The temporary
-    file of a write is named `<file>.sshkm-….tmp`: ignore rules like `.env*` cover it,
-    an exact `.env` rule doesn't. It is there only while the file is written, and is
-    listed before it is made, so one a crash leaves is removed by the guard (below),
-    or else by the next start or the next round. A missing folder is never created.
+    gives for the folder held; the file is then written by its path. On macOS and
+    Linux a new file or pipe is made in a folder of the app's own next to it,
+    `<file>.sshkm-….tmp` (mode 0700; on macOS its access list is emptied before
+    anything is made in it, so nothing a folder's list hands down is on the file at
+    any moment), under the file's own name, and then renamed into place: ignore rules
+    that name the file (`.env`, `.env*`) cover it there, though not one anchored to
+    the file's own path (`/.env`). On Windows the temporary file is
+    `<file>.sshkm-….tmp` itself, covered by `.env*` but not by an exact `.env`. Either
+    is there only while the file is written, and is listed before it is made, so one
+    a crash leaves (with the values in it) is removed by the guard (below), or else
+    by the next start or the next round; one left while a pipe was made holds only
+    the pipe, and the next round removes it. A missing folder is never created.
     A file is bound at the interface's request, without a system dialog: any
     environment of a project, a remote one too (at level 2 or 3), to a `.env` path in
     that project's folders; any warning about it comes from the interface.

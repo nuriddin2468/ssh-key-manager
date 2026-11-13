@@ -8,7 +8,7 @@ use zeroize::Zeroizing;
 
 use super::*;
 use crate::sync::{Hasher, agree_hashed};
-use crate::vault::envs::files::{EnvFile, FileLevel, FileState, FilesContext, InactiveReason};
+use crate::vault::envs::files::{EnvFile, FileState, FilesContext, InactiveReason};
 use crate::vault::envs::{EnvInput, EnvVarInput};
 use crate::vault::projects::{ProjectColor, ProjectInput, ProjectMember};
 use crate::vault::{EntryInput, SecretField, Vault, VaultPaths};
@@ -1136,7 +1136,12 @@ fn a_virtual_file_never_becomes_a_file_where_pipes_are_missing() {
     let (dir, mut a, mut b) = two();
     let (env, file) = project_with_env(dir.path(), &mut a, &mut b);
     a.vault
-        .bind_env_file_at(&env, &file, FileLevel::Virtual, &ctx(dir.path()))
+        .bind_env_file_at(
+            &env,
+            &file,
+            crate::vault::envs::files::FileLevel::Virtual,
+            &ctx(dir.path()),
+        )
         .unwrap();
     a.save();
     sync(&mut a, &mut b);

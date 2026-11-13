@@ -679,3 +679,39 @@ fn the_leak_scanner_gets_secret_variables_and_passwords() {
         assert!(fx.vault.known_secret(&key).is_none(), "{key}");
     }
 }
+
+#[test]
+fn risky_variables_are_the_ones_that_change_how_programs_start() {
+    for name in [
+        "PATH",
+        "path",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "DYLD_INSERT_LIBRARIES",
+        "NODE_OPTIONS",
+        "PYTHONSTARTUP",
+        "BASH_ENV",
+        "ENV",
+        "GIT_SSH_COMMAND",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_KEY_0",
+        "SSH_ASKPASS",
+        "_JAVA_OPTIONS",
+        "DOTNET_STARTUP_HOOKS",
+    ] {
+        assert!(risky_variable(name), "{name}");
+    }
+    for name in [
+        "API_KEY",
+        "DATABASE_URL",
+        "PATHS",
+        "MY_PATH",
+        "ENVIRONMENT",
+        "NODE_ENV",
+        "GIT_AUTHOR_NAME",
+        "LD",
+        "PORT",
+    ] {
+        assert!(!risky_variable(name), "{name}");
+    }
+}

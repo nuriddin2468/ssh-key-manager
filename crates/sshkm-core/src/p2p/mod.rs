@@ -24,4 +24,4 @@ pub mod session;
 
 pub use identity::{Identity, PeerKey};
 pub use protocol::Message;
-pub use session::{Session, accept, accept_with, connect, connect_with};
+pub use session::{Session, accept, accept_own, accept_with, connect, connect_own, connect_with};

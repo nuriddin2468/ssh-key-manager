@@ -51,8 +51,14 @@ pub const CHAT: &str = "chat/1";
 /// An environment in Personal without a part, whose empty project label
 /// older versions refuse.
 pub const PERSONAL_ENV: &str = "personal-env/1";
+/// A server's password goes with where its alias leads ([`Server`]), and
+/// the receiver saves it for one of its aliases only if that one leads to
+/// the same server. A peer without it gets the password for no host
+/// ([`Item::for_peer`]): older versions would bind it to the sender's alias
+/// whatever it leads to there.
+pub const SERVER_PASSWORD: &str = "server-password/1";
 /// What this version can do beyond version 1, as its `Hello` says.
-pub const FEATURES: &[&str] = &[CHAT, PERSONAL_ENV];
+pub const FEATURES: &[&str] = &[CHAT, PERSONAL_ENV, SERVER_PASSWORD];
 
 /// [`FEATURES`], as a `Hello` carries them.
 pub fn features() -> Vec<String> {
@@ -230,6 +236,10 @@ pub enum Item {
         otp: Option<String>,
         /// The ssh alias the password is for, when it is a server's.
         host: Option<String>,
+        /// Where `host` leads on the sender's computer. Versions before it
+        /// leave it out: the receiver then saves the password for no host.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        server: Option<Server>,
     },
     /// How to reach a server: a `Host` block's alias and address, and the
     /// server's keys from the sender's `known_hosts`. Never a key file or
@@ -263,6 +273,44 @@ pub enum Item {
     /// An item of a kind a later version sends: never saved.
     #[serde(other)]
     Unknown,
+}
+
+/// Where a server's password goes: the account and the server, as
+/// `ssh -G` works them out for the alias on the sender's computer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+pub struct Server {
+    pub user: String,
+    pub host_name: String,
+    pub port: u16,
+    /// The jump hosts the connection goes through (`ProxyJump`), if any.
+    pub proxy_jump: Option<String>,
+}
+
+impl Server {
+    /// Whether `other` is the same account on the same server, reached the
+    /// same way.
+    pub fn same(&self, other: &Self) -> bool {
+        self.user == other.user
+            && self.host_name.eq_ignore_ascii_case(&other.host_name)
+            && self.port == other.port
+            && self.proxy_jump == other.proxy_jump
+    }
+
+    /// Fails unless every name is made of name characters (see
+    /// [`Item::check`]) and the port is one.
+    pub fn check(&self) -> Result<()> {
+        name(&self.user, "._-")?;
+        name(&self.host_name, ".-_:")?;
+        if self.port == 0 {
+            return Err(Error::invalid("port 0"));
+        }
+        if let Some(proxy_jump) = &self.proxy_jump {
+            name(proxy_jump, ".-_:@,")?;
+        }
+        Ok(())
+    }
 }
 
 /// One variable of an [`Item::Environment`].
@@ -311,6 +359,14 @@ pub enum ItemSummary {
         url: String,
         /// A 2FA secret comes with it.
         otp: bool,
+        /// The alias a server's password is for on the sender's computer,
+        /// and where it leads there. The receiver saves it for a host of its
+        /// own only if that one leads to the same server. Versions before it
+        /// leave both out.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        server: Option<Server>,
     },
     #[serde(rename_all = "camelCase")]
     Host {
@@ -394,13 +450,25 @@ impl Item {
                 username,
                 url,
                 otp,
+                host,
+                server,
                 ..
-            } => ItemSummary::Password {
-                title: title.clone(),
-                username: username.clone(),
-                url: url.clone(),
-                otp: otp.is_some(),
-            },
+            } => {
+                // A host without where it leads is saved for none, so the
+                // summary names none either, as an older version's does.
+                let (host, server) = match (host, server) {
+                    (Some(host), Some(server)) => (Some(host.clone()), Some(server.clone())),
+                    _ => (None, None),
+                };
+                ItemSummary::Password {
+                    title: title.clone(),
+                    username: username.clone(),
+                    url: url.clone(),
+                    otp: otp.is_some(),
+                    host,
+                    server,
+                }
+            }
             Self::Host {
                 alias,
                 host_name,
@@ -485,6 +553,36 @@ impl Item {
         self.summary().requires()
     }
 
+    /// The item as it goes to a peer whose `Hello` named `features`: a
+    /// server's password to one without [`SERVER_PASSWORD`] goes for no
+    /// host, since it would bind it to the alias whatever that leads to
+    /// there.
+    #[must_use]
+    pub fn for_peer(self, features: &[String]) -> Self {
+        match self {
+            Self::Password {
+                title,
+                username,
+                password,
+                url,
+                notes,
+                otp,
+                host: Some(_),
+                ..
+            } if !features.iter().any(|feature| feature == SERVER_PASSWORD) => Self::Password {
+                title,
+                username,
+                password,
+                url,
+                notes,
+                otp,
+                host: None,
+                server: None,
+            },
+            item => item,
+        }
+    }
+
     /// Fails unless every field is something the receiver may save: no
     /// control characters, sizes in bounds, and a host's names made only of
     /// the characters a name has, so none of them can carry a command. A
@@ -501,6 +599,7 @@ impl Item {
                 notes,
                 otp,
                 host,
+                server,
             } => {
                 for value in [title, username, password, url, otp.as_deref().unwrap_or("")] {
                     text(value, false)?;
@@ -508,6 +607,12 @@ impl Item {
                 text(notes, true)?;
                 if let Some(host) = host {
                     name(host, "._-")?;
+                }
+                if let Some(server) = server {
+                    if host.is_none() {
+                        return Err(Error::invalid("a server without its alias"));
+                    }
+                    server.check()?;
                 }
                 if title.trim().is_empty() {
                     return Err(Error::invalid("an entry needs a title"));
@@ -568,9 +673,13 @@ impl Item {
 }
 
 /// See [`Item::check`]: names a project, an environment and a variable may
-/// have, values without control characters other than line breaks and tabs,
-/// and a size that fits one message. The project label is empty for an
-/// environment in Personal without a part.
+/// have, none of them a variable that makes a shell or a program run code
+/// ([`runs_code`]); names and notes without control, invisible or
+/// direction-changing characters, and values without control characters
+/// other than line breaks and tabs; and a size that fits one message. The
+/// project label is empty for an environment in Personal without a part.
+///
+/// [`runs_code`]: crate::vault::envs::runs_code
 fn check_environment(
     project: &str,
     name: &str,
@@ -586,9 +695,9 @@ fn check_environment(
         if blank || label.chars().count() > MAX_NAME || label.contains('/') {
             return Err(Error::invalid(format!("not a name: {label:?}")));
         }
-        text(label, false)?;
+        plain(label, false)?;
     }
-    text(notes, true)?;
+    plain(notes, true)?;
     if variables.len() > crate::vault::envs::MAX_VARIABLES {
         return Err(Error::invalid("too many variables"));
     }
@@ -600,6 +709,12 @@ fn check_environment(
                 var.name
             )));
         }
+        if crate::vault::envs::runs_code(&var.name) {
+            return Err(Error::invalid(format!(
+                "{} makes programs run code, so it is not sent",
+                var.name
+            )));
+        }
         if variables[..index]
             .iter()
             .any(|other| other.name == var.name)
@@ -607,7 +722,7 @@ fn check_environment(
             return Err(Error::invalid(format!("{} comes twice", var.name)));
         }
         text(&var.value, true)?;
-        text(&var.note, false)?;
+        plain(&var.note, false)?;
         bytes += var.name.len() + var.value.len() + var.note.len();
     }
     if bytes > MAX_ENVIRONMENT_BYTES {
@@ -699,6 +814,40 @@ pub(crate) fn text(value: &str, multiline: bool) -> Result<()> {
     Ok(())
 }
 
+/// [`text`] that can't mislead its reader: no character some programs take
+/// for a line break (U+2028, U+2029) and none that is invisible or turns
+/// the text around ([`is_invisible`]).
+fn plain(value: &str, multiline: bool) -> Result<()> {
+    text(value, multiline)?;
+    if value.chars().any(is_invisible) {
+        return Err(Error::invalid(
+            "a name or note has invisible or line-breaking characters",
+        ));
+    }
+    Ok(())
+}
+
+/// Whether `c` shows nothing, or changes how the text around it reads,
+/// though it is not a control character: it ends a line for some programs
+/// (U+2028, U+2029), changes the direction of the text (U+202E…), or takes
+/// no room (U+200B…, U+FEFF, tag characters).
+pub fn is_invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{061C}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{2028}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{E0001}'
+            | '\u{E0020}'..='\u{E007F}'
+    )
+}
+
 /// A non-empty name of ASCII letters, digits and `extra`, at most 255 bytes.
 fn name(value: &str, extra: &str) -> Result<()> {
     if value.is_empty()
@@ -713,14 +862,15 @@ fn name(value: &str, extra: &str) -> Result<()> {
     Ok(())
 }
 
-/// `name` as a device name: control characters dropped, whitespace
-/// collapsed, at most [`MAX_NAME`] characters.
+/// `name` as a device name: control, invisible and direction-changing
+/// characters ([`is_invisible`]) dropped, whitespace collapsed, at most
+/// [`MAX_NAME`] characters.
 pub fn clean_name(name: &str) -> String {
     let words: Vec<&str> = name.split_whitespace().collect();
     words
         .join(" ")
         .chars()
-        .filter(|c| !c.is_control())
+        .filter(|c| !c.is_control() && !is_invisible(*c))
         .take(MAX_NAME)
         .collect()
 }
@@ -809,7 +959,7 @@ mod tests {
         let json = serde_json::to_string(&hello).unwrap();
         assert_eq!(
             json,
-            r#"{"type":"hello","version":1,"name":"MacBook","known":true,"features":["chat/1","personal-env/1"]}"#
+            r#"{"type":"hello","version":1,"name":"MacBook","known":true,"features":["chat/1","personal-env/1","server-password/1"]}"#
         );
         assert_eq!(serde_json::from_str::<Message>(&json).unwrap(), hello);
         // An older version reads it as it always did, and its Hello has none.
@@ -910,7 +1060,88 @@ mod tests {
             notes: "line one\nline two".into(),
             otp: None,
             host: None,
+            server: None,
         }
+    }
+
+    fn server() -> Server {
+        Server {
+            user: "deploy".into(),
+            host_name: "10.0.4.12".into(),
+            port: 22,
+            proxy_jump: None,
+        }
+    }
+
+    /// A server's password, for `prod` leading where `server` says.
+    fn servers_password(server: Option<Server>) -> Item {
+        let mut item = password();
+        if let Item::Password {
+            host, server: to, ..
+        } = &mut item
+        {
+            *host = Some("prod".into());
+            *to = server;
+        }
+        item
+    }
+
+    #[test]
+    fn a_servers_password_says_where_it_leads_in_its_summary() {
+        let bound = servers_password(Some(server()));
+        assert!(bound.check().is_ok());
+        let ItemSummary::Password {
+            host, server: to, ..
+        } = bound.summary()
+        else {
+            unreachable!()
+        };
+        assert_eq!((host.as_deref(), to), (Some("prod"), Some(server())));
+        // Another server is another summary: the payload must be what was
+        // offered.
+        let mut elsewhere = server();
+        elsewhere.host_name = "203.0.113.9".into();
+        assert_ne!(
+            bound.summary(),
+            servers_password(Some(elsewhere.clone())).summary()
+        );
+        assert!(!server().same(&elsewhere));
+        let mut louder = server();
+        louder.host_name = "10.0.4.12".to_uppercase();
+        assert!(server().same(&louder));
+
+        // Without where it leads (as older versions send it), it names no
+        // host: it is saved for none, and its summary is an older one's.
+        let older = servers_password(None);
+        assert_eq!(older.summary(), password().summary());
+        let json = r#"{"type":"password","title":"prod DB","username":"deploy","url":"https://db.example.com","otp":false}"#;
+        assert_eq!(
+            serde_json::from_str::<ItemSummary>(json).unwrap(),
+            older.summary()
+        );
+
+        // A peer that didn't name the feature gets it for no host: an older
+        // version would bind it to the alias whatever it leads to there.
+        assert_eq!(bound.clone().for_peer(&[]).summary(), password().summary());
+        assert_eq!(
+            bound.clone().for_peer(&["chat/1".to_owned()]),
+            servers_password(None).for_peer(&[])
+        );
+        assert_eq!(bound.clone().for_peer(&features()), bound);
+        assert_eq!(password().for_peer(&[]), password());
+
+        // A server needs its alias, and names made of name characters.
+        let mut alone = password();
+        if let Item::Password { server: to, .. } = &mut alone {
+            *to = Some(server());
+        }
+        assert!(alone.check().is_err());
+        let mut odd = server();
+        odd.host_name = "$(curl evil)".into();
+        assert!(servers_password(Some(odd)).check().is_err());
+        let mut odd = server();
+        odd.port = 0;
+        assert!(servers_password(Some(odd)).check().is_err());
     }
 
     fn host() -> Item {
@@ -937,6 +1168,8 @@ mod tests {
                 username: "deploy".into(),
                 url: "https://db.example.com".into(),
                 otp: false,
+                host: None,
+                server: None,
             }
         );
         let json = serde_json::to_string(&Message::Offer { item: summary }).unwrap();
@@ -1207,6 +1440,33 @@ mod tests {
         assert!(with(&|_, vars| vars[1].name = "PORT".into()));
         assert!(with(&|_, vars| vars[0].value = "a\u{1b}[2J".into()));
         assert!(with(&|_, vars| vars[0].note = "two\nlines".into()));
+        // A value may hold any text; names and notes nothing a reader of
+        // the file it ends up in could take for another line, or that
+        // shows something other than what is there.
+        assert!(!with(&|_, vars| vars[0].value = "a\u{2028}b\u{202E}".into()));
+        for odd in [
+            '\u{2028}', '\u{2029}', '\u{0085}', '\u{202E}', '\u{2066}', '\u{200B}',
+        ] {
+            assert!(with(&|name, _| *name = format!("dev{odd}x")), "{odd:?}");
+            assert!(
+                with(&|_, vars| vars[0].note = format!("rotated{odd}API=1 #")),
+                "{odd:?}"
+            );
+            let mut item = environment();
+            if let Item::Environment { project, notes, .. } = &mut item {
+                *project = format!("shop{odd}");
+                *notes = String::new();
+            }
+            assert!(item.check().is_err(), "{odd:?}");
+            let mut item = environment();
+            if let Item::Environment { notes, .. } = &mut item {
+                *notes = format!("line one\nline{odd}two");
+            }
+            assert!(item.check().is_err(), "{odd:?}");
+        }
+        assert!(!with(
+            &|_, vars| vars[0].note = "rotated monthly \u{2714}\u{FE0F}".into()
+        ));
         assert!(with(&|_, vars| {
             for (index, var) in vars.iter_mut().enumerate() {
                 var.value = "x".repeat(60 * 1024);
@@ -1223,9 +1483,37 @@ mod tests {
     }
 
     #[test]
+    fn variables_that_make_programs_run_code_never_travel() {
+        for name in [
+            "BASH_ENV",
+            "PROMPT_COMMAND",
+            "LD_PRELOAD",
+            "GIT_SSH_COMMAND",
+            "path",
+        ] {
+            let mut item = environment();
+            if let Item::Environment { variables, .. } = &mut item {
+                variables[1].name = name.into();
+            }
+            assert!(item.check().is_err(), "{name}");
+        }
+        // Their look-alikes do.
+        let mut item = environment();
+        if let Item::Environment { variables, .. } = &mut item {
+            variables[1].name = "DATABASE_PATH".into();
+            variables[2].name = "GITHUB_TOKEN".into();
+        }
+        assert!(item.check().is_ok());
+    }
+
+    #[test]
     fn cleans_names() {
         assert_eq!(clean_name("  MacBook \t of\nAziz "), "MacBook of Aziz");
         assert_eq!(clean_name("a\u{7}b"), "ab");
         assert_eq!(clean_name(&"x".repeat(100)).chars().count(), MAX_NAME);
+        // Nothing that turns the name around or hides in it.
+        assert_eq!(clean_name("Mac\u{202E}koob\u{202C}"), "Mackoob");
+        assert_eq!(clean_name("this\u{200B}Mac\u{2066}\u{FEFF}"), "thisMac");
+        assert_eq!(clean_name("a\u{2028}b\u{2029}c"), "a b c");
     }
 }

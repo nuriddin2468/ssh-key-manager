@@ -254,6 +254,11 @@ translates.
   - Pairs one device at a time, from either side, on its own thread. `pairing::converse`
     is the whole conversation; it reaches the app through a small `Side` trait, so its
     tests run two sides over loopback without Tauri.
+  - Talks only to addresses on the local network (`on_local_network`), and gives a
+    connection the conversation only after its handshake, which has a deadline.
+  - What the user must allow outside the page (sending a secret, adding a device,
+    a received host that settings here would give access) is asked in system
+    dialogs whose texts `prompt` builds.
   - `items` reads what is sent and saves what is received. A hosts file group waits
     in memory until the Hosts file page adds it to its draft (`nearby_received_group`)
     and shows the review; a public key goes to `~/.ssh` through `keys::add_public`,

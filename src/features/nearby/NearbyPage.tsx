@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { type FormEvent, useEffect, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import { api } from '@/api/commands';
 import { useVaultStatus } from '@/api/queries';
 import { useAppMutation } from '@/api/useAppMutation';
@@ -75,7 +76,14 @@ export function NearbyPage() {
     onSuccess: setStatus,
   });
   const join = useAppMutation((on: boolean) => api.nearbyJoin(on), { onSuccess: setStatus });
-  const pair = useAppMutation((target: string) => api.nearbyPair(target));
+  const pair = useAppMutation((target: string) => api.nearbyPair(target), {
+    // An address the backend won't reach: not one on this network.
+    onError: (error, target) => {
+      if (error.code !== 'invalid_input' || !isAddress(target)) return false;
+      toast.error(t('nearby.address.notLocal'));
+      return true;
+    },
+  });
   const addDevice = useAppMutation((target: string) => api.nearbyAddDevice(target));
   const remove = useAppMutation((contact: Contact) => api.nearbyRemoveContact(contact.key), {
     success: (_, contact) => t('nearby.contacts.removed', { name: contact.name }),
@@ -166,6 +174,8 @@ export function NearbyPage() {
                     </>
                   ) : null}
                 </>
+              ) : data?.hiddenAfterAttempts ? (
+                <span className="text-warning">{t('nearby.hiddenAfterAttempts')}</span>
               ) : (
                 t('nearby.hidden')
               )}

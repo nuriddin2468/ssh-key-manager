@@ -304,6 +304,20 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     environment and how many of its values are secret. It asks once per environment
     until the vault locks: a script in the page could type into a shell that already
     holds them, so asking for every shell would add clicks, not protection.
+  - An environment's values are data, never code, wherever they came from, so a shell
+    started with them (here or in a project's terminal) never gets a variable that
+    would make it, or a program it starts, run code it names: shell startup files and
+    prompts (`BASH_ENV`, `ENV`,
+    `ZDOTDIR`, `HOME`, `XDG_CONFIG_HOME`, `PS0`–`PS4`, `PROMPT_COMMAND`, zsh's
+    `PROMPT`/`RPROMPT`/`RPS1`…, `SHELLOPTS`, `BASH_FUNC_…`, `FPATH`, `PATH`, `IFS`,
+    `MAILPATH`), the dynamic linker (`LD_…`, `DYLD_…`), Git (every `GIT_…`), pagers,
+    editors and password prompts other tools start (`PAGER`, `LESS`, `LESSOPEN`,
+    `EDITOR`, `VISUAL`, `BROWSER`, `SSH_ASKPASS`…), code a runtime loads before any
+    script (`NODE_OPTIONS`, `PYTHONSTARTUP`, `PYTHONPATH`, `PERL5OPT`, `RUBYOPT`,
+    `JAVA_TOOL_OPTIONS`, `DOTNET_STARTUP_HOOKS`…) and on Windows `COMSPEC`, `PATHEXT`
+    and `PSModulePath`, in any case. The full list is in
+    `crates/sshkm-core/src/vault/envs/startup.rs`. Set such a variable in the shell
+    yourself if you need it.
 - **Answering `ssh` prompts.** To log in with a password or one-time code, the app acts
   as `ssh`'s askpass program.
   - The secret goes over a local socket only this user can reach (a private 0700
@@ -983,6 +997,15 @@ Two copies of the app on the same local network pair, and later talk, over a dir
 TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
 `src-tauri/src/nearby/`.
 
+- **Local network only.** The app connects only to an address on the local network,
+  whether the user picked a computer from the list, typed an address, or a chat
+  reaches a contact: a private
+  (`10/8`, `172.16/12`, `192.168/16`) or link-local IPv4 address, a unique local
+  (`fc00::/7`) or link-local IPv6 one, or one in a network this computer has an
+  address in (no wider than a `/16`, or a `/48` for IPv6), checked after a name is
+  resolved. Loopback, multicast and anything beyond are refused, and connections
+  from such addresses are closed at once.
+
 - **Visible on request.** The app announces itself (mDNS, `_sshkm._tcp`) and accepts
   connections only for ten minutes after the user clicks **Show for 10 minutes** (or,
   without a vault, **Get it from my other computer**), under a random instance name
@@ -994,9 +1017,12 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   Each shows a computer it knows by the name it keeps for it in the vault, never by the
   name that computer gives itself now; only a computer it doesn't know yet is shown by
   its own name. Two contacts or devices of the same name are shown with the day each
-  was paired.
+  was paired. A device name loses control, invisible and direction-changing
+  characters when it arrives, and every system dialog shows any such character in a
+  name as `<U+…>`.
 - **Encrypted session.** Every connection starts with a `Noise_XX_25519_ChaChaPoly_SHA256`
-  handshake (prologue `sshkm-p2p/1`): each side proves it holds its device key, and
+  handshake (prologue `sshkm-p2p/1`; between the user's own devices a variant with a
+  key from the vault, below): each side proves it holds its device key, and
   everything after is encrypted and authenticated. Messages are JSON of at most 1 MiB.
 - **Pairing code.** Two computers that don't know each other both show a six-digit
   code, and each user says whether the other screen shows the same one. The code comes
@@ -1004,14 +1030,20 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   to its nonce (SHA-256) before it sees the other's, and the other sends its own before
   it sees the first. Someone in the middle runs a separate handshake with each side, so
   the two codes match only by chance, one time in a million: they can't try keys until
-  the codes agree, as they could if the code came from the handshake hash alone.
+  the codes agree, as they could if the code came from the handshake hash alone. The
+  side that connected can work out the other's code before it reveals its nonce, and
+  could hang up and try again until the code is the one it wants; so a computer that
+  was connected to counts such sessions, and after three while it is visible it hides
+  and says why. That keeps it to a few tries in a million each time the user shows it.
 - **Both must agree.** A computer becomes a contact only when both users said the codes
   match. A "no", a cancel or a dropped connection on either side saves nothing.
   Contacts are kept in the vault (`sshkm.contact.<device key>` in its custom data), so
   pairing needs it unlocked. A computer that was a contact already keeps the name it
   has here when the two pair again.
 - **One at a time.** While a pairing, an adding or a sync goes on, other connections
-  are closed at once.
+  are closed at once. A connection takes that one place only after its handshake,
+  which has ten seconds in all however slowly its bytes come, and at most four
+  handshakes go on at once: a connection that says nothing holds up nothing.
   The users have three minutes to compare the codes.
 - **Sending.** After pairing, or straight away between contacts, the side that
   connected may send one item: a vault entry, a secret environment, a host, a hosts
@@ -1022,22 +1054,46 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   accepts. Any computer can announce any name: when the user sends to a computer
   picked from the list and the one that answers is a contact (or one of the user's
   devices) the vault keeps under another name, the app asks whether to send to it all
-  the same before even the summary goes; on a no nothing goes. The receiver checks
+  the same before even the summary goes; on a no nothing goes. A password or an
+  environment goes only after the user allows it in a system dialog that names the
+  item and the computer as the vault knows it: the page's word (that the codes match,
+  which computer was picked) is never enough for a secret. The receiver checks
   that the item matches the summary and that every name in a host is made of name
   characters only, refuses a host block that would add a directive running a program,
   and gives an alias a number when `ssh` reaches that name already: a `Host` line of
-  the config or of a file it includes names it, `known_hosts` trusts a key for it (its
-  own or a certificate authority's), or a block that sets `HostName` or `HostKeyAlias`
-  may cover it. A host with a number still leads where the sender's alias did. It
-  never adds a server key for a host it already trusts a key for, its own or a
-  certificate authority's, since `ssh` would then accept the sender's key next to its
-  own; it keeps its own and warns instead. A 2FA secret
+  the config or of a file it includes names it, a `known_hosts` file `ssh` reads trusts
+  a key for it (its own or a certificate authority's; `~/.ssh/known_hosts`,
+  `known_hosts2`, the system's `ssh_known_hosts` and those `UserKnownHostsFile` and
+  `GlobalKnownHostsFile` name), or a block that sets `HostName` or `HostKeyAlias`
+  may cover it. A host with a number still leads where the sender's alias did. When
+  settings already in the config would give the host's server access to this computer
+  (a `ForwardAgent`, `ForwardX11` or `RemoteForward` of a block that covers the alias,
+  `Host *` or a `Match` included), the host is saved only after the user allows it in
+  a system dialog that lists those settings. It never adds a server key for a host
+  one of those files trusts a key for already, since `ssh` would then accept the
+  sender's key next to it; it keeps its own and warns instead. A 2FA secret
   goes only if the sender ticks it; a key's passphrase never goes.
+- **A server's password is for the server it was sent for.** It goes with the alias
+  and where that alias leads on the sender's computer (account, host name, port and
+  jump hosts, as `ssh -G` works them out), all of it in the summary. The receiver
+  saves it for one of its own aliases only if `ssh -G` says that alias leads to the
+  same place (the alias it was sent for, or another, such as the host received with
+  it under a number); otherwise it saves it as a login for no host, so the terminal
+  never gives it, or its 2FA code, to another server. A version whose `Hello` doesn't
+  name this (`server-password/1`) would bind it to the alias whatever that leads to
+  there, so it gets the password for no host. When two entries are for the same
+  alias, the one made first is used, so a received entry never takes the place of
+  one the vault had.
 - **An environment arrives as a new one.** Its summary names the project, the
   environment, how many variables (and secrets) it has and the first three names;
   the values go only after the other user accepts. The receiver checks every name
   (variable names are letters, digits and `_`), refuses control characters other
   than line breaks and tabs in values, and takes at most 1000 variables and 384 KiB.
+  Names and notes may hold no line or paragraph separator (U+2028, U+2029, U+0085)
+  and no invisible or direction-changing character, which some programs reading an
+  exported file would take for another line. An environment with a variable that
+  makes a shell or a program run code (the list under "Run in terminal") is never
+  sent, nor taken.
   It is saved as a new environment: one of the same name in that project gets a
   number (`prod 2`), so a sender can never replace or add to an environment the
   receiver has.
@@ -1061,8 +1117,9 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
 - **Own devices.** The user's own computers are a separate, higher level of trust than
   contacts. They are listed in the vault (`sshkm.device.<device key>` in its custom
   data), this computer included, so every copy of the vault knows all of them; a
-  removed one stays as a tombstone, which is final: a sync never brings it back, only
-  adding it again on that computer does. Record times are checked as RFC 3339 UTC, and
+  removed one stays as a tombstone, which is final: a sync never brings it back, and
+  neither does the removed computer asking to be added; only adding it again from a
+  computer that still is one of the user's devices does. Record times are checked as RFC 3339 UTC, and
   a record dated more than five minutes ahead of this computer's clock is not taken.
   The "own device"
   part of a conversation goes only to a peer whose `Hello` says it knows about own
@@ -1080,7 +1137,12 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   compare the code, always, even between contacts; then the first user confirms with
   Touch ID / Windows Hello or the master password. Only the app's own check of either
   counts: a yes from the page, or one left over from the code comparison, is never
-  taken for it. Only then does it record both
+  taken for it. Touch ID / Windows Hello names the other computer by the code both
+  screens show (and by the name the vault keeps for it, if any), never by the name it
+  gives itself; after the master password, which is typed into the page, a system
+  dialog that names the code asks too. If the other computer has this vault already,
+  its user confirms in a system dialog as well, and it is never added together with a
+  computer the user removed. Only then does each record both
   computers as the user's devices. Two different vaults are never merged: the
   conversation stops before the code. If the other computer has no vault yet (it
   waits for one, `join=1` in its announcement, and takes nothing but being added),
@@ -1092,11 +1154,15 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
 - **Reachable by own devices.** While the vault is unlocked, there is another own
   device, and the user didn't switch it off, the app listens on a port of its own
   and announces it as `_sshkm-own._tcp` under an HMAC of its device key and the
-  current ten-minute window, with nothing else in the record. The name changes and
-  says nothing to others; the user's devices recognise it. On that port only a sync
-  is taken, and only from a device that is one of the user's and proves it has the
-  vault: anyone else is turned away right after the handshake, before this computer
-  sends anything about its vault.
+  current ten-minute window, with nothing else in the record but the version. The
+  name and the port change every window and say nothing to others; the user's devices
+  recognise them. The handshake there is `Noise_XXpsk0_25519_ChaChaPoly_SHA256`
+  (prologue `sshkm-own/1`), with a key derived from the vault's `sshkm.own.key` mixed
+  in from the first message: a computer without the vault fails at once, before this
+  one sends anything, its device key included. On that port only a sync is taken,
+  and only from a device that is one of the user's and proves it has the vault.
+  Devices on versions before this handshake can't sync with this one until they are
+  updated.
 - **Syncing hosts.** Only `Host` blocks for single names go: never `Match`, `Host *`
   and other patterns, options before the first block or `Include`. A block goes
   without what belongs to the computer (`IdentityFile`, `CertificateFile`,
@@ -1117,7 +1183,10 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   writes them, and a file changed meanwhile is not written.
 - **Syncing server keys.** `known_hosts` only grows: a computer adds the other's keys
   for a host it has no key for, counting a matching `@cert-authority` line as one, and
-  never adds a key it marked `@revoked`; such keys are shown as a difference. For a
+  never adds a key it marked `@revoked`; such keys are shown as a difference. A key or
+  certificate authority trusted for the host in another file `ssh` reads
+  (`known_hosts2`, the system's `ssh_known_hosts`, or one `UserKnownHostsFile` or
+  `GlobalKnownHostsFile` names) counts too: nothing is written next to it. For a
   host it trusts another key of the same type for, it keeps its own and shows both
   fingerprints: one of the two may have met a server pretending.
 

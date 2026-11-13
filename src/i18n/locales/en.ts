@@ -328,6 +328,8 @@ const en = {
     nameLabel: 'Name others see',
     visibleFor: 'Visible to others for {{time}}',
     hidden: 'Hidden. Others on this network can’t see it.',
+    hiddenAfterAttempts:
+      'Hidden: pairing was broken off three times before a code showed. Show it again when you’re ready to pair.',
     show: 'Show for 10 minutes',
     hide: 'Hide',
     found: 'On this network',
@@ -355,9 +357,12 @@ const en = {
       label: 'Address',
       hint: 'The other computer shows it next to its name while it’s shown.',
       invalid: 'Enter an address and a port, like 192.168.1.24:48213.',
+      notLocal:
+        'Nearby connects only to computers on this network. Check the address the other computer shows.',
     },
     item: {
       password: 'Password',
+      forServer: 'for {{host}} · {{address}}',
       host: 'Host',
       otp: '2FA',
       hostKeys_one: '{{count}} server key',
@@ -395,6 +400,8 @@ const en = {
       offeredHost:
         'It goes into ~/.ssh/config, and the server’s key into known_hosts. You choose the sign-in key.',
       offeredPassword: 'It’s saved in Passwords.',
+      offeredServerPassword:
+        'It’s saved in Passwords, and used only for a host here that leads to the same server.',
       offeredGroup:
         'Nothing is written to your hosts file yet: you’ll see the change first and save it with your administrator password.',
       offeredKey: 'It’s saved in Keys as a public key only: the private key stays with its owner.',

@@ -216,7 +216,10 @@ export function PairingDialog() {
             ) : null}
             {phase.type === 'offered' ? (
               <p className="text-[13px] leading-5 text-fg-2">
-                {t('nearby.send.offered', { peer })} {t(OFFERED[phase.item.type])}
+                {t('nearby.send.offered', { peer })}{' '}
+                {phase.item.type === 'password' && phase.item.server
+                  ? t('nearby.send.offeredServerPassword')
+                  : t(OFFERED[phase.item.type])}
               </p>
             ) : null}
             {phase.type === 'sent' ? (

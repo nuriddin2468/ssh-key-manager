@@ -10,6 +10,9 @@
 //! under says nothing about who answers. When a contact answers that this
 //! vault knows by another name, the sending user says first whether it is
 //! the one they meant; until then nothing goes to it, not even the offer.
+//! An item with a secret in it (a password, an environment) goes only after
+//! the user's yes in a system dialog that names the device as this vault
+//! knows it ([`Side::allow_send`]).
 //!
 //! [`conversation`]: super::pairing::conversation
 
@@ -68,7 +71,20 @@ pub fn send(
             Err(reason) => return PairingPhase::Failed { reason },
         }
     }
+    // As the other side can take it: a server's password goes for no host
+    // to a version that would bind it to whatever the alias leads to there.
+    let item = &item.clone().for_peer(features);
     let summary = item.summary();
+    // A secret goes only after this user's yes in a system dialog that
+    // names the device it goes to: what the page says (that the codes
+    // match, which device was picked) is never enough for one.
+    if matches!(item, Item::Password { .. } | Item::Environment { .. })
+        && !side.allow_send(&summary)
+    {
+        return PairingPhase::Failed {
+            reason: PairingFailure::Cancelled,
+        };
+    }
     side.show(
         None,
         &PairingPhase::Offering {
@@ -94,7 +110,10 @@ pub fn send(
             Message::Unknown => return Err(PairingFailure::Unsupported),
             _ => return Err(PairingFailure::Broken),
         }
-        let _ = session.stream().set_read_timeout(Some(STEP_TIMEOUT));
+        // The receiver may ask its user in a system dialog before it saves.
+        let _ = session
+            .stream()
+            .set_read_timeout(Some(ANSWER_TIMEOUT + STEP_TIMEOUT));
         session
             .send(&Message::Payload { item: item.clone() })
             .map_err(|_| PairingFailure::Broken)?;
@@ -188,7 +207,7 @@ mod tests {
     use std::net::{TcpListener, TcpStream};
     use std::thread;
 
-    use sshkm_core::p2p::protocol::{HostKey, HostsEntry, ItemSummary, VERSION};
+    use sshkm_core::p2p::protocol::{HostKey, HostsEntry, ItemSummary, Server, VERSION};
     use sshkm_core::p2p::{Identity, accept, connect};
 
     use super::super::pairing::{Purpose, conversation};
@@ -204,6 +223,7 @@ mod tests {
             notes: String::new(),
             otp: None,
             host: None,
+            server: None,
         }
     }
 
@@ -449,6 +469,48 @@ mod tests {
     }
 
     #[test]
+    fn a_secret_goes_only_after_the_system_dialogs_yes() {
+        let environment = Item::Environment {
+            project: "shop".into(),
+            name: "prod".into(),
+            notes: String::new(),
+            variables: Vec::new(),
+        };
+        for item in [password(), environment] {
+            // Contacts: no code, no question on the page; the system dialog
+            // says no.
+            let mut left = Script::new("alice", Some(true));
+            left.knows = true;
+            left.allows_send = false;
+            let mut right = Script::new("bob", Some(true));
+            right.knows = true;
+            let ((left_end, left), (right_end, right)) = run(left, right, Some(&item));
+            assert_eq!(left_end, failed(PairingFailure::Cancelled));
+            assert_eq!(right_end, PairingPhase::Known);
+            assert_eq!(*left.asked_to_send.lock().unwrap(), [item.summary()]);
+            // Not even the offer went.
+            assert!(
+                right
+                    .shown
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|(_, phase)| !matches!(phase, PairingPhase::Offered { .. }))
+            );
+            assert_eq!(*right.stored.lock().unwrap(), Vec::<Item>::new());
+        }
+        // What holds no secret goes without one.
+        let mut left = Script::new("alice", Some(true));
+        left.knows = true;
+        left.allows_send = false;
+        let mut right = Script::new("bob", Some(true));
+        right.knows = true;
+        let ((left_end, left), _) = run(left, right, Some(&host()));
+        assert!(matches!(left_end, PairingPhase::Sent { .. }));
+        assert!(left.asked_to_send.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn the_receiver_may_turn_it_down() {
         let right = Script::answering("bob", &[Some(true), Some(false)]);
         let ((left_end, _), (right_end, right)) =
@@ -603,6 +665,78 @@ mod tests {
                 .all(|(_, phase)| !matches!(phase, PairingPhase::Offered { .. })),
             "the user is never asked about it"
         );
+    }
+
+    /// An older version would save a server's password for the sender's
+    /// alias whatever that leads to there: it gets it for no host.
+    #[test]
+    fn a_servers_password_goes_for_no_host_to_a_version_without_the_feature() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let older = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut session = accept(stream, &Identity::generate().unwrap()).unwrap();
+            assert!(matches!(session.recv().unwrap(), Message::Hello { .. }));
+            session
+                .send(&Message::Hello {
+                    version: VERSION,
+                    name: "older".into(),
+                    known: true,
+                    own: None,
+                    features: Vec::new(),
+                })
+                .unwrap();
+            let Message::Offer { item: offered } = session.recv().unwrap() else {
+                panic!("no offer")
+            };
+            session
+                .send(&Message::Reply {
+                    accepted: true,
+                    unsupported: false,
+                })
+                .unwrap();
+            let Message::Payload { item } = session.recv().unwrap() else {
+                panic!("no payload")
+            };
+            session.send(&Message::Received { saved: true }).unwrap();
+            (offered, item)
+        });
+        let login = |host: Option<&str>, server: Option<Server>| Item::Password {
+            title: "prod DB".into(),
+            username: "deploy".into(),
+            password: "s3cret".into(),
+            url: String::new(),
+            notes: String::new(),
+            otp: None,
+            host: host.map(str::to_owned),
+            server,
+        };
+        let item = login(
+            Some("prod"),
+            Some(Server {
+                user: "deploy".into(),
+                host_name: "10.0.4.12".into(),
+                port: 22,
+                proxy_jump: None,
+            }),
+        );
+        let stream = TcpStream::connect(address).unwrap();
+        let mut session = connect(stream, &Identity::generate().unwrap()).unwrap();
+        let mut side = Script::new("alice", Some(true));
+        side.knows = true;
+        let end = conversation(
+            &mut session,
+            &side,
+            Some(Purpose::Send {
+                item: &item,
+                to: None,
+            }),
+        );
+        assert!(matches!(end, PairingPhase::Sent { .. }));
+        let (offered, sent) = older.join().unwrap();
+        let unbound = login(None, None);
+        assert_eq!(offered, unbound.summary());
+        assert_eq!(sent, unbound);
     }
 
     #[test]

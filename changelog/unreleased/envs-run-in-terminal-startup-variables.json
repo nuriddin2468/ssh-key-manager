@@ -1,0 +1,6 @@
+{
+  "kind": "security",
+  "en": "Environments: Run in terminal leaves out variables that would make the shell, or the programs it starts, run code, such as BASH_ENV, PROMPT_COMMAND, LD_PRELOAD and GIT_SSH_COMMAND.",
+  "ru": "Окружения: «Запустить в терминале» не передаёт переменные, из-за которых оболочка или запущенные из неё программы выполняют код, например BASH_ENV, PROMPT_COMMAND, LD_PRELOAD и GIT_SSH_COMMAND.",
+  "uz": "Muhitlar: «Terminalda ishga tushirish» shell yoki undan ishga tushgan dasturlarni kod bajarishga majbur qiladigan oʻzgaruvchilarni, masalan BASH_ENV, PROMPT_COMMAND, LD_PRELOAD va GIT_SSH_COMMAND ni qoʻshmaydi."
+}

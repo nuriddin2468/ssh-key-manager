@@ -25,7 +25,7 @@
 
 mod link;
 mod presence;
-mod prompt;
+pub(super) mod prompt;
 
 pub use self::presence::CHAT_SERVICE_TYPE;
 
@@ -1009,6 +1009,7 @@ impl Nearby {
         let state = self.state()?;
         let item = items::build(&state, self.app()?, request)?;
         let features = self.link_to(&peer)?;
+        let item = item.for_peer(&features);
         if let Some(needed) = item.requires()
             && !features.iter().any(|feature| feature == needed)
         {

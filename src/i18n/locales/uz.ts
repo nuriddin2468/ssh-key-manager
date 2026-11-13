@@ -333,6 +333,8 @@ const uz = {
     nameLabel: 'Boshqalar koʻradigan nom',
     visibleFor: 'Yana {{time}} boshqalarga koʻrinadi',
     hidden: 'Yashirin. Shu tarmoqdagilar uni koʻrmaydi.',
+    hiddenAfterAttempts:
+      'Yashirin: kod chiqmasdan oldin ulanish uch marta toʻxtatildi. Ulanishga tayyor boʻlganingizda uni yana koʻrsating.',
     show: '10 daqiqaga koʻrsatish',
     hide: 'Yashirish',
     found: 'Shu tarmoqda',
@@ -361,9 +363,12 @@ const uz = {
       label: 'Manzil',
       hint: 'Boshqa kompyuter koʻrsatilgan paytda uni oʻz nomi yonida koʻrsatadi.',
       invalid: 'Manzil va portni kiriting, masalan 192.168.1.24:48213.',
+      notLocal:
+        '«Yaqin atrofda» faqat shu tarmoqdagi kompyuterlarga ulanadi. Boshqa kompyuter koʻrsatayotgan manzilni tekshiring.',
     },
     item: {
       password: 'Parol',
+      forServer: '{{host}} uchun · {{address}}',
       host: 'Xost',
       otp: '2FA',
       hostKeys_one: '{{count}} ta server kaliti',
@@ -402,6 +407,8 @@ const uz = {
       offeredHost:
         'Xost ~/.ssh/config ga, server kaliti known_hosts ga qoʻshiladi. Kirish kalitini oʻzingiz tanlaysiz.',
       offeredPassword: 'Parol «Parollar»da saqlanadi.',
+      offeredServerPassword:
+        'Parol «Parollar»da saqlanadi va faqat shu yerdagi xuddi shu serverga olib boradigan xost uchun ishlatiladi.',
       offeredGroup:
         'Hosts faylingizga hozircha hech narsa yozilmaydi: avval oʻzgarishlarni koʻrasiz va ularni administrator paroli bilan saqlaysiz.',
       offeredKey: '«Kalitlar»da faqat ochiq kalit sifatida saqlanadi: yopiq kalit egasida qoladi.',

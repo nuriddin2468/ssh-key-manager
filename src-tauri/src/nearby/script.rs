@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use sshkm_core::config::SshConfig;
 use sshkm_core::known_hosts::KnownHosts;
 use sshkm_core::p2p::own::OwnKey;
-use sshkm_core::p2p::protocol::{Intent, Item, SecretText, VaultState};
+use sshkm_core::p2p::protocol::{Intent, Item, ItemSummary, SecretText, VaultState};
 use sshkm_core::p2p::{Identity, PeerKey, accept, connect};
 use sshkm_core::sync::Hasher;
 use sshkm_core::vault::DeviceRecord;
@@ -89,6 +89,19 @@ pub struct Script {
     pub devices: Mutex<Vec<DeviceRecord>>,
     /// The project records this side sends, and then the other side's.
     pub projects: Mutex<Vec<ProjectRecord>>,
+    /// This user allows sending a secret in the system dialog.
+    pub allows_send: bool,
+    /// The secrets the system dialog asked about sending.
+    pub asked_to_send: Mutex<Vec<ItemSummary>>,
+    /// How many times the other side hung up before this one showed a code
+    /// it could already work out.
+    pub broken_off: Mutex<u32>,
+    /// The other side was one of the user's devices and was removed.
+    pub removed: bool,
+    /// This user allows, in the system dialog, this computer to be added.
+    pub allows_added: bool,
+    /// How many times the system dialog asked that.
+    pub asked_added: Mutex<u32>,
 }
 
 impl Script {
@@ -125,6 +138,12 @@ impl Script {
             sync_state: Mutex::default(),
             devices: Mutex::default(),
             projects: Mutex::default(),
+            allows_send: true,
+            asked_to_send: Mutex::default(),
+            broken_off: Mutex::default(),
+            removed: false,
+            allows_added: true,
+            asked_added: Mutex::default(),
         }
     }
 
@@ -287,6 +306,20 @@ impl Side for Script {
     fn allow_risky(&self, changes: &[RiskyChange]) -> bool {
         self.asked_risky.lock().unwrap().extend_from_slice(changes);
         self.allows_risky
+    }
+    fn allow_send(&self, item: &ItemSummary) -> bool {
+        self.asked_to_send.lock().unwrap().push(item.clone());
+        self.allows_send
+    }
+    fn broke_off(&self) {
+        *self.broken_off.lock().unwrap() += 1;
+    }
+    fn removed(&self, _: PeerKey) -> bool {
+        self.removed
+    }
+    fn allow_added(&self) -> bool {
+        *self.asked_added.lock().unwrap() += 1;
+        self.allows_added
     }
 }
 

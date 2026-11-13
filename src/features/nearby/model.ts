@@ -5,6 +5,7 @@ import type { TFunction } from 'i18next';
 import type { Conflict } from '@/bindings/Conflict';
 import type { Pairing } from '@/bindings/Pairing';
 import type { PairingFailure } from '@/bindings/PairingFailure';
+import type { Server } from '@/bindings/Server';
 import type { SyncSummary } from '@/bindings/SyncSummary';
 
 /** Seconds left until `until` (RFC 3339), never below zero; `null` without one. */
@@ -92,6 +93,12 @@ export function conflictRows(
     const theirs = value(conflict.theirs, key);
     return { key, mine, theirs, differs: mine !== theirs };
   });
+}
+
+/** Where a server's password goes: `user@host`, with the port unless it is 22. */
+export function serverAddress(server: Server): string {
+  const port = server.port === 22 ? '' : `:${server.port}`;
+  return `${server.user}@${server.hostName}${port}`;
 }
 
 /** A `host:port` the backend can try: a host and a port from 1 to 65535. */

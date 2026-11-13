@@ -270,6 +270,8 @@ export const chatHandlers: Record<string, (args: Record<string, unknown>) => unk
               username: 'admin',
               url: '',
               otp: false,
+              host: null,
+              server: null,
             },
       outcome: 'waiting',
       name: null,

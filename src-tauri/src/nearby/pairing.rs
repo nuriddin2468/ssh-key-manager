@@ -292,6 +292,26 @@ pub trait Side {
     fn allow_risky(&self, _changes: &[sync::RiskyChange]) -> bool {
         false
     }
+    /// Whether this user allows, in a system dialog that a script in the
+    /// page can't answer, sending `item`, which holds a secret, to the
+    /// other side.
+    fn allow_send(&self, _item: &ItemSummary) -> bool {
+        false
+    }
+    /// The other side hung up after this side gave it what it needs to work
+    /// out the code this side would show, and before this side showed it:
+    /// it may be trying again until the code is one it wants.
+    fn broke_off(&self) {}
+    /// Whether `peer` was one of the user's devices and was removed.
+    fn removed(&self, _peer: PeerKey) -> bool {
+        false
+    }
+    /// On a computer being added that has the vault already: whether this
+    /// user allows, in a system dialog, becoming one of their devices with
+    /// the computer that adds it.
+    fn allow_added(&self) -> bool {
+        false
+    }
 }
 
 /// What the side that connected came for.
@@ -328,8 +348,8 @@ pub fn conversation(
         (Met::Contacts(_, known, features), Some(Purpose::Send { item, to })) => {
             transfer::send(session, side, item, known.as_deref(), to, &features)
         }
-        (Met::Contacts(end, ..), Some(_)) => end,
-        (Met::Contacts(end, ..), None) => transfer::receive(session, side).unwrap_or(end),
+        (Met::Contacts(end, ..), Some(_)) => *end,
+        (Met::Contacts(end, ..), None) => transfer::receive(session, side).unwrap_or(*end),
         (Met::AddDevice { peer, name, joins }, _) => own::add(session, side, peer, &name, joins),
         (Met::Sync { peer }, _) => sync::run(session, side, peer),
     }
@@ -339,7 +359,7 @@ pub fn conversation(
 enum Met {
     /// As contacts: `Paired` or `Known`, with the name this side kept for
     /// the other before, if it knew it, and what the other can do.
-    Contacts(PairingPhase, Option<String>, Vec<String>),
+    Contacts(Box<PairingPhase>, Option<String>, Vec<String>),
     /// To make one the other's device; with `joins`, the side that
     /// answered gets the vault.
     AddDevice {
@@ -349,6 +369,12 @@ enum Met {
     },
     /// To sync, each one of the other's devices.
     Sync { peer: PeerKey },
+}
+
+impl Met {
+    fn contacts(end: PairingPhase, known: Option<String>, features: Vec<String>) -> Self {
+        Self::Contacts(Box::new(end), known, features)
+    }
 }
 
 fn meet(
@@ -393,14 +419,14 @@ fn meet(
 
     let Some(intent) = intent else {
         if known.is_some() && they_know {
-            return Ok(Met::Contacts(PairingPhase::Known, known, their_features));
+            return Ok(Met::contacts(PairingPhase::Known, known, their_features));
         }
         compare_codes(session, side, peer.as_deref())?;
         // A device known here already stays as it is, name and all.
         if known.is_none() {
             side.save(peer_key, &peer_name)?;
         }
-        return Ok(Met::Contacts(PairingPhase::Paired, known, their_features));
+        return Ok(Met::contacts(PairingPhase::Paired, known, their_features));
     };
     let (Some(mine), Some(theirs)) = (mine, theirs) else {
         return Err(PairingFailure::Version);
@@ -492,7 +518,12 @@ fn compare_codes(
     side: &impl Side,
     peer: Option<&str>,
 ) -> Result<(), PairingFailure> {
-    let code = session.pairing_code().map_err(broken)?;
+    let code = session.pairing_code().map_err(|error| {
+        if session.gave_nonce() {
+            side.broke_off();
+        }
+        broken(error)
+    })?;
     side.show(peer, &PairingPhase::Compare { code: code.clone() });
     let (matched, mut theirs) = wait_for_answer(session, side)?;
     if !matched {
@@ -634,6 +665,67 @@ mod tests {
         );
         assert!(matches!(right_end, PairingPhase::Failed { .. }));
         assert!(right.saved.lock().unwrap().is_empty());
+    }
+
+    /// A side that connects, says hello, and hangs up once it got the other
+    /// side's nonce, as one would that didn't like the code; or, without
+    /// `commits`, right after the hello.
+    fn hang_up_after_the_nonce(commits: bool) -> Script {
+        use std::net::{TcpListener, TcpStream};
+        use std::thread;
+
+        use sshkm_core::p2p::{accept, connect};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let other = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut session = accept(stream, &Identity::generate().unwrap()).unwrap();
+            let side = Script::new("bob", Some(true));
+            (conversation(&mut session, &side, None), side)
+        });
+        let stream = TcpStream::connect(address).unwrap();
+        let mut session = connect(stream, &Identity::generate().unwrap()).unwrap();
+        session
+            .send(&Message::Hello {
+                version: VERSION,
+                name: "mallory".into(),
+                known: false,
+                own: None,
+                features: Vec::new(),
+            })
+            .unwrap();
+        assert!(matches!(session.recv().unwrap(), Message::Hello { .. }));
+        if commits {
+            // What it commits to is only checked when it reveals it.
+            session
+                .send(&Message::Commit {
+                    hash: "a commitment".into(),
+                })
+                .unwrap();
+            assert!(matches!(session.recv().unwrap(), Message::Nonce { .. }));
+        }
+        drop(session);
+        let (end, side) = other.join().unwrap();
+        assert!(matches!(end, PairingPhase::Failed { .. }));
+        assert_eq!(codes(&side), Vec::<String>::new());
+        side
+    }
+
+    #[test]
+    fn a_side_hears_of_a_hang_up_after_its_nonce() {
+        assert_eq!(*hang_up_after_the_nonce(true).broken_off.lock().unwrap(), 1);
+        assert_eq!(
+            *hang_up_after_the_nonce(false).broken_off.lock().unwrap(),
+            0
+        );
+        // A pairing that went through is no such thing.
+        let ((_, left), (_, right)) = pair(
+            Script::new("alice", Some(true)),
+            Script::new("bob", Some(true)),
+        );
+        assert_eq!(*left.broken_off.lock().unwrap(), 0);
+        assert_eq!(*right.broken_off.lock().unwrap(), 0);
     }
 
     #[test]

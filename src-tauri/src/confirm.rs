@@ -19,6 +19,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use sshkm_core::ErrorCode;
+use sshkm_core::p2p::protocol::is_invisible;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
@@ -73,17 +74,8 @@ pub fn shown(text: &str, max: usize) -> String {
             let _ = write!(out, "… (+{rest})");
             break;
         }
-        let invisible = matches!(
-            c,
-            '\u{00AD}'
-                | '\u{061C}'
-                | '\u{180E}'
-                | '\u{200B}'..='\u{200F}'
-                | '\u{202A}'..='\u{202E}'
-                | '\u{2060}'..='\u{2069}'
-                | '\u{FEFF}'
-        );
-        if c.is_control() || invisible {
+        // Line and paragraph separators, tag characters and the like too.
+        if c.is_control() || is_invisible(c) {
             let _ = write!(out, "<U+{:04X}>", u32::from(c));
         } else {
             out.push(c);
@@ -375,6 +367,7 @@ mod tests {
             "/Users/me/Docs<U+202E>txt.kdbx<U+000A>Cancel"
         );
         assert_eq!(shown("a\u{200B}b\u{FEFF}", 100), "a<U+200B>b<U+FEFF>");
+        assert_eq!(shown("a\u{2028}b\u{2029}", 100), "a<U+2028>b<U+2029>");
         assert_eq!(shown("Профиль 1", 100), "Профиль 1");
         assert_eq!(shown("abcdef", 3), "abc… (+3)");
     }

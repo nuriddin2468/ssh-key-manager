@@ -140,8 +140,21 @@ impl Vault {
             .is_some_and(|stored| stored.removed.is_none())
     }
 
+    /// Whether `key` was one of the user's devices and was removed: its
+    /// tombstone is final, so it never adds this computer as a device of
+    /// the user's (only "Add device" on a computer that still is one adds
+    /// it again).
+    pub fn is_removed_device(&self, key: &PeerKey) -> bool {
+        self.record(&key.to_string())
+            .is_some_and(|stored| stored.removed.is_some())
+    }
+
     /// Records `key` as one of the user's devices named `name`; returns
-    /// whether anything changed (then the vault needs saving).
+    /// whether anything changed (then the vault needs saving). A device that
+    /// was removed comes back: the app calls this for the computer the user
+    /// adds after "Add device" and the user's own confirmation, and on the
+    /// computer being added, only for one that is not
+    /// [removed](Self::is_removed_device).
     pub fn add_own_device(&mut self, key: &PeerKey, name: &str) -> Result<bool> {
         let name = clean_name(name);
         if name.is_empty() {
@@ -419,9 +432,12 @@ mod tests {
         let mut vault = Vault::unlock(vault.paths(), &s("master")).unwrap();
         assert_eq!(vault.own_devices().len(), 2);
 
+        assert!(!vault.is_removed_device(&laptop));
         assert!(vault.remove_own_device(&laptop.to_string()).unwrap());
         assert!(!vault.remove_own_device(&laptop.to_string()).unwrap());
         assert!(!vault.is_own_device(&laptop));
+        assert!(vault.is_removed_device(&laptop));
+        assert!(!vault.is_removed_device(&desktop));
         assert_eq!(vault.own_devices().len(), 1);
         // The tombstone goes along to the other devices.
         assert_eq!(vault.device_records().len(), 2);

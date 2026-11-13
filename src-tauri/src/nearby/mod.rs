@@ -19,12 +19,18 @@
 //! and the fingerprints of public keys received from others, in
 //! `nearby.json` in the app's data folder. The UI follows [`CHANGED_EVENT`],
 //! which carries the whole [`NearbyStatus`].
+//!
+//! Nearby stays on the local network: it connects only to addresses there
+//! and takes connections only from there ([`on_local_network`]). A
+//! connection gets a conversation only once its handshake is done, which
+//! has a deadline; until then it holds up no other.
 
 pub mod chat;
 pub mod items;
 pub mod own;
 pub mod pairing;
 mod presence;
+pub mod prompt;
 #[cfg(test)]
 mod script;
 mod store;
@@ -36,7 +42,7 @@ use std::fmt::Write as _;
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread;
@@ -47,9 +53,11 @@ use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sshkm_core::config::SshConfig;
 use sshkm_core::known_hosts::KnownHosts;
-use sshkm_core::p2p::protocol::{Intent, Item, SecretText, VaultState, clean_name};
-use sshkm_core::p2p::{self, Identity, PeerKey};
+use sshkm_core::p2p::deadline::Deadline;
+use sshkm_core::p2p::protocol::{Intent, Item, ItemSummary, SecretText, VaultState, clean_name};
+use sshkm_core::p2p::{self, Identity, PeerKey, Session};
 use sshkm_core::sync::Hasher;
+use sshkm_core::sync::host_keys;
 use sshkm_core::vault::{self, Vault};
 use sshkm_core::{ErrorCode, ExposeSecret, SecretString, fsutil};
 use tauri::{AppHandle, Emitter, Manager};
@@ -63,7 +71,6 @@ pub use self::presence::OWN_SERVICE_TYPE;
 use self::presence::{OwnFound, Presence};
 use self::sync::{RiskyChange, SyncDecisions, SyncLocal, SyncState, SyncWrite};
 use crate::commands::Shared;
-use crate::confirm::Localized;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
@@ -80,6 +87,16 @@ const VISIBLE_FOR: Duration = Duration::from_secs(10 * 60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// For the handshake and `Hello`; comparing codes waits longer.
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a connection has for its whole handshake, however slowly its
+/// bytes come.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Most connections in their handshake at once; more are closed at once.
+const MAX_HANDSHAKES: usize = 4;
+/// How many times, while this computer is visible, others may hang up
+/// after they could work out the code it would show and before it showed
+/// it, before it hides: someone may be trying until the code is one they
+/// want.
+const MAX_BROKEN_OFF: u32 = 3;
 const KEY_SERVICE: &str = "SSH Key Manager nearby";
 const KEY_ACCOUNT: &str = "device";
 const SETTINGS_FILE: &str = "nearby.json";
@@ -90,6 +107,10 @@ pub const BASE_LABEL: &[u8] = b"sshkm sync base";
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = crate::types::BINDINGS))]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each is one thing the page shows on its own"
+)]
 pub struct NearbyStatus {
     /// This device's name, as others see it.
     pub name: String,
@@ -99,6 +120,9 @@ pub struct NearbyStatus {
     pub address: Option<String>,
     /// Visible to be given a vault by another of the user's computers.
     pub joining: bool,
+    /// It stopped being visible early: other devices broke off pairing
+    /// with it too many times before a code showed.
+    pub hidden_after_attempts: bool,
     /// Reachable by the user's devices while the vault is unlocked: the
     /// setting.
     pub reachable: bool,
@@ -199,6 +223,8 @@ pub struct Nearby {
     data_dir: PathBuf,
     app: OnceLock<AppHandle>,
     next_id: AtomicU32,
+    /// Connections in their handshake (see [`MAX_HANDSHAKES`]).
+    handshakes: AtomicUsize,
     inner: Mutex<Inner>,
     chats: chat::Chats,
 }
@@ -218,6 +244,11 @@ struct Inner {
     /// The user's devices found, by mDNS name.
     own_found: BTreeMap<String, OwnFound>,
     pairing: Option<Slot>,
+    /// Conversations broken off since this computer was made visible (see
+    /// [`MAX_BROKEN_OFF`]).
+    broken_off: u32,
+    /// Visibility ended because of them.
+    hidden_after_attempts: bool,
 }
 
 struct Visible {
@@ -286,6 +317,10 @@ struct Slot {
     socket: Option<TcpStream>,
     cancelled: Arc<AtomicBool>,
     pending: Option<PendingVault>,
+    /// The name this vault keeps for the other device, if it knows it.
+    known: Option<String>,
+    /// The code both users compared, for the system dialogs after it.
+    code: Option<String>,
 }
 
 impl Slot {
@@ -310,6 +345,7 @@ impl Nearby {
             data_dir,
             app: OnceLock::new(),
             next_id: AtomicU32::new(1),
+            handshakes: AtomicUsize::new(0),
             inner: Mutex::new(Inner {
                 name,
                 settings,
@@ -347,6 +383,7 @@ impl Nearby {
                 .as_ref()
                 .and_then(|visible| Some(SocketAddr::new(local_ip()?, visible.port).to_string())),
             joining: inner.visible.as_ref().is_some_and(|visible| visible.join),
+            hidden_after_attempts: inner.hidden_after_attempts,
             reachable: inner.settings.reachable != Some(false),
             present: inner.presence.is_some(),
             own_found,
@@ -462,6 +499,11 @@ impl Nearby {
 
     fn show(self: &Arc<Self>, on: bool, join: bool) -> AppResult<NearbyStatus> {
         self.hide();
+        {
+            let mut inner = self.lock();
+            inner.broken_off = 0;
+            inner.hidden_after_attempts = false;
+        }
         if !on {
             return Ok(self.changed());
         }
@@ -548,7 +590,13 @@ impl Nearby {
             .devices
             .get(target)
             .map(|found| found.name.clone());
-        self.start(target, Goal::Send { item, to })
+        self.start(
+            target,
+            Goal::Send {
+                item: Box::new(item),
+                to,
+            },
+        )
     }
 
     /// Makes a device found on the network (or at an address) one of the
@@ -599,17 +647,31 @@ impl Nearby {
     fn start(self: &Arc<Self>, target: &str, goal: Goal) -> AppResult<u32> {
         let identity = self.identity()?;
         self.require_vault()?;
-        let addresses = {
-            let inner = self.lock();
-            match inner.devices.get(target) {
-                Some(found) => found.addresses.clone(),
-                None => target
-                    .trim()
-                    .to_socket_addrs()
-                    .map_err(|_| AppError::invalid("not an address: host:port"))?
-                    .collect(),
-            }
+        let found = self
+            .lock()
+            .devices
+            .get(target)
+            .map(|found| found.addresses.clone());
+        let addresses = match found {
+            Some(addresses) => addresses,
+            None => target
+                .trim()
+                .to_socket_addrs()
+                .map_err(|_| AppError::invalid("not an address: host:port"))?
+                .collect(),
         };
+        // Only ever to another computer on this network, whatever a name
+        // resolves to or a device announces.
+        let subnets = local_subnets();
+        let addresses: Vec<SocketAddr> = addresses
+            .into_iter()
+            .filter(|address| on_local_network(address.ip(), &subnets))
+            .collect();
+        if addresses.is_empty() {
+            return Err(AppError::invalid(
+                "Nearby reaches only computers on the local network",
+            ));
+        }
         let (id, answers, cancelled) = self.claim(true, goal.kind())?;
         let nearby = Arc::clone(self);
         thread::spawn(move || {
@@ -663,24 +725,38 @@ impl Nearby {
 
     /// The user's yes to making the other computer one of their devices,
     /// with the master password or, without one, Touch ID / Windows Hello.
+    /// Either names the computer by the code both screens show (and by the
+    /// name this vault keeps for it, if it knows it), never by the name it
+    /// gives itself; after the master password, which can be typed into
+    /// the page, a system dialog asks too.
     pub fn authorize(&self, id: u32, master: Option<&SecretString>) -> AppResult<()> {
-        let peer = {
+        let (known, code, vault) = {
             let mut slot = self.slot(id);
-            let slot = slot
-                .as_mut()
-                .filter(|slot| matches!(slot.view.phase, PairingPhase::Authorize { .. }))
-                .ok_or_else(|| AppError::not_found("nothing to confirm"))?;
-            slot.view.peer.clone().unwrap_or_default()
+            slot.as_mut()
+                .and_then(|slot| match slot.view.phase {
+                    PairingPhase::Authorize { vault } => Some((
+                        slot.known.clone(),
+                        slot.code.clone().unwrap_or_default(),
+                        vault,
+                    )),
+                    _ => None,
+                })
+                .ok_or_else(|| AppError::not_found("nothing to confirm"))?
         };
         let state = self.state()?;
+        let app = self.app()?;
         match master {
-            Some(master) => state.vault.with(self.app()?, |vault| {
-                Ok(vault.verify_master_password(master)?)
-            })?,
-            None => crate::device_unlock::authenticate(&Localized::new(
-                format!("add {peer} to your devices"),
-                format!("добавить {peer} в ваши устройства"),
-                format!("{peer} qurilmasini qurilmalaringizga qoʻshish"),
+            Some(master) => {
+                state
+                    .vault
+                    .with(app, |vault| Ok(vault.verify_master_password(master)?))?;
+                let prompt = prompt::add(known.as_deref(), &code, vault);
+                crate::confirm::require(app, &prompt.title, &prompt.body, &prompt.approve)?;
+            }
+            None => crate::device_unlock::authenticate(&prompt::add_reason(
+                known.as_deref(),
+                &code,
+                vault,
             ))?,
         }
         self.tell(id, Said::Authorized)
@@ -878,7 +954,7 @@ impl Nearby {
     fn listen(self: Arc<Self>, listener: &TcpListener, stop: &AtomicBool, deadline: Instant) {
         while !stop.load(Ordering::SeqCst) && Instant::now() < deadline {
             match listener.accept() {
-                Ok((stream, _)) => self.incoming(stream, false),
+                Ok((stream, from)) => self.incoming(stream, from, false),
                 Err(error) if error.kind() == ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(150));
                 }
@@ -894,33 +970,128 @@ impl Nearby {
         }
     }
 
-    /// Someone connected: talk, unless a conversation is going on (then the
-    /// connection just closes). With `only_sync`, only a sync is taken.
-    fn incoming(self: &Arc<Self>, stream: TcpStream, only_sync: bool) {
-        // A listener's socket hands on its non-blocking mode on some systems.
-        let _ = stream.set_nonblocking(false);
-        let Ok(identity) = self.identity() else {
+    /// Someone connected from `from`: talk, unless it is not on the local
+    /// network or a conversation is going on (then the connection just
+    /// closes). With `only_sync`, only a sync is taken.
+    fn incoming(self: &Arc<Self>, stream: TcpStream, from: SocketAddr, only_sync: bool) {
+        if on_local_network(from.ip(), &local_subnets()) {
+            self.take_call(stream, only_sync);
+        }
+    }
+
+    /// Opens the session on a connection someone made, and only then
+    /// takes the slot: the handshake has [`HANDSHAKE_TIMEOUT`] in all, and
+    /// at most [`MAX_HANDSHAKES`] go on at once. With `only_sync`, only one
+    /// of the user's devices gets that far: anyone else is turned away
+    /// right after the handshake, which it can't even finish without the
+    /// vault. So a connection that says nothing, or a stranger, holds up no
+    /// conversation.
+    fn take_call(self: &Arc<Self>, stream: TcpStream, only_sync: bool) {
+        if self.lock().pairing.as_ref().is_some_and(Slot::active) {
             return;
-        };
-        let kind = if only_sync {
-            ConversationKind::Sync
-        } else {
-            ConversationKind::Pair
-        };
-        let Ok((id, answers, cancelled)) = self.claim(false, kind) else {
+        }
+        let Some(handshaking) = self.handshaking() else {
             return;
         };
         let nearby = Arc::clone(self);
         thread::spawn(move || {
-            nearby.run(
-                id,
-                stream,
-                &identity,
-                &Role::Answers { only_sync },
-                answers,
-                &cancelled,
-            );
+            // A listener's socket hands on its non-blocking mode on some
+            // systems.
+            let _ = stream.set_nonblocking(false);
+            let Ok(identity) = nearby.identity() else {
+                return;
+            };
+            let role = Role::Answers { only_sync };
+            let session = nearby.handshake(stream, &identity, &role);
+            drop(handshaking);
+            let Ok(session) = session else {
+                return;
+            };
+            if only_sync && !nearby.is_own(session.remote()) {
+                return;
+            }
+            let kind = if only_sync {
+                ConversationKind::Sync
+            } else {
+                ConversationKind::Pair
+            };
+            let Ok((id, answers, cancelled)) = nearby.claim(false, kind) else {
+                return;
+            };
+            if let Ok(socket) = session.stream().try_clone()
+                && let Some(slot) = nearby.slot(id).as_mut()
+            {
+                slot.socket = Some(socket);
+            }
+            nearby.talk(id, session, &role, answers, &cancelled);
         });
+    }
+
+    /// One of the [`MAX_HANDSHAKES`] connections whose handshake may go on,
+    /// if one is free.
+    fn handshaking(self: &Arc<Self>) -> Option<Handshaking> {
+        let handshaking = Handshaking(Arc::clone(self));
+        // Counted at once, so the count goes back down as it drops.
+        (self.handshakes.fetch_add(1, Ordering::SeqCst) < MAX_HANDSHAKES).then_some(handshaking)
+    }
+
+    /// Opens the session on `stream` as `role` says, in at most
+    /// [`HANDSHAKE_TIMEOUT`]. A sync is only ever with one of the user's
+    /// devices: its handshake mixes in the key own devices have from the
+    /// vault, so a computer without it learns nothing from it.
+    fn handshake(
+        &self,
+        stream: TcpStream,
+        identity: &Identity,
+        role: &Role,
+    ) -> Result<Session<TcpStream>, PairingFailure> {
+        let own = match role {
+            Role::Connects(Goal::Sync) | Role::Answers { only_sync: true } => {
+                Some(self.session_key().ok_or(PairingFailure::NotOwn)?)
+            }
+            _ => None,
+        };
+        handshake_within(stream, identity, role, own.as_deref(), HANDSHAKE_TIMEOUT)
+    }
+
+    /// The key own devices mix into their handshake, from the vault.
+    fn session_key(&self) -> Option<Zeroizing<[u8; 32]>> {
+        let state = self.state().ok()?;
+        state
+            .vault
+            .with_quietly(self.app().ok()?, |vault| {
+                Ok(vault.own_key().map(|key| key.session_key()))
+            })
+            .ok()
+            .flatten()
+    }
+
+    /// Whether `peer` is one of the user's devices.
+    fn is_own(&self, peer: PeerKey) -> bool {
+        let (Ok(state), Ok(app)) = (self.state(), self.app()) else {
+            return false;
+        };
+        state
+            .vault
+            .with_quietly(app, |vault| Ok(vault.is_own_device(&peer)))
+            .unwrap_or(false)
+    }
+
+    /// Another computer hung up after it could work out the code this one
+    /// would show, before this one showed it. After [`MAX_BROKEN_OFF`] of
+    /// them, this computer stops being visible and says why.
+    fn broke_off(&self) {
+        let hide = {
+            let mut inner = self.lock();
+            inner.broken_off += 1;
+            inner.broken_off >= MAX_BROKEN_OFF && inner.visible.is_some()
+        };
+        if hide {
+            log::warn!("nearby: pairing was broken off too often; no longer visible");
+            self.hide();
+            self.lock().hidden_after_attempts = true;
+            self.changed();
+        }
     }
 
     /// Takes the slot for a new conversation; fails if one is going on.
@@ -951,12 +1122,15 @@ impl Nearby {
             socket: None,
             cancelled: Arc::clone(&cancelled),
             pending: None,
+            known: None,
+            code: None,
         });
         drop(inner);
         self.changed();
         Ok((id, receiver, cancelled))
     }
 
+    /// The conversation `id` this side started, on the connection it made.
     fn run(
         self: &Arc<Self>,
         id: u32,
@@ -966,8 +1140,6 @@ impl Nearby {
         answers: Receiver<Answer>,
         cancelled: &Arc<AtomicBool>,
     ) {
-        let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
-        let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
         if let Ok(socket) = stream.try_clone()
             && let Some(slot) = self.slot(id).as_mut()
         {
@@ -987,35 +1159,47 @@ impl Nearby {
             );
             return;
         }
-        let session = if matches!(role, Role::Connects(_)) {
-            p2p::connect(stream, identity)
-        } else {
-            p2p::accept(stream, identity)
-        };
-        let end = match session {
-            Ok(mut session) => {
-                let side = AppSide {
-                    nearby: self,
-                    id,
-                    answers: Mutex::new(answers),
-                    cancelled,
-                    only_sync: matches!(role, Role::Answers { only_sync: true }),
+        match self.handshake(stream, identity, role) {
+            Ok(session) => self.talk(id, session, role, answers, cancelled),
+            Err(reason) => {
+                let reason = if cancelled.load(Ordering::SeqCst) {
+                    PairingFailure::Cancelled
+                } else {
+                    reason
                 };
-                // A sync is only ever with one of the user's devices: anyone
-                // else is turned away before the `Hello`, which would carry
-                // this vault's proof.
-                let sync = side.only_sync || matches!(role, Role::Connects(Goal::Sync));
-                match role {
-                    _ if sync && !side.is_own(session.remote()) => PairingPhase::Failed {
-                        reason: PairingFailure::NotOwn,
-                    },
-                    Role::Connects(goal) => conversation(&mut session, &side, Some(goal.purpose())),
-                    Role::Answers { .. } => conversation(&mut session, &side, None),
-                }
+                self.finish(id, PairingPhase::Failed { reason });
             }
-            Err(_) => PairingPhase::Failed {
-                reason: PairingFailure::Broken,
-            },
+        }
+    }
+
+    /// Conversation `id`, on an open session.
+    fn talk(
+        self: &Arc<Self>,
+        id: u32,
+        mut session: Session<TcpStream>,
+        role: &Role,
+        answers: Receiver<Answer>,
+        cancelled: &Arc<AtomicBool>,
+    ) {
+        let end = {
+            let side = AppSide {
+                nearby: self,
+                id,
+                answers: Mutex::new(answers),
+                cancelled,
+                only_sync: matches!(role, Role::Answers { only_sync: true }),
+            };
+            // A sync is only ever with one of the user's devices: anyone
+            // else is turned away before the `Hello`, which would carry
+            // this vault's proof.
+            let sync = side.only_sync || matches!(role, Role::Connects(Goal::Sync));
+            match role {
+                _ if sync && !side.is_own(session.remote()) => PairingPhase::Failed {
+                    reason: PairingFailure::NotOwn,
+                },
+                Role::Connects(goal) => conversation(&mut session, &side, Some(goal.purpose())),
+                Role::Answers { .. } => conversation(&mut session, &side, None),
+            }
         };
         let end = if cancelled.load(Ordering::SeqCst) && matches!(end, PairingPhase::Failed { .. })
         {
@@ -1150,7 +1334,7 @@ enum Goal {
     /// Send `item` to the device picked under the name `to`, or reached by
     /// its address.
     Send {
-        item: Item,
+        item: Box<Item>,
         to: Option<String>,
     },
     AddDevice,
@@ -1187,6 +1371,41 @@ enum Role {
     Answers {
         only_sync: bool,
     },
+}
+
+/// A connection in its handshake, counted while this lives.
+struct Handshaking(Arc<Nearby>);
+
+impl Drop for Handshaking {
+    fn drop(&mut self) {
+        self.0.handshakes.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Opens the session on `stream` as `role` says, with `own`, the key own
+/// devices mix in, if it is with one of them; all of it within `limit`
+/// ([`Deadline`]), so a peer that sends a byte now and then can't keep it
+/// going, as it could a read with a timeout of its own.
+fn handshake_within(
+    stream: TcpStream,
+    identity: &Identity,
+    role: &Role,
+    own: Option<&[u8; 32]>,
+    limit: Duration,
+) -> Result<Session<TcpStream>, PairingFailure> {
+    let stream = Deadline::new(stream, limit);
+    let session = match (role, own) {
+        (Role::Connects(_), None) => p2p::connect(stream, identity),
+        (Role::Connects(_), Some(key)) => p2p::connect_own(stream, identity, key),
+        (Role::Answers { .. }, None) => p2p::accept(stream, identity),
+        (Role::Answers { .. }, Some(key)) => p2p::accept_own(stream, identity, key),
+    }
+    .map_err(|_| PairingFailure::Broken)?;
+    let session = session.map_stream(Deadline::into_inner);
+    // The deadline left the timeouts of its last step: the usual ones now.
+    let _ = session.stream().set_read_timeout(Some(IO_TIMEOUT));
+    let _ = session.stream().set_write_timeout(Some(IO_TIMEOUT));
+    Ok(session)
 }
 
 /// The pairing slot while it holds one pairing; empty for any other.
@@ -1302,7 +1521,11 @@ impl Side for AppSide<'_> {
         if self.joining() {
             return Ok(None);
         }
-        self.read(|vault| vault.known_name(&peer))
+        let known = self.read(|vault| vault.known_name(&peer))?;
+        if let Some(slot) = self.nearby.slot(self.id).as_mut() {
+            slot.known.clone_from(&known);
+        }
+        Ok(known)
     }
 
     fn save(&self, peer: PeerKey, name: &str) -> Result<(), PairingFailure> {
@@ -1324,6 +1547,9 @@ impl Side for AppSide<'_> {
         if let Some(slot) = self.nearby.slot(self.id).as_mut() {
             if peer.is_some() {
                 slot.view.peer = peer.map(str::to_owned);
+            }
+            if let PairingPhase::Compare { code } = phase {
+                slot.code = Some(code.clone());
             }
             slot.view.phase = phase.clone();
         }
@@ -1376,8 +1602,48 @@ impl Side for AppSide<'_> {
     }
 
     fn is_own(&self, peer: PeerKey) -> bool {
-        self.read(|vault| vault.is_own_device(&peer))
-            .unwrap_or(false)
+        self.nearby.is_own(peer)
+    }
+
+    fn removed(&self, peer: PeerKey) -> bool {
+        self.read(|vault| vault.is_removed_device(&peer))
+            .unwrap_or(true)
+    }
+
+    fn broke_off(&self) {
+        self.nearby.broke_off();
+    }
+
+    fn allow_send(&self, item: &ItemSummary) -> bool {
+        let Ok((_, app)) = self.context() else {
+            return false;
+        };
+        let peer = self
+            .nearby
+            .slot(self.id)
+            .as_mut()
+            .and_then(|slot| slot.view.peer.clone())
+            .unwrap_or_default();
+        // The dialog a chat asks in before the same item leaves.
+        chat::prompt::send_item(&peer, item).is_none_or(|prompt| {
+            crate::confirm::require(app, &prompt.title, &prompt.body, &prompt.approve).is_ok()
+        })
+    }
+
+    fn allow_added(&self) -> bool {
+        let Ok((_, app)) = self.context() else {
+            return false;
+        };
+        let Some((known, code)) = self
+            .nearby
+            .slot(self.id)
+            .as_mut()
+            .map(|slot| (slot.known.clone(), slot.code.clone().unwrap_or_default()))
+        else {
+            return false;
+        };
+        let prompt = prompt::added(known.as_deref(), &code);
+        crate::confirm::require(app, &prompt.title, &prompt.body, &prompt.approve).is_ok()
     }
 
     fn takes(&self, intent: Option<Intent>) -> Result<(), PairingFailure> {
@@ -1513,26 +1779,100 @@ fn write_files(state: &AppState, write: &SyncWrite) -> AppResult<()> {
     }
     if let Some(known) = &write.known {
         let path = &state.paths.known_hosts;
-        fsutil::ensure_revision(
-            path,
-            &KnownHosts::load(path)?.revision(),
-            &write.known_revision,
-        )?;
-        known.save(path, &state.backup_dir)?;
+        let current = KnownHosts::load(path)?;
+        fsutil::ensure_revision(path, &current.revision(), &write.known_revision)?;
+        // No key comes in next to one, or a certificate authority, that
+        // another file `ssh` reads trusts for the host.
+        let mut known = known.clone();
+        host_keys::drop_trusted_elsewhere(
+            &mut known,
+            &current,
+            &items::trusted_elsewhere(&state.paths),
+        );
+        if known != current {
+            known.save(path, &state.backup_dir)?;
+        }
     }
     Ok(())
 }
 
-/// The IPv4 addresses a service was resolved to, but loopback.
+/// The IPv4 addresses a service was resolved to, on the local network.
 fn addresses_of(service: &mdns_sd::ResolvedService) -> Vec<SocketAddr> {
+    let subnets = local_subnets();
     let mut addresses: Vec<SocketAddr> = service
         .get_addresses_v4()
         .into_iter()
-        .filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
         .map(|ip| SocketAddr::new(IpAddr::V4(ip), service.port))
+        .filter(|address| on_local_network(address.ip(), &subnets))
         .collect();
     addresses.sort();
     addresses
+}
+
+/// The networks this computer has an address in: each address and the
+/// length of its network's prefix, loopback ones left out.
+fn local_subnets() -> Vec<(IpAddr, u8)> {
+    if_addrs::get_if_addrs()
+        .map(|interfaces| {
+            interfaces
+                .into_iter()
+                .filter(|interface| !interface.is_loopback())
+                .map(|interface| match interface.addr {
+                    if_addrs::IfAddr::V4(addr) => (IpAddr::V4(addr.ip), addr.prefixlen),
+                    if_addrs::IfAddr::V6(addr) => (IpAddr::V6(addr.ip), addr.prefixlen),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether `ip` is another computer on the local network: a private
+/// (`10/8`, `172.16/12`, `192.168/16`) or link-local IPv4 address, a unique
+/// local (`fc00::/7`) or link-local IPv6 one, or one in a network this
+/// computer has an address in (`subnets`), as some networks give out
+/// public addresses. Never a loopback, unspecified, multicast or broadcast
+/// address, nor anything beyond this computer's networks.
+fn on_local_network(ip: IpAddr, subnets: &[(IpAddr, u8)]) -> bool {
+    let ip = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(IpAddr::V6(v6), IpAddr::V4),
+        IpAddr::V4(_) => ip,
+    };
+    match ip {
+        IpAddr::V4(v4)
+            if v4.is_loopback()
+                || v4.is_unspecified()
+                || v4.is_multicast()
+                || v4.is_broadcast() =>
+        {
+            false
+        }
+        IpAddr::V6(v6) if v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() => false,
+        IpAddr::V4(v4) if v4.is_private() || v4.is_link_local() => true,
+        IpAddr::V6(v6)
+            if v6.segments()[0] & 0xfe00 == 0xfc00 || v6.segments()[0] & 0xffc0 == 0xfe80 =>
+        {
+            true
+        }
+        _ => subnets
+            .iter()
+            .any(|(net, prefix)| same_network(ip, *net, *prefix)),
+    }
+}
+
+/// Whether `a` and `b` are in one network whose prefix has `prefix` bits.
+/// One wider than a `/16` (IPv4) or a `/48` (IPv6) is no local network.
+fn same_network(a: IpAddr, b: IpAddr, prefix: u8) -> bool {
+    match (a, b) {
+        (IpAddr::V4(a), IpAddr::V4(b)) if (16..=32).contains(&prefix) => {
+            let mask = u32::MAX << (32 - u32::from(prefix));
+            u32::from(a) & mask == u32::from(b) & mask
+        }
+        (IpAddr::V6(a), IpAddr::V6(b)) if (48..=128).contains(&prefix) => {
+            let mask = u128::MAX << (128 - u32::from(prefix));
+            u128::from(a) & mask == u128::from(b) & mask
+        }
+        _ => false,
+    }
 }
 
 /// The mDNS daemon, started on first use.
@@ -1614,13 +1954,144 @@ mod tests {
 
     const WAIT: Duration = Duration::from_millis(10);
 
-    fn login() -> p2p::protocol::ItemSummary {
-        p2p::protocol::ItemSummary::Password {
+    fn login() -> ItemSummary {
+        ItemSummary::Password {
             title: "Router".into(),
             username: "admin".into(),
             url: String::new(),
             otp: false,
+            host: None,
+            server: None,
         }
+    }
+
+    #[test]
+    fn only_computers_on_the_local_network_are_reached() {
+        let ip = |text: &str| text.parse::<IpAddr>().unwrap();
+        let none: [(IpAddr, u8); 0] = [];
+        for local in [
+            "192.168.1.24",
+            "10.0.4.12",
+            "172.16.0.9",
+            "172.31.255.1",
+            "169.254.10.1",
+            "fd00::7",
+            "fe80::1",
+            "::ffff:192.168.1.24",
+        ] {
+            assert!(on_local_network(ip(local), &none), "{local}");
+        }
+        for beyond in [
+            "8.8.8.8",
+            "203.0.113.9",
+            "172.32.0.1",
+            "100.64.0.1",
+            "2001:db8::1",
+            "::ffff:8.8.8.8",
+            // Not another computer.
+            "127.0.0.1",
+            "::1",
+            "0.0.0.0",
+            "::",
+            "224.0.0.251",
+            "255.255.255.255",
+            "ff02::fb",
+        ] {
+            assert!(!on_local_network(ip(beyond), &none), "{beyond}");
+        }
+        // A network with public addresses that this computer is on is local
+        // too; one wider than a /16 doesn't count.
+        let subnets = [(ip("130.89.4.17"), 22), (ip("2001:db8:5::17"), 64)];
+        assert!(on_local_network(ip("130.89.7.200"), &subnets));
+        assert!(!on_local_network(ip("130.89.8.1"), &subnets));
+        assert!(on_local_network(ip("2001:db8:5::99"), &subnets));
+        assert!(!on_local_network(ip("2001:db8:6::99"), &subnets));
+        assert!(!on_local_network(
+            ip("130.1.2.3"),
+            &[(ip("130.89.4.17"), 8)]
+        ));
+        assert!(!on_local_network(ip("127.0.0.2"), &[(ip("127.0.0.1"), 8)]));
+    }
+
+    /// A stand-in for the other side: connected to, it says nothing at all.
+    fn silent_connections(n: usize) -> (Arc<Nearby>, Vec<TcpStream>) {
+        let nearby = Arc::new(Nearby::new(std::env::temp_dir().join("sshkm-no-nearby")));
+        nearby.lock().identity = Some(Arc::new(Identity::generate().unwrap()));
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let mut clients = Vec::new();
+        for _ in 0..n {
+            clients.push(TcpStream::connect(listener.local_addr().unwrap()).unwrap());
+            let (stream, _) = listener.accept().unwrap();
+            nearby.take_call(stream, false);
+        }
+        (nearby, clients)
+    }
+
+    #[test]
+    fn a_connection_that_says_nothing_holds_up_no_conversation() {
+        let (nearby, mut clients) = silent_connections(MAX_HANDSHAKES + 2);
+        thread::sleep(Duration::from_millis(200));
+        // None of them took the slot: the user can start one.
+        assert_eq!(nearby.status().pairing, None);
+        assert!(nearby.claim(true, ConversationKind::Pair).is_ok());
+        // Only so many wait for their handshake; the others were closed at
+        // once.
+        assert_eq!(nearby.handshakes.load(Ordering::SeqCst), MAX_HANDSHAKES);
+        let last = clients.last_mut().unwrap();
+        last.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        assert_eq!(std::io::Read::read(last, &mut [0; 1]).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_handshake_ends_when_its_time_is_up_however_slowly_bytes_come() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let started = Instant::now();
+        let handshake = thread::spawn(move || {
+            handshake_within(
+                server,
+                &Identity::generate().unwrap(),
+                &Role::Answers { only_sync: false },
+                None,
+                Duration::from_millis(300),
+            )
+            .is_err()
+        });
+        // A frame of 65535 bytes announced, then a byte every 100 ms: each
+        // read is quick, the whole never ends.
+        thread::spawn(move || {
+            for _ in 0..50 {
+                if std::io::Write::write_all(&mut client, &[0xff]).is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+        });
+        assert!(handshake.join().unwrap());
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn pairing_broken_off_too_often_hides_this_computer() {
+        let nearby = Nearby::new(std::env::temp_dir().join("sshkm-no-nearby"));
+        let visible = || Visible {
+            until: OffsetDateTime::now_utc() + VISIBLE_FOR,
+            port: 1,
+            join: false,
+            fullname: String::new(),
+            stop: Arc::new(AtomicBool::new(false)),
+        };
+        nearby.lock().visible = Some(visible());
+        for _ in 1..MAX_BROKEN_OFF {
+            nearby.broke_off();
+        }
+        assert!(nearby.status().visible_until.is_some());
+        assert!(!nearby.status().hidden_after_attempts);
+        nearby.broke_off();
+        let status = nearby.status();
+        assert_eq!(status.visible_until, None);
+        assert!(status.hidden_after_attempts);
     }
 
     #[test]

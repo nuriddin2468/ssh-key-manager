@@ -154,12 +154,22 @@ pub(crate) fn saved_secrets(state: &AppState, app: &AppHandle, alias: &str) -> A
     })
 }
 
-/// The entry for `alias`'s password: the first host entry outside the
-/// recycle bin that names it.
+/// The entry for `alias`'s password: of the host entries outside the
+/// recycle bin that name it, the one made first (one without a time, from
+/// an older file, counts as older still; then by id). Titles don't decide,
+/// so an entry made later, one another computer sent say, never takes the
+/// place of the one this vault had.
 pub(crate) fn host_entry<'a>(entries: &'a [EntrySummary], alias: &str) -> Option<&'a EntrySummary> {
     entries
         .iter()
-        .find(|e| !e.in_trash && e.kind == EntryKind::Host && e.host.as_deref() == Some(alias))
+        .filter(|e| !e.in_trash && e.kind == EntryKind::Host && e.host.as_deref() == Some(alias))
+        .min_by(|a, b| {
+            a.created
+                .is_some()
+                .cmp(&b.created.is_some())
+                .then_with(|| a.created.cmp(&b.created))
+                .then_with(|| a.id.cmp(&b.id))
+        })
 }
 
 /// The entry's current 2FA code, waiting for the next one if this one is
@@ -171,4 +181,56 @@ pub(crate) fn fresh_code(vault: &Vault, id: &str) -> AppResult<SecretString> {
     }
     thread::sleep(Duration::from_secs(valid_for + 1));
     Ok(SecretString::from(vault.otp_code(id)?.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(id: &str, title: &str, host: &str, created: Option<&str>) -> EntrySummary {
+        EntrySummary {
+            id: id.into(),
+            title: title.into(),
+            username: String::new(),
+            url: String::new(),
+            kind: EntryKind::Host,
+            host: Some(host.into()),
+            key_fingerprint: None,
+            has_password: true,
+            has_otp: false,
+            group: None,
+            in_trash: false,
+            created: created.map(str::to_owned),
+            modified: None,
+        }
+    }
+
+    #[test]
+    fn an_entry_made_later_never_takes_an_alias_over() {
+        // As `Vault::entries` lists them: by title.
+        let entries = [
+            entry("received", "Prod DB", "prod", Some("2026-11-13T10:00:00Z")),
+            entry("mine", "Work prod", "prod", Some("2026-02-01T08:00:00Z")),
+        ];
+        assert_eq!(host_entry(&entries, "prod").unwrap().id, "mine");
+        // One from a file without times counts as older.
+        let entries = [
+            entry("dated", "A", "prod", Some("2020-01-01T00:00:00Z")),
+            entry("undated", "B", "prod", None),
+        ];
+        assert_eq!(host_entry(&entries, "prod").unwrap().id, "undated");
+        // Nor does the recycle bin, another kind or another alias count.
+        let mut trashed = entry("trashed", "A", "prod", None);
+        trashed.in_trash = true;
+        let mut login = entry("login", "B", "prod", None);
+        login.kind = EntryKind::Login;
+        let entries = [
+            trashed,
+            login,
+            entry("other", "C", "staging", None),
+            entry("live", "D", "prod", Some("2026-01-01T00:00:00Z")),
+        ];
+        assert_eq!(host_entry(&entries, "prod").unwrap().id, "live");
+        assert!(host_entry(&entries, "db").is_none());
+    }
 }

@@ -23,6 +23,11 @@ address: string | null,
  */
 joining: boolean, 
 /**
+ * It stopped being visible early: other devices broke off pairing
+ * with it too many times before a code showed.
+ */
+hiddenAfterAttempts: boolean, 
+/**
  * Reachable by the user's devices while the vault is unlocked: the
  * setting.
  */

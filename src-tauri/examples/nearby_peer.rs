@@ -236,6 +236,12 @@ impl Side for Terminal {
             .unwrap_or(false)
     }
 
+    /// The app asks in a system dialog; here, the sample was chosen with
+    /// `--send` when the example started.
+    fn allow_send(&self, _item: &ItemSummary) -> bool {
+        true
+    }
+
     fn takes(&self, intent: Option<Intent>) -> Result<(), PairingFailure> {
         match (&self.mode, intent) {
             (Mode::Join(_), Some(Intent::AddDevice)) | (Mode::Own { .. }, Some(Intent::Sync)) => {
@@ -429,6 +435,7 @@ fn sample(kind: &str, name: &str) -> Item {
             notes: "Sent by the nearby_peer example.".into(),
             otp: None,
             host: None,
+            server: None,
         }
     }
 }
@@ -498,7 +505,7 @@ fn announcement(side: &Terminal, port: u16) -> Result<ServiceInfo, Box<dyn std::
             &format!("{instance}.local."),
             (),
             port,
-            &[("v", "1")][..],
+            &[("v", "2")][..],
         )?
     } else {
         let instance = format!("test-peer-{port}");
@@ -597,7 +604,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (stream, from) = listener.accept()?;
         println!("{from} connected.");
         stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-        let mut session = p2p::accept(stream, &side.identity)?;
+        // The user's devices mix the key they share into the handshake.
+        let mut session = match side
+            .with_vault(|vault| vault.own_key().map(|key| key.session_key()))
+            .flatten()
+        {
+            Some(key) => p2p::accept_own(stream, &side.identity, &key)?,
+            None => p2p::accept(stream, &side.identity)?,
+        };
         conversation(&mut session, &side, None)
     };
     println!("Result: {end:?}");

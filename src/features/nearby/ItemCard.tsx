@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Tile, type Tone } from '@/components/ui/Tile';
 import { keyTypeBadge } from '@/features/keys/model';
 import { cn } from '@/lib/cn';
+import { serverAddress } from './model';
 
 interface CardParts {
   /** The section the item goes to gives the tile its colour. */
@@ -34,16 +35,29 @@ export function ItemCard({ item }: { item: ItemSummary }) {
   const { t } = useTranslation();
   const parts = ((): CardParts => {
     switch (item.type) {
-      case 'password':
+      case 'password': {
+        // The host a server's password is for, and where it leads, is part
+        // of what is accepted: shown whole.
+        const server =
+          item.host && item.server
+            ? t('nearby.item.forServer', {
+                host: item.host,
+                address: item.server.proxyJump
+                  ? `${serverAddress(item.server)} · ${t('nearby.item.via', { jump: item.server.proxyJump })}`
+                  : serverAddress(item.server),
+              })
+            : null;
         return {
           tone: 'pink',
           Icon: RectangleEllipsis,
           label: t('nearby.item.password'),
           title: item.title,
           monoTitle: false,
-          details: [item.username, item.url].filter(Boolean).join(' · '),
+          details: [item.username, item.url, server].filter(Boolean).join(' · '),
+          wrapDetails: server !== null,
           badge: item.otp ? <Badge tone="violet">{t('nearby.item.otp')}</Badge> : null,
         };
+      }
       case 'host':
         return {
           tone: 'blue',

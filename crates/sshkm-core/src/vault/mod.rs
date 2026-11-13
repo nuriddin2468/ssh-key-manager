@@ -308,6 +308,10 @@ pub struct Vault {
     slots: KeySlots,
     /// SHA-256 of the database file as last read or written here.
     disk_hash: [u8; 32],
+    /// SHA-256 of a database file found on disk that didn't open, so the
+    /// same bytes aren't decrypted again (a key derivation each time) until
+    /// the file changes.
+    unreadable: Option<[u8; 32]>,
     /// The same for the key slots file; `None` while there is none.
     keys_hash: Option<[u8; 32]>,
 }
@@ -347,6 +351,7 @@ impl Vault {
             secret: duplicate(&secret),
             slots,
             disk_hash: sha256(&bytes),
+            unreadable: None,
             keys_hash: Some(keys_hash),
         };
         Ok((vault, secret))
@@ -409,6 +414,7 @@ impl Vault {
             secret,
             slots,
             disk_hash: sha256(&bytes),
+            unreadable: None,
             keys_hash,
         };
         let mut slots = vault.slots.clone();
@@ -443,6 +449,7 @@ impl Vault {
             secret: duplicate(secret),
             slots,
             disk_hash: sha256(database),
+            unreadable: None,
             keys_hash: Some(keys_hash),
         })
     }
@@ -469,6 +476,7 @@ impl Vault {
             secret,
             slots,
             disk_hash: sha256(&bytes),
+            unreadable: None,
             keys_hash: Some(keys_hash),
         })
     }
@@ -514,9 +522,24 @@ impl Vault {
         if hash == self.disk_hash {
             return Ok(slots_changed);
         }
-        self.db = parse_database(&bytes, &self.secret)?;
-        self.disk_hash = hash;
-        Ok(true)
+        if self.unreadable == Some(hash) {
+            return Err(Error::Parse(format!(
+                "{} doesn't open; it is read again once it changes",
+                self.paths.database.display()
+            )));
+        }
+        match parse_database(&bytes, &self.secret) {
+            Ok(db) => {
+                self.db = db;
+                self.disk_hash = hash;
+                self.unreadable = None;
+                Ok(true)
+            }
+            Err(error) => {
+                self.unreadable = Some(hash);
+                Err(error)
+            }
+        }
     }
 
     /// The database as it is in memory now, to put back with
@@ -1210,6 +1233,11 @@ fn open_error(error: keepass::db::DatabaseOpenError) -> Error {
     use keepass::db::DatabaseOpenError as E;
     match error {
         E::Key(keepass::error::DatabaseKeyError::IncorrectKey) => Error::WrongPassphrase,
+        // A KDBX 3 file has no check of the key before its contents: the
+        // wrong key shows as contents that don't decrypt.
+        E::Cryptography(keepass::error::CryptographyError::InvalidPadding(_)) => {
+            Error::WrongPassphrase
+        }
         E::UnsupportedVersion => Error::Unsupported("this KeePass file version".into()),
         other => Error::Parse(format!("reading the vault: {other}")),
     }

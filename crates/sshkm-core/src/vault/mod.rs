@@ -1148,12 +1148,12 @@ fn load_slots(paths: &VaultPaths) -> Result<(KeySlots, [u8; 32])> {
     KeySlots::read(&paths.keys)?.ok_or_else(|| Error::NotFound(paths.keys.display().to_string()))
 }
 
-/// Re-encrypts with `new` the database's backups and conflict copies in
-/// `backup_dir` that `old` opens. A backup that can't be rewritten is
-/// deleted; a conflict copy is kept, since it may hold the only copy of
-/// changes made elsewhere. Files the old secret doesn't open (another
-/// vault's with the same name) stay as they are. Returns how many files were
-/// rewritten or deleted.
+/// Re-encrypts with `new` the database's backups (those a sync kept
+/// included) and conflict copies in `backup_dir` that `old` opens. A
+/// backup that can't be rewritten is deleted; a conflict copy is kept,
+/// since it may hold the only copy of changes made elsewhere. Files the old
+/// secret doesn't open (another vault's with the same name) stay as they
+/// are. Returns how many files were rewritten or deleted.
 fn reencrypt_copies(
     paths: &VaultPaths,
     backup_dir: &Path,
@@ -1171,6 +1171,7 @@ fn reencrypt_copies(
     let conflict_prefix = format!("{stem}-conflict-");
     let mut copies: Vec<(PathBuf, bool)> = fsutil::list_backups(backup_dir, name)
         .into_iter()
+        .chain(fsutil::list_kept_backups(backup_dir, name))
         .map(|path| (path, false))
         .collect();
     if let Ok(entries) = std::fs::read_dir(backup_dir) {

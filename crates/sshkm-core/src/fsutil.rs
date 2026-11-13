@@ -20,6 +20,9 @@ use crate::{Error, Result};
 
 /// Number of backups kept per file name; older ones are deleted.
 pub const BACKUPS_TO_KEEP: usize = 20;
+/// Days a backup taken before another device's deletions is kept
+/// ([`keep_backup`]), whatever backups come after it.
+pub const KEPT_DAYS: i64 = 30;
 
 /// Maximum number of symbolic links followed when resolving a write target.
 const MAX_SYMLINKS: usize = 40;
@@ -407,6 +410,79 @@ pub fn backup(path: &Path, backup_dir: &Path) -> Result<Option<PathBuf>> {
     Ok(Some(dest))
 }
 
+/// Copies `path` into `backup_dir` as `<file name>.<UTC timestamp>.kept.bak`,
+/// a backup the rotation of [`backup`] never removes: taken before a sync
+/// deletes what another device deleted, so that the file as it was stays
+/// whatever backups later syncs take. At most one a day per file (the one
+/// before that day's first deletions); those older than [`KEPT_DAYS`] go.
+///
+/// Returns the backup's path, or `None` if `path` doesn't exist or one was
+/// kept today already.
+pub fn keep_backup(path: &Path, backup_dir: &Path) -> Result<Option<PathBuf>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let name = path
+        .file_name()
+        .ok_or_else(|| Error::invalid(format!("not a file: {}", path.display())))?
+        .to_string_lossy()
+        .into_owned();
+    ensure_private_dir(backup_dir)?;
+    let now = OffsetDateTime::now_utc();
+    let stamp = now.format(BACKUP_TS).map_err(|e| Error::Io {
+        context: "formatting backup timestamp".into(),
+        source: io::Error::other(e),
+    })?;
+    let day = &stamp[..8];
+    let oldest = (now - time::Duration::days(KEPT_DAYS))
+        .format(BACKUP_TS)
+        .unwrap_or_default();
+    let kept = list_kept_backups(backup_dir, &name);
+    for old in &kept {
+        let old_stamp = kept_stamp(old, &name).unwrap_or_default();
+        if old_stamp < oldest.as_str() {
+            // Best effort, as for the rotation.
+            let _ = fs::remove_file(old);
+        }
+    }
+    if kept
+        .iter()
+        .any(|old| kept_stamp(old, &name).is_some_and(|old| old.starts_with(day)))
+    {
+        return Ok(None);
+    }
+    let dest = backup_dir.join(format!("{name}.{stamp}.kept.bak"));
+    let contents = fs::read(path).map_err(|e| Error::io(e, path))?;
+    write_new(&dest, &contents, 0o600)?;
+    Ok(Some(dest))
+}
+
+/// Lists the backups [`keep_backup`] took of `file_name` in `backup_dir`,
+/// oldest first.
+pub fn list_kept_backups(backup_dir: &Path, file_name: &str) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(backup_dir) else {
+        return Vec::new();
+    };
+    let mut found: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|path| kept_stamp(path, file_name).is_some())
+        .collect();
+    found.sort();
+    found
+}
+
+/// The timestamp of a backup [`keep_backup`] took of `file_name`.
+fn kept_stamp<'a>(path: &'a Path, file_name: &str) -> Option<&'a str> {
+    let candidate = path.file_name()?.to_str()?;
+    let stamp = candidate
+        .strip_prefix(file_name)?
+        .strip_prefix('.')?
+        .strip_suffix(".kept.bak")?;
+    parse_backup_name(&format!("{file_name}.{stamp}.bak"), file_name)?;
+    Some(stamp)
+}
+
 /// Lists the backups of `file_name` in `backup_dir`, oldest first.
 pub fn list_backups(backup_dir: &Path, file_name: &str) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(backup_dir) else {
@@ -616,6 +692,36 @@ fn prune_backups(backup_dir: &Path, file_name: &str, keep: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_kept_backup_outlives_the_rotation_and_goes_after_its_days() {
+        let dir = tempfile::tempdir().unwrap();
+        let (file, backups) = (dir.path().join("config"), dir.path().join("backups"));
+        fs::write(&file, "before").unwrap();
+        let kept = keep_backup(&file, &backups).unwrap().unwrap();
+        // One a day: the second the same day isn't taken.
+        fs::write(&file, "after").unwrap();
+        assert_eq!(keep_backup(&file, &backups).unwrap(), None);
+        for _ in 0..BACKUPS_TO_KEEP + 5 {
+            backup(&file, &backups).unwrap();
+        }
+        assert_eq!(list_backups(&backups, "config").len(), BACKUPS_TO_KEEP);
+        assert_eq!(fs::read_to_string(&kept).unwrap(), "before");
+        assert_eq!(
+            list_kept_backups(&backups, "config"),
+            std::slice::from_ref(&kept)
+        );
+        // Another file's kept backups aren't this one's.
+        assert_eq!(list_kept_backups(&backups, "conf").len(), 0);
+
+        // One older than its days goes when the next is taken.
+        let old = backups.join("config.20000101T000000.000Z.kept.bak");
+        fs::write(&old, "ancient").unwrap();
+        fs::remove_file(&kept).unwrap();
+        assert!(keep_backup(&file, &backups).unwrap().is_some());
+        assert!(!old.exists());
+        assert_eq!(list_kept_backups(&backups, "config").len(), 1);
+    }
 
     #[test]
     fn files_kept_out_of_copies_are_so_from_the_start() {

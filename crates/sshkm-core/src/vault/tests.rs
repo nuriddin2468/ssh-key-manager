@@ -732,3 +732,27 @@ fn a_database_that_does_not_open_is_not_decrypted_again_until_it_changes() {
     assert!(!vault.refresh().unwrap());
     assert_eq!(vault.entries()[0].title, "GitHub");
 }
+
+#[test]
+fn a_damaged_key_slots_file_still_lets_the_recovery_key_in() {
+    let too_large = vec![b' '; 70 * 1024];
+    let damaged: [&[u8]; 3] = [
+        b"{ not json",
+        br#"{"format":"sshkm-vault-keys","version":2,"vaultId":"x","slots":[]}"#,
+        &too_large,
+    ];
+    for keys in damaged {
+        let fx = Fixture::new();
+        let (vault, recovery) = Vault::create(&fx.paths, &s("master")).unwrap();
+        drop(vault);
+        std::fs::write(&fx.paths.keys, keys).unwrap();
+
+        // The lock screen offers the recovery key rather than failing.
+        let files = probe(&fx.paths).unwrap();
+        assert!(files.exists && !files.has_master_password && files.vault_id.is_none());
+        let vault = Vault::recover(&fx.paths, &recovery, &s("new master")).unwrap();
+        drop(vault);
+        assert!(probe(&fx.paths).unwrap().has_master_password);
+        assert!(Vault::unlock(&fx.paths, &s("new master")).is_ok());
+    }
+}

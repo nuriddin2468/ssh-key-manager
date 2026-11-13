@@ -153,9 +153,15 @@ pub fn check_shared(database: &[u8], secret: &SecretString) -> Result<()> {
     parse_database(database, secret).map(drop)
 }
 
-/// Looks at the vault's files without decrypting anything.
+/// Looks at the vault's files without decrypting anything. A key slots file
+/// that can't be read (damaged, or in a format this version doesn't know)
+/// counts as none: the database then opens with the recovery key alone, as
+/// it does without one, and gets a new one ([`Vault::recover`]).
 pub fn probe(paths: &VaultPaths) -> Result<VaultFiles> {
-    let slots = KeySlots::load(&paths.keys)?;
+    let slots = match KeySlots::load(&paths.keys) {
+        Err(Error::Parse(_) | Error::Unsupported(_)) => None,
+        other => other?,
+    };
     Ok(VaultFiles {
         exists: paths.database.is_file(),
         has_master_password: slots.as_ref().is_some_and(KeySlots::has_password),
@@ -377,7 +383,9 @@ impl Vault {
     }
 
     /// Unlocks with the recovery key — or, for a KeePass database brought from
-    /// elsewhere, its password — and sets a new master password.
+    /// elsewhere, its password — and sets a new master password. A key slots
+    /// file that can't be read is replaced: the key just opened the database
+    /// without it.
     pub fn recover(
         paths: &VaultPaths,
         recovery_key: &SecretString,
@@ -404,9 +412,11 @@ impl Vault {
             }
         }
         let (db, secret) = opened.ok_or(Error::WrongPassphrase)?;
-        let (slots, keys_hash) = match KeySlots::read(&paths.keys)? {
-            Some((slots, hash)) => (slots, Some(hash)),
-            None => (KeySlots::new(), None),
+        let (slots, keys_hash, damaged) = match KeySlots::read(&paths.keys) {
+            Ok(Some((slots, hash))) => (slots, Some(hash), false),
+            Ok(None) => (KeySlots::new(), None, false),
+            Err(Error::Parse(_) | Error::Unsupported(_)) => (KeySlots::new(), None, true),
+            Err(other) => return Err(other),
         };
         let mut vault = Self {
             paths: paths.clone(),
@@ -419,7 +429,12 @@ impl Vault {
         };
         let mut slots = vault.slots.clone();
         slots.set_password(&vault.secret, new_master)?;
-        vault.write_slots(slots)?;
+        if damaged {
+            vault.keys_hash = Some(slots.save(&paths.keys)?);
+            vault.slots = slots;
+        } else {
+            vault.write_slots(slots)?;
+        }
         Ok(vault)
     }
 

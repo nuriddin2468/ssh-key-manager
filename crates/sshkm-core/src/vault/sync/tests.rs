@@ -1106,6 +1106,21 @@ fn a_conflict_value_is_shown_only_when_asked_for_one_field() {
         ("mine".into(), "theirs".into())
     );
     assert!(a.vault.sync_value(&peer, &id, "a:file", true).is_err());
+    // A password, or a field protected on either side, is a secret: the
+    // app asks before showing one past the free ones.
+    assert!(a.vault.sync_value_secret(&peer, &id, "s:Password"));
+    assert!(!a.vault.sync_value_secret(&peer, &id, "s:URL"));
+    b.vault
+        .db
+        .entry_mut(EntryId::from_uuid(id.parse().unwrap()))
+        .unwrap()
+        .set_protected("Token", "t");
+    let peer = a
+        .vault
+        .open_sync_copy(&b.vault.sync_copy().unwrap())
+        .unwrap();
+    assert!(a.vault.sync_value_secret(&peer, &id, "s:Token"));
+    assert!(!a.vault.sync_value_secret(&peer, &id, "a:file"));
     for field in [
         "s:otp",
         "s:TOTP Seed",

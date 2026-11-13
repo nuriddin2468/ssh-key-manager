@@ -216,7 +216,7 @@ impl LogFile {
         }
     }
 
-    pub fn path(&self) -> &std::path::Path {
+    pub fn path(&self) -> &Path {
         &self.0
     }
 

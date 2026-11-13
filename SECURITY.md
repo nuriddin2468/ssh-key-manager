@@ -76,10 +76,11 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     neither, such as swaylock or i3lock started from a key binding, isn't noticed:
     there the vault locks after inactivity or sleep only.
   - A new recovery key on the screen (after making the vault, or in Settings) goes
-    when the vault locks. Until you confirm it's saved, it is shown again after the
-    next unlock: the app keeps only a note of the vault's id meanwhile and reads the key
-    from the unlocked vault, whose password it is. Only the app sets that note, when it
-    makes a key; the page can only clear it.
+    when the vault locks. Until you confirm it's saved, the app reminds you after each
+    unlock, and keeps only a note of the vault's id meanwhile. Only the app sets that
+    note, when it makes a key; the page can only clear it. The key is shown again only
+    when you ask and say yes in a system dialog, every time: then it is read from the
+    unlocked vault, whose password it is.
   - A 2FA secret the app can't make codes for (HOTP, a period of 0 or over 5 minutes,
     fewer than 6 or more than 10 digits), from an import, a contact or a KeePass file,
     is refused or kept as unreadable instead of crashing the app.

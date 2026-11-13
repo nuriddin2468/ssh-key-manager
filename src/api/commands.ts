@@ -337,9 +337,12 @@ export const api = {
     call<void>('vault_change_master', { current, new: next }),
   /** Returns the new recovery key, to be shown once. */
   vaultNewRecoveryKey: (master: string) => call<string>('vault_new_recovery_key', { master }),
+  /** Whether the recovery key made last isn't confirmed as saved yet; gives no key. */
+  vaultRecoveryKeyPending: () => call<boolean>('vault_recovery_key_pending'),
   /**
    * The recovery key made last, while it isn't confirmed as saved (a lock took
-   * it off the screen); `null` once it is. Needs the vault unlocked.
+   * it off the screen); `null` once it is. Asks in a native dialog first, every
+   * time; `cancelled` if the user says no. Needs the vault unlocked.
    */
   vaultUnsavedRecoveryKey: () => call<string | null>('vault_unsaved_recovery_key'),
   /** The user confirmed the recovery key made last as saved. */

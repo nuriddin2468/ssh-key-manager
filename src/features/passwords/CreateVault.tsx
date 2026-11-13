@@ -12,9 +12,11 @@ import { MasterPasswordFields, masterReady } from './MasterPasswordFields';
 import { RecoveryKeyPanel } from './RecoveryKeyPanel';
 import { VaultCard } from './VaultCard';
 import {
+  dismissUnsavedRecoveryKey,
   recoveryKeySaved,
   requestSearchFocus,
   setPendingRecoveryKey,
+  showUnsavedRecoveryKey,
   toastVaultError,
   useSecretCall,
 } from './vault';
@@ -137,6 +139,41 @@ export function RecoveryKeyScreen({ recoveryKey }: { recoveryKey: string }) {
         }}
       >
         {t('passwords.continue')}
+      </Button>
+    </VaultCard>
+  );
+}
+
+/**
+ * After an unlock, when a lock took a new recovery key off the screen before
+ * it was confirmed as saved. "Show key" asks in a native dialog first; the
+ * key is never fetched without the user asking.
+ */
+export function UnsavedRecoveryKey() {
+  const { t } = useTranslation();
+  const [pending, setPending] = useState(false);
+  const show = async () => {
+    setPending(true);
+    try {
+      await showUnsavedRecoveryKey();
+    } catch (error) {
+      toastVaultError(t, error);
+    } finally {
+      setPending(false);
+    }
+  };
+  return (
+    <VaultCard
+      icon={<FileKey className="size-[26px]" strokeWidth={1.9} />}
+      title={t('passwords.unsavedKeyTitle')}
+      text={t('passwords.unsavedKeyCardText')}
+      focusTitle
+    >
+      <Button variant="primary" size="lg" className="w-full" loading={pending} onClick={show}>
+        {t('passwords.unsavedKeyShow')}
+      </Button>
+      <Button variant="ghost" size="sm" className="self-center" onClick={dismissUnsavedRecoveryKey}>
+        {t('passwords.unsavedKeyLater')}
       </Button>
     </VaultCard>
   );

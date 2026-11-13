@@ -218,6 +218,7 @@ pub fn run() {
             commands::vault::vault_strength,
             commands::vault::vault_change_master,
             commands::vault::vault_new_recovery_key,
+            commands::vault::vault_recovery_key_pending,
             commands::vault::vault_unsaved_recovery_key,
             commands::vault::vault_recovery_key_saved,
             commands::vault::vault_set_settings,

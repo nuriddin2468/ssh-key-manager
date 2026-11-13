@@ -2220,8 +2220,11 @@ const uz = {
     keysTooNew:
       'Bu omborni SSH Key Manager’ning yangiroq versiyasi oʻzgartirgan. Uni ochish uchun ilovani yangilang.',
     unsavedKeyTitle: 'Yangi tiklash kaliti hali saqlanmagan',
-    unsavedKeyText: 'Ombor siz tasdiqlashingizdan oldin qulflandi. Kalit «Parollar» sahifasida.',
+    unsavedKeyText: 'Ombor siz uni saqlaganingizni tasdiqlashingizdan oldin qulflandi.',
+    unsavedKeyCardText:
+      'Ombor siz uni saqlaganingizni tasdiqlashingizdan oldin qulflandi. Kalitni yana koʻrsating va saqlang: asosiy parolni unutsangiz, faqat u kirishni qaytaradi.',
     unsavedKeyShow: 'Kalitni koʻrsatish',
+    unsavedKeyLater: 'Keyinroq',
     createTitle: 'Parollarni kalitlaringiz yonida saqlang',
     createText:
       'Server parollari, kalit parol iboralari va sayt loginlari — bitta shifrlangan omborda.',

@@ -425,13 +425,58 @@ impl VaultRuntime {
         }
     }
 
+    /// Whether the unlocked vault's recovery key, made here, is not yet
+    /// confirmed as saved; the UI then reminds the user. Quiet, and gives
+    /// nothing of the key.
+    pub fn has_unsaved_recovery_key(&self, app: &AppHandle) -> AppResult<bool> {
+        self.access(app, false, |vault| {
+            Ok(self.unsaved_recovery_key(vault).is_some())
+        })
+    }
+
+    /// The recovery key not yet confirmed as saved, once `confirm` — the
+    /// user's yes in a native dialog — allows it: a lock took a new key off
+    /// the screen, and the user asks to see it again. It is read from the
+    /// unlocked vault (it is its password), and nothing of it is kept while
+    /// the vault is locked. `None`, without asking, when there is none. The
+    /// vault is not held while the dialog is open.
+    pub fn reveal_unsaved_recovery_key(
+        &self,
+        app: &AppHandle,
+        confirm: impl FnOnce() -> AppResult<()>,
+    ) -> AppResult<Option<SecretString>> {
+        self.reveal_unsaved_recovery_key_then(confirm, || {
+            let _ = app.emit(LOCKED_EVENT, LockReason::Changed);
+        })
+    }
+
+    /// [`Self::reveal_unsaved_recovery_key`], calling `on_changed` as
+    /// [`Self::access_then`] does.
+    fn reveal_unsaved_recovery_key_then(
+        &self,
+        confirm: impl FnOnce() -> AppResult<()>,
+        on_changed: impl Fn(),
+    ) -> AppResult<Option<SecretString>> {
+        let noted = self.access_then(
+            false,
+            |vault| Ok(self.unsaved_recovery_key(vault).is_some()),
+            &on_changed,
+        )?;
+        if !noted {
+            return Ok(None);
+        }
+        confirm()?;
+        self.access_then(
+            false,
+            |vault| Ok(self.unsaved_recovery_key(vault)),
+            &on_changed,
+        )
+    }
+
     /// The recovery key of the unlocked `vault`, while the one made here is
-    /// not yet confirmed as saved: a lock takes a new key off the screen,
-    /// and it comes back after the next unlock, from the unlocked vault
-    /// (whose password it is). Nothing of it is kept while the vault is
-    /// locked. `None` for another vault, or a password that isn't a recovery
-    /// key (a KeePass file's own).
-    pub fn unsaved_recovery_key(&self, vault: &Vault) -> Option<SecretString> {
+    /// not yet confirmed as saved. `None` for another vault, or a password
+    /// that isn't a recovery key (a KeePass file's own).
+    fn unsaved_recovery_key(&self, vault: &Vault) -> Option<SecretString> {
         let noted = std::fs::read_to_string(self.data_dir.join(UNSAVED_RECOVERY_KEY)).ok()?;
         if noted.trim() != vault.vault_id() {
             return None;
@@ -974,15 +1019,40 @@ mod tests {
         // Locked, the app keeps nothing of it.
         assert!(rt.lock_now());
         assert!(run_locked(&rt).is_err());
-        // Unlocked again, it is the vault's own password.
+        assert!(
+            rt.reveal_unsaved_recovery_key_then(|| Ok(()), || {})
+                .is_err()
+        );
         rt.set_unlocked(Vault::unlock(&rt.paths(), &s("master")).unwrap());
-        let again = run(&rt, false, |vault| Ok(rt.unsaved_recovery_key(vault))).unwrap();
-        assert_eq!(again.expose_secret(), recovery.expose_secret());
 
-        // Once saved, it is never handed out again.
+        // Unlocked again, it is shown only after the user's yes in the
+        // native dialog; a no keeps the note, so the reminder stays.
+        let no = rt.reveal_unsaved_recovery_key_then(
+            || Err(AppError::new(ErrorCode::Cancelled, "not approved")),
+            || {},
+        );
+        assert!(matches!(no, Err(e) if e.code() == ErrorCode::Cancelled));
+        assert!(run(&rt, false, |vault| Ok(rt.unsaved_recovery_key(vault))).is_some());
+        let asked = std::cell::Cell::new(0);
+        let yes = rt
+            .reveal_unsaved_recovery_key_then(
+                || {
+                    asked.set(asked.get() + 1);
+                    Ok(())
+                },
+                || {},
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(yes.expose_secret(), recovery.expose_secret());
+        assert_eq!(asked.get(), 1);
+
+        // Once saved, it is never handed out again, and nobody is asked.
         rt.recovery_key_saved().unwrap();
         rt.recovery_key_saved().unwrap();
-        assert!(run(&rt, false, |vault| Ok(rt.unsaved_recovery_key(vault))).is_none());
+        let none = rt
+            .reveal_unsaved_recovery_key_then(|| panic!("asked about a key that is saved"), || {});
+        assert!(none.unwrap().is_none());
     }
 
     #[test]

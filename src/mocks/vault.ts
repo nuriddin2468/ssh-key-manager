@@ -455,6 +455,8 @@ export const vaultHandlers: Record<string, (args: Record<string, unknown>) => un
     recoveryKeyUnsaved = true;
     return RECOVERY_KEY;
   },
+  vault_recovery_key_pending: () => requireUnlocked() ?? (recoveryKeyUnsaved && hasMaster),
+  // The app asks in a native dialog first; the mock takes the yes.
   vault_unsaved_recovery_key: () =>
     requireUnlocked() ?? (recoveryKeyUnsaved && hasMaster ? RECOVERY_KEY : null),
   vault_recovery_key_saved: () => {

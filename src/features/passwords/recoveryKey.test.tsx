@@ -7,19 +7,21 @@ import { keys, queryClient } from '@/api/queries';
 import type { VaultStatus } from '@/bindings/VaultStatus';
 import { Dialog } from '@/components/ui/Dialog';
 import { TooltipProvider } from '@/components/ui/Tooltip';
-import { RecoveryKeyScreen } from './CreateVault';
+import { RecoveryKeyScreen, UnsavedRecoveryKey } from './CreateVault';
 import { NewRecoveryKeyDialog } from './SecurityDialogs';
 import {
+  checkUnsavedRecoveryKey,
   markLocked,
-  restoreUnsavedRecoveryKey,
   setPendingRecoveryKey,
   usePendingRecoveryKey,
+  useUnsavedRecoveryKeyReminder,
 } from './vault';
 
 const api = vi.hoisted(() => ({
   vaultStatus: vi.fn(),
   vaultNewRecoveryKey: vi.fn(),
   vaultCopyRecoveryKey: vi.fn(),
+  vaultRecoveryKeyPending: vi.fn(),
   vaultUnsavedRecoveryKey: vi.fn(),
   vaultRecoveryKeySaved: vi.fn(),
 }));
@@ -70,6 +72,7 @@ describe('a new recovery key', () => {
     state = 'unlocked';
     api.vaultStatus.mockImplementation(async () => status());
     api.vaultNewRecoveryKey.mockResolvedValue(KEY);
+    api.vaultRecoveryKeyPending.mockResolvedValue(true);
     api.vaultUnsavedRecoveryKey.mockResolvedValue(KEY);
     api.vaultRecoveryKeySaved.mockResolvedValue(undefined);
   });
@@ -82,27 +85,58 @@ describe('a new recovery key', () => {
     expect(result.current).toBeNull();
   });
 
-  it('comes back after an unlock until it is confirmed as saved', async () => {
-    const { result } = renderHook(() => usePendingRecoveryKey());
+  it('is only a reminder after an unlock, shown when the user asks', async () => {
+    const shown = renderHook(() => ({
+      key: usePendingRecoveryKey(),
+      remind: useUnsavedRecoveryKeyReminder(),
+    }));
     await act(async () => {
-      expect(await restoreUnsavedRecoveryKey()).toBe(true);
+      expect(await checkUnsavedRecoveryKey()).toBe(true);
     });
-    expect(result.current).toBe(KEY);
+    // Unlocking asks nothing and fetches no key.
+    expect(shown.result.current).toEqual({ key: null, remind: true });
+    expect(api.vaultUnsavedRecoveryKey).not.toHaveBeenCalled();
 
-    // Nothing to fetch while one is on screen.
-    expect(await restoreUnsavedRecoveryKey()).toBe(false);
+    render(wrap(<UnsavedRecoveryKey />));
+    // The user says no in the native dialog: nothing shown, the reminder stays.
+    api.vaultUnsavedRecoveryKey.mockRejectedValueOnce({
+      code: 'cancelled',
+      message: 'not approved',
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'Show key' }));
     expect(api.vaultUnsavedRecoveryKey).toHaveBeenCalledTimes(1);
+    expect(shown.result.current).toEqual({ key: null, remind: true });
 
+    // Yes: the key is on screen until confirmed as saved.
+    await userEvent.click(screen.getByRole('button', { name: 'Show key' }));
+    expect(api.vaultUnsavedRecoveryKey).toHaveBeenCalledTimes(2);
+    expect(shown.result.current).toEqual({ key: KEY, remind: false });
+  });
+
+  it('is confirmed as saved once, and then not asked about again', async () => {
+    const { result } = renderHook(() => usePendingRecoveryKey());
+    act(() => setPendingRecoveryKey(KEY));
     render(wrap(<RecoveryKeyScreen recoveryKey={KEY} />));
     await userEvent.click(screen.getByLabelText('I’ve saved my recovery key'));
     await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
     expect(api.vaultRecoveryKeySaved).toHaveBeenCalled();
     expect(result.current).toBeNull();
 
-    // Confirmed: the backend has none to give back.
-    api.vaultUnsavedRecoveryKey.mockResolvedValue(null);
-    expect(await restoreUnsavedRecoveryKey()).toBe(false);
-    expect(result.current).toBeNull();
+    api.vaultRecoveryKeyPending.mockResolvedValue(false);
+    expect(await checkUnsavedRecoveryKey()).toBe(false);
+    expect(api.vaultUnsavedRecoveryKey).not.toHaveBeenCalled();
+  });
+
+  it('can wait until the next unlock', async () => {
+    const { result } = renderHook(() => useUnsavedRecoveryKeyReminder());
+    await act(async () => {
+      await checkUnsavedRecoveryKey();
+    });
+    render(wrap(<UnsavedRecoveryKey />));
+    await userEvent.click(screen.getByRole('button', { name: 'Later' }));
+    expect(result.current).toBe(false);
+    expect(api.vaultUnsavedRecoveryKey).not.toHaveBeenCalled();
+    expect(api.vaultRecoveryKeySaved).not.toHaveBeenCalled();
   });
 
   it('closes the Settings dialog that shows it when the vault locks', async () => {

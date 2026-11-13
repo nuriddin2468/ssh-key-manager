@@ -41,12 +41,13 @@ export function useVaultEntry(id: string | undefined) {
  * again: entries and details leave the cache, finished commands leave
  * TanStack's mutation cache (their variables may hold a master password or a
  * passphrase), a new recovery key still on screen is dropped (until it is
- * confirmed as saved, the backend gives it back after the next unlock:
- * `restoreUnsavedRecoveryKey`), and anything that shows a revealed secret
+ * confirmed as saved, the user is reminded after the next unlock:
+ * `checkUnsavedRecoveryKey`), and anything that shows a revealed secret
  * unmounts with the unlocked view.
  */
 export function markLocked(): void {
   setPendingRecoveryKey(null);
+  setUnsavedReminder(false);
   queryClient.setQueryData<VaultStatus>(keys.vaultStatus, (status) =>
     status && status.state === 'unlocked'
       ? { ...status, state: status.files.exists ? 'locked' : 'missing' }
@@ -193,37 +194,71 @@ export function takeSearchFocusRequest(): boolean {
 // kept outside the page so switching sections doesn't lose it, and dropped
 // when the vault locks.
 let pendingRecoveryKey: string | null = null;
+// After an unlock: the recovery key made last isn't confirmed as saved, so
+// the Passwords page reminds the user. Only that is known here; the key
+// itself comes after the user's yes in a native dialog.
+let unsavedReminder = false;
 const listeners = new Set<() => void>();
+
+function notify(): void {
+  for (const listener of listeners) listener();
+}
 
 export function setPendingRecoveryKey(key: string | null): void {
   pendingRecoveryKey = key;
-  for (const listener of listeners) listener();
+  notify();
+}
+
+function setUnsavedReminder(on: boolean): void {
+  unsavedReminder = on;
+  notify();
 }
 
 /** The user confirmed the new recovery key as saved: it isn't shown again. */
 export function recoveryKeySaved(): void {
   setPendingRecoveryKey(null);
+  setUnsavedReminder(false);
   api.vaultRecoveryKeySaved().catch(() => undefined);
 }
 
 /**
- * After an unlock: the recovery key made last, if a lock took it off the
- * screen before the user confirmed it as saved. Returns whether it is back.
+ * After an unlock: whether the recovery key made last still isn't confirmed
+ * as saved (a lock took it off the screen first). Turns the reminder on;
+ * asks nothing of the user.
  */
-export async function restoreUnsavedRecoveryKey(): Promise<boolean> {
+export async function checkUnsavedRecoveryKey(): Promise<boolean> {
   if (pendingRecoveryKey) return false;
-  const key = await api.vaultUnsavedRecoveryKey().catch(() => null);
-  if (!key || pendingRecoveryKey) return false;
-  setPendingRecoveryKey(key);
-  return true;
+  const pending = await api.vaultRecoveryKeyPending().catch(() => false);
+  setUnsavedReminder(pending && !pendingRecoveryKey);
+  return unsavedReminder;
+}
+
+/**
+ * Shows the recovery key the reminder is about, when the user asks: the
+ * backend first asks them in a native dialog. A no (`cancelled`) keeps the
+ * reminder; other failures are thrown.
+ */
+export async function showUnsavedRecoveryKey(): Promise<void> {
+  const key = await api.vaultUnsavedRecoveryKey();
+  setUnsavedReminder(false);
+  if (key) setPendingRecoveryKey(key);
+}
+
+/** "Later": no reminder until the next unlock. */
+export function dismissUnsavedRecoveryKey(): void {
+  setUnsavedReminder(false);
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }
 
 export function usePendingRecoveryKey(): string | null {
-  return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    () => pendingRecoveryKey,
-  );
+  return useSyncExternalStore(subscribe, () => pendingRecoveryKey);
+}
+
+/** Whether to remind the user of a recovery key not yet saved. */
+export function useUnsavedRecoveryKeyReminder(): boolean {
+  return useSyncExternalStore(subscribe, () => unsavedReminder);
 }

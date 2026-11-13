@@ -2184,8 +2184,11 @@ const en = {
     loadFailed: 'Couldn’t open the vault',
     keysTooNew: 'A newer version of SSH Key Manager changed this vault. Update the app to open it.',
     unsavedKeyTitle: 'Your new recovery key isn’t saved yet',
-    unsavedKeyText: 'The vault locked before you confirmed it. The key is on the Passwords page.',
+    unsavedKeyText: 'The vault locked before you confirmed you saved it.',
+    unsavedKeyCardText:
+      'The vault locked before you confirmed you saved it. Show it again and save it: if you forget the master password, it’s the only way back in.',
     unsavedKeyShow: 'Show key',
+    unsavedKeyLater: 'Later',
     createTitle: 'Keep passwords next to your keys',
     createText: 'Server passwords, key passphrases and website logins in one encrypted vault.',
     pointFile: 'An encrypted KeePass file on this computer.',

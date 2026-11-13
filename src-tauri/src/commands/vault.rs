@@ -435,22 +435,56 @@ pub async fn vault_new_recovery_key(
     .await
 }
 
+/// Whether the recovery key made last isn't confirmed as saved yet, so the UI
+/// reminds the user. Gives nothing of the key. Quiet: the UI asks after every
+/// unlock.
+#[tauri::command]
+pub async fn vault_recovery_key_pending(
+    app: AppHandle,
+    state: State<'_, Shared>,
+) -> AppResult<bool> {
+    blocking(&state, move |state| {
+        state.vault.has_unsaved_recovery_key(&app)
+    })
+    .await
+}
+
 /// The recovery key made last, again, while the user hasn't confirmed it as
-/// saved: a lock took it off the screen before they could. It comes from the
-/// unlocked vault, whose password it is; `None` once it is confirmed. Quiet:
-/// the UI asks after every unlock.
+/// saved: a lock took it off the screen before they could. Only after the
+/// user's yes in a native dialog, every time, since it opens the vault and
+/// every copy of it; `cancelled` otherwise, and the reminder stays. It comes
+/// from the unlocked vault, whose password it is; `None`, without asking,
+/// once it is confirmed.
 #[tauri::command]
 pub async fn vault_unsaved_recovery_key(
     app: AppHandle,
     state: State<'_, Shared>,
 ) -> AppResult<Option<String>> {
     blocking(&state, move |state| {
-        state.vault.with_quietly(&app, |vault| {
-            Ok(state
-                .vault
-                .unsaved_recovery_key(vault)
-                .map(|key| key.expose_secret().to_owned()))
-        })
+        let key = state.vault.reveal_unsaved_recovery_key(&app, || {
+            confirm::require(
+                &app,
+                &Localized::new(
+                    "Show the new recovery key again?",
+                    "Показать новый ключ восстановления ещё раз?",
+                    "Yangi tiklash kaliti yana koʻrsatilsinmi?",
+                ),
+                &Localized::new(
+                    "It wasn’t confirmed as saved before the vault locked. SSH Key Manager \
+                     will show it in its window so you can save it.\n\n\
+                     Continue only if you asked to see it.",
+                    "Его сохранение не было подтверждено до блокировки хранилища. \
+                     SSH Key Manager покажет его в своём окне, чтобы вы могли его \
+                     сохранить.\n\n\
+                     Продолжайте, только если вы сами попросили его показать.",
+                    "Ombor qulflanishidan oldin u saqlangani tasdiqlanmagan. \
+                     SSH Key Manager uni saqlab olishingiz uchun oʻz oynasida koʻrsatadi.\n\n\
+                     Faqat uni koʻrsatishni oʻzingiz soʻragan boʻlsangiz davom eting.",
+                ),
+                &Localized::new("Show key", "Показать ключ", "Kalitni koʻrsatish"),
+            )
+        })?;
+        Ok(key.map(|key| key.expose_secret().to_owned()))
     })
     .await
 }

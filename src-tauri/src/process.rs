@@ -35,6 +35,14 @@ pub fn command(program: &str) -> Command {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
+        // Windows looks for a program named without a path (one a
+        // `ProxyCommand` runs) in the current folder first, and the app's
+        // may be any folder. The child starts in the home folder instead,
+        // told not to search the current one at all.
+        if let Some(home) = sshkm_core::paths::home_dir() {
+            command.current_dir(home);
+        }
+        command.env("NoDefaultCurrentDirectoryInExePath", "1");
     }
     command
 }
@@ -133,6 +141,49 @@ pub fn openssh_version() -> Option<String> {
         .map(str::to_owned)
 }
 
+/// A new, empty file only the user can read, in the temporary folder, for
+/// `ssh -E`: what `ssh` itself logs goes there, apart from what servers and
+/// jump hosts send as banners and what a `ProxyCommand` prints, which go to
+/// its stderr. Removed once dropped.
+pub struct LogFile(std::path::PathBuf);
+
+impl LogFile {
+    pub fn create() -> std::io::Result<Self> {
+        use rand_core::RngCore as _;
+        let dir = std::env::temp_dir();
+        loop {
+            let name = format!("sshkm-ssh-{:016x}.log", rand_core::OsRng.next_u64());
+            let path = dir.join(name);
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            match options.open(&path) {
+                Ok(_) => return Ok(Self(path)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    pub fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    /// Everything logged so far.
+    pub fn read(&self) -> String {
+        std::fs::read(&self.0)
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_default()
+    }
+}
+
+impl Drop for LogFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,5 +213,21 @@ mod tests {
         assert!(output.success);
         assert_eq!(output.stdout.len(), KEEP);
         assert!(output.stdout.ends_with("y\ndone\n"));
+    }
+
+    #[test]
+    fn log_files_are_private_and_removed() {
+        let log = LogFile::create().unwrap();
+        let path = log.path().to_path_buf();
+        std::fs::write(&path, "debug1: x\n").unwrap();
+        assert_eq!(log.read(), "debug1: x\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        drop(log);
+        assert!(!path.exists());
     }
 }

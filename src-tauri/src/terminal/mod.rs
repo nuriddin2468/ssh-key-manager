@@ -158,11 +158,14 @@ impl Terminals {
             askpass.expect_account(account);
         }
         // Without `ssh -G` nothing is known about the way: assume the worst.
-        askpass.expect_connection(Connection::new(
-            state.openssh_version().as_deref(),
-            resolved.as_ref().is_none_or(|r| r.keyboard_interactive),
-            resolved.as_ref().is_none_or(Resolved::proxied),
-        ));
+        askpass.expect_connection(
+            Connection::new(
+                state.openssh_version().as_deref(),
+                resolved.as_ref().is_none_or(|r| r.keyboard_interactive),
+                resolved.as_ref().is_none_or(Resolved::proxied),
+            )
+            .through_command(resolved.as_ref().is_none_or(|r| r.proxy_command.is_some())),
+        );
 
         let info = TerminalInfo {
             id,

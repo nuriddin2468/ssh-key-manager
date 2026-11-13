@@ -11,7 +11,7 @@ use sshkm_core::authorized_keys;
 use sshkm_core::authorized_line::{self, AuthorizedLine, LineOptions};
 use sshkm_core::config::HostKind;
 use sshkm_core::keys::convert::{self, KeyFileFormat, KeyFileInfo};
-use sshkm_core::tunnels::Tunnel;
+use sshkm_core::tunnels::{Tunnel, TunnelKind};
 use sshkm_core::{ErrorCode, SecretString, fsutil};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -42,15 +42,162 @@ pub async fn tunnel_list(
 }
 
 /// Adds a tunnel (an empty `id`) or changes one; one that is on starts again
-/// as changed.
+/// as changed. A tunnel that lets others reach something through this
+/// computer (on every address, or remote) is confirmed in a native dialog
+/// that says what it opens to whom, unless it forwards as it did before;
+/// `cancelled` if the user says no.
 #[tauri::command]
 pub async fn tunnel_save(
+    app: AppHandle,
     state: State<'_, Shared>,
     tunnels: State<'_, SharedTunnels>,
     tunnel: Tunnel,
 ) -> AppResult<TunnelView> {
     let tunnels = SharedTunnels::clone(&tunnels);
-    blocking(&state, move |_| tunnels.save(tunnel)).await
+    blocking(&state, move |_| {
+        tunnels.save(tunnel, |tunnel| {
+            let (title, body) = opening_prompt(tunnel);
+            crate::confirm::require(
+                &app,
+                &title,
+                &body,
+                &Localized::new(
+                    "Allow and save",
+                    "Разрешить и сохранить",
+                    "Ruxsat berish va saqlash",
+                ),
+            )
+        })
+    })
+    .await
+}
+
+/// The title and text of the native dialog before saving `tunnel`, which
+/// lets others reach something through this computer: who can connect,
+/// where, and what they reach. Every value in it passed
+/// [`Tunnel::validate`]: a plain alias, ports, addresses and host names.
+fn opening_prompt(tunnel: &Tunnel) -> (Localized, Localized) {
+    let alias = &tunnel.alias;
+    let port = tunnel.listen_port;
+    let target = format!(
+        "{}:{}",
+        tunnel.target_host.as_deref().unwrap_or_default(),
+        tunnel.target_port.unwrap_or_default()
+    );
+    let (where_en, where_ru, where_uz) = match tunnel.bind_address.as_deref() {
+        None | Some("*") => (
+            "every address".to_owned(),
+            "всех адресах".to_owned(),
+            "barcha manzillarida".to_owned(),
+        ),
+        Some(address) => (
+            format!("the address {address}"),
+            format!("адресе {address}"),
+            format!("{address} manzilida"),
+        ),
+    };
+    let check = Localized::new(
+        "Allow it only if you set up this tunnel yourself.",
+        "Разрешайте, только если вы сами настроили этот туннель.",
+        "Faqat bu tunnelni oʻzingiz sozlagan boʻlsangiz, ruxsat bering.",
+    );
+    let network = Localized::new(
+        "Open this computer to your network?",
+        "Открыть этот компьютер для вашей сети?",
+        "Bu kompyuter tarmogʻingiz uchun ochilsinmi?",
+    );
+    let (title, en, ru, uz) = match tunnel.kind {
+        TunnelKind::Local => (
+            network,
+            format!(
+                "This tunnel listens on {where_en} of this computer, port {port}. Anyone on \
+                 your network can connect to it and reach {target} through {alias}."
+            ),
+            format!(
+                "Этот туннель принимает подключения на {where_ru} этого компьютера, порт {port}. \
+                 Любой в вашей сети сможет подключиться к нему и попасть на {target} через \
+                 {alias}."
+            ),
+            format!(
+                "Bu tunnel shu kompyuterning {where_uz} {port}-portda ulanishlarni qabul qiladi. \
+                 Tarmogʻingizdagi istalgan kishi unga ulanib, {alias} orqali {target} ga yeta \
+                 oladi."
+            ),
+        ),
+        TunnelKind::Dynamic => (
+            network,
+            format!(
+                "This SOCKS proxy listens on {where_en} of this computer, port {port}. Anyone \
+                 on your network can use it: their connections leave from {alias}."
+            ),
+            format!(
+                "Этот SOCKS-прокси принимает подключения на {where_ru} этого компьютера, порт \
+                 {port}. Любой в вашей сети сможет им пользоваться: его подключения будут \
+                 выходить с {alias}."
+            ),
+            format!(
+                "Bu SOCKS proksi shu kompyuterning {where_uz} {port}-portda ulanishlarni qabul \
+                 qiladi. Tarmogʻingizdagi istalgan kishi undan foydalana oladi: uning ulanishlari \
+                 {alias} dan chiqadi."
+            ),
+        ),
+        TunnelKind::Remote => remote_prompt(tunnel, &target),
+    };
+    let body = Localized::new(
+        format!("{en}\n\n{}", check.en),
+        format!("{ru}\n\n{}", check.ru),
+        format!("{uz}\n\n{}", check.uz),
+    );
+    (title, body)
+}
+
+/// [`opening_prompt`]'s title and text for a remote tunnel: who can connect
+/// on the server, and what they reach from this computer.
+fn remote_prompt(tunnel: &Tunnel, target: &str) -> (Localized, String, String, String) {
+    let alias = &tunnel.alias;
+    let port = tunnel.listen_port;
+    let (who_en, who_ru, who_uz) = if tunnel.exposed() {
+        (
+            format!("Anyone who can reach {alias}"),
+            format!("Любой, кто может подключиться к {alias}, сможет"),
+            format!("{alias} ga ulana oladigan istalgan kishi"),
+        )
+    } else {
+        (
+            format!("Programs on {alias}"),
+            format!("Программы на {alias} смогут"),
+            format!("{alias} dagi dasturlar"),
+        )
+    };
+    let host = tunnel.target_host.as_deref().unwrap_or_default();
+    let here = host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    let target_port = tunnel.target_port.unwrap_or_default();
+    let (what_en, what_ru, what_uz) = if here {
+        (
+            format!("port {target_port} of this computer"),
+            format!("порт {target_port} этого компьютера"),
+            format!("shu kompyuterning {target_port}-portiga"),
+        )
+    } else {
+        (
+            format!("{target} through this computer"),
+            format!("{target} через этот компьютер"),
+            format!("shu kompyuter orqali {target} ga"),
+        )
+    };
+    (
+        Localized::new(
+            "Give a server access to this computer?",
+            "Дать серверу доступ к этому компьютеру?",
+            "Serverga bu kompyuterdan foydalanishga ruxsat berilsinmi?",
+        ),
+        format!("{who_en} can connect to port {port} there and reach {what_en}."),
+        format!("{who_ru} подключиться там к порту {port} и попасть на {what_ru}."),
+        format!("{who_uz} u yerdagi {port}-portga ulanib, {what_uz} yeta oladi."),
+    )
 }
 
 #[tauri::command]
@@ -435,6 +582,66 @@ mod tests {
 
     const KEY: &str =
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHJCszOHaI9X/yGLtjn22f0hO6VPMQDVtctkym6FJH1W a@b";
+
+    fn tunnel(kind: TunnelKind, bind: Option<&str>) -> Tunnel {
+        Tunnel {
+            id: String::new(),
+            name: "anything the page wrote".into(),
+            alias: "bastion".into(),
+            kind,
+            bind_address: bind.map(str::to_owned),
+            listen_port: 2222,
+            target_host: (kind != TunnelKind::Dynamic).then(|| "127.0.0.1".into()),
+            target_port: (kind != TunnelKind::Dynamic).then_some(22),
+            auto_reconnect: false,
+        }
+    }
+
+    #[test]
+    fn the_confirmation_says_what_opens_to_whom() {
+        let texts = |tunnel: &Tunnel| {
+            let (title, body) = opening_prompt(tunnel);
+            for text in [
+                &title.en, &title.ru, &title.uz, &body.en, &body.ru, &body.uz,
+            ] {
+                assert_ne!(text, "");
+                // The page's own words never reach the dialog.
+                assert!(!text.contains("anything the page wrote"), "{text}");
+            }
+            (title.en, body.en)
+        };
+        let (title, body) = texts(&tunnel(TunnelKind::Local, Some("*")));
+        assert_eq!(title, "Open this computer to your network?");
+        assert!(body.contains("every address"), "{body}");
+        assert!(body.contains("port 2222"), "{body}");
+        assert!(body.contains("127.0.0.1:22 through bastion"), "{body}");
+
+        let (_, body) = texts(&tunnel(TunnelKind::Dynamic, Some("192.168.1.5")));
+        assert!(body.contains("the address 192.168.1.5"), "{body}");
+        assert!(body.contains("leave from bastion"), "{body}");
+
+        let (title, body) = texts(&tunnel(TunnelKind::Remote, None));
+        assert_eq!(title, "Give a server access to this computer?");
+        assert!(
+            body.starts_with(
+                "Programs on bastion can connect to port 2222 there and reach port 22 of \
+                 this computer."
+            ),
+            "{body}"
+        );
+        let elsewhere = Tunnel {
+            target_host: Some("nas.lan".into()),
+            ..tunnel(TunnelKind::Remote, Some("*"))
+        };
+        let (_, body) = texts(&elsewhere);
+        assert!(
+            body.starts_with(
+                "Anyone who can reach bastion can connect to port 2222 there and reach \
+                 nas.lan:22 through this computer."
+            ),
+            "{body}"
+        );
+    }
 
     #[test]
     fn the_install_script_stays_one_quoted_line() {

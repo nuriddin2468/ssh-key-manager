@@ -157,6 +157,11 @@ pub struct Ask<'a> {
 ///   host's (its own `ssh` asks the same session, and the options of this
 ///   run do not reach it): the session vouches for none.
 ///
+/// A `ProxyJump` runs the same `ssh` again, but a `ProxyCommand` may run
+/// any `ssh`, older than the one `ssh -V` names, whose jump host's prompts
+/// come unmarked. So through a `ProxyCommand` prompts count as before 8.5
+/// ([`Connection::through_command`]).
+///
 /// Prompts it does not vouch for are [`Ask::unverified`]: refused by a batch
 /// session, left to the user by an interactive one. Other yes/no questions
 /// are always answered "no", so they need no vouching.
@@ -183,6 +188,20 @@ impl Connection {
             keyboard_interactive,
             proxied,
         }
+    }
+
+    /// The same connection made through a `ProxyCommand` when
+    /// `proxy_command`: its program may run another, older `ssh`, which
+    /// asks this session too without marking a jump host's prompts, so
+    /// prompts are told apart as before OpenSSH 8.5 through a proxy: none is
+    /// vouched for.
+    #[must_use]
+    pub fn through_command(mut self, proxy_command: bool) -> Self {
+        if proxy_command {
+            self.marks_server_prompts = false;
+            self.proxied = true;
+        }
+        self
     }
 
     /// Whether a prompt like `prompt` can only be `ssh`'s own or the
@@ -1115,6 +1134,28 @@ mod tests {
             )
             .as_deref(),
             Some("key-passphrase")
+        );
+    }
+
+    #[test]
+    fn a_proxy_command_gets_no_saved_secret_whatever_ssh_says() {
+        // The `ProxyCommand` may run an older `ssh`, whose jump host's
+        // prompts look like `ssh`'s own.
+        let server = server();
+        let connection = Connection::new(Some("OpenSSH_9.9p1"), true, true).through_command(true);
+        assert!(!connection.marks_server_prompts && connection.proxied);
+        let session = saved_session(&server, connection);
+        for text in [
+            format!("Enter passphrase for key '{KEY}': "),
+            "alice@target.example's password: ".to_owned(),
+            "(alice@target.example) Password: ".to_owned(),
+        ] {
+            assert_eq!(ask_session(&server, &session, &text), None, "{text:?}");
+        }
+        // Without one, nothing changes.
+        assert_eq!(
+            Connection::new(Some("OpenSSH_9.9p1"), true, true).through_command(false),
+            Connection::new(Some("OpenSSH_9.9p1"), true, true)
         );
     }
 

@@ -212,23 +212,21 @@ fn key_blob(public_key: &str) -> AppResult<String> {
 }
 
 /// A host alias the app runs `ssh` (or a terminal with `ssh`) with: letters,
-/// digits and `. _ - @ : [ ]`, not starting with `-`. Every command that
-/// hands a name from the page to `ssh` checks it here.
+/// digits and `. _ - @ : [ ]`, with no part of it, before or after an `@`
+/// or `:`, starting with `-`. Every command that hands a name from the page
+/// to `ssh` checks it here.
 ///
 /// `ssh` puts the name into commands it runs through the shell: `%h` and `%n`
 /// in a `ProxyCommand` or `Match exec`, and the command a `ProxyJump`
 /// becomes. Only OpenSSH 9.6 and later refuse a name with shell syntax
-/// there, so without this a script in the page could run its own commands
-/// through a `Host *.corp` block that is already in the config.
+/// there, or a host part (after the last `@`) that the program would read as
+/// an option, so without this a script in the page could run its own
+/// commands through a `Host *.corp` block that is already in the config.
 pub fn check_alias(alias: &str) -> AppResult<()> {
-    let plain = !alias.is_empty()
-        && !alias.starts_with('-')
-        && alias
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "._-@:[]".contains(c));
-    if !plain {
+    if !sshkm_core::tunnels::is_plain_alias(alias) {
         return Err(AppError::invalid(
-            "not a host alias: only letters, digits and . _ - @ : [ ] can be used",
+            "not a host alias: only letters, digits and . _ - @ : [ ] can be used, \
+             and no part of it may start with -",
         ));
     }
     Ok(())
@@ -284,11 +282,14 @@ pub fn run_ssh(
         && !options.contains(&"KbdInteractiveAuthentication=no");
     let session = state.askpass_session(secrets)?;
     session.expect_account(target.account);
-    session.expect_connection(Connection::new(
-        state.openssh_version().as_deref(),
-        keyboard_interactive,
-        target.proxied,
-    ));
+    session.expect_connection(
+        Connection::new(
+            state.openssh_version().as_deref(),
+            keyboard_interactive,
+            target.proxied,
+        )
+        .through_command(target.proxy_command),
+    );
     let mut command = process::command("ssh");
     session.configure(&mut command);
     command
@@ -331,6 +332,8 @@ struct Target {
     account: PromptAccount,
     /// Through a `ProxyJump` or `ProxyCommand`.
     proxied: bool,
+    /// Through a `ProxyCommand`, which may run another `ssh`.
+    proxy_command: bool,
     /// `KbdInteractiveAuthentication` is not off.
     keyboard_interactive: bool,
 }
@@ -349,7 +352,7 @@ fn ssh_target(alias: &str) -> AppResult<Result<Target, Output>> {
 
 fn parse_ssh_g(text: &str) -> Option<Target> {
     let (mut user, mut host_name, mut host_key_alias) = (None, None, None);
-    let (mut proxied, mut keyboard_interactive) = (false, true);
+    let (mut proxied, mut proxy_command, mut keyboard_interactive) = (false, false, true);
     for line in text.lines() {
         let Some((key, value)) = line.split_once(' ') else {
             continue;
@@ -361,6 +364,7 @@ fn parse_ssh_g(text: &str) -> Option<Target> {
             "hostkeyalias" => &mut host_key_alias,
             "proxyjump" | "proxycommand" => {
                 proxied |= value != "none";
+                proxy_command |= key == "proxycommand" && value != "none";
                 continue;
             }
             "kbdinteractiveauthentication" => {
@@ -374,6 +378,7 @@ fn parse_ssh_g(text: &str) -> Option<Target> {
     Some(Target {
         account: PromptAccount::new(user?, host_key_alias.or(host_name)?),
         proxied,
+        proxy_command,
         keyboard_interactive,
     })
 }
@@ -546,6 +551,14 @@ mod tests {
             "a#b",
             "сервер",
             "ｐｒｏｄ",
+            // A host (after the last `@`) or any other part that `%h` would
+            // hand a proxy program as an option.
+            "x@-e.corp",
+            "a@b@-v",
+            "x@--help",
+            "x@-oProxyCommand",
+            "-x@host",
+            "host:-p",
         ] {
             let error = check_alias(alias).expect_err(alias);
             assert_eq!(error.code(), ErrorCode::InvalidInput, "{alias:?}");
@@ -589,6 +602,7 @@ mod tests {
             Some(Target {
                 account: PromptAccount::new("alice", "10.0.0.5"),
                 proxied: false,
+                proxy_command: false,
                 keyboard_interactive: true,
             })
         );
@@ -602,11 +616,11 @@ mod tests {
         let jumped = "user alice\nhostname 10.0.0.5\nproxyjump bastion\n\
                       kbdinteractiveauthentication no\n";
         let target = parse_ssh_g(jumped).unwrap();
-        assert!(target.proxied && !target.keyboard_interactive);
+        assert!(target.proxied && !target.proxy_command && !target.keyboard_interactive);
         let command = parse_ssh_g("user a\nhostname h\nproxycommand nc %h %p\n").unwrap();
-        assert!(command.proxied);
-        let none = parse_ssh_g("user a\nhostname h\nproxyjump none\nproxycommand none\n");
-        assert!(!none.unwrap().proxied);
+        assert!(command.proxied && command.proxy_command);
+        let none = parse_ssh_g("user a\nhostname h\nproxyjump none\nproxycommand none\n").unwrap();
+        assert!(!none.proxied && !none.proxy_command);
     }
 
     #[test]
@@ -636,6 +650,7 @@ mod tests {
             Some(Target {
                 account: PromptAccount::new("alice", "10.0.0.5"),
                 proxied: false,
+                proxy_command: false,
                 keyboard_interactive: true,
             })
         );

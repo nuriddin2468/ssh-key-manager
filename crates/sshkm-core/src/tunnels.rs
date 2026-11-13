@@ -83,7 +83,8 @@ impl Tunnel {
     pub fn validate(&self) -> Result<()> {
         if !is_plain_alias(&self.alias) {
             return Err(Error::invalid(
-                "not a host alias: only letters, digits and . _ - @ : [ ] can be used",
+                "not a host alias: only letters, digits and . _ - @ : [ ] can be used, \
+                 and no part of it may start with -",
             ));
         }
         if self.name.chars().count() > MAX_NAME || self.name.chars().any(char::is_control) {
@@ -253,6 +254,41 @@ impl Tunnel {
         }
     }
 
+    /// Others than the user reach something through this computer: a local
+    /// tunnel or SOCKS proxy that is [`exposed`](Self::exposed), or any
+    /// remote tunnel (the server, and whoever can reach its port, reaches
+    /// what this computer reaches). Saving one takes the user's yes.
+    pub fn opens_to_others(&self) -> bool {
+        self.kind == TunnelKind::Remote || self.exposed()
+    }
+
+    /// Whether `other` forwards the same way: the same host, kind, address,
+    /// ports and destination. Its name and auto-reconnect may differ.
+    pub fn same_forward(&self, other: &Self) -> bool {
+        self.alias == other.alias
+            && self.kind == other.kind
+            && self.bind_address == other.bind_address
+            && self.listen_port == other.listen_port
+            && self.target_host == other.target_host
+            && self.target_port == other.target_port
+    }
+
+    /// The tunnel as [`TunnelStore::save`] keeps it: name, address and
+    /// destination trimmed, an empty address or destination none.
+    #[must_use]
+    pub fn normalized(mut self) -> Self {
+        self.name = self.name.trim().to_owned();
+        self.bind_address = self
+            .bind_address
+            .map(|b| b.trim().to_owned())
+            .filter(|b| !b.is_empty());
+        self.target_host = self
+            .target_host
+            .map(|h| h.trim().to_owned())
+            .filter(|h| !h.is_empty());
+        self
+    }
+
     /// What the tray menu calls it: its name, else the forward.
     pub fn label(&self) -> String {
         if !self.name.trim().is_empty() {
@@ -284,13 +320,16 @@ impl Tunnel {
 }
 
 /// An alias the app runs `ssh` with: letters, digits and `. _ - @ : [ ]`,
-/// not starting with `-` (what `check_alias` in the app allows).
+/// and no part of it, between `@` and `:`, starting with `-` (what
+/// `check_alias` in the app allows). `ssh` takes the host from after the
+/// last `@` and puts it into `%h`, so `user@-x` would hand a `ProxyCommand`
+/// or `Match exec` program an option.
 pub fn is_plain_alias(alias: &str) -> bool {
     !alias.is_empty()
-        && !alias.starts_with('-')
         && alias
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || "._-@:[]".contains(c))
+        && !alias.split(['@', ':']).any(|part| part.starts_with('-'))
 }
 
 /// A host name (letters, digits, `.`, `-`, `_`, not starting with `-` or
@@ -360,16 +399,8 @@ impl TunnelStore {
     /// Adds `tunnel` (an empty `id`) or replaces the one with its id, after
     /// the checks; fails with `already_exists` if another one listens on
     /// the same port. Returns it as saved.
-    pub fn save(&self, mut tunnel: Tunnel) -> Result<Tunnel> {
-        tunnel.name = tunnel.name.trim().to_owned();
-        tunnel.bind_address = tunnel
-            .bind_address
-            .map(|b| b.trim().to_owned())
-            .filter(|b| !b.is_empty());
-        tunnel.target_host = tunnel
-            .target_host
-            .map(|h| h.trim().to_owned())
-            .filter(|h| !h.is_empty());
+    pub fn save(&self, tunnel: Tunnel) -> Result<Tunnel> {
+        let mut tunnel = tunnel.normalized();
         tunnel.validate()?;
         let mut tunnels = self.load()?;
         if tunnel.id.is_empty() {
@@ -513,6 +544,14 @@ mod tests {
                 alias: "a b".into(),
                 ..local(1)
             },
+            Tunnel {
+                alias: "x@-e.corp".into(),
+                ..local(1)
+            },
+            Tunnel {
+                alias: "a@b@--help".into(),
+                ..local(1)
+            },
             local(0),
             Tunnel {
                 bind_address: Some("example.com".into()),
@@ -628,6 +667,83 @@ mod tests {
             TunnelStore::new(&path).load().unwrap_err().code(),
             ErrorCode::Parse
         );
+    }
+
+    #[test]
+    fn tunnels_that_open_this_computer_to_others() {
+        assert!(!local(8080).opens_to_others());
+        for bind in ["localhost", "127.0.0.1", "::1"] {
+            let tunnel = Tunnel {
+                bind_address: Some(bind.into()),
+                ..local(8080)
+            };
+            assert!(!tunnel.opens_to_others(), "{bind}");
+        }
+        for bind in ["*", "0.0.0.0", "::", "192.168.1.5"] {
+            let tunnel = Tunnel {
+                bind_address: Some(bind.into()),
+                ..local(8080)
+            };
+            assert!(tunnel.opens_to_others(), "{bind}");
+        }
+        let socks = Tunnel {
+            kind: TunnelKind::Dynamic,
+            target_host: None,
+            target_port: None,
+            ..local(1080)
+        };
+        assert!(!socks.opens_to_others());
+        assert!(
+            Tunnel {
+                bind_address: Some("*".into()),
+                ..socks
+            }
+            .opens_to_others()
+        );
+        // The server reaches what this computer reaches, on whatever
+        // address it listens.
+        let remote = Tunnel {
+            kind: TunnelKind::Remote,
+            ..local(2222)
+        };
+        assert!(remote.opens_to_others());
+
+        // A new name or auto-reconnect forwards the same way; anything
+        // else doesn't.
+        let renamed = Tunnel {
+            name: "Mine".into(),
+            auto_reconnect: true,
+            ..remote.clone()
+        };
+        assert!(renamed.same_forward(&remote));
+        for other in [
+            Tunnel {
+                alias: "other".into(),
+                ..remote.clone()
+            },
+            Tunnel {
+                bind_address: Some("*".into()),
+                ..remote.clone()
+            },
+            Tunnel {
+                listen_port: 2223,
+                ..remote.clone()
+            },
+            Tunnel {
+                target_host: Some("10.0.0.5".into()),
+                ..remote.clone()
+            },
+            Tunnel {
+                target_port: Some(22),
+                ..remote.clone()
+            },
+            Tunnel {
+                kind: TunnelKind::Local,
+                ..remote.clone()
+            },
+        ] {
+            assert!(!other.same_forward(&remote), "{other:?}");
+        }
     }
 
     #[test]

@@ -39,6 +39,23 @@ impl Appearance {
     }
 }
 
+/// What to give `AppHandle::set_theme` when the setting goes from `from` to
+/// `to` (`from` is `None` at start), or `None` to leave the app's theme
+/// alone. System is applied only when leaving Light or Dark: on Linux,
+/// `set_theme(None)` turns GTK's prefer-dark off for the app (tao), which
+/// would hide a dark GTK desktop from the page; at start, nothing was forced.
+#[allow(
+    clippy::option_option,
+    reason = "None: leave it; Some(None): follow the system; Some(Some(_)): force"
+)]
+fn theme_change(from: Option<Appearance>, to: Appearance) -> Option<Option<Theme>> {
+    match (from, to) {
+        (Some(from), to) if from == to => None,
+        (None, Appearance::System) => None,
+        (_, to) => Some(to.theme()),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Saved {
     appearance: Appearance,
@@ -102,7 +119,9 @@ fn is_dark<R: Runtime>(app: &AppHandle<R>, saved: Saved) -> bool {
 pub fn install<R: Runtime>(app: &AppHandle<R>, data_dir: &Path) {
     let file = data_dir.join(FILE);
     let saved = read(&file);
-    app.set_theme(saved.appearance.theme());
+    if let Some(theme) = theme_change(None, saved.appearance) {
+        app.set_theme(theme);
+    }
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_background_color(Some(color(is_dark(app, saved))));
     }
@@ -141,15 +160,12 @@ pub fn set_appearance(
     dark: bool,
 ) {
     let next = Saved { appearance, dark };
-    let changed = {
-        let mut saved = state.lock();
-        let changed = *saved != next;
-        *saved = next;
-        changed
-    };
-    if changed {
+    let previous = std::mem::replace(&mut *state.lock(), next);
+    if previous != next {
         save(&state.file, next);
-        app.set_theme(appearance.theme());
+    }
+    if let Some(theme) = theme_change(Some(previous.appearance), appearance) {
+        app.set_theme(theme);
     }
     for window in app.webview_windows().values() {
         let _ = window.set_background_color(Some(color(dark)));
@@ -217,6 +233,22 @@ mod tests {
                 dark: true
             }
         );
+    }
+
+    #[test]
+    fn the_app_theme_changes_only_when_the_setting_does() {
+        use Appearance::{Dark, Light, System};
+        // At start: only a forced theme.
+        assert_eq!(theme_change(None, System), None);
+        assert_eq!(theme_change(None, Light), Some(Some(Theme::Light)));
+        assert_eq!(theme_change(None, Dark), Some(Some(Theme::Dark)));
+        // The system turned light or dark: the setting stays System.
+        assert_eq!(theme_change(Some(System), System), None);
+        assert_eq!(theme_change(Some(Dark), Dark), None);
+        // Leaving Light or Dark gives the windows back to the system.
+        assert_eq!(theme_change(Some(Dark), System), Some(None));
+        assert_eq!(theme_change(Some(System), Light), Some(Some(Theme::Light)));
+        assert_eq!(theme_change(Some(Light), Dark), Some(Some(Theme::Dark)));
     }
 
     #[test]

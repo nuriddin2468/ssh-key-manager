@@ -11,9 +11,9 @@
 //!    - changes nobody needs to look at;
 //!    - changes that add a directive running a program or reaching beyond
 //!      the host, or a variable that makes programs load code;
-//!    - deletions past [`MASS_DELETE`] from that device in a day, hosts
-//!      and the vault's items counted together, those made without asking
-//!      before included;
+//!    - deletions past [`MASS_DELETE`] in a day from the user's other
+//!      devices, all of them together, hosts and the vault's items counted
+//!      alike, those made without asking before included;
 //!    - conflicts.
 //! 3. The user of the side that connected decides on all but the first
 //!    kind; its choices on conflicts go to the other side
@@ -31,7 +31,6 @@
 //! [`conversation`]: super::pairing::conversation
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
 use std::net::TcpStream;
 use std::time::Instant;
 
@@ -51,7 +50,7 @@ use sshkm_core::vault::projects::ProjectRecord;
 use sshkm_core::vault::sync::{
     Party, VaultBase, VaultChange, VaultChoices, VaultConflict, VaultCounts, VaultPlan,
 };
-use sshkm_core::vault::{ContactRecord, DeviceRecord, MAX_DATABASE_SIZE};
+use sshkm_core::vault::{ContactRecord, DeviceRecord, MAX_DATABASE_SIZE, learned_devices};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use zeroize::Zeroizing;
@@ -61,17 +60,22 @@ use super::pairing::{
     ANSWER_TIMEOUT, Entries, POLL, PairingFailure, PairingPhase, Side, VaultItems, broken, waiting,
 };
 use super::transfer::STEP_TIMEOUT;
-use crate::confirm::Localized;
+use crate::confirm::{Localized, invisible, shown};
 
-/// More deletions than this from one device within [`DELETION_WINDOW`]
-/// need the user's yes.
+/// More deletions than this within [`DELETION_WINDOW`] from the user's
+/// other devices, all of them together, need the user's yes: a device
+/// can't get more by syncing under other names or through another one.
 pub const MASS_DELETE: usize = 5;
-/// Over how long deletions from one device are counted, in seconds.
+/// Over how long deletions from the user's other devices are counted, in
+/// seconds.
 const DELETION_WINDOW: i64 = 24 * 60 * 60;
 /// Most directives the system dialog lists.
 const SHOWN_LINES: usize = 8;
-/// Longest value the system dialog shows in full.
+/// Longest name the system dialog shows in full.
 const SHOWN_CHARS: usize = 120;
+/// Longest value of a directive or variable the system dialog shows in
+/// full: past it, its start and its end.
+const SHOWN_VALUE: usize = 1000;
 
 /// What a sync starts from on one side.
 pub struct SyncLocal {
@@ -103,11 +107,11 @@ pub struct SyncState {
     /// version turned down.
     #[serde(default)]
     pub vault_declined: BTreeMap<String, String>,
-    /// Deletions this computer made from that device without asking: when
-    /// (seconds since 1970) and how many. Those of the last
-    /// [`DELETION_WINDOW`] count with a sync's own. Kept in a small file of
-    /// their own ([`Side::sync_unasked`]), written before a sync changes
-    /// anything.
+    /// Deletions this computer made from the user's other devices without
+    /// asking, whichever they came from: when (seconds since 1970) and how
+    /// many. Those of the last [`DELETION_WINDOW`] count with a sync's own.
+    /// Kept in a small file of their own for this computer
+    /// ([`Side::sync_unasked`]), written before a sync changes anything.
     #[serde(skip)]
     pub unasked: Vec<(i64, u32)>,
 }
@@ -279,6 +283,9 @@ pub struct SyncSummary {
     pub removed: u32,
     /// Server keys added to `known_hosts` here.
     pub keys_added: u32,
+    /// Devices the other computer's records made the user's here: their
+    /// names. Shown, so a device learned through a sync is never silent.
+    pub devices_added: Vec<String>,
     /// Hosts the two trust different keys for: shown, never resolved.
     pub keys_differ: Vec<KeysDiffer>,
     /// Changes put off for this computer's user, and for the other's.
@@ -403,10 +410,11 @@ fn talk(
     let vault_choices = choose_vault(&choice, &sorted.vault, &mut state, &mut summary);
     if state.note_unasked(now, unasked) {
         // Kept before anything changes: a sync that ends early counts too.
-        side.sync_unasked(peer, &state.unasked)?;
+        side.sync_unasked(&state.unasked)?;
     }
     let changes = choose(&choice, &local.config, sorted, &mut state, &mut summary);
     let (config, known) = apply_hosts(&local, &changes, &theirs, &mut summary);
+    let learned = learned_devices(&local.devices, &theirs.devices);
     let written = side.sync_write(
         peer,
         &SyncWrite {
@@ -453,6 +461,7 @@ fn talk(
         return Err(PairingFailure::Broken);
     };
     written?;
+    summary.devices_added = learned.into_iter().map(|device| device.name).collect();
     vault_written.transpose()?;
     summary.deferred_there = deferred_there;
 
@@ -715,7 +724,7 @@ pub fn risky_prompt(
     let en = risky_list(changes, |n| format!("…and {n} more"));
     let ru = risky_list(changes, |n| format!("…и ещё {n}"));
     let uz = risky_list(changes, |n| format!("…va yana {n} ta"));
-    let peer = shown(peer);
+    let peer = shown(peer, SHOWN_CHARS);
     (
         Localized::new(
             "Allow ssh to run this?",
@@ -761,9 +770,9 @@ fn risky_list(changes: &[RiskyChange], more: impl Fn(usize) -> String) -> String
             change.lines.iter().map(move |line| {
                 format!(
                     "• Host {}: {} {}",
-                    shown(&change.id),
-                    shown(&line.key),
-                    shown(&line.value)
+                    shown(&change.id, SHOWN_CHARS),
+                    shown(&line.key, SHOWN_CHARS),
+                    shown_value(&line.value)
                 )
             })
         })
@@ -790,12 +799,12 @@ pub fn variables_prompt(
             .flat_map(|change| {
                 change.names.iter().map(move |name| {
                     let shown_value = value(change, name)
-                        .map(|value| format!("={}", shown(&value)))
+                        .map(|value| format!("={}", shown_value(&value)))
                         .unwrap_or_default();
                     format!(
                         "• {}: {}{shown_value}",
-                        shown(&change.environment),
-                        shown(name)
+                        shown(&change.environment, SHOWN_CHARS),
+                        shown(name, SHOWN_CHARS)
                     )
                 })
             })
@@ -809,7 +818,7 @@ pub fn variables_prompt(
     let en = list(&|n| format!("…and {n} more"));
     let ru = list(&|n| format!("…и ещё {n}"));
     let uz = list(&|n| format!("…va yana {n} ta"));
-    let peer = shown(peer);
+    let peer = shown(peer, SHOWN_CHARS);
     (
         Localized::new(
             "Allow variables that run code?",
@@ -846,34 +855,33 @@ pub fn variables_prompt(
     )
 }
 
-/// `text` as the dialog shows it: control characters and invisible or
-/// direction-changing ones as `<U+…>`, so what is shown is what `ssh` runs,
-/// and at most [`SHOWN_CHARS`] characters, with how many more there are.
-fn shown(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for (i, c) in text.chars().enumerate() {
-        if i == SHOWN_CHARS {
-            let rest = text.chars().count() - SHOWN_CHARS;
-            let _ = write!(out, "… (+{rest})");
-            break;
-        }
-        let invisible = matches!(
-            c,
-            '\u{00AD}'
-                | '\u{061C}'
-                | '\u{180E}'
-                | '\u{200B}'..='\u{200F}'
-                | '\u{202A}'..='\u{202E}'
-                | '\u{2060}'..='\u{2069}'
-                | '\u{FEFF}'
-        );
-        if c.is_control() || invisible {
-            let _ = write!(out, "<U+{:04X}>", u32::from(c));
+/// A value as the dialog shows it ([`shown`]): a run of spaces as one, so
+/// padding can't push what follows out of sight, and in full up to
+/// [`SHOWN_VALUE`] characters; past that, its start and its end.
+fn shown_value(text: &str) -> String {
+    let mut collapsed = String::with_capacity(text.len());
+    for c in text.chars() {
+        if c.is_whitespace() && !c.is_control() && !invisible(c) {
+            if !collapsed.ends_with(' ') {
+                collapsed.push(' ');
+            }
         } else {
-            out.push(c);
+            collapsed.push(c);
         }
     }
-    out
+    let chars: Vec<char> = collapsed.chars().collect();
+    if chars.len() <= SHOWN_VALUE {
+        return shown(&collapsed, SHOWN_VALUE);
+    }
+    let half = SHOWN_VALUE / 2;
+    let head: String = chars[..half].iter().collect();
+    let tail: String = chars[chars.len() - half..].iter().collect();
+    format!(
+        "{} … (+{}) … {}",
+        shown(&head, half),
+        chars.len() - SHOWN_VALUE,
+        shown(&tail, half)
+    )
 }
 
 /// What the changes to make here follow: which side this is, the
@@ -885,8 +893,15 @@ struct Choice<'a> {
     decisions: &'a SyncDecisions,
 }
 
+/// Whether taking the other side's version of a conflict deletes the item
+/// or moves it to the recycle bin.
+fn removes(conflict: &VaultConflict) -> bool {
+    conflict.there == Party::Deleted || conflict.to_bin
+}
+
 /// Deletions the other user decided through conflicts, on the side that
-/// didn't connect: the conflicts settled for a version that deletes.
+/// didn't connect: the conflicts settled for a version that deletes, or
+/// moves to the recycle bin.
 fn decided_deletions(sorted: &Sorted, decisions: &SyncDecisions) -> usize {
     let hosts = sorted
         .conflicts
@@ -899,7 +914,7 @@ fn decided_deletions(sorted: &Sorted, decisions: &SyncDecisions) -> usize {
         .vault
         .conflicts
         .iter()
-        .filter(|c| decisions.vault_theirs.contains(&c.id) && c.there == Party::Deleted)
+        .filter(|c| decisions.vault_theirs.contains(&c.id) && removes(c))
         .count();
     hosts + vault
 }
@@ -994,7 +1009,7 @@ fn choose_vault(
     let (mut theirs, mut kept) = (BTreeSet::new(), BTreeSet::new());
     for conflict in &sorted.conflicts {
         if decisions.vault_theirs.contains(&conflict.id) {
-            let past_limit = !within && conflict.there == Party::Deleted;
+            let past_limit = !within && removes(conflict);
             if !initiator && (!conflict.risky.is_empty() || past_limit) {
                 summary.deferred += 1;
             } else {
@@ -1025,10 +1040,10 @@ fn swap(session: &mut Session<TcpStream>, message: &Message) -> Result<Message, 
 
 /// Sorts a plan's changes by who has to look at them; a risky change the
 /// user turned down before, in the same version, is left out. Deletions
-/// from a device are limited over time, not per sync: they need a look
-/// when, with those made from it without asking in the last
-/// [`DELETION_WINDOW`], they pass [`MASS_DELETE`], hosts and the vault's
-/// items counted together.
+/// from the user's other devices are limited over time, not per sync: they
+/// need a look when, with those made from any of them without asking in the
+/// last [`DELETION_WINDOW`], they pass [`MASS_DELETE`], hosts and the
+/// vault's items counted together.
 fn sort(local: &SyncLocal, plan: &sshkm_core::sync::Plan, vault: Option<&VaultPlan>) -> Sorted {
     let mut sorted = Sorted {
         conflicts: plan.conflicts.clone(),
@@ -1326,8 +1341,20 @@ mod tests {
         assert_eq!(body.en.matches("• Host").count(), SHOWN_LINES);
         assert!(body.en.contains("…and 3 more"));
         assert!(body.ru.contains("…и ещё 3"));
-        let long = "x".repeat(SHOWN_CHARS + 5);
-        assert_eq!(shown(&long), format!("{}… (+5)", "x".repeat(SHOWN_CHARS)));
+        // Padding can't hide what follows, nor a line break of its own.
+        let padded = format!(
+            "--max-old-space-size=4096{}--require /tmp/x.js",
+            " ".repeat(100)
+        );
+        assert_eq!(
+            shown_value(&padded),
+            "--max-old-space-size=4096 --require /tmp/x.js"
+        );
+        assert_eq!(shown_value("a\u{2028}b\u{2029}c"), "a<U+2028>b<U+2029>c");
+        let long = format!("{}{}", "x".repeat(SHOWN_VALUE), "--require /tmp/x.js");
+        let value = shown_value(&long);
+        assert!(value.ends_with("--require /tmp/x.js"), "{value}");
+        assert!(value.contains(" … (+19) … "));
     }
 
     #[test]
@@ -1572,7 +1599,7 @@ mod tests {
 
     #[test]
     fn vault_conflicts_and_many_deletions_are_the_users() {
-        let (_dir, left, right, mail) = vault_pair();
+        let (dir, left, right, mail) = vault_pair();
         let doomed: Vec<String> = (0..7)
             .map(|n| add_login(&left, &format!("Old {n}")))
             .collect();
@@ -1614,6 +1641,13 @@ mod tests {
             right.real_vault().entry(&mail).unwrap().history_len,
             right_versions + 1
         );
+        // Saved, though nothing else of the vault changed on that side.
+        let saved = sshkm_core::vault::Vault::unlock(
+            &sshkm_core::vault::VaultPaths::new(dir.path().join("b/vault.kdbx")),
+            &sshkm_core::SecretString::from("master"),
+        )
+        .unwrap();
+        assert_eq!(saved.entry(&mail).unwrap().history_len, right_versions + 1);
 
         // Started from that side, its user sees them and lets them go.
         right.decisions.delete = true;
@@ -1783,6 +1817,63 @@ mod tests {
     }
 
     #[test]
+    fn conflicts_settled_for_a_version_in_the_bin_count_as_deletions() {
+        let (_dir, left, right, _) = vault_pair();
+        let ids: Vec<String> = (0..6)
+            .map(|n| add_login(&left, &format!("Login {n}")))
+            .collect();
+        let ((_, mut left), (_, right)) = sync(left, right);
+        let retitle = |side: &Script, id: &str, to: &str| {
+            side.real_vault()
+                .update_entry(
+                    id,
+                    &sshkm_core::vault::EntryInput {
+                        title: to.into(),
+                        ..sshkm_core::vault::EntryInput::default()
+                    },
+                )
+                .unwrap();
+        };
+        for id in &ids {
+            retitle(&left, id, "Left");
+            left.real_vault().trash_entry(id).unwrap();
+            retitle(&right, id, "Right");
+        }
+        // The user who started keeps its versions, in the bin: on the other
+        // side that moves six to the bin, past the limit, so they wait.
+        left.decisions.vault_mine.clone_from(&ids);
+        let ((left_sum, _), (right_sum, right)) = sync(left, right);
+        assert_eq!(right_sum.deferred, 6);
+        assert_eq!(left_sum.deferred_there, 6);
+        assert!(
+            ids.iter()
+                .all(|id| !right.real_vault().entry(id).unwrap().summary.in_trash)
+        );
+        assert_eq!(unasked(&right), 0);
+    }
+
+    #[test]
+    fn a_device_learned_through_a_sync_is_named_in_the_summary() {
+        let key = sshkm_core::p2p::Identity::generate()
+            .unwrap()
+            .public()
+            .to_string();
+        let now = OffsetDateTime::now_utc()
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&Rfc3339)
+            .unwrap();
+        let mut left = Script::own("alice", "s", LEFT);
+        left.device_records = vec![DeviceRecord {
+            key,
+            record: format!(r#"{{"name":"Phone","added":"{now}","modified":"{now}"}}"#),
+        }];
+        let ((left_sum, _), (right_sum, _)) = sync(left, Script::own("bob", "s", RIGHT));
+        assert_eq!(right_sum.devices_added, ["Phone"]);
+        assert_eq!(left_sum.devices_added, Vec::<String>::new());
+    }
+
+    #[test]
     fn only_a_text_field_of_a_conflict_both_changed_is_shown() {
         use sshkm_core::vault::sync::ItemKind;
         let conflict = |id: &str, there: Party| VaultConflict {
@@ -1802,6 +1893,7 @@ mod tests {
             .map(String::from)
             .to_vec(),
             risky: Vec::new(),
+            to_bin: false,
         };
         let review = Review {
             vault: VaultReview {

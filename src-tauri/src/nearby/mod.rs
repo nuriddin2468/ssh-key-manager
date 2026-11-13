@@ -183,6 +183,9 @@ pub struct MyDevice {
     pub last_sync: Option<String>,
     /// Found on the network now.
     pub reachable: bool,
+    /// The device a sync with which made it one of the user's on this
+    /// computer, by its name then; `None` when it was added here.
+    pub learned_from: Option<String>,
 }
 
 /// What `nearby.json` holds.
@@ -816,6 +819,7 @@ impl Nearby {
         let devices = state
             .vault
             .with_quietly(self.app()?, |vault| Ok(vault.own_devices()))?;
+        let learned = store::learned(&self.data_dir);
         Ok(devices
             .into_iter()
             .map(|device| {
@@ -825,6 +829,7 @@ impl Nearby {
                 MyDevice {
                     this: device.key == me,
                     reachable: found.contains(&device.key),
+                    learned_from: learned.get(&device.key).map(|learned| learned.from.clone()),
                     key: device.key,
                     name: device.name,
                     added: device.added,
@@ -1573,12 +1578,26 @@ impl Side for AppSide<'_> {
         })?;
         // The other device's records, saved as one change.
         let (mut devices, mut projects) = (false, false);
+        let mut learned = Vec::new();
         self.write(|vault| {
+            learned = vault::learned_devices(&vault.device_records(), &write.devices);
             devices = vault.merge_own_devices(&write.devices)?;
             projects = vault.merge_projects(&write.projects)?;
             let contacts = vault.merge_contacts(&write.contacts)?;
             Ok(devices || projects || contacts)
         })?;
+        if !learned.is_empty() {
+            let from = self
+                .nearby
+                .slot(self.id)
+                .as_mut()
+                .and_then(|slot| slot.view.peer.clone())
+                .unwrap_or_default();
+            // Best effort: the sync's summary names them too.
+            if let Err(error) = store::note_learned(&self.nearby.data_dir, &learned, &from) {
+                log::warn!("nearby: devices learned of were not noted: {error}");
+            }
+        }
         if let Some(app) = self.nearby.app.get() {
             if devices {
                 let _ = app.emit(DEVICES_EVENT, ());
@@ -1594,9 +1613,8 @@ impl Side for AppSide<'_> {
         store::save(&self.nearby.data_dir, &peer, state).map_err(|_| PairingFailure::NotSaved)
     }
 
-    fn sync_unasked(&self, peer: PeerKey, unasked: &[(i64, u32)]) -> Result<(), PairingFailure> {
-        store::save_unasked(&self.nearby.data_dir, &peer, unasked)
-            .map_err(|_| PairingFailure::NotSaved)
+    fn sync_unasked(&self, unasked: &[(i64, u32)]) -> Result<(), PairingFailure> {
+        store::save_unasked(&self.nearby.data_dir, unasked).map_err(|_| PairingFailure::NotSaved)
     }
 
     fn allow_risky_variables(&self, changes: &[RiskyVariables]) -> bool {
@@ -1671,13 +1689,14 @@ impl Side for AppSide<'_> {
             .ok_or(PairingFailure::Broken)?;
         // The vault as it was before the day's first sync deletions
         // outlives the rotation of backups.
-        let deletes =
-            plan.changes
-                .iter()
-                .any(|change| change.removal && make.contains(&change.id))
-                || plan.conflicts.iter().any(|conflict| {
-                    conflict.there == Party::Deleted && theirs.contains(&conflict.id)
-                });
+        let deletes = plan
+            .changes
+            .iter()
+            .any(|change| change.removal && make.contains(&change.id))
+            || plan.conflicts.iter().any(|conflict| {
+                (conflict.there == Party::Deleted || conflict.to_bin)
+                    && theirs.contains(&conflict.id)
+            });
         if deletes {
             let (state, _) = self.context()?;
             let database = self.read(|vault| vault.paths().database.clone())?;
@@ -1687,7 +1706,8 @@ impl Side for AppSide<'_> {
         let mut applied = VaultApplied::default();
         let changed = self.write(|vault| {
             applied = vault.apply_sync(&peer, plan, &hasher, choices)?;
-            Ok(!applied.counts.is_empty())
+            // A version kept in history changes the vault too.
+            Ok(applied.changed())
         })?;
         if changed && let Some(app) = self.nearby.app.get() {
             // The page reads the vault again, and the files of environments
@@ -2039,6 +2059,7 @@ mod tests {
                     there: Party::Changed,
                     fields: vec!["s:Password".into(), "s:TOTP Seed".into()],
                     risky: Vec::new(),
+                    to_bin: false,
                 }],
                 ..sync::VaultReview::default()
             },

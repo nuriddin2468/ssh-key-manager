@@ -1022,7 +1022,8 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   removed one stays as a tombstone, which is final: a sync never brings it back, only
   adding it again on that computer does. Record times are checked as RFC 3339 UTC, and
   a record dated more than five minutes ahead of this computer's clock is not taken.
-  The "own device"
+  A device a sync makes one of the user's is named in that sync's summary, and My
+  devices says which device the sync was with. The "own device"
   part of a conversation goes only to a peer whose `Hello` says it knows about own
   devices; older versions see nothing new.
 - **Same vault, without telling it.** In its `Hello` each side sends an HMAC-SHA256
@@ -1068,15 +1069,18 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   before `Host *`. What changed is told by a snapshot of each other device's last
   sync, kept as HMACs (keyed with a key derived from the device key) of each field,
   never the values. A change that would add a directive on the list under "Standard
-  files only" above is never made unasked, and neither are deletions past five from
-  one device in a day: those made without asking in the last 24 hours count with a
-  sync's own, so the limit holds over time, not per sync. They are kept in a small file
-  of their own, written before the sync changes anything, so a sync that ends early
-  counts too; a file that can't be read counts as at the limit. On the computer that
-  didn't start the sync, the deletions the other user's choices on conflicts would make
-  count as well. The user of the computer that started the sync decides there, and the
-  other computer puts them off until its own user syncs from it. A change that adds such a directive,
-  a conflict settled for the other computer's version included, is written only after
+  files only" above is never made unasked, and neither are deletions past five a day
+  from the user's other devices, all of them together: those this computer made
+  without asking in the last 24 hours count with a sync's own, so the limit holds over
+  time, not per sync, and a device gets no more by syncing under other device keys or
+  through another device. They are kept in a small file for this computer, written
+  before the sync changes anything, so a sync that ends early counts too; a file that
+  can't be read counts as at the limit, and is written so for a day. On the computer
+  that didn't start the sync, the deletions the other user's choices on conflicts
+  would make (moves to the recycle bin included) count as well. The user of the
+  computer that started the sync decides there, and the other computer puts them off
+  until its own user syncs from it. A change that adds such a directive, a conflict
+  settled for the other computer's version included, is written only after
   that user allows it in a system dialog that lists the hosts and directives; on a no
   it waits for the next sync. A change turned down is not asked about again until it
   changes. A conflict is the user's choice too. Both files are backed up before a sync
@@ -1121,13 +1125,15 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   `DYLD_*`, `NODE_OPTIONS`, `PATH`, `BASH_ENV`, `GIT_SSH_COMMAND`, …), or the value of a
   shared value such a variable uses, is a risky change: the user who started the sync
   decides on it and allows it in a system dialog that lists each variable with the
-  value it would take; the other computer puts it off. Deletions and moves to the recycle bin
-  count with hosts' toward the same limit of five from one device a day, and the vault
+  value it would take, in full up to a thousand characters (past that its start and its
+  end), runs of spaces as one, and invisible, direction-changing or line-breaking
+  characters escaped; the other computer puts it off. Deletions and moves to the
+  recycle bin count with hosts' toward the same limit of five a day, and the vault
   is kept as it was before each sync that makes them, as the config is. The other
   device's records (devices, projects, contacts) are saved as one change, then its
   entries and groups are applied in memory as another and saved once, each after a
-  backup of the file; an entry the user changed while deciding is left for the next
-  sync. A binding of a
+  backup of the file, a conflict settled for this computer's version included; an
+  entry the user changed while deciding is left for the next sync. A binding of a
   `.env` file comes with its environment's kind and level as one value, so a sync
   never lowers its protection: a level-3 file on a system without pipes, or a level-1
   file of a remote environment, is never written. What a computer keeps to itself

@@ -107,6 +107,8 @@ pub struct Script {
     pub asked_variables: Mutex<Vec<RiskyVariables>>,
     /// Hangs up after applying a sync, before saying what it has.
     pub hangs_up: bool,
+    /// The records of the user's devices this side sends.
+    pub device_records: Vec<DeviceRecord>,
 }
 
 impl Script {
@@ -150,6 +152,7 @@ impl Script {
             allows_variables: true,
             asked_variables: Mutex::default(),
             hangs_up: false,
+            device_records: Vec::new(),
         }
     }
 
@@ -313,7 +316,7 @@ impl Side for Script {
         Ok(SyncLocal {
             config: self.config.lock().unwrap().clone(),
             known: self.known.lock().unwrap().clone(),
-            devices: Vec::new(),
+            devices: self.device_records.clone(),
             projects: self.projects.lock().unwrap().clone(),
             contacts: self.contact_records.lock().unwrap().clone(),
             state: self.sync_state.lock().unwrap().clone(),
@@ -339,7 +342,7 @@ impl Side for Script {
         *self.sync_state.lock().unwrap() = state.clone();
         Ok(())
     }
-    fn sync_unasked(&self, _: PeerKey, unasked: &[(i64, u32)]) -> Result<(), PairingFailure> {
+    fn sync_unasked(&self, unasked: &[(i64, u32)]) -> Result<(), PairingFailure> {
         self.sync_state.lock().unwrap().unasked = unasked.to_vec();
         Ok(())
     }
@@ -385,8 +388,11 @@ impl Side for Script {
         let applied = vault
             .apply_sync(peer, plan, &self.vault_hasher(), choices)
             .map_err(|_| PairingFailure::NotSaved)?;
-        let backups = &self.real.as_ref().expect("a script with a vault").1;
-        vault.save(backups).map_err(|_| PairingFailure::NotSaved)?;
+        // Saved when the app saves: something counted, or a version kept.
+        if applied.changed() {
+            let backups = &self.real.as_ref().expect("a script with a vault").1;
+            vault.save(backups).map_err(|_| PairingFailure::NotSaved)?;
+        }
         Ok(applied)
     }
     fn vault_items(&self, pairs: &Pairs) -> Result<VaultItems, PairingFailure> {

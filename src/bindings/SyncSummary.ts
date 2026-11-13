@@ -16,6 +16,11 @@ added: number, changed: number, removed: number,
  */
 keysAdded: number, 
 /**
+ * Devices the other computer's records made the user's here: their
+ * names. Shown, so a device learned through a sync is never silent.
+ */
+devicesAdded: Array<string>, 
+/**
  * Hosts the two trust different keys for: shown, never resolved.
  */
 keysDiffer: Array<KeysDiffer>, 

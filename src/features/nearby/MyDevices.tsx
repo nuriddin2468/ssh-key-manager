@@ -102,6 +102,14 @@ export function MyDevices({ status }: { status: NearbyStatus | undefined }) {
                               })
                             : t('nearby.devices.never')}
                         </span>
+                        {device.learnedFrom ? (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span>
+                              {t('nearby.devices.learnedFrom', { name: device.learnedFrom })}
+                            </span>
+                          </>
+                        ) : null}
                       </>
                     )}
                   </span>

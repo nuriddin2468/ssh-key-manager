@@ -607,10 +607,10 @@ function ConflictValues({
   }, [focus]);
   const show = async (field: string) => {
     try {
-      const [mine, theirs] = await Promise.all([
-        api.nearbySyncValue(id, conflict.id, field, false),
-        api.nearbySyncValue(id, conflict.id, field, true),
-      ]);
+      // One after the other: past the free secrets, each is asked for in
+      // a dialog of its own.
+      const mine = await api.nearbySyncValue(id, conflict.id, field, false);
+      const theirs = await api.nearbySyncValue(id, conflict.id, field, true);
       setShown((current) => ({ ...current, [field]: { mine, theirs } }));
       setFocus(field);
     } catch (error) {

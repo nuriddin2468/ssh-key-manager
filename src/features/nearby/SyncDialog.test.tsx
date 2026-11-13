@@ -78,6 +78,7 @@ const decidingVault: Pairing = {
             there: 'changed',
             fields: ['s:Password', 's:otp'],
             risky: [],
+            toBin: false,
           },
           {
             id: 'stage',
@@ -87,6 +88,7 @@ const decidingVault: Pairing = {
             there: 'changed',
             fields: [],
             risky: [],
+            toBin: false,
           },
         ],
         risky: [
@@ -222,6 +224,7 @@ describe('SyncDialog', () => {
             added: 2,
             changed: 1,
             removed: 0,
+            devicesAdded: [],
             keysAdded: 0,
             keysDiffer: [{ host: 'nas', port: 22, here: ['SHA256:aaa'], there: ['SHA256:bbb'] }],
             deferred: 0,
@@ -262,6 +265,7 @@ describe('SyncDialog', () => {
             added: 0,
             changed: 0,
             removed: 0,
+            devicesAdded: [],
             keysAdded: 0,
             keysDiffer: [],
             deferred: 0,

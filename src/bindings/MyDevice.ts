@@ -19,4 +19,9 @@ lastSync: string | null,
 /**
  * Found on the network now.
  */
-reachable: boolean, };
+reachable: boolean, 
+/**
+ * The device a sync with which made it one of the user's on this
+ * computer, by its name then; `None` when it was added here.
+ */
+learnedFrom: string | null, };

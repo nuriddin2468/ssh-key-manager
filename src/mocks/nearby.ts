@@ -157,6 +157,7 @@ const mine: MyDevice[] = [
     this: true,
     lastSync: null,
     reachable: false,
+    learnedFrom: null,
   },
   {
     key: IMAC,
@@ -165,6 +166,16 @@ const mine: MyDevice[] = [
     this: false,
     lastSync: new Date(Date.now() - 2 * 3600_000).toISOString(),
     reachable: true,
+    learnedFrom: null,
+  },
+  {
+    key: 'bW9jay10YWJsZXQ=',
+    name: 'Pixel Tablet',
+    added: '2026-10-30T18:20:00Z',
+    this: false,
+    lastSync: null,
+    reachable: false,
+    learnedFrom: 'iMac at home',
   },
 ];
 
@@ -294,6 +305,7 @@ function addMine(peer: string) {
     this: false,
     lastSync: null,
     reachable: false,
+    learnedFrom: null,
   });
   window.dispatchEvent(new CustomEvent(MOCK_DEVICES_EVENT));
 }
@@ -336,6 +348,17 @@ const REVIEW: Review = {
         there: 'changed',
         fields: ['s:Password', 's:URL'],
         risky: [],
+        toBin: false,
+      },
+      {
+        id: '3f6c2a10-6d3b-4c1e-9a55-0b7d2e8f4a07',
+        kind: 'login',
+        label: 'Old VPN',
+        here: 'changed',
+        there: 'changed',
+        fields: ['s:Password'],
+        risky: [],
+        toBin: true,
       },
       {
         id: '3f6c2a10-6d3b-4c1e-9a55-0b7d2e8f4a02',
@@ -345,6 +368,7 @@ const REVIEW: Review = {
         there: 'changed',
         fields: [],
         risky: [],
+        toBin: false,
       },
     ],
     risky: [
@@ -394,6 +418,7 @@ function syncSummary(decisions: SyncDecisions | null): SyncSummary {
     changed: 1 + (decisions?.theirs.length ?? 0),
     removed: decisions?.delete ? REVIEW.deletions.length : 0,
     keysAdded: 3,
+    devicesAdded: SWITCH === 'sync' ? ['Pixel Tablet'] : [],
     keysDiffer: [
       {
         host: 'legacy-nas',
@@ -604,8 +629,8 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
     if (valuesShown >= MAX_VALUES_SHOWN)
       return fail('invalid_input', 'no more values in this sync');
     valuesShown += 1;
-    const values = CONFLICT_VALUES[String(field)];
-    if (!values) return fail('not_found', 'field');
+    // As the app: a field one side doesn't have reads as empty there.
+    const values = CONFLICT_VALUES[String(field)] ?? ['', ''];
     return values[theirs ? 1 : 0];
   },
   nearby_vault_cloud: () => (SWITCH === 'cloud' ? 'iCloudDrive' : null),

@@ -245,15 +245,19 @@ skip a tombstone (it lacks `name`) and keep an extra field when they read a live
 ## Risky changes and deletions
 
 **Deletions.** An entry leaving the vault, an entry moved to the recycle bin, and a group
-deleted each count as one. Deletions from a device are limited over time, not per sync:
-those this computer made from one device without asking in the last 24 hours count
-with the ones a sync brings, and past 5 (`MASS_DELETE`, hosts and vault counted together)
+deleted each count as one. Deletions from the user's other devices are limited over time,
+not per sync, and for all of them together, so a device gets no more under other device
+keys or through another device: those this computer made without asking in the last 24
+hours count with the ones a sync brings, and past 5 (`MASS_DELETE`, hosts and vault counted together)
 all of that sync's need the user's yes: on the side that connected, in the review; the
 other side puts them off, its snapshot untouched for them, until its user syncs from it.
-There, the deletions the other user's choices on conflicts would make count too, and wait
-past the limit. The count is kept in a small file per device (`sync/<device>.unasked.json`),
-written before the sync changes anything, so a sync that ends early counts; a file that
-can't be read counts as at the limit. Before each sync that makes such deletions, the
+There, the deletions the other user's choices on conflicts would make count too, moves to
+the recycle bin included (`VaultConflict.to_bin`), and wait past the limit. The count is
+kept in one small file for this computer (`sync/unasked.json`), written before the sync
+changes anything, so a sync that ends early counts; a file that can't be read counts as
+at the limit and is written so, to end a day later. A device a sync makes one of the
+user's is named in its summary ("Added to your devices: …"), and My devices says which
+device the sync was with (`sync/learned.json`). Before each sync that makes such deletions, the
 file (`~/.ssh/config`, the vault) is kept as it was in a backup the rotation of 20
 never removes (`fsutil::keep_backup`): the first of each day for 30 days and the 16
 newest; a new recovery key re-encrypts them like the others.
@@ -307,7 +311,7 @@ has; the risk is damage and code running on this computer.
 | A stranger, or a former own device, syncs                           | PR 1: Noise XX, the own-vault proof, both in each other's registry; a removed device stays a tombstone                            |
 | A different vault gets merged                                       | proof, then the copy must open with this secret and have this root                                                                |
 | A copy built to exhaust memory or CPU                               | 256 MiB, KDF bounds, no compression, XML depth and size scanned before parsing, item limits, history cap                          |
-| Mass deletion                                                       | more than 5 a day from one device need a yes on each device; a kept backup before each sync's deletions                           |
+| Mass deletion                                                       | more than 5 a day from all other devices need a yes on each device; a kept backup before each sync's deletions                    |
 | Values overwritten or emptied                                       | the previous version stays in each entry's history; backup before the save; step 2 adds undo                                      |
 | Code run through a variable (`NODE_OPTIONS`, `LD_PRELOAD`, `PATH`…) | risky variables need the review and the system dialog                                                                             |
 | Code run through a host directive                                   | PR 1's risky directives, unchanged                                                                                                |

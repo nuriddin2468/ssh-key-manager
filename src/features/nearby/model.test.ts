@@ -9,6 +9,7 @@ import {
   canShow,
   clock,
   conflictRows,
+  conflictStory,
   fieldLabel,
   fieldLabels,
   isActive,
@@ -89,6 +90,7 @@ describe('summaryLine', () => {
     changed: 0,
     removed: 1,
     keysAdded: 0,
+    devicesAdded: [],
     keysDiffer: [],
     deferred: 0,
     deferredThere: 0,
@@ -114,6 +116,38 @@ describe('summaryLine', () => {
       'nearby.sync.vault.line',
     ]);
     expect(summaryLines(t, { ...summary, vault })).toHaveLength(2);
+  });
+
+  it('always names a device a sync made one of the user’s', () => {
+    const named = ((key: string, options?: { names?: string }) =>
+      options?.names ? `${key}:${options.names}` : key) as unknown as TFunction;
+    expect(
+      summaryLines(named, { ...summary, added: 0, removed: 0, devicesAdded: ['Phone', 'Tablet'] }),
+    ).toEqual(['nearby.sync.devicesAdded:Phone, Tablet']);
+  });
+});
+
+describe('conflictStory', () => {
+  const t = ((key: string) => key) as unknown as TFunction;
+  const conflict: VaultConflict = {
+    id: 'x',
+    kind: 'login',
+    label: 'Mail',
+    here: 'changed',
+    there: 'changed',
+    fields: ['s:Password'],
+    risky: [],
+    toBin: false,
+  };
+
+  it('says when taking the other version moves the item to the recycle bin', () => {
+    expect(conflictStory(t, conflict, 'iMac')).toBe('nearby.sync.vault.changedBoth');
+    expect(conflictStory(t, { ...conflict, toBin: true }, 'iMac')).toBe(
+      'nearby.sync.vault.binnedThere',
+    );
+    expect(conflictStory(t, { ...conflict, there: 'deleted' }, 'iMac')).toBe(
+      'nearby.sync.vault.deletedThere',
+    );
   });
 });
 
@@ -143,6 +177,8 @@ describe('fieldLabel', () => {
     expect(canShow('s:TOTP Seed')).toBe(false);
     expect(canShow('s:TimeOtp-Secret-Base32')).toBe(false);
     expect(canShow('s:HmacOtp-Secret')).toBe(false);
+    expect(canShow('s:OTP')).toBe(false);
+    expect(canShow('s:totp seed')).toBe(false);
     expect(canShow('a:key.pem')).toBe(false);
     expect(canShow('group')).toBe(false);
   });
@@ -157,6 +193,7 @@ describe('mayShow', () => {
     there,
     fields: ['s:Password', 's:TOTP Seed'],
     risky: [],
+    toBin: false,
   });
   const review: Review = {
     conflicts: [],

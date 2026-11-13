@@ -280,9 +280,10 @@ pub trait Side {
     fn sync_keep(&self, _peer: PeerKey, _state: &SyncState) -> Result<(), PairingFailure> {
         Err(PairingFailure::NotSaved)
     }
-    /// Keeps the deletions made from `peer` without asking
-    /// ([`SyncState::unasked`]): before a sync writes anything.
-    fn sync_unasked(&self, _peer: PeerKey, _unasked: &[(i64, u32)]) -> Result<(), PairingFailure> {
+    /// Keeps the deletions this computer made without asking, from all the
+    /// user's devices ([`SyncState::unasked`]): before a sync writes
+    /// anything.
+    fn sync_unasked(&self, _unasked: &[(i64, u32)]) -> Result<(), PairingFailure> {
         Err(PairingFailure::NotSaved)
     }
     /// The user's decisions on a review, if they come within `wait`.

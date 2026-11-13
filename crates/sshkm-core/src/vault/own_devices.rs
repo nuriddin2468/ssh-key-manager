@@ -353,6 +353,40 @@ impl Stored {
     }
 }
 
+/// The devices that records from another own device (`theirs`) would make
+/// the user's here, as [`Vault::merge_own_devices`] takes them: live ones
+/// this computer has no record of. A sync tells the user of each.
+pub fn learned_devices(mine: &[DeviceRecord], theirs: &[DeviceRecord]) -> Vec<OwnDevice> {
+    let latest = OffsetDateTime::now_utc() + MAX_AHEAD;
+    let here: std::collections::BTreeSet<&str> = mine
+        .iter()
+        .filter(|record| parse(&record.key, &record.record).is_some())
+        .map(|record| record.key.as_str())
+        .collect();
+    let mut learned: std::collections::BTreeMap<&str, OwnDevice> =
+        std::collections::BTreeMap::new();
+    for record in theirs.iter().take(MAX_RECORDS) {
+        let Some(incoming) = parse(&record.key, &record.record) else {
+            continue;
+        };
+        if incoming.removed.is_some()
+            || incoming.times().any(|time| time > latest)
+            || here.contains(record.key.as_str())
+        {
+            continue;
+        }
+        learned.insert(
+            &record.key,
+            OwnDevice {
+                key: record.key.clone(),
+                name: incoming.name,
+                added: incoming.added,
+            },
+        );
+    }
+    learned.into_values().collect()
+}
+
 /// Whether `incoming` (stored as `json`) takes the place of `mine`.
 ///
 /// - A tombstone here is final: nothing from a sync replaces it.
@@ -451,6 +485,37 @@ mod tests {
         let fresh = dated("Back", &now, &now);
         assert!(!here.merge_own_devices(&[record(&laptop, &fresh)]).unwrap());
         assert!(!here.is_own_device(&laptop));
+    }
+
+    #[test]
+    fn a_device_only_the_other_side_knows_is_learned() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut here = vault(&dir, "here");
+        let (known, new, gone) = (
+            Identity::generate().unwrap().public(),
+            Identity::generate().unwrap().public(),
+            Identity::generate().unwrap().public(),
+        );
+        let now = from_now(0);
+        let live = |name: &str| dated(name, &now, &now);
+        let removed = format!(r#"{{"modified":"{now}","removed":"{now}"}}"#);
+        assert!(
+            here.merge_own_devices(&[record(&known, &live("Known"))])
+                .unwrap()
+        );
+        assert!(here.merge_own_devices(&[record(&gone, &removed)]).unwrap());
+        let theirs = [
+            record(&known, &live("Known, renamed")),
+            record(&new, &live("New")),
+            record(&gone, &live("Back")),
+            record(&Identity::generate().unwrap().public(), &removed),
+        ];
+        let learned = learned_devices(&here.device_records(), &theirs);
+        assert_eq!(
+            learned.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(),
+            ["New"]
+        );
+        assert_eq!(learned[0].key, new.to_string());
     }
 
     /// A record of a device added at `added` and changed at `modified`.

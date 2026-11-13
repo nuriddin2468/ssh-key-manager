@@ -111,7 +111,14 @@ export function summaryLines(t: TFunction, summary: SyncSummary): string[] {
     summary.removed ? t('nearby.sync.removed', { count: summary.removed }) : null,
     summary.keysAdded ? t('nearby.sync.keysAdded', { count: summary.keysAdded }) : null,
   ].filter((part) => part !== null);
-  const lines = [...(hosts.length > 0 ? [hosts.join(', ')] : []), ...vaultLines(t, summary.vault)];
+  const lines = [
+    ...(hosts.length > 0 ? [hosts.join(', ')] : []),
+    ...vaultLines(t, summary.vault),
+    // A device made the user's through a sync is always named.
+    ...(summary.devicesAdded.length > 0
+      ? [t('nearby.sync.devicesAdded', { names: summary.devicesAdded.join(', ') })]
+      : []),
+  ];
   return lines.length > 0 ? lines : [t('nearby.sync.nothing')];
 }
 
@@ -133,6 +140,7 @@ export function vaultOffText(t: TFunction, off: VaultOff, peer: string): string 
 export function conflictStory(t: TFunction, conflict: VaultConflict, peer: string): string {
   if (conflict.here === 'deleted') return t('nearby.sync.vault.deletedHere', { peer });
   if (conflict.there === 'deleted') return t('nearby.sync.vault.deletedThere', { peer });
+  if (conflict.toBin) return t('nearby.sync.vault.binnedThere', { peer });
   return t('nearby.sync.vault.changedBoth', { peer });
 }
 
@@ -214,14 +222,14 @@ export function fieldLabels(t: TFunction, fields: string[], kind: SyncItemKind):
 
 /**
  * Whether a field holds a 2FA secret, as this app, KeePassXC or KeePass's plugins write it
- * (`otp`, `TOTP Seed`, `TimeOtp-Secret-…`, `HmacOtp-Secret-…`): never shown.
+ * (`otp`, `TOTP Seed`, `TimeOtp-Secret-…`, `HmacOtp-Secret-…`), in any letter case: never shown.
  */
 function isOtpField(field: string): boolean {
-  const name = field.slice(2);
+  const name = field.slice(2).toLowerCase();
   return (
-    ['otp', 'Unrecognized 2FA secret', 'TOTP Seed'].includes(name) ||
-    name.startsWith('TimeOtp-Secret') ||
-    name.startsWith('HmacOtp-Secret')
+    ['otp', 'unrecognized 2fa secret', 'totp seed'].includes(name) ||
+    name.startsWith('timeotp-secret') ||
+    name.startsWith('hmacotp-secret')
   );
 }
 

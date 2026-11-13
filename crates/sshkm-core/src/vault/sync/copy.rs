@@ -6,17 +6,17 @@ use std::collections::{HashMap, HashSet};
 use chrono::{Duration, NaiveDateTime};
 use keepass::Database;
 use keepass::config::CompressionConfig;
-use keepass::db::{CustomDataItem, CustomDataValue, EntryId, GroupId, History, Times};
+use keepass::db::{CustomDataItem, CustomDataValue, EntryId, GroupId, History, Icon, Times};
 use secrecy::SecretString;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use super::model::local_set;
-use super::{MAX_DELETED, MAX_DEPTH, MAX_ENTRIES, MAX_GROUPS, MAX_VERSIONS};
+use super::payload;
+use super::{MAX_ATTACHMENTS, MAX_DELETED, MAX_DEPTH, MAX_ENTRIES, MAX_GROUPS, MAX_VERSIONS};
 use crate::vault::projects::KEEP_REMOVED_MS;
 use crate::vault::{
-    MAX_DATABASE_SIZE, Vault, kdf, key, open_error, parse_database, read_database, serialize,
-    sha256,
+    MAX_DATABASE_SIZE, Vault, kdf, parse_database, read_database, serialize, sha256,
 };
 use crate::{Error, Result};
 
@@ -90,7 +90,7 @@ impl Vault {
             return Err(Error::invalid("another vault"));
         }
         check(&db)?;
-        let local = local_ids(&db);
+        let local = local_ids(&db)?;
         strip(&mut db);
         settle_times(&mut db);
         Ok(PeerVault { db, local })
@@ -126,21 +126,23 @@ pub fn check_moved(database: &[u8], secret: &SecretString) -> Result<()> {
 }
 
 /// Reads a database another device sent, within bounds: at most
-/// [`MAX_DATABASE_SIZE`], sane key derivation, KDBX 4 without compression
-/// (so nothing inflates past the file's size), and its XML, decrypted first,
+/// [`MAX_DATABASE_SIZE`], sane key derivation, KDBX 4 without compression,
+/// and its payload, decrypted here first ([`payload`]): at most
+/// [`MAX_ATTACHMENTS`] attachments in its inner header, and its XML
 /// neither deeper than [`MAX_XML_DEPTH`] nor more than [`MAX_XML_ELEMENTS`]
 /// elements, without a DTD and without attachments stored compressed in it.
-/// The `keepass` crate inflates and recurses without limits; this is the
-/// guard in front of it.
+/// The `keepass` crate allocates, inflates and recurses without limits;
+/// this is the guard in front of it.
 fn read_bounded(bytes: &[u8], secret: &SecretString) -> Result<Database> {
     if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_DATABASE_SIZE {
         return Err(Error::invalid("the copy is too large"));
     }
     kdf::check_kdbx(bytes)?;
     kdf::check_uncompressed_kdbx4(bytes)?;
-    let xml = Zeroizing::new(Database::get_xml(&mut &bytes[..], key(secret)).map_err(open_error)?);
-    check_xml(&xml)?;
-    drop(xml);
+    let decrypted = payload::decrypt(bytes, secret)?;
+    let xml = payload::xml_start(&decrypted, MAX_ATTACHMENTS)?;
+    check_xml(&decrypted[xml..])?;
+    drop(decrypted);
     parse_database(bytes, secret)
 }
 
@@ -161,7 +163,8 @@ fn check_xml(xml: &[u8]) -> Result<()> {
     {
         let rest = &xml[start..];
         if rest.starts_with(b"<!--") {
-            at = find(start, b"-->")?;
+            // Not the `-->` of `<!-->`: a comment ends after it starts.
+            at = find(start + 4, b"-->")?;
             continue;
         }
         if rest.starts_with(b"<![CDATA[") {
@@ -241,22 +244,30 @@ fn compressed_binary(tag: &[u8]) -> bool {
     !inner[..end].eq_ignore_ascii_case(b"false")
 }
 
-/// What the sender keeps on its computer, from a copy's custom data.
-fn local_ids(db: &Database) -> HashSet<Uuid> {
+/// Longest list of what the sender keeps on its computer that is read: a
+/// UUID in quotes and a comma for each entry and group a copy may hold.
+const MAX_LOCAL_IDS_LEN: usize = (MAX_ENTRIES + MAX_GROUPS) * 40;
+
+/// What the sender keeps on its computer, from a copy's custom data; a list
+/// longer than any copy needs is refused before it is parsed.
+fn local_ids(db: &Database) -> Result<HashSet<Uuid>> {
     let Some(CustomDataValue::String(json)) = db
         .meta
         .custom_data
         .get(LOCAL_IDS)
         .and_then(|item| item.value.as_ref())
     else {
-        return HashSet::new();
+        return Ok(HashSet::new());
     };
-    serde_json::from_str::<Vec<String>>(json)
+    if json.len() > MAX_LOCAL_IDS_LEN {
+        return Err(Error::invalid("the copy's list of local items is too long"));
+    }
+    Ok(serde_json::from_str::<Vec<String>>(json)
         .unwrap_or_default()
         .iter()
         .take(MAX_ENTRIES + MAX_GROUPS)
         .filter_map(|id| Uuid::parse_str(id).ok())
-        .collect()
+        .collect())
 }
 
 /// Keeps removal records within what a copy may carry: at most the newest
@@ -330,6 +341,39 @@ fn strip(db: &mut Database) {
         // A local group inside another went with it.
         if let Some(group) = db.group_mut(id) {
             group.remove();
+        }
+    }
+    drop_unused_icons(db);
+}
+
+/// Removes the custom icons nothing left uses (an entry, an earlier
+/// version of one, a group): the `keepass` crate writes them all, and one
+/// a local item used would otherwise go in the copy.
+fn drop_unused_icons(db: &mut Database) {
+    let mut used = HashSet::new();
+    let mut note = |icon: Option<&Icon>| {
+        if let Some(Icon::Custom(id)) = icon {
+            used.insert(*id);
+        }
+    };
+    for entry in db.iter_all_entries() {
+        note(entry.icon());
+        let versions = entry.history.as_ref().map_or(0, |h| h.get_entries().len());
+        for version in (0..versions).filter_map(|i| entry.historical(i)) {
+            note(version.icon());
+        }
+    }
+    for group in db.iter_all_groups() {
+        note(group.icon());
+    }
+    let unused: Vec<_> = db
+        .iter_all_custom_icons()
+        .map(|icon| icon.id())
+        .filter(|id| !used.contains(id))
+        .collect();
+    for id in unused {
+        if let Some(icon) = db.custom_icon_mut(id) {
+            icon.remove();
         }
     }
 }

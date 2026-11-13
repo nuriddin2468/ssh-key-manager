@@ -1448,6 +1448,10 @@ fn a_copy_is_read_within_bounds() {
     }
     let nested = format!("{}{}", "<a>".repeat(200), "</a>".repeat(200));
     assert!(check_xml_for_tests(nested.as_bytes()).is_err());
+    // `<!-->` opens a comment that ends at a later `-->`, as the parser
+    // reads it: what is inside doesn't close what is outside.
+    let hidden = "<a><!--></a>-->".repeat(200);
+    assert!(check_xml_for_tests(hidden.as_bytes()).is_err());
 
     // A vault moved to a new device goes the same way.
     let moved = a.vault.moved_copy().unwrap();
@@ -1691,6 +1695,79 @@ fn a_crafted_copy_brings_no_custom_data_and_no_local_items() {
     let peer = a.vault.open_sync_copy(&crafted(&db, &a.vault)).unwrap();
     assert!(peer.db.meta.custom_data.is_empty());
     assert!(peer.db.group(local).is_none());
+}
+
+#[test]
+fn a_copys_list_of_local_items_is_bounded_and_kept_out_on_both_sides() {
+    let (_dir, mut a, mut b) = two();
+    let id = a.login("Mail", "p1");
+    sync(&mut a, &mut b);
+    b.edit(&id, |e| e.password = Some(s("p2")));
+    let listed = |json: String| {
+        let mut db = b.vault.db.clone();
+        db.meta.custom_data.insert(
+            "sshkm.sync.local".into(),
+            CustomDataItem {
+                value: Some(CustomDataValue::String(json)),
+                last_modification_time: None,
+            },
+        );
+        crafted(&db, &a.vault)
+    };
+    // Listed as kept on that computer, yet sent: left out on both sides,
+    // neither taken nor a conflict.
+    let peer = a
+        .vault
+        .open_sync_copy(&listed(format!(r#"["{id}"]"#)))
+        .unwrap();
+    let plan = a.vault.plan_sync(&peer, &a.base, &a.hasher);
+    assert!(
+        plan.changes.iter().all(|c| c.id != id),
+        "{:?}",
+        plan.changes
+    );
+    assert!(
+        plan.conflicts.iter().all(|c| c.id != id),
+        "{:?}",
+        plan.conflicts
+    );
+    // A list longer than any copy needs isn't parsed.
+    let long = " ".repeat((MAX_ENTRIES + MAX_GROUPS) * 40 + 1);
+    assert!(a.vault.open_sync_copy(&listed(long)).is_err());
+}
+
+#[test]
+fn a_local_items_custom_icon_stays_on_its_computer() {
+    let (_dir, mut a, _b) = two();
+    let shared = a.login("Shared", "p");
+    let local = a.login("Local", "p");
+    for (id, icon) in [(&shared, vec![1u8; 8]), (&local, vec![2u8; 8])] {
+        a.vault
+            .db
+            .entry_mut(EntryId::from_uuid(id.parse().unwrap()))
+            .unwrap()
+            .set_icon_custom_new(icon);
+    }
+    a.vault
+        .db
+        .entry_mut(EntryId::from_uuid(local.parse().unwrap()))
+        .unwrap()
+        .custom_data
+        .insert(
+            LOCAL.into(),
+            CustomDataItem {
+                value: Some(CustomDataValue::String("x".into())),
+                last_modification_time: None,
+            },
+        );
+    a.save();
+    let copy = a.vault.sync_copy().unwrap();
+    let parsed = crate::vault::parse_database(&copy, &a.vault.secret).unwrap();
+    let icons: Vec<Vec<u8>> = parsed
+        .iter_all_custom_icons()
+        .map(|icon| icon.data.clone())
+        .collect();
+    assert_eq!(icons, [vec![1u8; 8]]);
 }
 
 #[test]

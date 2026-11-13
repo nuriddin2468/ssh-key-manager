@@ -125,8 +125,9 @@ pub(crate) fn compressed_kdbx(bytes: &[u8]) -> bool {
 }
 
 /// Fails unless `bytes` is a KDBX 4 file whose payload isn't compressed:
-/// what goes between the user's devices, so that reading it inflates
-/// nothing beyond its own size.
+/// what goes between the user's devices, so that its payload is no larger
+/// than the file. What the payload holds is bounded before the `keepass`
+/// crate reads it (`vault::sync::copy::read_bounded`).
 pub(crate) fn check_uncompressed_kdbx4(bytes: &[u8]) -> Result<()> {
     let kdbx = bytes.get(0..4) == Some(&KDBX_SIGNATURE[..])
         && bytes.get(4..8) == Some(&KDBX_VERSION_2[..])

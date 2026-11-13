@@ -9,10 +9,10 @@
 //!   a file the app writes ([`confirm_env_secrets`]): asked once per
 //!   environment and use while the vault stays unlocked;
 //! - single secrets shown on the page or copied to the clipboard
-//!   ([`take_secret`]): a few a minute are free, each one past that is asked
-//!   for.
+//!   ([`take_secret`]): ten in a row are free, then one every six minutes;
+//!   each one past that is asked for.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::BTreeSet;
 use std::sync::{Mutex, MutexGuard, Once, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -204,13 +204,15 @@ fn let_out() -> MutexGuard<'static, LetOut> {
 
 // --- Single secrets -----------------------------------------------------------
 
-/// How many secrets may be shown or copied in a minute before each further
-/// one is asked for.
-pub const FREE_PER_MINUTE: usize = 10;
-const MINUTE: Duration = Duration::from_secs(60);
+/// How many secrets may be shown or copied in a row without asking.
+pub const BURST: u32 = 10;
+/// How long until one more may go without asking, after the [`BURST`] is
+/// used: about ten an hour, so the page can't read the vault out a few at a
+/// time either.
+pub const REFILL: Duration = Duration::from_secs(6 * 60);
 
-/// When the secrets of the last minute were shown or copied.
-static TAKEN: Mutex<Taken> = Mutex::new(Taken::new());
+/// The secrets that may still be shown or copied without asking.
+static FREE: Mutex<Bucket> = Mutex::new(Bucket::new());
 
 /// What happens to a secret.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,19 +224,31 @@ pub enum Taking {
 }
 
 /// Lets one more secret out, to the page (`Show`) or the clipboard
-/// (`Copy`): free while fewer than [`FREE_PER_MINUTE`] went out in the last
-/// minute, otherwise only after a yes in a native dialog naming `what`, so a
-/// script can't read the vault out one secret after another. Fails with
-/// `cancelled` on a no. Call it before the secret is read, outside the
-/// vault's lock: the dialog waits for the user.
+/// (`Copy`): free while the bucket has one ([`BURST`] in a row, then one
+/// every [`REFILL`]), otherwise only after a yes in a native dialog naming
+/// `what`, so a script can't read the vault out one secret after another.
+/// Fails with `cancelled` on a no. Call it before the secret is read,
+/// outside the vault's lock: the dialog waits for the user.
 pub fn take_secret(app: &AppHandle, taking: Taking, what: &Localized) -> AppResult<()> {
-    if taken().try_take(Instant::now()) {
-        return Ok(());
-    }
-    let (title, body, approve) = take_question(taking, what);
-    confirm::require(app, &title, &body, &approve)?;
-    taken().record(Instant::now());
-    Ok(())
+    take_from(&FREE, Instant::now(), || {
+        let (title, body, approve) = take_question(taking, what);
+        confirm::require(app, &title, &body, &approve)
+    })
+}
+
+/// Takes one from `bucket` at `now`, or, when it is empty, asks with `ask`
+/// (whose yes takes nothing from the bucket).
+fn take_from(
+    bucket: &Mutex<Bucket>,
+    now: Instant,
+    ask: impl FnOnce() -> AppResult<()>,
+) -> AppResult<()> {
+    // Not held while asking: the dialog waits for the user.
+    let free = bucket
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .try_take(now);
+    if free { Ok(()) } else { ask() }
 }
 
 /// [`take_secret`] for the value of the variable `name` of the environment
@@ -280,22 +294,23 @@ pub fn take_entry_password(
 
 /// The dialog for one more secret past the free ones.
 fn take_question(taking: Taking, what: &Localized) -> (Localized, Localized, Localized) {
-    let free = FREE_PER_MINUTE;
+    let (burst, minutes) = (BURST, REFILL.as_secs() / 60);
     let (en, ru, uz) = (&what.en, &what.ru, &what.uz);
     let body = Localized::new(
         format!(
-            "More than {free} secrets were shown or copied in the last minute, so each further \
-             one is asked for. This one is {en}.\n\nContinue only if you asked for it yourself."
+            "The {burst} secrets that can be shown or copied without asking are used up (one \
+             more becomes free every {minutes} minutes), so this one is asked for: \
+             {en}.\n\nContinue only if you asked for it yourself."
         ),
         format!(
-            "За последнюю минуту показано или скопировано больше {free} секретов, поэтому о \
-             каждом следующем приложение спрашивает. Сейчас это {ru}.\n\nПродолжайте, только \
-             если запросили его сами."
+            "{burst} секретов, которые можно показать или скопировать без вопроса, уже \
+             использованы (ещё один освобождается каждые {minutes} минут), поэтому приложение \
+             спрашивает про этот: {ru}.\n\nПродолжайте, только если запросили его сами."
         ),
         format!(
-            "Oxirgi bir daqiqada {free} tadan ortiq sir koʻrsatildi yoki nusxalandi, shuning \
-             uchun har bir keyingisi soʻraladi. Bu safar: {uz}.\n\nUni oʻzingiz soʻragan \
-             boʻlsangizgina davom eting."
+            "Soʻrovsiz koʻrsatish yoki nusxalash mumkin boʻlgan {burst} ta sir ishlatib \
+             boʻlindi (har {minutes} daqiqada yana bittasi boʻshaydi), shuning uchun bu \
+             soʻraladi: {uz}.\n\nUni oʻzingiz soʻragan boʻlsangizgina davom eting."
         ),
     );
     match taking {
@@ -350,48 +365,47 @@ pub fn import_password() -> Localized {
     )
 }
 
-/// When secrets were let out in the last minute.
-struct Taken {
-    at: VecDeque<Instant>,
+/// A token bucket: [`BURST`] secrets free in a row, then one more every
+/// [`REFILL`], never more than [`BURST`] saved up.
+struct Bucket {
+    tokens: u32,
+    /// Since when the next token is being earned; `None` while full.
+    earning_since: Option<Instant>,
 }
 
-impl Taken {
+impl Bucket {
     const fn new() -> Self {
         Self {
-            at: VecDeque::new(),
+            tokens: BURST,
+            earning_since: None,
         }
     }
 
-    /// Counts one more taken at `now` if fewer than [`FREE_PER_MINUTE`]
-    /// were in the minute before; returns whether it did.
+    /// Adds the tokens earned by `now`.
+    fn refill(&mut self, now: Instant) {
+        let Some(since) = self.earning_since else {
+            return;
+        };
+        let earned = now.saturating_duration_since(since).as_secs() / REFILL.as_secs();
+        if earned == 0 {
+            return;
+        }
+        let earned = u32::try_from(earned).unwrap_or(u32::MAX);
+        self.tokens = self.tokens.saturating_add(earned).min(BURST);
+        // Short of full, the time already spent on the next one counts.
+        self.earning_since = (self.tokens < BURST).then(|| since + REFILL * earned);
+    }
+
+    /// Takes one token at `now`, if there is one; returns whether it did.
     fn try_take(&mut self, now: Instant) -> bool {
-        while self
-            .at
-            .front()
-            .is_some_and(|at| now.saturating_duration_since(*at) >= MINUTE)
-        {
-            self.at.pop_front();
+        self.refill(now);
+        if self.tokens == 0 {
+            return false;
         }
-        if self.at.len() < FREE_PER_MINUTE {
-            self.at.push_back(now);
-            true
-        } else {
-            false
-        }
+        self.tokens -= 1;
+        self.earning_since.get_or_insert(now);
+        true
     }
-
-    /// Counts one taken at `now` after the user said yes.
-    fn record(&mut self, now: Instant) {
-        self.at.push_back(now);
-        // Only the newest matter for the count.
-        while self.at.len() > FREE_PER_MINUTE {
-            self.at.pop_front();
-        }
-    }
-}
-
-fn taken() -> MutexGuard<'static, Taken> {
-    TAKEN.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]
@@ -465,25 +479,66 @@ mod tests {
         );
     }
 
+    /// Takes one from `bucket` at `start + seconds`; whether it had to ask,
+    /// with the user saying `yes`.
+    fn take_at(bucket: &Mutex<Bucket>, start: Instant, seconds: u64, yes: bool) -> (bool, bool) {
+        let mut asked = false;
+        let result = take_from(bucket, start + Duration::from_secs(seconds), || {
+            asked = true;
+            if yes {
+                Ok(())
+            } else {
+                Err(crate::error::AppError::new(
+                    sshkm_core::ErrorCode::Cancelled,
+                    "not approved",
+                ))
+            }
+        });
+        (asked, result.is_ok())
+    }
+
     #[test]
-    fn a_few_secrets_a_minute_are_free_and_each_one_past_that_is_asked() {
+    fn ten_secrets_go_in_a_row_then_each_one_is_asked_for() {
+        let bucket = Mutex::new(Bucket::new());
         let start = Instant::now();
-        let mut taken = Taken::new();
-        for i in 0..FREE_PER_MINUTE {
-            assert!(
-                taken.try_take(start + Duration::from_secs(u64::try_from(i).unwrap())),
-                "{i}"
-            );
+        // The burst, in no time at all.
+        for _ in 0..BURST {
+            assert_eq!(take_at(&bucket, start, 0, false), (false, true));
         }
-        // The next one in the same minute is asked for, and so is the one after
-        // a yes.
-        let soon = start + Duration::from_secs(30);
-        assert!(!taken.try_take(soon));
-        taken.record(soon);
-        assert!(!taken.try_take(soon + Duration::from_secs(1)));
-        // A minute after the first ones, they are free again.
-        assert!(taken.try_take(start + Duration::from_secs(95)));
-        assert!(taken.at.len() <= FREE_PER_MINUTE);
+        // Then each one is asked for: a yes lets it out, a no doesn't, and
+        // neither earns another free one.
+        assert_eq!(take_at(&bucket, start, 1, true), (true, true));
+        assert_eq!(take_at(&bucket, start, 2, false), (true, false));
+        assert_eq!(take_at(&bucket, start, 3, true), (true, true));
+    }
+
+    #[test]
+    fn one_more_is_free_every_six_minutes_and_at_most_ten_are_saved_up() {
+        let bucket = Mutex::new(Bucket::new());
+        let start = Instant::now();
+        for _ in 0..BURST {
+            take_at(&bucket, start, 0, false);
+        }
+        let refill = REFILL.as_secs();
+        // Just short of six minutes: still asked.
+        assert_eq!(take_at(&bucket, start, refill - 1, false), (true, false));
+        // At six minutes one is free, and only one.
+        assert_eq!(take_at(&bucket, start, refill, false), (false, true));
+        assert_eq!(take_at(&bucket, start, refill + 1, false), (true, false));
+        // Time spent on the next one counts: at twelve minutes, the next.
+        assert_eq!(take_at(&bucket, start, 2 * refill, false), (false, true));
+        // About ten an hour, not six hundred.
+        let hour = 2 * refill + 3600;
+        let free = (0..BURST + 5)
+            .filter(|_| !take_at(&bucket, start, hour, false).0)
+            .count();
+        assert_eq!(free, 10);
+        // A long pause saves up no more than the burst.
+        let day = hour + 86_400;
+        let free = (0..BURST + 5)
+            .filter(|_| !take_at(&bucket, start, day, false).0)
+            .count();
+        assert_eq!(free, usize::try_from(BURST).unwrap());
     }
 
     #[test]
@@ -492,10 +547,13 @@ mod tests {
         let (title, body, approve) = take_question(Taking::Show, &what);
         assert_eq!(title.en, "Show another secret?");
         assert_eq!(approve.en, "Show");
-        assert!(body.en.contains("More than 10 secrets"));
+        assert!(body.en.contains(
+            "The 10 secrets that can be shown or copied without asking are used up (one more \
+             becomes free every 6 minutes)"
+        ));
         assert!(
             body.en
-                .contains("This one is the password of “GitHub<U+202E>”.")
+                .contains("so this one is asked for: the password of “GitHub<U+202E>”.")
         );
         let what = env_value("DATABASE_URL", "Shop · prod");
         let (title, body, _) = take_question(Taking::Copy, &what);

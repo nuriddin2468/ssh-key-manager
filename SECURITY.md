@@ -37,11 +37,11 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     count as activity, so it doesn't keep the vault open. Lists and details sent to the
     interface carry no passwords or 2FA secrets; a password (or a key's passphrase)
     reaches the interface only when you choose to reveal it. A 2FA secret never does:
-    only the current code, computed in the Rust process. Ten secrets a minute (shown,
-    or copied from the main window: passwords, secret variables, the vault's side of an
-    import's comparison) go without asking; each one past that is asked for in a
-    system dialog that names it, so the page can't read the vault out one secret
-    after another.
+    only the current code, computed in the Rust process. Ten secrets (shown, or
+    copied from the main window: passwords, secret variables, the vault's side of an
+    import's comparison) go without asking in a row, then one more every six minutes,
+    about ten an hour; each one past that is asked for in a system dialog that names
+    it, so the page can't read the vault out one secret after another.
   - Copying a password, a 2FA code or the recovery key goes from Rust straight to the
     clipboard, marked so clipboard history (and Windows' cloud clipboard) skip it, and
     is cleared after 30 seconds by default if nothing else was copied. Locking the vault
@@ -127,7 +127,7 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     and notes, never values: a value reaches it only when you choose to show it (or
     load it to edit it), and copying goes from Rust straight to the clipboard,
     cleared like a password when the variable is secret. Secret values count toward
-    the ten a minute above. Two environments are
+    the ten in a row above. Two environments are
     compared inside the Rust process; only the names that differ come out.
   - A `.env` file to import is picked in a system dialog the app opens itself and
     read again when you import, at most 1 MiB; nothing in it is expanded or run, and
@@ -496,7 +496,7 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     Security Policy below lets only the app's own scripts run. The system dialogs and
     the rule that the page never names a file only limit what such a script could
     take in bulk from the vault and from browsers, or where it could move the vault.
-    Without a dialog it could still read up to ten secrets a minute, the values of
+    Without a dialog it could still read ten secrets, then about ten an hour, the values of
     environments you let into a shell or a file since the vault was unlocked, and,
     through a shell, anything you can read: the `.env` files the app already writes,
     an unencrypted private key, other programs' files. It can always run commands.

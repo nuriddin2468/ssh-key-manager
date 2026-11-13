@@ -155,9 +155,16 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     (a quote that never closes, a line naming a variable without `=`), or that would
     remove half its variables or more at once, changes nothing until you say so.
     Values never reach the interface, errors or logs; the compare dialog compares only
-    an environment's own files. Whether Git ignores or has committed a file is asked of `git` with
-    `core.fsmonitor` off, so a repository's own settings can't make it run a program;
-    a line goes into `.gitignore` only when you ask.
+    an environment's own files. Whether Git ignores or has committed a file is asked of
+    `git` (as are the files of a working tree for the leak scanner) so that a
+    repository's own settings can't make it run a program. Git finds the repository as
+    it always does, so its own check that the repository belongs to you applies
+    (`safe.directory`), but a folder in the project laid out like a bare repository is
+    never taken for one (`safe.bareRepository=explicit`). It runs no file system
+    monitor (`core.fsmonitor` off), may use no transport at all, whatever the
+    repository's settings say (`GIT_ALLOW_PROTOCOL`), so it fetches nothing, not even
+    the objects a partial clone left out, and it gets none of the app's `GIT_*`
+    environment. A line goes into `.gitignore` only when you ask.
   - **Run in terminal** starts your own shell (`$SHELL` as a login shell, or
     `%ComSpec%` on Windows) in the in-app terminal with the variables added to its
     environment. Nothing is written to disk, but the shell and everything it starts

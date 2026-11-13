@@ -82,9 +82,11 @@ windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security"
 windows-registry = "0.6.1"
 
 # The workspace lints, except that `unsafe_code` is `deny` instead of `forbid`:
-# two modules opt in with `#![allow(unsafe_code)]`: `perms/private_file.rs`
-# (Windows) creates files with their access list through Win32, and the Unix
-# part of `vault/envs/files/pipes.rs` makes and serves named pipes through libc.
+# three modules opt in with `#![allow(unsafe_code)]`: `perms/private_file.rs`
+# (Windows) creates files with their access list through Win32,
+# `perms/extended_acl.rs` (macOS) empties a private file's access list through
+# the system library, and the Unix part of `vault/envs/files/pipes.rs` makes and
+# serves named pipes through libc.
 [lints.rust]
 unsafe_code = "deny"
 unused_qualifications = "warn"

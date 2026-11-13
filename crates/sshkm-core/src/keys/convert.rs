@@ -16,8 +16,10 @@
 //! with one round of MD5; or PKCS#8, encrypted with PBES2 (PBKDF2-HMAC-SHA256,
 //! AES-256-CBC) when a passphrase is given. PEM and PKCS#8 hold no comment.
 //!
-//! Converted keys are written into `~/.ssh` only in the OpenSSH format,
-//! through [`super::ops::write_pair`], the end of every import.
+//! Converted keys are added to `~/.ssh` only in the OpenSSH format, through
+//! [`super::ops::write_pair`], the end of every import. One saved where the
+//! user picks ([`save`]) is a private file there, and never replaces a file
+//! in `~/.ssh`.
 
 use std::path::Path;
 
@@ -257,6 +259,26 @@ pub fn convert(
         )),
         KeyFileFormat::Pem => pem_text(key.key_data()),
         KeyFileFormat::Pkcs8 => pkcs8_text(key.key_data(), new_passphrase),
+    }
+}
+
+/// Saves `text`, a key [`convert`] wrote out (often unencrypted), at
+/// `target`, picked in a save dialog, in a new file only this user can open
+/// ([`fsutil::write_private`]): mode 0600 from the first byte whatever was
+/// there, on Windows the private access list from creation (a drive that
+/// can't keep one is refused). The file is renamed onto `target` itself, so
+/// a link there is replaced, never written through. Inside `ssh_dir`
+/// (compared by file identity, [`fsutil::is_within`]) it is only ever a new
+/// file: [`Error::AlreadyExists`] if something is there.
+pub fn save(target: &Path, text: &str, ssh_dir: &Path) -> Result<()> {
+    let in_ssh_dir = fsutil::is_within(target, ssh_dir);
+    if fsutil::write_private(target, text.as_bytes(), !in_ssh_dir)? {
+        Ok(())
+    } else {
+        Err(Error::AlreadyExists(format!(
+            "{} is in ~/.ssh already",
+            target.display()
+        )))
     }
 }
 
@@ -978,5 +1000,73 @@ mod tests {
             Some("a\nb"),
         );
         assert_eq!(comment.unwrap_err().code(), ErrorCode::InvalidInput);
+    }
+
+    #[test]
+    fn saved_keys_are_private_and_never_written_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let ssh = dir.path().join(".ssh");
+        fs::create_dir(&ssh).unwrap();
+        let source = file(dir.path(), "id_ed25519", td::OPENSSH_ED25519);
+        // Unencrypted, as without a new passphrase.
+        let text = convert(&source, None, KeyFileFormat::Pkcs8, None, None).unwrap();
+        assert!(text.contains("BEGIN PRIVATE KEY"));
+        #[cfg(unix)]
+        let mode = |p: &Path| {
+            use std::os::unix::fs::PermissionsExt;
+            fs::metadata(p).unwrap().permissions().mode() & 0o777
+        };
+
+        // Over an older file that others could read, the key is private.
+        let target = file(dir.path(), "id_ed25519.pem", "old");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        save(&target, &text, &ssh).unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), *text);
+        #[cfg(unix)]
+        assert_eq!(mode(&target), 0o600);
+        #[cfg(windows)]
+        {
+            let report = crate::perms::check(&target, crate::perms::PermKind::PrivateKey);
+            assert!(report.ok, "{report:?}");
+        }
+
+        // A link at the path is replaced; what it leads to is left alone.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let elsewhere = file(dir.path(), "elsewhere", "keep");
+            fs::set_permissions(&elsewhere, fs::Permissions::from_mode(0o666)).unwrap();
+            let link = dir.path().join("deploy.pem");
+            std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
+            save(&link, &text, &ssh).unwrap();
+            assert_eq!(fs::read_to_string(&elsewhere).unwrap(), "keep");
+            assert!(fs::symlink_metadata(&link).unwrap().is_file());
+            assert_eq!(fs::read_to_string(&link).unwrap(), *text);
+            assert_eq!(mode(&link), 0o600);
+        }
+
+        // Into `~/.ssh` only as a new file, however the path gets there.
+        let in_ssh = ssh.join("id_ed25519.pem");
+        save(&in_ssh, &text, &ssh).unwrap();
+        let again = save(&in_ssh, "other", &ssh).unwrap_err();
+        assert_eq!(again.code(), ErrorCode::AlreadyExists);
+        let dotted = dir.path().join("x").join("..").join(".ssh");
+        fs::create_dir(dir.path().join("x")).unwrap();
+        let again = save(&dotted.join("id_ed25519.pem"), "other", &ssh).unwrap_err();
+        assert_eq!(again.code(), ErrorCode::AlreadyExists);
+        #[cfg(unix)]
+        {
+            let dotfiles = dir.path().join("dotfiles");
+            std::os::unix::fs::symlink(&ssh, &dotfiles).unwrap();
+            let again = save(&dotfiles.join("id_ed25519.pem"), "other", &ssh).unwrap_err();
+            assert_eq!(again.code(), ErrorCode::AlreadyExists);
+        }
+        assert_eq!(fs::read_to_string(&in_ssh).unwrap(), *text);
+        // No temporary file is left behind.
+        assert_eq!(fs::read_dir(&ssh).unwrap().count(), 1);
     }
 }

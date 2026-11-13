@@ -294,7 +294,7 @@ impl PipeList {
 /// nothing is. Fails if something is there by then.
 pub fn make(path: &Path) -> Result<PipeId> {
     imp::mkfifo(path)?;
-    fsutil::set_mode(path, 0o600)?;
+    fsutil::make_owner_only(path)?;
     PipeId::of(path).ok_or_else(|| Error::invalid(format!("{} isn't a pipe", path.display())))
 }
 

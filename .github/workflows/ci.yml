@@ -93,16 +93,31 @@ jobs:
         if: runner.os == 'Linux'
         run: git diff --exit-code -- src/bindings
 
-  advisories:
-    name: Advisories
+  dependencies:
+    name: Dependencies
     if: ${{ !startsWith(github.event.head_commit.message, 'Release ') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      # Known vulnerable, unmaintained or yanked crates in Cargo.lock; deny.toml
-      # lists the advisories that don't apply and why.
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
         with:
-          command: check advisories
+          toolchain: stable
+      # cargo-deny's release build, checked against the checksum of the
+      # version named here.
+      - name: Install cargo-deny
+        env:
+          VERSION: 0.20.2
+          SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+        run: |
+          name="cargo-deny-$VERSION-x86_64-unknown-linux-musl"
+          curl -sSfL -o "$RUNNER_TEMP/$name.tar.gz" \
+            "https://github.com/EmbarkStudios/cargo-deny/releases/download/$VERSION/$name.tar.gz"
+          echo "$SHA256  $RUNNER_TEMP/$name.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$name.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$name" >> "$GITHUB_PATH"
+      # Known vulnerable, unmaintained or yanked crates in Cargo.lock, crates
+      # from anywhere but crates.io, and licenses the app can't be shipped
+      # with; deny.toml says what is allowed and why.
+      - run: cargo deny --all-features check

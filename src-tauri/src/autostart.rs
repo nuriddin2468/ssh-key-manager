@@ -333,7 +333,11 @@ mod tests {
 
     #[test]
     fn turning_it_on_keeps_the_app_running_where_the_tray_can() {
-        let background = |enabled, available| BackgroundStatus { enabled, available };
+        let background = |enabled, available| BackgroundStatus {
+            enabled,
+            available,
+            virtual_files: 0,
+        };
         assert!(keeps_running_too(true, &background(false, true)));
         // Already on.
         assert!(!keeps_running_too(true, &background(true, true)));

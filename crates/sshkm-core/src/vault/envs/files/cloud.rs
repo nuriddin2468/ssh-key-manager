@@ -95,6 +95,10 @@ impl CloudRoots {
     /// for a level-2 file where the service leaves out a file kept out of
     /// copies.
     pub fn copies(&self, path: &Path, level: super::FileLevel) -> Option<CloudService> {
+        // A pipe holds nothing to copy.
+        if level == super::FileLevel::Virtual {
+            return None;
+        }
         if level == super::FileLevel::WhileUnlocked
             && self.root_of(path).is_some_and(|(_, _, kept_out)| *kept_out)
         {

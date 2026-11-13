@@ -8,6 +8,7 @@ mod confirm;
 mod device_unlock;
 mod env_files;
 pub mod env_guard;
+mod env_pipes;
 mod error;
 #[cfg(target_os = "linux")]
 mod gpu;
@@ -326,7 +327,7 @@ pub fn run() {
         .expect("failed to start SSH Key Manager")
         .run(|app, event| {
             // The `.env` files written only while the vault is unlocked go
-            // with the app.
+            // with the app, and so do the pipes of virtual ones.
             if let RunEvent::Exit = event
                 && let (Some(files), Some(state)) = (
                     app.try_state::<Arc<env_files::EnvFiles>>(),
@@ -428,7 +429,10 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     state.vault.start_timer(app.handle().clone());
     device_unlock::watch_screen_lock(Arc::clone(&state.vault), app.handle().clone());
     vault_watcher::start(app.handle(), &state.vault.paths());
-    let env_files = Arc::new(env_files::EnvFiles::new(&data_dir));
+    let env_files = Arc::new(env_files::EnvFiles::new(
+        &data_dir,
+        Arc::clone(&state.served_pipes),
+    ));
     app.manage(Arc::clone(&env_files));
     env_files.start(app.handle(), &state);
     app.manage(state);

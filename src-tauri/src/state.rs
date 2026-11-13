@@ -29,6 +29,11 @@ pub struct AppState {
     pub terminals: Arc<Terminals>,
     /// What became of checks and terminal sessions, by host.
     pub history: Arc<History>,
+    /// The pipes of level-3 `.env` files the app serves now
+    /// ([`crate::env_pipes`]).
+    pub served_pipes: crate::env_pipes::KnownPipes,
+    /// Where the list of those pipes is kept.
+    pub pipe_list: PathBuf,
 }
 
 impl AppState {
@@ -41,6 +46,7 @@ impl AppState {
         data_dir: PathBuf,
     ) -> Self {
         let history = Arc::new(History::new(&data_dir));
+        let pipe_list = crate::env_pipes::list_path(&data_dir);
         Self {
             paths,
             hosts_file,
@@ -51,6 +57,8 @@ impl AppState {
             vault: Arc::new(VaultRuntime::new(data_dir)),
             askpass: Mutex::new(None),
             terminals: Arc::new(Terminals::new(history)),
+            served_pipes: crate::env_pipes::KnownPipes::default(),
+            pipe_list,
         }
     }
 

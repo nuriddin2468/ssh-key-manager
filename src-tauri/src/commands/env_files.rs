@@ -115,6 +115,9 @@ pub async fn envs_files_bind(
         })?;
         // A folder whose AI tools' rules the user asked for gets its line.
         super::env_agents::follow_choice(&app, state, &file.folder);
+        if level == FileLevel::Virtual {
+            super::background::keep_running_for_virtual_files(&app);
+        }
         let synced = files.sync(&app, state, None, true)?;
         status_of(synced, &id, &file)
     })
@@ -140,7 +143,11 @@ pub async fn envs_files_set_level(
         state.vault.change(&app, &state.backup_dir, |vault| {
             Ok(vault.set_env_file_level(&id, &file, level)?)
         })?;
-        // The round puts the attributes on or takes them off.
+        if level == FileLevel::Virtual {
+            super::background::keep_running_for_virtual_files(&app);
+        }
+        // The round puts the attributes on or takes them off, or makes the
+        // pipe, or the file in its place.
         let synced = files.sync(&app, state, None, true)?;
         status_of(synced, &id, &file)
     })
@@ -150,7 +157,8 @@ pub async fn envs_files_set_level(
 /// Stops writing an environment to `file`. With `delete_file`, the file
 /// is deleted first, only if it holds exactly what the vault has. Without,
 /// a file kept only while the vault is unlocked stays from then on, as the
-/// user's own.
+/// user's own. A virtual file's pipe goes either way: it holds nothing; a
+/// regular file saved in its place is deleted only when asked, as any.
 #[tauri::command]
 pub async fn envs_files_unbind(
     app: AppHandle,
@@ -163,7 +171,23 @@ pub async fn envs_files_unbind(
     let files = Arc::clone(&files);
     blocking(&state, move |state| {
         let ctx = context(state);
-        if delete_file {
+        let kept = files.state();
+        let level = state.vault.with(&app, |vault| {
+            Ok(vault
+                .env_files_status(&ctx, &kept)
+                .into_iter()
+                .find(|status| status.env_id == id && status.file == file)
+                .map(|status| (status.level, status.location)))
+        })?;
+        // A virtual file's place holds a regular file only when one was
+        // saved over the pipe; the pipe itself goes with the binding.
+        let deletable = match &level {
+            Some((FileLevel::Virtual, location)) => location.as_deref().is_some_and(|path| {
+                std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file())
+            }),
+            _ => true,
+        };
+        if delete_file && deletable {
             state
                 .vault
                 .with(&app, |vault| Ok(vault.delete_env_file(&id, &file, &ctx)?))?;
@@ -174,15 +198,10 @@ pub async fn envs_files_unbind(
                 Ok(vault.environment(&id)?)
             })
         };
-        let kept = files.state();
-        let level_two = state.vault.with(&app, |vault| {
-            Ok(vault
-                .env_files_status(&ctx, &kept)
-                .into_iter()
-                .find(|status| status.env_id == id && status.file == file)
-                .filter(|status| status.level == FileLevel::WhileUnlocked)
-                .and_then(|status| status.location))
-        })?;
+        let level_two = match level {
+            Some((FileLevel::WhileUnlocked, location)) => location,
+            _ => None,
+        };
         let detail = match level_two {
             Some(location) if !delete_file => files.keep_file(&location, unbind)?,
             _ => unbind()?,
@@ -311,7 +330,7 @@ pub async fn envs_files_overview(
         // Folders are looked through and Git asked once the vault is free.
         (overview.unmanaged, overview.truncated) = search.run(&ctx, &cloud);
         for report in &mut overview.files {
-            report.git = report.status.location.as_deref().map(git_state);
+            report.git = git_of(&report.status);
         }
         for file in &mut overview.unmanaged {
             file.git = Some(git_state(&file.location));
@@ -425,7 +444,7 @@ pub async fn envs_files_risks(
         })?;
         reports.retain(|report| id.as_ref().is_none_or(|id| report.status.env_id == *id));
         for report in &mut reports {
-            report.git = report.status.location.as_deref().map(git_state);
+            report.git = git_of(&report.status);
         }
         Ok(reports)
     })
@@ -550,6 +569,15 @@ fn status_of(synced: EnvFilesSynced, id: &str, file: &EnvFile) -> AppResult<EnvF
         .into_iter()
         .find(|status| status.env_id == id && status.file == file)
         .ok_or_else(|| AppError::not_found(file.path))
+}
+
+/// What Git makes of a bound file, when its folder is here; nothing for a
+/// virtual file: Git never takes a pipe along, so there is nothing to ask.
+fn git_of(status: &EnvFileStatus) -> Option<GitInfo> {
+    if status.level == FileLevel::Virtual {
+        return None;
+    }
+    status.location.as_deref().map(git_state)
 }
 
 /// What Git makes of `path`: outside a working tree, ignored, untracked

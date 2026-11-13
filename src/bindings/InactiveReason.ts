@@ -3,4 +3,4 @@
 /**
  * Why a file isn't kept in step.
  */
-export type InactiveReason = "remote" | "inTrash" | "notInProject";
+export type InactiveReason = "remote" | "inTrash" | "notInProject" | "unsupported";

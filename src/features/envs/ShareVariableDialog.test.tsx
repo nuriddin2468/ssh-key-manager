@@ -41,7 +41,14 @@ const summary = (id: string, name: string, extra: Partial<EnvSummary> = {}): Env
   ...extra,
 });
 const here = summary('env-1', 'dev');
-const env: EnvDetail = { ...here, notes: '', variables: [], files: [], whileUnlocked: [] };
+const env: EnvDetail = {
+  ...here,
+  notes: '',
+  variables: [],
+  files: [],
+  whileUnlocked: [],
+  virtualFiles: [],
+};
 const token = (shared: string | null): EnvVarInfo => ({
   name: 'API_TOKEN',
   secret: true,

@@ -19,6 +19,7 @@ import type { CloudService } from '@/bindings/CloudService';
 import type { EnvFile } from '@/bindings/EnvFile';
 import type { EnvFileReport } from '@/bindings/EnvFileReport';
 import type { EnvFileStatus } from '@/bindings/EnvFileStatus';
+import type { FileLevel } from '@/bindings/FileLevel';
 import type { FileState } from '@/bindings/FileState';
 
 export type StateTone = 'ok' | 'info' | 'warning' | 'critical' | 'neutral';
@@ -97,6 +98,35 @@ export function bindingPath(file: EnvFile): string {
   const folder = file.folder.replace(/[\\/]+$/, '');
   const separator = folder.includes('\\') && !folder.includes('/') ? '\\' : '/';
   return `${folder}${separator}${file.path}`;
+}
+
+/** A file's level, by the environment's lists of level-2 and level-3 files. */
+export function levelOf(
+  file: EnvFile,
+  whileUnlocked: readonly EnvFile[],
+  virtualFiles: readonly EnvFile[],
+): FileLevel {
+  if (virtualFiles.some((x) => sameFile(x, file))) return 'virtual';
+  if (whileUnlocked.some((x) => sameFile(x, file))) return 'whileUnlocked';
+  return 'always';
+}
+
+/**
+ * A file's state as its row says it: a virtual file in step is served, and
+ * one still to come is its pipe being made.
+ */
+export function levelStateLabel(t: TFunction, state: FileState, level: FileLevel): string {
+  if (level === 'virtual' && state.type === 'inSync') return t('envs.files.state.served');
+  if (level === 'virtual' && state.type === 'vaultChanged') return t('envs.files.state.makingPipe');
+  return stateLabel(t, state);
+}
+
+/** What a state means for a file at `level`, as [`stateText`]. */
+export function levelStateText(t: TFunction, state: FileState, level: FileLevel): string {
+  if (level === 'virtual' && state.type === 'conflict') {
+    return t('envs.files.explain.conflictVirtual');
+  }
+  return stateText(t, state);
 }
 
 /** The file's name, the last part of its path. */

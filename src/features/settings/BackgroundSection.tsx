@@ -61,7 +61,13 @@ export function BackgroundSection() {
       <div className="glass flex flex-col divide-y divide-white/[0.06] overflow-hidden rounded-2xl">
         <SettingSwitch
           label={t('background.enable')}
-          hint={status.available ? t(HINT[platform]) : t('background.unavailable')}
+          hint={
+            !status.available
+              ? t('background.unavailable')
+              : status.enabled && status.virtualFiles > 0
+                ? `${t(HINT[platform])} ${t('background.virtualFiles', { count: status.virtualFiles })}`
+                : t(HINT[platform])
+          }
           checked={status.enabled}
           disabled={!status.available}
           busy={toggle.isPending}

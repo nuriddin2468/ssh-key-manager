@@ -36,7 +36,14 @@ export function summary(
 }
 
 export function detailOf(env: EnvSummary, notes = ''): EnvDetail {
-  return { ...env, notes, variables: [], files: [], whileUnlocked: [] } as EnvDetail;
+  return {
+    ...env,
+    notes,
+    variables: [],
+    files: [],
+    whileUnlocked: [],
+    virtualFiles: [],
+  } as EnvDetail;
 }
 
 /**

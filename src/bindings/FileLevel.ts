@@ -3,4 +3,4 @@
 /**
  * How long a file an environment is written to stays on disk.
  */
-export type FileLevel = "always" | "whileUnlocked";
+export type FileLevel = "always" | "whileUnlocked" | "virtual";

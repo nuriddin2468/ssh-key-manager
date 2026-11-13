@@ -37,7 +37,11 @@
 //! ([`fsutil::keep_out_of_copies`]), and is the only kind a remote
 //! environment can have. Its bindings are kept in a list of their own, which
 //! older versions keep without reading, so they never write such a file for
-//! good. A file whose lines can't
+//! good. On macOS and Linux there is level 3 as well
+//! ([`FileLevel::Virtual`], [`pipes`]): nothing on disk but a named pipe the
+//! app answers while it runs, with the values while the vault is unlocked;
+//! a file saved over the pipe is taken like an edit, and the pipe comes
+//! back. A file whose lines can't
 //! all be read (a quote that never closes, a value too long) changes
 //! nothing either way until it is fixed, so a typo can't empty the vault;
 //! nor does a file left without a variable, which is a conflict.
@@ -46,6 +50,7 @@
 pub mod agents;
 mod cloud;
 mod disk;
+pub mod pipes;
 #[cfg(test)]
 mod tests;
 mod unlocked;
@@ -66,6 +71,7 @@ use zeroize::Zeroizing;
 pub use self::cloud::{CloudRoots, CloudService};
 use self::disk::{Disk, Target};
 pub use self::disk::{find_env_files, ignore_in_git};
+pub use self::pipes::{Answer, PipeId, VirtualFile};
 pub use self::unlocked::{Leftover, Leftovers, PutAway, left_on_disk, put_away};
 use super::document::EnvDocument;
 use super::dotenv::{self, ParseProblem, ParsedEnv, ProblemKind};
@@ -140,6 +146,9 @@ pub enum FileLevel {
     /// Level 2: written when the vault is unlocked, removed when it locks
     /// and when the app quits, and kept out of backups and cloud folders.
     WhileUnlocked,
+    /// Level 3: no file, but a named pipe the app answers while it runs
+    /// ([`pipes`]), on macOS and Linux.
+    Virtual,
 }
 
 /// A file an environment is written to.
@@ -167,13 +176,17 @@ struct FilesData {
     /// ([`FileLevel::WhileUnlocked`]): a list older versions don't read.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     unlocked: Vec<StoredFile>,
+    /// The files that are pipes the app answers ([`FileLevel::Virtual`]):
+    /// a list older versions don't read either.
+    #[serde(rename = "virtual", default, skip_serializing_if = "Vec::is_empty")]
+    virtual_files: Vec<StoredFile>,
     #[serde(flatten)]
     rest: Map<String, Value>,
 }
 
 impl FilesData {
-    /// Every binding and its level: level 1 first, each list in the order
-    /// its files were added.
+    /// Every binding and its level: level 1 first, then 2 and 3, each list
+    /// in the order its files were added.
     fn bindings(&self) -> impl Iterator<Item = (&StoredFile, FileLevel)> {
         self.files
             .iter()
@@ -183,13 +196,23 @@ impl FilesData {
                     .iter()
                     .map(|stored| (stored, FileLevel::WhileUnlocked)),
             )
+            .chain(
+                self.virtual_files
+                    .iter()
+                    .map(|stored| (stored, FileLevel::Virtual)),
+            )
     }
 
     fn list_mut(&mut self, level: FileLevel) -> &mut Vec<StoredFile> {
         match level {
             FileLevel::Always => &mut self.files,
             FileLevel::WhileUnlocked => &mut self.unlocked,
+            FileLevel::Virtual => &mut self.virtual_files,
         }
+    }
+
+    fn len(&self) -> usize {
+        self.files.len() + self.unlocked.len() + self.virtual_files.len()
     }
 }
 
@@ -221,6 +244,9 @@ pub enum InactiveReason {
     InTrash,
     /// No project holds both the environment and the folder.
     NotInProject,
+    /// A virtual file ([`FileLevel::Virtual`]) on a system without pipes in
+    /// folders (Windows).
+    Unsupported,
 }
 
 /// Why a file is never written or read.
@@ -406,6 +432,11 @@ pub struct EnvFilesSynced {
     #[serde(skip)]
     #[cfg_attr(feature = "ts", ts(skip))]
     pub always: Vec<PathBuf>,
+    /// The level-3 files' pipes on this computer and what each is to
+    /// answer: the app serves these, and no others.
+    #[serde(skip)]
+    #[cfg_attr(feature = "ts", ts(skip))]
+    pub virtual_files: Vec<VirtualFile>,
 }
 
 /// A template next to a file (`.env.example`) and the names it sets that
@@ -515,6 +546,10 @@ struct Agreement {
     /// file: let back in once it is at level 1, whoever changed its level.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     out: bool,
+    /// The place held the app's pipe (level 3), not a file: at a lower
+    /// level, a file missing there was never written, rather than deleted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    piped: bool,
 }
 
 /// Most keys a [`SyncState`] keeps revisions for.
@@ -547,6 +582,15 @@ impl SyncState {
             .get(file)
             .filter(|agreed| agreed.dir == dir)
             .map(|agreed| agreed.rev.as_str())
+    }
+
+    /// Whether `file`'s place held the app's pipe, by the agreement made
+    /// with the key `key_id`.
+    fn was_piped(&self, key_id: &str, file: &str) -> bool {
+        self.keys
+            .get(key_id)
+            .and_then(|keyed| keyed.files.get(file))
+            .is_some_and(|agreed| agreed.piped)
     }
 
     /// Whether the app kept `file` out of copies, by the agreement made with
@@ -584,12 +628,18 @@ impl SyncState {
 }
 
 /// What finding files on this computer needs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FilesContext {
     /// The home folder, for folders kept as `~/…`.
     pub home: Option<PathBuf>,
     /// `~/.ssh`, where no file is ever written.
     pub ssh_dir: PathBuf,
+    /// The pipes the app serves now: a pipe at a binding's place is one of
+    /// these, or never used.
+    pub pipes: Vec<PipeId>,
+    /// The app's list of its pipes ([`pipes::PipeList`]), where a pipe a
+    /// round makes is listed at once.
+    pub pipe_list: Option<PathBuf>,
 }
 
 /// A file binding with its environment.
@@ -1008,15 +1058,15 @@ impl Vault {
     }
 
     /// Makes an environment local or remote. A remote one has files only
-    /// while the vault is unlocked, so its other files are to be removed, or
-    /// made so, first.
+    /// while the vault is unlocked, or virtual ones, so its other files are
+    /// to be removed, or made so, first.
     pub fn set_env_kind(&mut self, id: &str, kind: EnvKind) -> Result<()> {
         let entry = self.env_entry(id)?;
         let mut data = files_data(&entry)?;
         if kind == EnvKind::Remote && !data.files.is_empty() {
             return Err(Error::invalid(
-                "a remote environment has files only while the vault is unlocked: \
-                 remove its other files or make them so first",
+                "a remote environment has files only while the vault is unlocked, or virtual \
+                 ones: remove its other files or make them so first",
             ));
         }
         data.kind = Some(kind.as_str().to_owned());
@@ -1080,6 +1130,9 @@ impl Vault {
         if now == level {
             return Ok(false);
         }
+        if level == FileLevel::Virtual && !pipes::SUPPORTED {
+            return Err(unsupported());
+        }
         if level == FileLevel::Always && kind_of(&entry) == EnvKind::Remote {
             return Err(Error::invalid(
                 "a remote environment has files only while the vault is unlocked",
@@ -1114,8 +1167,11 @@ impl Vault {
         }
         if kind_of(&entry) == EnvKind::Remote && level == FileLevel::Always {
             return Err(Error::invalid(
-                "a remote environment has a file only while the vault is unlocked",
+                "a remote environment has a file only while the vault is unlocked, or a virtual one",
             ));
+        }
+        if level == FileLevel::Virtual && !pipes::SUPPORTED {
+            return Err(unsupported());
         }
         let owner = self
             .environment_owners()
@@ -1129,7 +1185,7 @@ impl Vault {
         if data.bindings().any(|(stored, _)| stored.file() == file) {
             return Err(Error::AlreadyExists(file.path));
         }
-        if data.files.len() + data.unlocked.len() >= MAX_FILES {
+        if data.len() >= MAX_FILES {
             return Err(Error::invalid(format!(
                 "an environment is written to at most {MAX_FILES} files"
             )));
@@ -1170,10 +1226,11 @@ impl Vault {
     pub fn unbind_env_file(&mut self, id: &str, file: &EnvFile) -> Result<bool> {
         let entry = self.env_entry(id)?;
         let mut data = files_data(&entry)?;
-        let before = data.files.len() + data.unlocked.len();
+        let before = data.len();
         data.files.retain(|stored| stored.file() != *file);
         data.unlocked.retain(|stored| stored.file() != *file);
-        if data.files.len() + data.unlocked.len() == before {
+        data.virtual_files.retain(|stored| stored.file() != *file);
+        if data.len() == before {
             return Ok(false);
         }
         self.put_files_data(id, &data)?;
@@ -1222,8 +1279,16 @@ impl Vault {
             .map(|planned| {
                 let file_state = match &planned.located {
                     Err(file_state) => file_state.clone(),
-                    Ok(target) => {
+                    Ok(target) if planned.bound.level == FileLevel::Virtual => {
                         let base = state.base(&id, &planned.bound.state_key(), &target.dir_token());
+                        self.settle_virtual(&key, &planned.bound, target, base, None, Settle::Look)
+                            .0
+                    }
+                    Ok(target) => {
+                        let state_key = planned.bound.state_key();
+                        let base = state
+                            .base(&id, &state_key, &target.dir_token())
+                            .filter(|_| !state.was_piped(&id, &state_key));
                         self.settle(&key, &planned.bound, target, base, None, false)
                             .0
                     }
@@ -1277,6 +1342,7 @@ impl Vault {
                     rev: vault_rev,
                     dir,
                     out: state.kept_out(&id, &bound.state_key()),
+                    piped: false,
                 };
                 pulled.updates.push((bound.state_key(), agreed));
                 continue;
@@ -1294,6 +1360,7 @@ impl Vault {
                 rev: after_rev.clone(),
                 dir,
                 out: state.kept_out(&id, &bound.state_key()),
+                piped: false,
             };
             pulled.updates.push((bound.state_key(), agreed));
             pulled.changes.push(EnvFileChange {
@@ -1359,13 +1426,27 @@ impl Vault {
                     file_state.clone()
                 }
                 Err(file_state) => file_state.clone(),
+                Ok(target) if planned.bound.level == FileLevel::Virtual => {
+                    let (file_state, made) = self.push_virtual(
+                        &key,
+                        &planned.bound,
+                        target,
+                        files,
+                        prefer,
+                        ctx.pipe_list.as_deref(),
+                    );
+                    synced.virtual_files.extend(made.served);
+                    written = made.written;
+                    file_state
+                }
                 Ok(target) => {
                     disk::sweep(target);
                     let state_key = planned.bound.state_key();
                     let dir = target.dir_token();
+                    // After the app's pipe, a missing file is one to write.
                     let base = files
                         .get(&state_key)
-                        .filter(|agreed| agreed.dir == dir)
+                        .filter(|agreed| agreed.dir == dir && !agreed.piped)
                         .map(|agreed| agreed.rev.clone());
                     let was_out = files.get(&state_key).is_some_and(|agreed| agreed.out);
                     let (file_state, agreed) =
@@ -1381,7 +1462,8 @@ impl Vault {
                                 .unlocked
                                 .extend(self.leftover(&key, &planned.bound, target));
                         }
-                        FileLevel::WhileUnlocked => {}
+                        // Settled above, by `settle_virtual`.
+                        FileLevel::WhileUnlocked | FileLevel::Virtual => {}
                         FileLevel::Always => {
                             synced.always.push(target.real.clone());
                             if was_out && in_sync {
@@ -1398,6 +1480,7 @@ impl Vault {
                                 rev: agreed.revision,
                                 dir,
                                 out,
+                                piped: false,
                             },
                         );
                     }
@@ -1411,6 +1494,52 @@ impl Vault {
             synced.files.push(status);
         }
         synced
+    }
+
+    /// The second half of a round for a level-3 file: its place settled
+    /// ([`Self::settle_virtual`]) and, where the two agree, the agreement
+    /// kept in `files`, as made with the app's pipe.
+    fn push_virtual(
+        &self,
+        key: &[u8; 32],
+        bound: &Bound,
+        target: &Target,
+        files: &mut BTreeMap<String, Agreement>,
+        prefer: Option<Preference<'_>>,
+        list: Option<&Path>,
+    ) -> (FileState, PushedVirtual) {
+        disk::sweep(target);
+        let state_key = bound.state_key();
+        let dir = target.dir_token();
+        let base = files
+            .get(&state_key)
+            .filter(|agreed| agreed.dir == dir)
+            .map(|agreed| agreed.rev.clone());
+        let (file_state, agreed, served) = self.settle_virtual(
+            key,
+            bound,
+            target,
+            base.as_deref(),
+            prefer,
+            Settle::Act { list },
+        );
+        let mut made = PushedVirtual {
+            served,
+            written: false,
+        };
+        if let Some(agreed) = agreed {
+            made.written = agreed.written;
+            files.insert(
+                state_key,
+                Agreement {
+                    rev: agreed.revision,
+                    dir,
+                    out: false,
+                    piped: true,
+                },
+            );
+        }
+        (file_state, made)
     }
 
     /// Puts back an environment's variables as they were before an edit
@@ -1567,6 +1696,12 @@ impl Vault {
         };
         let wanted = pairs(&vault);
         let vault_rev = revision(key, &wanted);
+        // The app's pipe of a file that was virtual until now: it goes
+        // first (the app stops serving it), and the next round writes the
+        // file in its place.
+        if target.pipe.is_some() {
+            return (FileState::VaultChanged, None);
+        }
         let text = match disk::read(&target.real) {
             Disk::Text(text) => Some(text),
             Disk::Missing => None,
@@ -1643,6 +1778,121 @@ impl Vault {
         }
     }
 
+    /// Where a level-3 binding's place stands, and, when `act`, what is
+    /// done about it: a pipe made where nothing is; a regular file there
+    /// (one saved over the pipe, or one that was at a lower level until
+    /// now) replaced by the pipe once it holds what the vault holds, or
+    /// when it only holds what the last answer held. A file whose edits the
+    /// vault can't take (both sides changed, lines that can't be read)
+    /// stays until the user keeps a side. Returns the state, the agreement
+    /// when the two agree now, and the pipe to serve with its answer.
+    fn settle_virtual(
+        &self,
+        key: &[u8; 32],
+        bound: &Bound,
+        target: &Target,
+        base: Option<&str>,
+        prefer: Option<Preference<'_>>,
+        how: Settle<'_>,
+    ) -> (FileState, Option<Agreed>, Option<VirtualFile>) {
+        let (act, list) = match how {
+            Settle::Look => (false, None),
+            Settle::Act { list } => (true, list),
+        };
+        let vault = self.env_variables(&bound.env_id);
+        let (answer, vault_rev) = match &vault {
+            Ok(vars) => match virtual_answer(bound, &pairs(vars)) {
+                Ok(text) => (Answer::Values(text), Some(revision(key, &pairs(vars)))),
+                Err(error) => {
+                    let state = FileState::Failed {
+                        message: error.to_string(),
+                    };
+                    return (state, None, None);
+                }
+            },
+            // A shared value that can't be resolved: the pipe says so.
+            Err(_) => (Answer::Unresolved, None),
+        };
+        let serve = |id: PipeId, answer: Answer| VirtualFile {
+            path: target.real.clone(),
+            display: target.display.clone(),
+            id,
+            answer,
+        };
+        let agreed = |written: bool| {
+            vault_rev
+                .clone()
+                .map(|revision| Agreed { revision, written })
+        };
+        let served_state = |vault: &Result<Vec<EnvVariable>>| match vault {
+            Ok(_) => FileState::InSync,
+            Err(error) => FileState::Failed {
+                message: error.to_string(),
+            },
+        };
+        if let Some(id) = target.pipe {
+            return (served_state(&vault), agreed(false), Some(serve(id, answer)));
+        }
+        let text = match disk::read(&target.real) {
+            Disk::Text(text) => Some(text),
+            Disk::Missing => None,
+            Disk::Refused(reason) => return (FileState::Refused { reason }, None, None),
+            Disk::Failed(message) => return (FileState::Failed { message }, None, None),
+        };
+        let Some(text) = text else {
+            if !act {
+                // Made by the next round.
+                return (FileState::VaultChanged, None, None);
+            }
+            return match disk::make_pipe(target, list) {
+                Ok(id) => (served_state(&vault), agreed(true), Some(serve(id, answer))),
+                Err(error) => (
+                    FileState::Failed {
+                        message: error.to_string(),
+                    },
+                    None,
+                    None,
+                ),
+            };
+        };
+        // A regular file where the pipe is to be.
+        let Ok(vars) = &vault else {
+            return (served_state(&vault), None, None);
+        };
+        let parsed = dotenv::parse(&text);
+        if let Some(problems) = blocking(&text, &parsed, vars) {
+            return (FileState::Invalid { problems }, None, None);
+        }
+        let file_rev = revision(key, &parsed_pairs(&parsed));
+        let keep_vault = prefer.is_some_and(|p| p.settles(bound, KeepSide::Vault, Some(&file_rev)));
+        let replace = vault_rev.as_deref() == Some(file_rev.as_str())
+            || keep_vault
+            || base == Some(file_rev.as_str());
+        if replace {
+            if !act {
+                return (FileState::VaultChanged, None, None);
+            }
+            return match disk::make_pipe_over(target, text.as_bytes(), list) {
+                Ok(Some(id)) => (FileState::InSync, agreed(true), Some(serve(id, answer))),
+                // It changed while this was being worked out: the next
+                // round sees it.
+                Ok(None) => (FileState::FileChanged, None, None),
+                Err(error) => (
+                    FileState::Failed {
+                        message: error.to_string(),
+                    },
+                    None,
+                    None,
+                ),
+            };
+        }
+        if vault_rev.as_deref().is_some_and(|rev| base == Some(rev)) && !drastic(&parsed, vars) {
+            (FileState::FileChanged, None, None)
+        } else {
+            (FileState::Conflict, None, None)
+        }
+    }
+
     /// Every file binding with what it can be: its file on this computer,
     /// or why it isn't kept in step. Of two bindings that name one file on
     /// disk, the first in order is.
@@ -1664,6 +1914,8 @@ impl Vault {
                 let location = disk::display(&bound.file, ctx);
                 let reason = if bound.in_trash {
                     Some(InactiveReason::InTrash)
+                } else if bound.level == FileLevel::Virtual && !pipes::SUPPORTED {
+                    Some(InactiveReason::Unsupported)
                 } else if bound.kind == EnvKind::Remote && bound.level == FileLevel::Always {
                     Some(InactiveReason::Remote)
                 } else if !holds(&projects, bound.project.as_deref(), &bound.file.folder) {
@@ -1985,11 +2237,48 @@ impl Vault {
     }
 }
 
+/// Whether [`Vault::settle_virtual`] only looks, or acts: makes the pipe,
+/// listing it in `list`.
+#[derive(Clone, Copy)]
+enum Settle<'a> {
+    Look,
+    Act { list: Option<&'a Path> },
+}
+
+/// What [`Vault::push_virtual`] did: the pipe to serve, and whether one
+/// was made.
+struct PushedVirtual {
+    served: Option<VirtualFile>,
+    written: bool,
+}
+
 /// The two sides agree on `revision`; `written` when the file was written
 /// to get there.
 struct Agreed {
     revision: String,
     written: bool,
+}
+
+/// What a level-3 file's pipe answers with the variables `vars`: a line
+/// saying where they come from, then the variables, as the app writes them
+/// to a new file.
+fn virtual_answer(bound: &Bound, vars: &[(&str, &str)]) -> Result<Zeroizing<String>> {
+    let place = if bound.label.is_empty() {
+        bound.env_name.clone()
+    } else {
+        format!("{} · {}", bound.label, bound.env_name)
+    };
+    let place: String = place.chars().filter(|c| !c.is_control()).collect();
+    let mut doc = EnvDocument::new(&format!(
+        "# Read-only: SSH Key Manager serves this file from the vault ({place}).\n"
+    ));
+    doc.set_variables(vars)?;
+    Ok(Zeroizing::new(doc.text().to_owned()))
+}
+
+/// Level 3 asked for where there are no pipes in folders.
+fn unsupported() -> Error {
+    Error::Unsupported("virtual files work on macOS and Linux".into())
 }
 
 /// Whether the live project `owner`, which has the environment, holds

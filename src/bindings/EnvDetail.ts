@@ -16,6 +16,10 @@ files: Array<EnvFile>,
  */
 whileUnlocked: Array<EnvFile>, 
 /**
+ * Those of `files` that are pipes the app answers (level 3).
+ */
+virtualFiles: Array<EnvFile>, 
+/**
  * The KeePass entry UUID.
  */
 id: string, 

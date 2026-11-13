@@ -326,6 +326,13 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to start SSH Key Manager")
         .run(|app, event| {
+            // A secret copied from the vault goes with the app, as with a
+            // lock: ⌘Q, Quit in the tray, closing the window, an update.
+            if let RunEvent::Exit = event
+                && let Some(state) = app.try_state::<Shared>()
+            {
+                state.vault.on_exit();
+            }
             // The `.env` files written only while the vault is unlocked go
             // with the app, and so do the pipes of virtual ones.
             if let RunEvent::Exit = event

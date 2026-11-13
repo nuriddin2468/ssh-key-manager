@@ -80,11 +80,11 @@ side that connected, `Decisions`, apply, `Applied` swap, `agree`). Entry sync ad
    Entries sync only when both say `On`; each uses the lower version. Otherwise the sync is
    PR 1's, and the summary says why passwords didn't go (see [UI](#ui)).
 2. **Manifest** as in PR 1, plus `contacts: Vec<ContactRecord>` (`serde(default)`).
-3. **Vault copy** (new `Message::VaultCopy { database }` through `send_large`, the side
-   that connected first, only when both said `On`): this computer's database as a KDBX 4
-   file, encrypted with the vault secret, with what never syncs taken out
-   ([`copy`](#code)): no database custom data, no local-marked items, no browser data.
-   The receiver takes up to `MAX_DATABASE_SIZE` (256 MiB) plus base64 and framing.
+3. **Vault copy** (as `Message::Bytes` and `Part`s, which own devices already use to move
+   the vault, the side that connected first, only when both said `On`): this computer's
+   database as a KDBX 4 file, encrypted with the vault secret, with what never syncs taken
+   out ([`copy`](#code)): no database custom data, no local-marked items, no browser data.
+   The receiver takes up to `MAX_DATABASE_SIZE` (256 MiB) and checks its SHA-256.
 4. **Each side plans** on its own: hosts as in PR 1, the vault against
    `SyncState.vault` (below).
 5. **Decide** on the side that connected: host and entry conflicts, risky changes and
@@ -102,7 +102,7 @@ everything KeePass has, and its size is bounded by the file's. On a LAN a typica
 (well under 1 MiB) costs nothing; a 256 MiB one with attachments takes seconds. Values a
 conflict shows are read from the copy in memory, one at a time, when the user asks.
 
-**Checks on the copy before anything is planned** (`VaultCopy::check`, failure = `Broken`,
+**Checks on the copy before anything is planned** (`Vault::open_sync_copy`, failure = `Broken`,
 nothing applied):
 - it parses with this vault's secret (`check_shared`); a different secret → `OtherVault`;
 - its root group has this vault's root UUID (two vaults are never merged; the keepass
@@ -304,8 +304,9 @@ key is PR 6.
   receives an entry it can't read; the vault file stays standard KDBX 4.1, which KeePassXC
   and older versions of the app read.
 - New fields (`Own.entries`, `Manifest.contacts`, `Decisions.vault`, `Applied.vault`,
-  `SyncState.vault`) are `serde(default)` and skipped when empty; `Message::VaultCopy` is sent
-  only after both announced. Protocol `VERSION` stays 1.
+  `SyncState.vault`) are `serde(default)` and skipped when empty; the copy goes only after
+  both announced. No new message: protocol `VERSION` stays 1, and an older peer never sees
+  anything it can't read.
 - Contact tombstones are skipped by older versions; a live record keeps parsing.
 
 ## Cloud folder
@@ -383,13 +384,13 @@ Core (`crates/sshkm-core`):
 - `sync/merge.rs` — the three-way rules get a hash-level core (`plan_hashed` over
   `id → field → hash`), which the host plan (`plan` on `Item`s) calls; tests stay.
 - `vault/sync/` (new, inside `vault` for the database): `copy.rs` (the copy without what
-  never syncs; `VaultCopy::check`), `model.rs` (items, field hashes, canonical groups,
+  never syncs; `Vault::open_sync_copy`), `model.rs` (items, field hashes, canonical groups,
   pairs), `plan.rs` (`VaultPlan`: changes, conflicts with differing field names, deletions,
   risky variables), `apply.rs` (`Vault::apply_sync`), `tests.rs`.
 - `vault/contacts.rs` — `contact_records()`, `merge_contacts()`, tombstones.
 - `vault/location.rs` — `cloud_service()`; `vault/envs` — `risky_variable()`.
-- `p2p/protocol.rs` — `Own.entries`, `Message::VaultCopy`, the new optional fields; small
-  and additive (the `p2p-chat` branch touches this file too).
+- `p2p/protocol.rs` — `Own.entries` and the new optional fields; small and additive (the
+  `p2p-chat` branch touches this file too).
 
 App (`src-tauri`): `nearby/sync.rs` (the vault part in `nearby/sync/vault.rs` if it grows),
 `Side` methods with defaults (`vault_copy`, `vault_plan`, `vault_apply`, `vault_value`) so
@@ -420,7 +421,7 @@ Core:
   future times;
 - a real two-vault sync: one vault copied to two files, both edited (adds, edits on both
   sides, a conflict, a deletion, an environment with a shared value, an attachment), copies
-  exchanged and applied both ways through `VaultCopy` bytes, then both files reopened: the
+  exchanged and applied both ways through the copies' bytes, then both files reopened: the
   same entries, `agree` digests equal, a second sync changes nothing;
 - contacts: tombstones, last change wins, older-version parsing; one device paired on both
   computers under two names merges into one record without a conflict;

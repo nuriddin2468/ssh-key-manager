@@ -102,9 +102,6 @@ pub enum Message {
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         vault: BTreeMap<String, String>,
     },
-    /// The sender's copy of the vault ([`crate::vault::Vault::sync_copy`]),
-    /// in base64; sent only when both sides said [`EntrySync::On`].
-    VaultCopy { database: SecretText },
 }
 
 /// What the initiator's user chose for each of the vault's conflicts, by
@@ -136,7 +133,9 @@ pub struct Own {
 }
 
 /// What a side says about syncing the vault's entries. Entries sync only
-/// when both say [`Self::On`], in the lower of their versions.
+/// when both say [`Self::On`], in the lower of their versions; then each
+/// sends the other its copy of the vault ([`crate::vault::Vault::sync_copy`])
+/// as [`Message::Bytes`] and [`Message::Part`]s after the manifests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum EntrySync {
@@ -851,10 +850,6 @@ mod tests {
         };
         let json = serde_json::to_string(&with_vault).unwrap();
         assert_eq!(serde_json::from_str::<Message>(&json).unwrap(), with_vault);
-        let copy = Message::VaultCopy {
-            database: SecretText::new("A3mimmf7S7U="),
-        };
-        assert!(!format!("{copy:?}").contains("A3mimmf7S7U="));
     }
 
     #[test]

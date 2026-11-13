@@ -761,9 +761,10 @@ fn a_database_that_does_not_open_is_not_decrypted_again_until_it_changes() {
 #[test]
 fn a_damaged_key_slots_file_still_lets_the_recovery_key_in() {
     let too_large = vec![b' '; 70 * 1024];
-    let damaged: [&[u8]; 3] = [
+    let damaged: [&[u8]; 4] = [
         b"{ not json",
-        br#"{"format":"sshkm-vault-keys","version":2,"vaultId":"x","slots":[]}"#,
+        br#"{"format":"something else","version":1,"vaultId":"x","slots":[]}"#,
+        br#"{"format":"sshkm-vault-keys","version":0,"vaultId":"x","slots":[]}"#,
         &too_large,
     ];
     for keys in damaged {
@@ -779,5 +780,74 @@ fn a_damaged_key_slots_file_still_lets_the_recovery_key_in() {
         drop(vault);
         assert!(probe(&fx.paths).unwrap().has_master_password);
         assert!(Vault::unlock(&fx.paths, &s("new master")).is_ok());
+
+        // The damaged file is kept next to the new one.
+        let aside: Vec<_> = std::fs::read_dir(fx.dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("vault.keys.damaged-")
+            })
+            .collect();
+        assert_eq!(aside.len(), 1, "{aside:?}");
+        assert_eq!(std::fs::read(&aside[0]).unwrap(), keys);
     }
+}
+
+#[test]
+fn a_key_slots_file_from_a_newer_version_is_left_alone() {
+    let fx = Fixture::new();
+    let (vault, recovery) = Vault::create(&fx.paths, &s("master")).unwrap();
+    drop(vault);
+    // A later format may change anything but its format and version.
+    let newer =
+        br#"{"format":"sshkm-vault-keys","version":2,"vaultId":"x","slots":[{"type":"new"}]}"#;
+    std::fs::write(&fx.paths.keys, newer).unwrap();
+
+    // No recovery is offered over it, and none happens.
+    let Err(Error::Unsupported(why)) = probe(&fx.paths) else {
+        panic!("a newer key slots file looked damaged or fine");
+    };
+    assert!(why.contains("newer version"), "{why}");
+    assert!(matches!(
+        Vault::recover(&fx.paths, &recovery, &s("new master")),
+        Err(Error::Unsupported(_))
+    ));
+    assert!(matches!(
+        Vault::unlock(&fx.paths, &s("master")),
+        Err(Error::Unsupported(_))
+    ));
+    assert_eq!(std::fs::read(&fx.paths.keys).unwrap(), newer);
+    assert_eq!(std::fs::read_dir(fx.dir.path()).unwrap().count(), 2);
+}
+
+#[test]
+fn recovery_over_a_damaged_key_slots_file_keeps_one_written_meanwhile() {
+    let fx = Fixture::new();
+    let (vault, recovery) = Vault::create(&fx.paths, &s("master")).unwrap();
+    drop(vault);
+    let good = std::fs::read(&fx.paths.keys).unwrap();
+    std::fs::write(&fx.paths.keys, b"{ not json").unwrap();
+    // Another computer writes a good file between the read and the write:
+    // the write goes through the same check as any other and doesn't
+    // replace it.
+    let mut slots = KeySlots::new();
+    slots.set_password(&recovery, &s("elsewhere")).unwrap();
+    let aside = KeySlots::set_aside(&fx.paths.keys).unwrap();
+    std::fs::write(&fx.paths.keys, &good).unwrap();
+    let mut vault = Vault {
+        paths: fx.paths.clone(),
+        db: Database::new(),
+        secret: duplicate(&recovery),
+        slots: KeySlots::new(),
+        disk_hash: [0; 32],
+        unreadable: None,
+        keys_hash: None,
+    };
+    assert!(matches!(vault.write_slots(slots), Err(Error::Conflict(_))));
+    assert_eq!(std::fs::read(&fx.paths.keys).unwrap(), good);
+    assert!(aside.exists());
 }

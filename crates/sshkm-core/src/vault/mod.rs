@@ -154,13 +154,14 @@ pub fn check_shared(database: &[u8], secret: &SecretString) -> Result<()> {
     parse_database(database, secret).map(drop)
 }
 
-/// Looks at the vault's files without decrypting anything. A key slots file
-/// that can't be read (damaged, or in a format this version doesn't know)
-/// counts as none: the database then opens with the recovery key alone, as
-/// it does without one, and gets a new one ([`Vault::recover`]).
+/// Looks at the vault's files without decrypting anything. A damaged key
+/// slots file counts as none: the database then opens with the recovery key
+/// alone, as it does without one, and gets a new one ([`Vault::recover`]).
+/// One written by a newer version of the app fails with
+/// [`Error::Unsupported`]: it is not replaced, the app is updated.
 pub fn probe(paths: &VaultPaths) -> Result<VaultFiles> {
     let slots = match KeySlots::load(&paths.keys) {
-        Err(Error::Parse(_) | Error::Unsupported(_)) => None,
+        Err(Error::Parse(_)) => None,
         other => other?,
     };
     Ok(VaultFiles {
@@ -384,9 +385,10 @@ impl Vault {
     }
 
     /// Unlocks with the recovery key — or, for a KeePass database brought from
-    /// elsewhere, its password — and sets a new master password. A key slots
-    /// file that can't be read is replaced: the key just opened the database
-    /// without it.
+    /// elsewhere, its password — and sets a new master password. A damaged
+    /// key slots file is moved aside ([`KeySlots::set_aside`]) and replaced:
+    /// the key just opened the database without it. One written by a newer
+    /// version of the app is left alone, and recovery fails.
     pub fn recover(
         paths: &VaultPaths,
         recovery_key: &SecretString,
@@ -411,10 +413,13 @@ impl Vault {
             }
             Err(Error::WrongPassphrase)
         })?;
-        let (slots, keys_hash, damaged) = match KeySlots::read(&paths.keys) {
-            Ok(Some((slots, hash))) => (slots, Some(hash), false),
-            Ok(None) => (KeySlots::new(), None, false),
-            Err(Error::Parse(_) | Error::Unsupported(_)) => (KeySlots::new(), None, true),
+        let (slots, keys_hash) = match KeySlots::read(&paths.keys) {
+            Ok(Some((slots, hash))) => (slots, Some(hash)),
+            Ok(None) => (KeySlots::new(), None),
+            Err(Error::Parse(_)) => {
+                KeySlots::set_aside(&paths.keys)?;
+                (KeySlots::new(), None)
+            }
             Err(other) => return Err(other),
         };
         let mut vault = Self {
@@ -428,12 +433,7 @@ impl Vault {
         };
         let mut slots = vault.slots.clone();
         slots.set_password(&vault.secret, new_master)?;
-        if damaged {
-            vault.keys_hash = Some(slots.save(&paths.keys)?);
-            vault.slots = slots;
-        } else {
-            vault.write_slots(slots)?;
-        }
+        vault.write_slots(slots)?;
         Ok(vault)
     }
 

@@ -6,9 +6,20 @@
 //!   ([`crate::terminal::Bridge`]): saved secrets come from the vault, the
 //!   rest becomes a prompt on the tunnel for the Tools page to show, and a
 //!   new host key is trusted only after the user's yes.
-//! - A tunnel is *connecting* until `ssh` prints `Authenticated to …`
+//! - A tunnel is *connecting* until `ssh` logs `Authenticated to …`
 //!   (`LogLevel=VERBOSE`), then *up* once the forward had a moment to be
-//!   set up: `ExitOnForwardFailure` ends `ssh` if it can't be.
+//!   set up: `ExitOnForwardFailure` ends `ssh` if it can't be. That line is
+//!   read only from `ssh`'s own log, a private file (`-E`): a server's or
+//!   jump host's banner and a `ProxyCommand`'s output go to its stderr, so
+//!   they can't make answers count as accepted. Only the server signing in
+//!   could write such a line there, and it could just as well let the user
+//!   in. On Windows, where Win32-OpenSSH lets no one read that file while it
+//!   writes it, there is no log: the line is read from stderr, and a tunnel
+//!   never offers to save an answer, as the terminal there doesn't.
+//! - A tunnel that lets others reach something through this computer (one
+//!   listening on more than loopback, or any remote tunnel) is saved only
+//!   after the user's yes in a native dialog, unless it forwards as it did
+//!   when saved before.
 //! - When `ssh` ends by itself the tunnel failed, with a reason. With
 //!   auto-reconnect on, one that may work later (the network, a busy port,
 //!   a server that went away) starts again after 2 seconds, then 5, 10, 20,
@@ -18,13 +29,15 @@
 //! - Every change goes to the UI as [`CHANGED_EVENT`], and to the tray menu,
 //!   which counts the tunnels that are on.
 //!
-//! `ssh`'s output is kept (the last 16 KiB) to tell why a tunnel failed; it
-//! holds no secret, since answers go through askpass. Nothing is logged.
+//! `ssh`'s output and log are kept (the last 16 KiB) to tell why a tunnel
+//! failed; they hold no secret, since answers go through askpass. Nothing is
+//! logged by the app, and the log file is removed when `ssh` ends.
 
 pub mod failure;
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
+use std::fs::File;
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,11 +54,11 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use self::failure::{TunnelFailReason, TunnelFailure, classify, shown_output};
-use crate::askpass::{Connection, Session};
+use crate::askpass::{Connection, Session, fill};
 use crate::commands::Shared;
 use crate::commands::remote::check_alias;
 use crate::error::{AppError, AppResult};
-use crate::process;
+use crate::process::{self, LogFile};
 use crate::terminal::bridge::{self, Bridge};
 use crate::terminal::store::VaultStore;
 use crate::terminal::text::Resolved;
@@ -208,7 +221,29 @@ impl Tunnels {
     }
 
     /// Adds or changes a tunnel; one that is on starts again as changed.
-    pub fn save(self: &Arc<Self>, tunnel: Tunnel) -> AppResult<TunnelView> {
+    ///
+    /// A tunnel that lets others reach something through this computer
+    /// ([`Tunnel::opens_to_others`]) is saved only once `approve` says yes,
+    /// unless it was saved before forwarding the same way: `approve` is
+    /// the native confirmation, which the page can't answer.
+    pub fn save(
+        self: &Arc<Self>,
+        tunnel: Tunnel,
+        approve: impl FnOnce(&Tunnel) -> AppResult<()>,
+    ) -> AppResult<TunnelView> {
+        let tunnel = tunnel.normalized();
+        if tunnel.opens_to_others() {
+            let unchanged = !tunnel.id.is_empty()
+                && self
+                    .store
+                    .load()?
+                    .iter()
+                    .any(|saved| saved.id == tunnel.id && saved.same_forward(&tunnel));
+            if !unchanged {
+                tunnel.validate()?;
+                approve(&tunnel)?;
+            }
+        }
         let saved = self.store.save(tunnel)?;
         if self.stop(&saved.id) {
             self.start(&saved)?;
@@ -380,12 +415,24 @@ impl Tunnels {
             Err(e) => return other(format!("could not ask for passwords: {e}")),
         };
 
+        // `ssh`'s own messages, apart from what servers print.
+        let log = if READS_OWN_LOG {
+            match LogFile::create().and_then(|log| Ok((LogTail::open(log.path())?, log))) {
+                Ok(opened) => Some(opened),
+                Err(e) => return other(format!("could not make a log file for ssh: {e}")),
+            }
+        } else {
+            None
+        };
         let mut command = process::command("ssh");
         askpass.configure(&mut command);
         command
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
-            .args(run.tunnel.ssh_args())
+            .args(ssh_args(
+                &run.tunnel,
+                log.as_ref().map(|(_, file)| file.path()),
+            ))
             .current_dir(&state.paths.home);
         let mut child = match command.spawn() {
             Ok(child) => child,
@@ -410,12 +457,15 @@ impl Tunnels {
         *lock(&run.child) = Some(child);
         *lock(&run.bridge) = Some(Arc::clone(&bridge));
 
-        let watched = self.watch(run, &bridge, &received);
+        let (mut tail, log) = log.unzip();
+        let watched = self.watch(run, &bridge, &received, tail.as_mut());
         lock(&run.child).take();
         lock(&run.bridge).take();
         bridge.close();
         lock(&run.prompt).take();
         drop(askpass);
+        drop(tail);
+        drop(log);
         let Watched {
             status,
             output,
@@ -469,8 +519,9 @@ impl Tunnels {
             bridge::Options {
                 key_offered,
                 ask_password: false,
-                // `Authenticated to …` tells for sure when signing in is done.
-                can_save: true,
+                // `Authenticated to …` in `ssh`'s own log tells for sure when
+                // signing in is done; without the log nothing does.
+                can_save: READS_OWN_LOG,
                 timeout: bridge::ANSWER_TIMEOUT,
             },
         ));
@@ -479,17 +530,32 @@ impl Tunnels {
             askpass.expect_account(account);
         }
         // Without `ssh -G` nothing is known about the way: assume the worst.
-        askpass.expect_connection(Connection::new(
-            state.openssh_version().as_deref(),
-            resolved.as_ref().is_none_or(|r| r.keyboard_interactive),
-            resolved.as_ref().is_none_or(Resolved::proxied),
-        ));
+        fill::expect_way(
+            &askpass,
+            &run.tunnel.alias,
+            Connection::new(
+                state.openssh_version().as_deref(),
+                resolved.as_ref().is_none_or(|r| r.keyboard_interactive),
+                resolved.as_ref().is_none_or(Resolved::proxied),
+            ),
+            resolved.as_ref().and_then(|r| r.user.as_deref()),
+            resolved.as_ref().and_then(|r| r.host_name.as_deref()),
+        );
         Ok((bridge, askpass))
     }
 
-    /// Follows a running `ssh` until it exits (or is stopped): its output,
-    /// signing in, and the forward coming up.
-    fn watch(&self, run: &Run, bridge: &Bridge, received: &mpsc::Receiver<String>) -> Watched {
+    /// Follows a running `ssh` until it exits (or is stopped): its stderr
+    /// (`received`) and its log (`log`), signing in, and the forward coming
+    /// up. With a log, only the log tells that it signed in. Without one
+    /// (Windows) stderr does, which a server's banner can fake, so nothing
+    /// is saved there ([`READS_OWN_LOG`]).
+    fn watch(
+        &self,
+        run: &Run,
+        bridge: &Bridge,
+        received: &mpsc::Receiver<String>,
+        mut log: Option<&mut LogTail>,
+    ) -> Watched {
         let settle = if run.tunnel.kind == TunnelKind::Remote {
             SETTLE_REMOTE
         } else {
@@ -499,16 +565,30 @@ impl Tunnels {
         let mut signed_in: Option<Instant> = None;
         let mut up: Option<Instant> = None;
         let status = loop {
+            let mut telling = Vec::new();
             match received.recv_timeout(POLL) {
                 Ok(line) => {
-                    if signed_in.is_none() && line.starts_with("Authenticated to ") {
-                        signed_in = Some(Instant::now());
-                        bridge.signed_in();
-                        bridge.save_answers();
-                    }
                     keep(&mut output, &line);
+                    if log.is_none() {
+                        telling.push(line);
+                    }
                 }
                 Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {}
+            }
+            if let Some(log) = log.as_deref_mut() {
+                for line in log.lines(false) {
+                    keep(&mut output, &line);
+                    telling.push(line);
+                }
+            }
+            if signed_in.is_none()
+                && telling
+                    .iter()
+                    .any(|line| line.starts_with("Authenticated to "))
+            {
+                signed_in = Some(Instant::now());
+                bridge.signed_in();
+                bridge.save_answers();
             }
             if up.is_none() && signed_in.is_some_and(|at| at.elapsed() >= settle) {
                 up = Some(Instant::now());
@@ -528,12 +608,17 @@ impl Tunnels {
                 Err(_) => break None,
             }
         };
-        // What it printed on the way out.
+        // What it printed and logged on the way out.
         let deadline = Instant::now() + Duration::from_millis(300);
         while let Ok(line) =
             received.recv_timeout(deadline.saturating_duration_since(Instant::now()))
         {
             keep(&mut output, &line);
+        }
+        if let Some(log) = log {
+            for line in log.lines(true) {
+                keep(&mut output, &line);
+            }
         }
         Watched {
             status,
@@ -565,6 +650,95 @@ fn keep(output: &mut String, line: &str) {
             .unwrap_or(cut);
         output.drain(..cut);
     }
+}
+
+/// `ssh` logs to a private file (`-E`) that the tunnel reads as `ssh` writes
+/// it. Not on Windows, where Win32-OpenSSH opens the file so that no one
+/// else may read it meanwhile: tunnels there tell signing in from stderr,
+/// and so never save answers.
+const READS_OWN_LOG: bool = cfg!(unix);
+
+/// `ssh`'s arguments for `tunnel`, logging to `log` if given.
+fn ssh_args(tunnel: &Tunnel, log: Option<&Path>) -> Vec<std::ffi::OsString> {
+    let mut args = Vec::new();
+    if let Some(log) = log {
+        args.push("-E".into());
+        args.push(log.as_os_str().to_owned());
+    }
+    args.extend(tunnel.ssh_args().into_iter().map(Into::into));
+    args
+}
+
+/// Past this size the log file is emptied (Unix, where `ssh` writes at the
+/// end of the file, whatever it is): a tunnel up for long may log a line for
+/// every connection it can't forward.
+#[cfg_attr(not(unix), allow(dead_code))]
+const LOG_LIMIT: u64 = 1024 * 1024;
+
+/// `ssh`'s `-E` log, read line by line as it grows.
+struct LogTail {
+    file: File,
+    /// Bytes after the last full line.
+    partial: Vec<u8>,
+    /// Bytes read since the file was last emptied.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    read: u64,
+}
+
+impl LogTail {
+    fn open(path: &Path) -> std::io::Result<Self> {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(cfg!(unix))
+            .open(path)?;
+        Ok(Self {
+            file,
+            partial: Vec::new(),
+            read: 0,
+        })
+    }
+
+    /// The lines logged since the last call, without line ends; `rest`
+    /// takes an unfinished last line too.
+    fn lines(&mut self, rest: bool) -> Vec<String> {
+        let mut buffer = [0; 8 * 1024];
+        loop {
+            match self.file.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    self.partial.extend_from_slice(&buffer[..n]);
+                    self.read += u64::try_from(n).unwrap_or(u64::MAX);
+                }
+            }
+        }
+        #[cfg(unix)]
+        if self.read > LOG_LIMIT && self.file.set_len(0).is_ok() {
+            use std::io::Seek as _;
+            let _ = self.file.rewind();
+            self.read = 0;
+        }
+        let mut lines = Vec::new();
+        while let Some(end) = self.partial.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = self.partial.drain(..=end).collect();
+            lines.push(text_line(&line));
+        }
+        if self.partial.len() > TAIL {
+            // A line without end: keep its last part.
+            let cut = self.partial.len() - TAIL;
+            self.partial.drain(..cut);
+        }
+        if rest && !self.partial.is_empty() {
+            lines.push(text_line(&std::mem::take(&mut self.partial)));
+        }
+        lines
+    }
+}
+
+/// A line of the log as text, without its `\r\n`.
+fn text_line(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .trim_end_matches(['\r', '\n'])
+        .to_owned()
 }
 
 /// One tunnel that is on.
@@ -653,4 +827,287 @@ impl Sink for TunnelSink {
     }
 
     fn output(&self, _bytes: &[u8]) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write as _;
+
+    use sshkm_core::{ErrorCode, ExposeSecret, SecretString};
+
+    use super::*;
+    use crate::askpass::{Ask, Interactive, Prompt, Reply};
+    use crate::terminal::bridge::{Options, SaveTarget, Store};
+    use crate::terminal::types::SaveOffer;
+
+    /// A vault that keeps what the bridge saves.
+    #[derive(Default, Clone)]
+    struct Saved(Arc<Mutex<Vec<String>>>);
+
+    impl Store for Saved {
+        fn password(&self) -> Option<SecretString> {
+            None
+        }
+        fn one_time_code(&self) -> Option<SecretString> {
+            None
+        }
+        fn passphrase(&self, _: &str) -> Option<SecretString> {
+            None
+        }
+        fn offer(&self, _: &SaveTarget) -> SaveOffer {
+            SaveOffer::Update
+        }
+        fn save(&self, _: &SaveTarget, secret: &SecretString) -> AppResult<()> {
+            lock(&self.0).push(secret.expose_secret().to_owned());
+            Ok(())
+        }
+    }
+
+    /// Passes on the ids of the prompts the bridge shows.
+    struct Prompts(Mutex<mpsc::Sender<u32>>);
+
+    impl Sink for Prompts {
+        fn event(&self, event: &TerminalEvent) {
+            if let TerminalEvent::Prompt { prompt } = event {
+                let _ = lock(&self.0).send(prompt.id);
+            }
+        }
+        fn output(&self, _: &[u8]) {}
+    }
+
+    fn local(alias: &str) -> Tunnel {
+        Tunnel {
+            id: String::new(),
+            name: String::new(),
+            alias: alias.into(),
+            kind: TunnelKind::Local,
+            bind_address: None,
+            listen_port: 8080,
+            target_host: Some("localhost".into()),
+            target_port: Some(80),
+            auto_reconnect: false,
+        }
+    }
+
+    /// A bridge whose password prompt the user answered with "typed",
+    /// asking to save it.
+    fn answered(saved: &Saved) -> Arc<Bridge> {
+        let (send, ids) = mpsc::channel();
+        let bridge = Arc::new(Bridge::new(
+            saved.clone(),
+            Arc::new(Prompts(Mutex::new(send))),
+            Options::default(),
+        ));
+        let asking = Arc::clone(&bridge);
+        let asked = thread::spawn(move || {
+            let prompt = Prompt::parse("alice@10.0.0.5's password: ", "");
+            let ask = Ask {
+                prompt: &prompt,
+                foreign: false,
+                unverified: false,
+                given: 0,
+                confirm_fill: None,
+            };
+            matches!(asking.respond(&ask), Reply::Secret(_))
+        });
+        let id = ids.recv().unwrap();
+        assert!(bridge.answer(
+            id,
+            PromptAnswer::Secret {
+                value: "typed".into(),
+                save: true,
+            }
+        ));
+        assert!(asked.join().unwrap());
+        bridge
+    }
+
+    /// What [`Tunnels::watch`] makes of `printed` on stderr and `logged` in
+    /// `ssh`'s log: whether it signed in, what was saved, the output kept.
+    fn watched(printed: &str, logged: &str) -> (bool, Vec<String>, String) {
+        let saved = Saved::default();
+        let bridge = answered(&saved);
+        let (lines, received) = mpsc::channel();
+        for line in printed.lines() {
+            lines.send(line.to_owned()).unwrap();
+        }
+        drop(lines);
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("ssh.log");
+        std::fs::write(&log, logged).unwrap();
+        let mut tail = LogTail::open(&log).unwrap();
+        let tunnels = Tunnels::new(dir.path());
+        let watched = tunnels.watch(&Run::new(local("h")), &bridge, &received, Some(&mut tail));
+        let saved = lock(&saved.0).clone();
+        (watched.signed_in, saved, watched.output)
+    }
+
+    #[test]
+    fn only_ssh_s_own_log_tells_that_it_signed_in() {
+        let line = "Authenticated to h ([10.0.0.5]:22) using \"password\".";
+        // A server's banner, or what a jump host or proxy command prints.
+        let (signed_in, saved, output) = watched(&format!("Welcome\n{line}\n"), "");
+        assert!(!signed_in);
+        assert!(saved.is_empty(), "saved before signing in");
+        assert!(output.contains("Welcome"));
+
+        let (signed_in, saved, output) = watched("", &format!("{line}\r\n"));
+        assert!(signed_in);
+        assert_eq!(saved, ["typed"]);
+        assert!(output.contains(line), "{output}");
+    }
+
+    /// Without a log (Windows), stderr tells that the tunnel is up, and the
+    /// tunnel's bridge offers no saving at all.
+    #[test]
+    fn without_a_log_stderr_tells_and_nothing_is_offered_for_saving() {
+        let saved = Saved::default();
+        let bridge = answered(&saved);
+        let (lines, received) = mpsc::channel();
+        lines
+            .send("Authenticated to h ([10.0.0.5]:22) using \"password\".".into())
+            .unwrap();
+        drop(lines);
+        let dir = tempfile::tempdir().unwrap();
+        let watched =
+            Tunnels::new(dir.path()).watch(&Run::new(local("h")), &bridge, &received, None);
+        assert!(watched.signed_in);
+
+        let tunnel = local("h");
+        let log = dir.path().join("ssh.log");
+        let with_log = ssh_args(&tunnel, Some(&log));
+        assert_eq!(with_log[0], "-E");
+        assert_eq!(with_log[1], log.as_os_str());
+        let without = ssh_args(&tunnel, None);
+        assert!(!without.iter().any(|arg| arg == "-E"));
+        assert_eq!(
+            without
+                .last()
+                .map(|a| a.to_string_lossy().into_owned())
+                .as_deref(),
+            Some("h")
+        );
+        // Windows never logs to a file, so never saves.
+        assert_eq!(READS_OWN_LOG, cfg!(unix));
+    }
+
+    /// The real `ssh` writes its `-E` log while the tunnel holds it open to
+    /// read, and the tunnel reads it.
+    #[cfg(unix)]
+    #[test]
+    fn ssh_logs_to_the_file_the_tunnel_reads() {
+        let log = LogFile::create().unwrap();
+        let mut tail = LogTail::open(log.path()).unwrap();
+        let mut args = vec!["-v".into(), "-F".into(), "none".into()];
+        args.extend(ssh_args(&local("example.invalid"), Some(log.path())));
+        // `-G` reads the configuration, logs, and exits without connecting.
+        args.insert(1, "-G".into());
+        let output = std::process::Command::new("ssh")
+            .args(&args)
+            .stdin(Stdio::null())
+            .output();
+        let Ok(output) = output else {
+            return; // No ssh here.
+        };
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let lines = tail.lines(true);
+        assert!(
+            // OpenSSH 10 logs its version as a debug line (`debug1: OpenSSH_…`).
+            lines.iter().any(|line| line.contains("OpenSSH_")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn the_log_is_read_as_it_grows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ssh.log");
+        let mut file = File::create(&path).unwrap();
+        let mut tail = LogTail::open(&path).unwrap();
+        assert_eq!(tail.lines(false), Vec::<String>::new());
+        file.write_all(b"bind [127.0.0.1]:8080: Address already in use\r\nCould not")
+            .unwrap();
+        assert_eq!(
+            tail.lines(false),
+            ["bind [127.0.0.1]:8080: Address already in use"]
+        );
+        file.write_all(b" request local forwarding.\r\nlast")
+            .unwrap();
+        assert_eq!(tail.lines(false), ["Could not request local forwarding."]);
+        assert_eq!(tail.lines(true), ["last"]);
+        assert_eq!(tail.lines(true), Vec::<String>::new());
+    }
+
+    #[test]
+    fn opening_this_computer_to_others_takes_a_yes() {
+        let dir = tempfile::tempdir().unwrap();
+        let tunnels = Arc::new(Tunnels::new(dir.path()));
+        let asked = Mutex::new(Vec::new());
+        let ask = |answer: bool| {
+            let asked = &asked;
+            move |tunnel: &Tunnel| {
+                lock(asked).push(tunnel.forward_spec());
+                if answer {
+                    Ok(())
+                } else {
+                    Err(AppError::new(ErrorCode::Cancelled, "not approved"))
+                }
+            }
+        };
+
+        // On loopback: nothing to ask.
+        let plain = tunnels.save(local("web"), ask(false)).unwrap().tunnel;
+        assert!(lock(&asked).is_empty());
+
+        // On every address: a no saves nothing.
+        let open = Tunnel {
+            bind_address: Some(" * ".into()),
+            ..plain.clone()
+        };
+        let error = tunnels.save(open.clone(), ask(false)).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::Cancelled);
+        assert_eq!(*lock(&asked), ["*:8080:localhost:80"]);
+        assert_eq!(tunnels.list().unwrap()[0].tunnel, plain);
+
+        // A yes saves it; renaming it later asks nothing, changing where it
+        // leads asks again.
+        let open = tunnels.save(open, ask(true)).unwrap().tunnel;
+        assert_eq!(open.bind_address.as_deref(), Some("*"));
+        lock(&asked).clear();
+        let renamed = Tunnel {
+            name: "Shared".into(),
+            auto_reconnect: true,
+            ..open
+        };
+        tunnels.save(renamed.clone(), ask(false)).unwrap();
+        assert!(lock(&asked).is_empty());
+        let moved = Tunnel {
+            target_port: Some(8000),
+            ..renamed
+        };
+        assert!(tunnels.save(moved, ask(false)).is_err());
+        assert_eq!(lock(&asked).len(), 1);
+
+        // Every remote tunnel asks, and an invalid one is refused first.
+        lock(&asked).clear();
+        let remote = Tunnel {
+            kind: TunnelKind::Remote,
+            listen_port: 2222,
+            target_host: Some("127.0.0.1".into()),
+            target_port: Some(22),
+            ..local("web")
+        };
+        assert!(tunnels.save(remote.clone(), ask(false)).is_err());
+        let invalid = Tunnel {
+            alias: "x@-e".into(),
+            ..remote
+        };
+        let error = tunnels.save(invalid, ask(true)).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::InvalidInput);
+        assert_eq!(*lock(&asked), ["2222:127.0.0.1:22"]);
+    }
 }

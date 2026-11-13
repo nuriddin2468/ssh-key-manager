@@ -55,6 +55,7 @@ pub mod audit;
 pub mod authorized_keys;
 pub mod authorized_line;
 pub mod browser;
+pub mod chat;
 pub mod config;
 pub mod diagnose;
 mod error;

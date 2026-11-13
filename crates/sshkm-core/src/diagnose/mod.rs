@@ -238,8 +238,10 @@ fn debug_text(line: &str) -> Option<&str> {
     (level.len() == 1 && level.as_bytes()[0].is_ascii_digit()).then_some(text)
 }
 
-/// `OpenSSH_9.9p2, LibreSSL 3.3.6`, `OpenSSH_for_Windows_9.5p1, LibreSSL 3.8.2`.
+/// `OpenSSH_9.9p2, LibreSSL 3.3.6`, `OpenSSH_for_Windows_9.5p1, LibreSSL 3.8.2`;
+/// OpenSSH 10 logs it as a debug line (`debug1: OpenSSH_10.5p1, …`).
 fn is_version(line: &str) -> bool {
+    let line = debug_text(line).unwrap_or(line);
     line.starts_with("OpenSSH_") && line.contains(", ")
 }
 

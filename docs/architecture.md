@@ -35,7 +35,10 @@ real `~/.ssh`. Its modules:
   - `install` writes the file with administrator rights; see SECURITY.md.
 - `agent`: a small synchronous client for the ssh-agent protocol.
   - Connects through a Unix socket (`SSH_AUTH_SOCK`), or on Windows a named pipe:
-    `SSH_AUTH_SOCK` if it names one, else the OpenSSH agent's pipe.
+    `SSH_AUTH_SOCK` if it names one, else the OpenSSH agent's pipe. Nothing is sent
+    until the server is known to run as this user or the system: on Unix by the
+    socket's peer credentials (`agent/peer.rs`, through libc), on Windows by the check
+    the app sets.
 - `perms`
   - Unix: checks and fixes file modes. On macOS it also empties a folder's access list
     (`perms/extended_acl.rs`, through the system library), for the private folders
@@ -44,8 +47,8 @@ real `~/.ssh`. Its modules:
     `icacls`. It also creates files meant for plain-text secrets (exports, converted
     keys) with a protected access list already in place, through Win32
     (`perms/private_file.rs`). These two modules, the Unix part of
-    `vault/envs/files/pipes.rs` and the Windows part of `vault/envs/files/folder.rs`
-    are the crate's only `unsafe` code.
+    `vault/envs/files/pipes.rs`, the Windows part of `vault/envs/files/folder.rs` and
+    `agent/peer.rs` (Unix) are the crate's only `unsafe` code.
 - `fsutil`: atomic writes. Files in `~/.ssh` and the app's data folder are written
   through links (`atomic_write`; `atomic_write_private` for a private key, which keeps
   only its owner's permissions); secrets written where the user picks are never written
@@ -266,6 +269,16 @@ translates.
     which `store` keeps per device in `sync/` in the app's data folder.
   - `examples/nearby_peer.rs` stands in for another computer, also as a new one
     (`--join`) and as one of the user's devices (`--sync`).
+  - `chat` runs chats ([design](p2p-chat.md)), outside the one conversation at a
+    time: online while the vault is unlocked and Nearby is open in a visible window
+    (the page says so with `chat_set_open`, and again every 20 seconds), and two
+    minutes after. `chat/presence.rs` listens on a port of its own and announces
+    `_sshkm-chat._tcp` with a tag per contact (`p2p::contact`); `chat/link.rs` knocks,
+    runs the handshake bound to the knock, and keeps up to 16 split sessions, one
+    reading thread each. A manager thread pings, closes idle links, wipes values whose
+    term ended and writes the conversations (`sshkm_core::chat`) to `chats/` in the
+    app's data folder, sealed with the chat key the vault keeps for this computer.
+    Every change goes to the UI as `nearby-chats` with the conversation's key.
 - **Watcher.** Watches `~/.ssh` and the hosts file so changes made in a terminal appear
   immediately.
 - **Vault runtime.** The unlocked vault lives only in the Rust process. A timer locks
@@ -282,9 +295,16 @@ translates.
   - One supervisor thread per tunnel that is on runs `ssh -N` with the forward,
     `ExitOnForwardFailure` and `ServerAliveInterval`, its prompts answered by the
     terminal's prompt bridge through an interactive askpass session.
-  - `LogLevel=VERBOSE`'s `Authenticated to …` line tells when signing in is done;
-    `failure` reads why `ssh` stopped. With auto-reconnect a tunnel starts again
+  - `LogLevel=VERBOSE`'s `Authenticated to …` line, read from `ssh`'s own log (a
+    private `-E` file, which servers' banners don't reach), tells when signing in is
+    done; `failure` reads why `ssh` stopped from that log and its stderr. On Windows,
+    where Win32-OpenSSH keeps others from reading that file, there is no log: stderr
+    tells, and nothing is offered for saving. With auto-reconnect a tunnel starts again
     after a growing wait, unless what stopped it needs the user.
+  - Through a program that may run another `ssh` (a `ProxyCommand` of the host or a
+    `ProxyJump` hop, a `LocalCommand`, a `KnownHostsCommand`), `askpass::fill` asks in
+    a native dialog before each secret is filled in, for tunnels, the terminal and
+    `run_ssh` alike.
   - Every change goes to the page as `tunnels-changed`, and to the tray menu. Tunnels
     stop when the app quits.
 - **Quick search.** `src-tauri/src/quick/`: a system-wide shortcut

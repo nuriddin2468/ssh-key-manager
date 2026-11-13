@@ -133,6 +133,7 @@ impl Background {
             crate::watcher::EVENT,
             crate::vault_watcher::EVENT,
             crate::tunnels::CHANGED_EVENT,
+            crate::nearby::chat::CHATS_EVENT,
         ] {
             let handle = app.clone();
             app.listen_any(event, move |_| refresh(&handle));
@@ -378,11 +379,15 @@ fn items(app: &AppHandle) -> Vec<Item> {
         .try_state::<SharedTunnels>()
         .map(|tunnels| tunnels.active())
         .unwrap_or_default();
+    let unread = app
+        .try_state::<SharedNearby>()
+        .map_or(0, |nearby| nearby.chat_unread());
     menu::items(&Input {
         vault,
         aliases: &aliases,
         history: &history,
         waiting,
+        unread,
         tunnels: &tunnels,
     })
 }
@@ -423,6 +428,7 @@ fn act(app: &AppHandle, id: &str) {
     match id {
         menu::OPEN | menu::NEARBY => show_window(app),
         menu::QUICK => crate::quick::open(app),
+        menu::CHATS => page("chats"),
         menu::ALL_HOSTS => page("new-session"),
         // Touch ID or Windows Hello, else the small unlock window: the main
         // window stays as it is.

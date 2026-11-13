@@ -18,6 +18,8 @@ pub const HOSTS_SHOWN: usize = 8;
 pub const OPEN: &str = "tray:open";
 pub const QUICK: &str = "tray:quick";
 pub const NEARBY: &str = "tray:nearby";
+/// Nearby's chats, when messages wait there unread.
+pub const CHATS: &str = "tray:chats";
 /// Followed by the alias.
 pub const HOST: &str = "tray:host:";
 pub const ALL_HOSTS: &str = "tray:hosts";
@@ -49,6 +51,8 @@ pub struct Input<'a> {
     pub aliases: &'a [String],
     pub history: &'a HostHistory,
     pub waiting: Option<Waiting>,
+    /// Chat messages the user hasn't read.
+    pub unread: u32,
     /// The tunnels that are on, in the Tunnels tool's order.
     pub tunnels: &'a [Active],
 }
@@ -66,6 +70,44 @@ pub enum Item {
         items: Vec<Item>,
     },
     Separator,
+}
+
+/// What waits on Nearby: a conversation that asks the user, chat messages
+/// they haven't read.
+fn nearby(input: &Input, items: &mut Vec<Item>) {
+    if let Some(waiting) = &input.waiting {
+        items.push(Item::Separator);
+        let waiting = match &waiting.peer {
+            Some(peer) => Localized::new(
+                format!("{peer} is waiting for your answer"),
+                format!("{peer} ждёт вашего ответа"),
+                format!("{peer} javobingizni kutmoqda"),
+            )
+            .pick()
+            .to_owned(),
+            None => text(
+                "A computer nearby is waiting for your answer",
+                "Компьютер рядом ждёт вашего ответа",
+                "Yaqindagi kompyuter javobingizni kutmoqda",
+            ),
+        };
+        items.push(action(NEARBY, waiting));
+    }
+
+    if input.unread > 0 && input.vault == Vault::Unlocked {
+        let unread = input.unread;
+        items.push(Item::Separator);
+        items.push(action(
+            CHATS,
+            Localized::new(
+                format!("Unread messages: {unread}"),
+                format!("Непрочитанные сообщения: {unread}"),
+                format!("Oʻqilmagan xabarlar: {unread}"),
+            )
+            .pick()
+            .to_owned(),
+        ));
+    }
 }
 
 pub fn items(input: &Input) -> Vec<Item> {
@@ -96,24 +138,7 @@ pub fn items(input: &Input) -> Vec<Item> {
         text("Quick Search…", "Быстрый поиск…", "Tezkor qidiruv…"),
     ));
 
-    if let Some(waiting) = &input.waiting {
-        items.push(Item::Separator);
-        let waiting = match &waiting.peer {
-            Some(peer) => Localized::new(
-                format!("{peer} is waiting for your answer"),
-                format!("{peer} ждёт вашего ответа"),
-                format!("{peer} javobingizni kutmoqda"),
-            )
-            .pick()
-            .to_owned(),
-            None => text(
-                "A computer nearby is waiting for your answer",
-                "Компьютер рядом ждёт вашего ответа",
-                "Yaqindagi kompyuter javobingizni kutmoqda",
-            ),
-        };
-        items.push(action(NEARBY, waiting));
-    }
+    nearby(input, &mut items);
 
     if !input.tunnels.is_empty() {
         items.push(Item::Separator);
@@ -346,6 +371,7 @@ mod tests {
             aliases: &aliases,
             history: &history,
             waiting: None,
+            unread: 0,
             tunnels: &[],
         });
         assert_eq!(
@@ -373,6 +399,8 @@ mod tests {
             waiting: Some(Waiting {
                 peer: Some("Laptop".into()),
             }),
+            // Locked: unread chats aren't counted aloud.
+            unread: 3,
             tunnels: &[],
         });
         assert_eq!(
@@ -383,6 +411,26 @@ mod tests {
     }
 
     #[test]
+    fn unread_chats_lead_to_them_while_the_vault_is_unlocked() {
+        let history = HostHistory::new();
+        let items = items(&Input {
+            vault: Vault::Unlocked,
+            aliases: &[],
+            history: &history,
+            waiting: None,
+            unread: 2,
+            tunnels: &[],
+        });
+        let chats = items
+            .iter()
+            .find(|item| matches!(item, Item::Action { id, .. } if id == CHATS));
+        assert!(
+            matches!(chats, Some(Item::Action { text, .. }) if text == "Unread messages: 2"),
+            "{items:?}"
+        );
+    }
+
+    #[test]
     fn without_a_vault_there_is_nothing_to_lock() {
         let history = HostHistory::new();
         let items = items(&Input {
@@ -390,6 +438,7 @@ mod tests {
             aliases: &[],
             history: &history,
             waiting: None,
+            unread: 0,
             tunnels: &[],
         });
         assert_eq!(ids(&items), [OPEN, QUICK, "-", QUIT]);
@@ -413,6 +462,7 @@ mod tests {
             aliases: &[],
             history: &history,
             waiting: None,
+            unread: 0,
             tunnels: &tunnels,
         });
         assert_eq!(

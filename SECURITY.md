@@ -6,7 +6,9 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
 
 - **Private keys never reach the UI.** The webview only receives metadata and public keys.
   Decrypted keys exist only inside the Rust process, are zeroized when dropped, and are
-  passed straight to `ssh-agent`.
+  passed straight to `ssh-agent`, and only to one that runs as you or as the system: on
+  macOS and Linux the app asks the system which user serves the socket in
+  `SSH_AUTH_SOCK` before it sends anything, and on Windows who serves the pipe.
 - **Key passphrases are not stored**, unless you save them in the password vault. They
   travel from the form to the Rust process for one operation and are held in
   `secrecy::SecretString`. They are never logged. Adding a passphrase to a key that has
@@ -320,6 +322,24 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     keyboard-interactive is on. The terminal then shows those prompts, and with
     keyboard-interactive on any prompt that names another account, as the sender's
     quoted text, never as the app's password or passphrase dialog.
+  - A program `ssh` runs on the way may run another, older `ssh` than the one the app
+    checks the version of, whose prompts look like `ssh`'s own: a `ProxyCommand` of the
+    host or of any `ProxyJump` hop (each hop read with its own `ssh -G`; one that
+    can't be read counts), a `LocalCommand` that may run, or a `KnownHostsCommand`.
+    Through one, the app asks in a system dialog before each password, 2FA code or
+    passphrase it would fill in (saved, or typed into a form such as Install key), and
+    only for a prompt `ssh`'s version lets it tell apart as the host's or `ssh`'s own.
+    The dialog names the host, its user and `HostName`, and the program's line, shown
+    as text and shortened; "Don't fill in" is the default, and Escape is the same.
+    It asks for every prompt and remembers nothing, and at most three times a host a
+    minute; past that nothing is filled in until the minute is over, and a test or key
+    install says so. While the main window is hidden (a tunnel reconnecting from the
+    tray) the dialog stands on its own rather than on the window. The time it stays
+    open doesn't count against a test's or install's timeout. On "Don't fill in" the
+    terminal and tunnels show the prompt as described above, and a test or key
+    install stops and says so. A prompt for another account, a host-key or yes/no
+    question, or one the app can't tell apart is never filled in and never asked
+    about.
   - The in-app terminal uses the same channel with an interactive session. A saved
     secret is given once and only to prompts for the host's own account; everything else
     (a secret not saved, a rejected one, a jump host's password) is asked of you in a
@@ -334,24 +354,34 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     connection, and so does a new key of another type for a host whose key is already
     known. Anything else `ssh` adds to the question is shown as a warning.
   - An answer you choose to save goes into the vault only after the session has signed
-    in. On Windows, where the app can't tell when that happens, the terminal never saves
-    answers. Terminal output and answers are never logged.
+    in. On Windows, where the app can't tell when that happens, the terminal and
+    tunnels never save answers. Terminal output and answers are never logged.
   - Tunnels (Tools → Tunnels) use the same interactive channel: a saved secret is
     given once, a new host key is trusted only after your "Trust", and anything else is
     asked of you on the Tunnels page. A tunnel that reconnects by itself gets saved
-    secrets again but never trusts a host key without you.
+    secrets again but never trusts a host key without you. A tunnel counts as signed
+    in only when `ssh` logs so in its own log, a new file only you can read in the
+    temporary folder (`ssh -E`, removed when `ssh` ends): a server's banner or what a
+    jump host or `ProxyCommand` prints never reaches it. Windows' OpenSSH lets no one
+    read that file while it writes it, so there tunnels read `ssh`'s output instead and
+    never offer to save an answer.
 - **SSH tools.** The Tools page's SSH tools change nothing behind your back.
   - A tunnel is one `ssh -N` per forward, with `ExitOnForwardFailure` (no half-working
     tunnel) and no connection sharing (`ControlPath none`), so it neither rides on nor
     carries other `ssh` sessions. Local and SOCKS tunnels listen on `localhost` unless
-    you pick "All addresses", which the app marks as open to your network. Every value
-    that reaches `ssh` (alias, address, host, port) is checked first. Tunnels stop when
+    you pick "All addresses", which the app marks as open to your network. Saving a
+    tunnel that listens beyond `localhost`, or any remote tunnel (the server reaches
+    this computer, or what it reaches), asks first in a system dialog that says who can
+    connect and what they reach; changing only its name or auto-reconnect doesn't ask
+    again. Every value that reaches `ssh` (alias, address, host, port) is checked first. Tunnels stop when
     the app quits and keep running while the window is closed to the tray, where the
     menu counts them and stops them all. Their definitions are in `tunnels.json` in the
     app's data folder (mode 0600): hosts, ports, names, never a secret.
   - The ProxyJump wizard and "Add to ~/.ssh/config" of a tunnel edit `~/.ssh/config`
     through the host editor's path: a backup first, refused if the file changed
-    meanwhile, and a native confirmation for lines that say which server gets access.
+    meanwhile, and a native confirmation for lines that give access to this computer
+    (every `RemoteForward`), open it to others (a forward on all addresses) or say which
+    server gets access.
   - The key converter decrypts keys in Rust only; the page sees fingerprints and the
     public key. It reads only a file picked in a system dialog the app opens itself, or
     a private key in `~/.ssh`. Converted keys go into `~/.ssh` only as new files (0600), or where you
@@ -408,9 +438,12 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - Only `ssh`, `autossh`, `mosh`, `scp` and `sftp` commands are looked at. Of those, only
     the target (user, host, port), `-i`, `-J`, `-A` and a short list of `-o` options
     reach the interface; remote commands, file names and every other argument stay in
-    Rust. Options that run programs or check servers less strictly (`ProxyCommand`,
-    `LocalCommand`, `StrictHostKeyChecking`, `UserKnownHostsFile`, …) are never
-    suggested, and nothing in a command is expanded or run (`$VAR`, `$(…)`).
+    Rust. Options that run programs, choose who signs with your keys, give the server
+    full control of the display, put the connection where others can reach it, or check
+    servers less strictly (`ProxyCommand`, `LocalCommand`, `IdentityAgent`,
+    `ForwardX11Trusted`, `ControlPath`, `StrictHostKeyChecking`, `UserKnownHostsFile`,
+    …) are never suggested, and nothing in a command is expanded or run (`$VAR`,
+    `$(…)`).
   - Passwords typed into those commands (`sshpass -p`, `ssh://user:password@`, a `-o`
     option or a variable named like a password, also inside a `ProxyCommand`) are
     dropped and only counted per file, so the app can tell you to remove them.
@@ -536,16 +569,18 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     anything to be written to it (`/dev/null` reads as empty).
   - `config` and `known_hosts` are backed up before every write. An edit is tied to the
     version of the file it was made on and refused if the file changed meanwhile.
-  - A change that adds or alters a directive that runs a program, loads a library,
-    includes another file, or gives the server access (`ProxyCommand`, `LocalCommand`,
-    `KnownHostsCommand`, `Match exec`, `PKCS11Provider`, `SecurityKeyProvider`,
-    `Include`, `IdentityAgent`, `ForwardAgent`, `ForwardX11`, a dynamic
-    `RemoteForward`, …), a host name with shell syntax, a change of which server gets
-    such access (`HostName`, `Port`, `User`, `ProxyJump`, `HostKeyAlias` or the `Host`
-    line of a block it applies to), or one that checks servers less strictly
-    (`StrictHostKeyChecking no` or `accept-new`, `UserKnownHostsFile`,
-    `GlobalKnownHostsFile`, `VerifyHostKeyDNS yes`), is confirmed in a system dialog
-    that shows it. Lines are read as OpenSSH reads them (only spaces and tabs separate
+  - A change that adds or alters a directive that runs a program (here or on every
+    server it applies to), loads a library, includes another file, or gives the server
+    access (`ProxyCommand`, `LocalCommand`, `RemoteCommand`, `KnownHostsCommand`,
+    `Match exec`, `PKCS11Provider`, `SecurityKeyProvider`, `Include`, `IdentityAgent`,
+    `ForwardAgent`, `ForwardX11`, every `RemoteForward`, `SendEnv` of anything but the
+    locale, …), a host name with shell syntax, a change of which server gets such
+    access (`HostName`, `Port`, `User`, `ProxyJump`, `HostKeyAlias` or the `Host` line
+    of a block it applies to), one that lets others use the connection (`GatewayPorts`,
+    a `LocalForward` or `DynamicForward` on all addresses, a `ControlPath` outside your
+    home folder), or one that checks servers less strictly (`StrictHostKeyChecking no`
+    or `accept-new`, `UserKnownHostsFile`, `GlobalKnownHostsFile`,
+    `VerifyHostKeyDNS yes`), is confirmed in a system dialog that shows it. Lines are read as OpenSSH reads them (only spaces and tabs separate
     words; quoted keywords count), and text with control characters other than tabs
     and line ends is refused.
   - A script in the page can't answer that dialog, and a yes given less than a second
@@ -554,9 +589,11 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     for the page. This holds for every confirmation dialog in the app.
   - Whatever the page asks, the app runs `ssh` (connection tests, key installs, the
     in-app and system terminal) only with a host alias of letters, digits and
-    `. _ - @ : [ ]`. OpenSSH before 9.6 puts the name as it is into the commands that
-    `ProxyCommand`, `ProxyJump` and `Match exec` run through the shell, so a name with
-    shell syntax could run as a command.
+    `. _ - @ : [ ]`, no part of which (around an `@` or `:`) starts with `-`. OpenSSH
+    before 9.6 puts the name as it is into the commands that `ProxyCommand`,
+    `ProxyJump` and `Match exec` run through the shell, so a name with shell syntax
+    could run as a command, and a host starting with `-` could pass the program an
+    option.
   - Private keys are deliberately not backed up, because a backup taken before adding a
     passphrase would leave an unencrypted copy behind.
 - **Deletions are recoverable.** Removed keys go to the system Trash.
@@ -608,8 +645,14 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     the like) or not UTF-8 is never written.
   - The hosts file is backed up before every change, and any backup can be restored.
   - On Windows the elevated step runs Windows PowerShell, so the UAC prompt names
-    Microsoft as the publisher. PowerShell, `pkexec` and the other system tools the app
-    starts are run by their full path in the system folders, never looked up on `PATH`.
+    Microsoft as the publisher. PowerShell, `pkexec`, `open`, `cmd.exe` and the other
+    system tools the app starts are run from the system folders, never looked up on
+    `PATH`. The programs that are yours to choose are found on `PATH`: OpenSSH (`ssh`,
+    `ssh-keyscan`), Git, and the terminal that opens a session in a window (Windows
+    Terminal, or the first terminal emulator found on Linux). On Windows the programs
+    the app starts begin in your home folder and are told not to look for programs in
+    the current folder, so a file dropped in the folder the app was started from is
+    never run as `ssh.exe`.
 - **Locked-down webview**
   - The page drives the in-app terminal, so a script running in the page could open a
     shell and run commands as you. The model therefore rests on no outside code ever
@@ -1072,6 +1115,68 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   it waits for the next sync. A change turned down is not asked about again until it
   changes. A conflict is the user's choice too. Both files are backed up before a sync
   writes them, and a file changed meanwhile is not written.
+- **Chats.** Contacts and the user's own devices can chat: texts, secrets that
+  expire, variables and the items above as cards ([design](docs/p2p-chat.md)).
+  - _Only while both are online._ A computer is online while its vault is unlocked
+    and Nearby is open in a visible window, and two minutes after (hiding to the tray
+    counts as leaving). There is no outbox, no relay and no background listener.
+  - _Presence only contacts recognise._ The app announces `_sshkm-chat._tcp` under a
+    random name that changes every ten minutes, with one tag per contact: an
+    HMAC-SHA256 of the announcing device, the name and the window, keyed with the
+    _contact key_, HKDF over the X25519 of the two device keys (salt `sshkm contact`).
+    Nothing is stored or exchanged for it, and it is gone once either side removes the
+    other. The tags are shuffled and padded with random ones to 16, 32 or 64, so a
+    stranger learns only that an app with Nearby open is there and that bucket.
+  - _A knock before the handshake._ The chat port sends a random 16-byte challenge
+    and waits up to 5 seconds for an HMAC of it with a contact key; anyone else is
+    hung up on before the Noise handshake, so they never get the device key. The
+    challenge and the knock are the handshake's prologue (`sshkm-chat/1` ‖ challenge ‖
+    knock), so a chat session can't pass for a pairing one. Both `Hello`s must name
+    `chat/1`; an older version is never connected to for a chat.
+  - _Limits._ Frames of at most 1 MiB; texts and secrets of 16 KiB; terms from five
+    minutes to seven days; 30 frames at once, then two a second (more closes the
+    session and turns that contact away for a minute); three offers waiting; 16 chat
+    sessions and 8 connections at the knock. A frame that doesn't pass the checks is
+    refused; one that doesn't parse ends the session. Each message has a random id,
+    and one received twice is kept once.
+  - _Secrets._ Values reach the page only when the user clicks Show, one at a time,
+    and hide again after 30 seconds; Copy goes through the app's clipboard, like a
+    password. Both count against the same budget as the vault's passwords
+    (`secret_gate::take_secret`: ten in a row, then one every six minutes, each one
+    past that asked for in a native dialog naming the secret and the computer it came
+    from). Each side wipes a value when its term ends (at the next unlock if the
+    app was closed). The sender can wipe it earlier on both computers while the
+    receiver is online: the wipe goes there first, and if it can't, nothing is wiped
+    and the user is told. Offline, the sender can wipe it here only, which the button
+    says; the receiver's copy then goes at its term. The receiver may have copied it
+    before: the app says so. Secret frames are padded to 512 bytes,
+    so their length doesn't tell a password's.
+  - _Variables_ are added to an environment only after the user reviews them: new
+    names are ticked, replacing a value never is, and names that change how programs
+    start (`envs::risky_variable`: `PATH`, `LD_*`, `NODE_OPTIONS`, …) are flagged and
+    never ticked. _Items_ go as in Sending above, with every check.
+  - _Storage._ History is not in the vault file: each conversation is
+    `chats/<id>.chat` in the app's data folder, XChaCha20-Poly1305 with a key derived
+    from 32 random bytes the vault keeps for this computer (`sshkm.chat.<device key>`
+    in its custom data), both devices' keys as associated data, and a name that is an
+    HMAC of the other device's key. So it is readable only while the vault is
+    unlocked, on this computer only; vault backups and a synced vault never carry it,
+    and the sync between own devices keeps that custom data per computer. Deleting a
+    chat or a value removes it from the app's files; copies the system made of the
+    encrypted file before (Time Machine, snapshots) stay as safe as the vault.
+  - _Asked natively._ Sending variables, offering a login or an environment,
+    accepting one into the vault and adding received variables to an environment
+    each wait for a system dialog the page can't answer (`confirm::require`, with
+    its one-second rule). It names what goes and to or from whom, lists replaced
+    values and risky names, and shows names from elsewhere with their hidden
+    characters as `<U+…>`. Texts and secrets typed in the composer need none: the
+    page has them already. The page never names a peer's address or marks one
+    online; sends go only to a contact the backend recognised.
+  - _Notifications_ say who wrote and how many messages, never what.
+  - _Older versions._ Every `Hello` names what the app can do (`features`). A message,
+    item or summary of a kind a version doesn't know parses as unknown and ends as
+    "needs the new version"; an item that needs a feature the other side didn't name
+    is never offered.
 - **Syncing server keys.** `known_hosts` only grows: a computer adds the other's keys
   for a host it has no key for, counting a matching `@cert-authority` line as one, and
   never adds a key it marked `@revoked`; such keys are shown as a difference. For a

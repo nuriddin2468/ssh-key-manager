@@ -53,6 +53,8 @@ export function canRetry(reason: PairingFailure): boolean {
     'turned',
     'otherVault',
     'notOwn',
+    'unsupported',
+    'peerUnsupported',
   ].includes(reason);
 }
 

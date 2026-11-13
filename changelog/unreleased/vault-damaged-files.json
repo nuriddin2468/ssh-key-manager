@@ -1,0 +1,6 @@
+{
+  "kind": "security",
+  "en": "Passwords: vault files are checked more strictly before they are opened, and KeePass 1 files are refused. A damaged vault.keys no longer hides the lock screen: the recovery key opens the vault and makes a new one, keeping the damaged file next to it.",
+  "ru": "Пароли: файлы хранилища проверяются строже, прежде чем открыться, а файлы KeePass 1 не открываются. Повреждённый vault.keys больше не прячет экран блокировки: ключ восстановления открывает хранилище и создаёт новый файл, а повреждённый остаётся рядом.",
+  "uz": "Parollar: ombor fayllari ochilishidan oldin qattiqroq tekshiriladi, KeePass 1 fayllari esa ochilmaydi. Shikastlangan vault.keys endi qulf ekranini yashirmaydi: tiklash kaliti omborni ochadi va yangisini yaratadi, shikastlangani esa yonida qoladi."
+}

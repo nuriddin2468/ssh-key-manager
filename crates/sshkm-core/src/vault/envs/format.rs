@@ -181,14 +181,30 @@ pub fn render(
 
 /// A variable's note as a `#` comment line, on one line.
 fn comment(out: &mut String, note: &str) {
-    let note: String = note
-        .trim()
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
+    let note = one_line(note.trim());
+    let note = note.trim();
     if !note.is_empty() {
         let _ = writeln!(out, "# {note}");
     }
+}
+
+/// `text` for a comment line the app writes: every character that some
+/// reader of the file takes as the end of a line is a space. Besides the
+/// control characters (`\n`, `\r`, and U+0085, which YAML 1.1 ends lines
+/// at), that is U+2028 and U+2029, which JavaScript's regular expressions
+/// take as line ends (Node's `dotenv`, so Vite and Next.js) and YAML 1.1
+/// too. Otherwise the rest of a comment would be read as a line of its own:
+/// a variable the vault doesn't have.
+pub(super) fn one_line(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 /// A `.env` value: bare when it is only safe characters, else in the
@@ -460,6 +476,32 @@ mod tests {
         assert_eq!(text, "# note\nA=x y \"z\" ${B}\nE=\n");
         let error = render(EnvFormat::Docker, "p", "e", &sample()).unwrap_err();
         assert!(error.to_string().contains("KEY has a line break"));
+    }
+
+    #[test]
+    fn a_note_stays_one_comment_line_in_every_format() {
+        // Every character some loader ends a line at: JavaScript's `m`
+        // flag (Node's dotenv) and YAML 1.1 take U+2028, U+2029 and U+0085
+        // as line ends, besides `\n` and `\r`.
+        let note = "one\u{2028}A=1\u{2029}B=2\u{85}C=3\u{b}D=4\u{c}E=5\r\nF=6 #";
+        for format in [
+            EnvFormat::Dotenv,
+            EnvFormat::Yaml,
+            EnvFormat::Shell,
+            EnvFormat::Docker,
+        ] {
+            let text = render_text(format, &[var("PORT", "3000", note)]);
+            let comment = text.split('\n').next().unwrap();
+            assert_eq!(
+                comment, "# one A=1 B=2 C=3 D=4 E=5  F=6 #",
+                "{format:?}: {text:?}"
+            );
+            assert!(
+                !text.contains(['\u{2028}', '\u{2029}', '\u{85}', '\u{b}', '\u{c}', '\r']),
+                "{format:?}: {text:?}"
+            );
+        }
+        assert_eq!(one_line("dev\u{2028}X=1"), "dev X=1");
     }
 
     #[test]

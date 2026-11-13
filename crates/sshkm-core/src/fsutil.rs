@@ -496,7 +496,7 @@ const DROPBOX_STREAM: &str = ":com.dropbox.ignored";
 /// extended attributes (FAT, some network shares) keeps none, and nothing
 /// fails because of that.
 #[cfg(not(windows))]
-fn keep_out_of_copies(file: &fs::File) {
+pub(crate) fn keep_out_of_copies(file: &fs::File) {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         use xattr::FileExt as _;

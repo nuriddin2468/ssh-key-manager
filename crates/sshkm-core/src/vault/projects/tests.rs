@@ -1649,6 +1649,7 @@ fn a_file_an_older_environment_is_written_to_works_once_it_takes_the_step() {
         ssh_dir: dir.path().join(".ssh"),
         pipes: Vec::new(),
         pipe_list: None,
+        unlocked_list: None,
     };
     let file = EnvFile {
         folder: folder_text,

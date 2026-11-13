@@ -16,12 +16,15 @@
 //!
 //! **Files written only while the vault is unlocked** (level 2). Each round
 //! keeps the list of those that hold what the vault holds, as they are on
-//! disk, in `env-files-unlocked.json` (no values). Before the vault locks,
-//! and when the app quits, one last round takes their edits to the vault
-//! and they are removed ([`EnvFiles::put_away`]); one the vault couldn't
-//! take stays, and the UI hears of it through [`LEFT_EVENT`]. Until the
-//! next unlock no round writes them. A crash or a forced quit is caught by
-//! the guard ([`crate::env_guard`]), and failing that by the next start.
+//! disk, in `env-files-unlocked.json` (no values); each write a round makes
+//! is listed there before it is made (`FilesContext::unlocked_list`), so a
+//! crash in the middle of a round leaves nothing off the list. Before the
+//! vault locks, and when the app quits, one last round takes their edits
+//! to the vault and they are removed ([`EnvFiles::put_away`]); one the
+//! vault couldn't take stays, and the UI hears of it through
+//! [`LEFT_EVENT`]. Until the next unlock no round writes them. A crash or a
+//! forced quit is caught by the guard ([`crate::env_guard`]), and failing
+//! that by the next start.
 //!
 //! **Virtual files** (level 3, macOS and Linux). Each round makes or keeps
 //! their pipes and gives them their answers, which [`crate::env_pipes`]
@@ -104,10 +107,16 @@ struct Wanted {
     pipes: Vec<(PathBuf, PipeId)>,
 }
 
+/// Where the app keeps the list of its level-2 files, in its data folder
+/// `data_dir`.
+fn leftovers_path(data_dir: &Path) -> PathBuf {
+    data_dir.join(LEFTOVERS_FILE)
+}
+
 impl EnvFiles {
     pub fn new(data_dir: &Path, known: KnownPipes) -> Self {
         let state_path = data_dir.join(STATE_FILE);
-        let leftovers_path = data_dir.join(LEFTOVERS_FILE);
+        let leftovers_path = leftovers_path(data_dir);
         // Level-2 files a crash or a forced quit left, still as the app
         // wrote them, go before anything else.
         let removed = Leftovers::sweep_at(&leftovers_path);
@@ -354,6 +363,24 @@ impl EnvFiles {
         Ok(result)
     }
 
+    /// Before an update replaces the app: the level-2 files are put away
+    /// as a quit puts them ([`Self::put_away`]). On Windows the updater
+    /// quits into the installer at once, without the app's own way out
+    /// (`RunEvent::Exit`), so nothing else would before the installer runs.
+    pub fn put_away_for_update(&self, app: &AppHandle, shared: &AppState) {
+        self.put_away(app, shared);
+    }
+
+    /// The update didn't go ahead after [`Self::put_away_for_update`]:
+    /// while the vault is still unlocked, rounds run again and write the
+    /// level-2 files.
+    pub fn resume_after_update(&self, shared: &AppState) {
+        if shared.vault.is_unlocked() {
+            self.come_back();
+            self.request();
+        }
+    }
+
     /// After an unlock: rounds run again, and write the level-2 files.
     fn come_back(&self) {
         let _state = lock(&self.state);
@@ -484,6 +511,8 @@ pub fn context(state: &AppState) -> FilesContext {
             .unwrap_or_else(PoisonError::into_inner)
             .clone(),
         pipe_list: Some(state.pipe_list.clone()),
+        // Kept next to the list of pipes, in the app's data folder.
+        unlocked_list: state.pipe_list.parent().map(leftovers_path),
     }
 }
 

@@ -1,6 +1,12 @@
 //! The in-app terminal's commands (see [`crate::terminal`]). Input, resizing,
 //! answers and closing are synchronous commands: they only hand data to the
 //! session's threads, and run in the order the UI sends them.
+//!
+//! The page drives the terminal, so a script in the page could run commands
+//! through it (SECURITY.md, "Locked-down webview"). What it can't do is take
+//! an environment's secret values out of the vault in one go by starting a
+//! shell with them: that is asked first in a native dialog
+//! ([`crate::secret_gate`]).
 
 #![allow(
     clippy::needless_pass_by_value,

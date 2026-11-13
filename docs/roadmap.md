@@ -11,7 +11,7 @@ ticks it here, with its link.
 ## Decisions
 
 - **Audience: the broad public.** Individual developers first, small teams next. No
-  server, no account: the vault, the local network (Nearby) and Git carry everything.
+  server, no account: the vault and the local network (Nearby) carry everything.
 - **Keep `.env` files; manage them.** The app is the source of truth and writes the files
   projects need, keeping them in sync both ways: an edit in an editor (or by an AI agent)
   lands in the vault, a change in the app lands in every file that uses it. Every tool,
@@ -155,7 +155,7 @@ problems on All projects, and the review's leftovers:
   variables against `.env.example`, files Git doesn't ignore, files in cloud-synced
   folders, unmanaged `.env` files found on disk with "Take under management".
 
-### 4. Protection
+### 4. Protection — done
 
 1. **Leak scanner — done** ([#36](https://github.com/nuriddin2468/ssh-key-manager/pull/36)): the vault knows the exact values, so it
    finds them without false positives — secret variables and entry passwords, as they are,
@@ -187,7 +187,7 @@ problems on All projects, and the review's leftovers:
      the app or in any of their files — changes every file, with Undo. The value lives
      in one entry, so syncing converges; references are resolved wherever values leave
      the vault: [#50](https://github.com/nuriddin2468/ssh-key-manager/pull/50).
-3. **Level 3**, the virtual `.env` on macOS and Linux: in place of the file, a named pipe
+3. **Level 3 — done**, the virtual `.env` on macOS and Linux: in place of the file, a named pipe
    (FIFO) the app serves while it runs, chosen per file like level 2 and kept in a list of
    its own that older versions don't read; a remote environment may have one too. Each
    open gets one whole answer, the values with shared ones resolved, or at once a comment
@@ -202,17 +202,22 @@ problems on All projects, and the review's leftovers:
    turning that off would stop. Windows offers no level 3 and says why. Checked on macOS
    with Node `dotenv` 18, `python-dotenv` 1.2, Docker Compose 5.5, direnv 2.38, Vite 8
    (`loadEnv` and its dev server), Next.js 16 (`@next/env` and `next dev`), and `source`
-   in bash and zsh. In review:
-   [#56](https://github.com/nuriddin2468/ssh-key-manager/pull/56).
+   in bash and zsh. While the app serves a pipe it holds it (on Linux, `O_PATH`), so no
+   other file takes its inode number; after a crash its time of birth tells it apart:
+   [#56](https://github.com/nuriddin2468/ssh-key-manager/pull/56),
+   [#57](https://github.com/nuriddin2468/ssh-key-manager/pull/57).
 
-### 5. Teams
+### 5. Teams — later
 
-1. **Project file in the repository** (no secrets): hosts (HostName, User, Port,
-   ProxyJump), their host key fingerprints, environment and variable names. Cloning a repo
-   offers to add the hosts and trust their keys — no blind first connection. Risky options
-   (`ProxyCommand`, `LocalCommand`, `Match exec`…) are refused (`config/risky.rs`).
-2. **Share a project** with a colleague: through Nearby, or encrypted to their SSH public
-   keys (age format) and committed to the repository.
+A project's things go from one app to another, peer to peer, the way Nearby already sends
+a password, a host or a group of the hosts file: no file in the repository, nothing
+committed (decided on 2026-11-13).
+
+1. **Send a project** to a colleague through Nearby: its hosts with their server keys, so
+   their first connection isn't blind, its environments, and the rest of what it gathers.
+   Nothing is saved until they review it and accept; risky options are refused
+   (`config/risky.rs`). What exactly goes (variable values, logins) is decided when this
+   step is built.
 
 ### Later, maybe
 

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
@@ -11,6 +11,7 @@ use crate::sync::{Hasher, agree_hashed};
 use crate::vault::envs::files::{EnvFile, FileState, FilesContext, InactiveReason};
 use crate::vault::envs::{EnvInput, EnvVarInput};
 use crate::vault::projects::{ProjectColor, ProjectInput, ProjectMember};
+use crate::vault::sync::copy::{check_xml_for_tests, newest_removals};
 use crate::vault::{EntryInput, SecretField, Vault, VaultPaths};
 use crate::{Error, Result};
 
@@ -124,11 +125,19 @@ impl Device {
             .to_owned()
     }
 
-    fn digests(&self, pairs: &BTreeMap<String, String>) -> Vec<(String, String)> {
+    fn digests(&self, pairs: &Pairs) -> Vec<(String, String)> {
         digests(&self.vault.sync_items(pairs, &shared()))
             .into_iter()
             .collect()
     }
+}
+
+/// A copy as another device might make it: `db` as it is, encrypted with
+/// `vault`'s secret, without compression.
+fn crafted(db: &keepass::Database, vault: &Vault) -> Vec<u8> {
+    let mut db = db.clone();
+    db.config.compression_config = keepass::config::CompressionConfig::None;
+    crate::vault::serialize(&db, &vault.secret).unwrap()
 }
 
 /// One vault, made on the first computer and copied to the second.
@@ -189,13 +198,33 @@ fn sync_taking(a: &mut Device, b: &mut Device, take: impl Fn(&VaultConflict) -> 
     let all = |plan: &VaultPlan| -> BTreeSet<String> {
         plan.changes.iter().map(|c| c.id.clone()).collect()
     };
+    // Each side keeps its own version of what the other takes.
+    let (a_kept, b_kept) = (b_theirs.clone(), a_theirs.clone());
     let applied_a = a
         .vault
-        .apply_sync(&peer_b, &a_plan, &a.hasher, &all(&a_plan), &a_theirs)
+        .apply_sync(
+            &peer_b,
+            &a_plan,
+            &a.hasher,
+            &VaultChoices {
+                make: all(&a_plan),
+                theirs: a_theirs,
+                kept: a_kept,
+            },
+        )
         .unwrap();
     let applied_b = b
         .vault
-        .apply_sync(&peer_a, &b_plan, &b.hasher, &all(&b_plan), &b_theirs)
+        .apply_sync(
+            &peer_a,
+            &b_plan,
+            &b.hasher,
+            &VaultChoices {
+                make: all(&b_plan),
+                theirs: b_theirs,
+                kept: b_kept,
+            },
+        )
         .unwrap();
     a.save();
     b.save();
@@ -935,7 +964,7 @@ fn a_copy_must_be_this_vault_and_within_bounds() {
     assert!(refused(a.vault.open_sync_copy(&other.sync_copy().unwrap())));
     // This secret, another root.
     let stranger = keepass::Database::with_config(a.vault.db.config.clone());
-    let bytes = crate::vault::serialize(&stranger, &a.vault.secret).unwrap();
+    let bytes = crafted(&stranger, &a.vault);
     assert!(refused(a.vault.open_sync_copy(&bytes)));
     // An entry with a group's id.
     let mut odd = b.vault.db.clone();
@@ -943,7 +972,7 @@ fn a_copy_must_be_this_vault_and_within_bounds() {
     odd.root_mut()
         .add_entry_with_id(EntryId::from_uuid(root.uuid()))
         .unwrap();
-    let bytes = crate::vault::serialize(&odd, &a.vault.secret).unwrap();
+    let bytes = crafted(&odd, &a.vault);
     assert!(refused(a.vault.open_sync_copy(&bytes)));
     // Groups too deep.
     let mut deep = b.vault.db.clone();
@@ -951,7 +980,7 @@ fn a_copy_must_be_this_vault_and_within_bounds() {
     for _ in 0..=MAX_DEPTH + 1 {
         parent = deep.group_mut(parent).unwrap().add_group().id();
     }
-    let bytes = crate::vault::serialize(&deep, &a.vault.secret).unwrap();
+    let bytes = crafted(&deep, &a.vault);
     assert!(refused(a.vault.open_sync_copy(&bytes)));
     // A time far ahead counts as now.
     let mut ahead = b.vault.db.clone();
@@ -961,7 +990,7 @@ fn a_copy_must_be_this_vault_and_within_bounds() {
         .and_hms_opt(0, 0, 0)
         .unwrap();
     ahead.entry_mut(id).unwrap().times.last_modification = Some(year_2099);
-    let bytes = crate::vault::serialize(&ahead, &a.vault.secret).unwrap();
+    let bytes = crafted(&ahead, &a.vault);
     let peer = a.vault.open_sync_copy(&bytes).unwrap();
     let when = peer.db.entry(id).unwrap().times.last_modification.unwrap();
     assert!(when < Times::now() + chrono::Duration::minutes(6));
@@ -1018,7 +1047,15 @@ fn an_item_changed_during_the_review_is_left_for_next_time() {
     let make = plan.changes.iter().map(|c| c.id.clone()).collect();
     let applied = b
         .vault
-        .apply_sync(&peer, &plan, &b.hasher, &make, &BTreeSet::new())
+        .apply_sync(
+            &peer,
+            &plan,
+            &b.hasher,
+            &VaultChoices {
+                make,
+                ..VaultChoices::default()
+            },
+        )
         .unwrap();
     assert!(applied.skipped.contains(&id));
     assert_eq!(b.password(&id), "p1");
@@ -1193,4 +1230,453 @@ fn a_remote_environment_gets_no_file_from_a_sync() {
         }]
     );
     assert!(!dir.path().join("shop").join(".env").exists());
+}
+
+fn group_named(vault: &Vault, name: &str) -> Vec<keepass::db::GroupId> {
+    vault
+        .db
+        .iter_all_groups()
+        .filter(|group| group.name == name)
+        .map(|group| group.id())
+        .collect()
+}
+
+/// Deletes a group and what is in it for good, as emptying the recycle
+/// bin does, with removal records.
+fn delete_group(vault: &mut Vault, id: keepass::db::GroupId) {
+    let entries: Vec<EntryId> = vault.db.group(id).unwrap().entry_ids().collect();
+    for entry in entries {
+        vault.db.entry_mut(entry).unwrap().remove();
+        vault
+            .db
+            .deleted_objects
+            .insert(entry.uuid(), Some(Times::now()));
+    }
+    vault.db.group_mut(id).unwrap().remove();
+    vault
+        .db
+        .deleted_objects
+        .insert(id.uuid(), Some(Times::now()));
+}
+
+fn add_group(vault: &mut Vault, name: &str) -> keepass::db::GroupId {
+    let mut root = vault.db.root_mut();
+    let mut group = root.add_group();
+    group.name = name.into();
+    group.id()
+}
+
+fn add_entry_in(vault: &mut Vault, group: keepass::db::GroupId, title: &str) -> EntryId {
+    let mut group = vault.db.group_mut(group).unwrap();
+    let mut entry = group.add_entry();
+    entry.set_unprotected(fields::TITLE, title);
+    entry.id()
+}
+
+#[test]
+fn deleting_one_twin_of_paired_groups_brings_nothing_back() {
+    for smaller_on_a in [true, false] {
+        let (_dir, mut a, mut b) = two();
+        sync(&mut a, &mut b);
+        // Each side makes its own `Work`, with a login in it.
+        let a_work = add_group(&mut a.vault, "Work");
+        add_entry_in(&mut a.vault, a_work, "From A");
+        let b_work = add_group(&mut b.vault, "Work");
+        add_entry_in(&mut b.vault, b_work, "From B");
+        a.save();
+        b.save();
+        sync(&mut a, &mut b);
+        nothing_left(&mut a, &mut b);
+        // The twin with the smaller UUID goes for good on its side.
+        let a_smaller = a_work.uuid() < b_work.uuid();
+        let (gone_side, other) = if a_smaller == smaller_on_a {
+            (&mut a, &mut b)
+        } else {
+            (&mut b, &mut a)
+        };
+        let twin = group_named(&gone_side.vault, "Work")[0];
+        delete_group(&mut gone_side.vault, twin);
+        gone_side.save();
+        let synced = sync(gone_side, other);
+        assert_eq!(
+            synced.a_plan.conflicts.len(),
+            0,
+            "{:?}",
+            synced.a_plan.conflicts
+        );
+        assert_eq!(
+            synced.b_plan.conflicts.len(),
+            0,
+            "{:?}",
+            synced.b_plan.conflicts
+        );
+        for side in [&a, &b] {
+            assert_eq!(group_named(&side.vault, "Work").len(), 0);
+            assert_eq!(side.vault.entries().len(), 0);
+        }
+        nothing_left(&mut a, &mut b);
+    }
+}
+
+#[test]
+fn a_new_pair_goes_by_the_id_the_snapshot_holds() {
+    let (_dir, mut a, mut b) = two();
+    let x = add_group(&mut a.vault, "Work");
+    a.save();
+    sync(&mut a, &mut b);
+    // `b` loses `x` without a record and makes its own `Work`.
+    b.vault.db.group_mut(x).unwrap().remove();
+    let y = add_group(&mut b.vault, "Work");
+    b.save();
+    let peer = a
+        .vault
+        .open_sync_copy(&b.vault.sync_copy().unwrap())
+        .unwrap();
+    let plan = a.vault.plan_sync(&peer, &a.base, &a.hasher);
+    let pair = &plan.pairs[&x.uuid().to_string()];
+    assert_eq!(pair.there, y.uuid().to_string());
+    assert_eq!(pair.common, x.uuid().to_string());
+    assert_eq!(plan.conflicts.len(), 0, "{:?}", plan.conflicts);
+}
+
+#[test]
+fn a_shared_value_a_variable_that_loads_code_uses_is_flagged() {
+    let (_dir, mut a, mut b) = two();
+    let api = a.env("api", &[("NODE_OPTIONS", "--max-old-space-size=4096")]);
+    let web = a.env("web", &[("NODE_OPTIONS", "--max-old-space-size=4096")]);
+    let shared_id = a
+        .vault
+        .share_env_variable(&api, "NODE_OPTIONS", std::slice::from_ref(&web))
+        .unwrap();
+    a.save();
+    sync(&mut a, &mut b);
+    b.set_var(&api, "NODE_OPTIONS", "--import=./x.mjs");
+    let peer = a
+        .vault
+        .open_sync_copy(&b.vault.sync_copy().unwrap())
+        .unwrap();
+    let plan = a.vault.plan_sync(&peer, &a.base, &a.hasher);
+    let change = plan.changes.iter().find(|c| c.id == shared_id).unwrap();
+    assert_eq!(change.kind, ItemKind::Shared);
+    assert_eq!(change.risky, ["NODE_OPTIONS"]);
+}
+
+#[test]
+fn a_copy_is_read_within_bounds() {
+    let (_dir, a, b) = two();
+    // A compressed copy is refused before anything inflates.
+    let compressed = crate::vault::serialize(&b.vault.db, &a.vault.secret).unwrap();
+    assert!(matches!(
+        a.vault.open_sync_copy(&compressed),
+        Err(Error::InvalidInput(_))
+    ));
+    // XML too deep is refused before it is parsed.
+    let mut deep = b.vault.db.clone();
+    let mut parent = deep.root().id();
+    for _ in 0..200 {
+        parent = deep.group_mut(parent).unwrap().add_group().id();
+    }
+    assert!(matches!(
+        a.vault.open_sync_copy(&crafted(&deep, &a.vault)),
+        Err(Error::InvalidInput(_))
+    ));
+    // The XML scanner itself.
+    let ok = br#"<?xml version="1.0"?><KeePassFile><Meta><Binaries><Binary ID="0" Compressed="False">AA==</Binary></Binaries></Meta><Root a="x>y"/><!-- <a><a> --></KeePassFile>"#;
+    assert!(check_xml_for_tests(ok).is_ok());
+    for bad in [
+        &br#"<KeePassFile><Meta><Binaries><Binary ID="0" Compressed="True">AA==</Binary></Binaries></Meta></KeePassFile>"#[..],
+        br#"<KeePassFile><Meta><Binaries><Binary Compressed='true' ID="0">AA==</Binary></Binaries></Meta></KeePassFile>"#,
+        br#"<!DOCTYPE x [<!ENTITY a "aaaa">]><KeePassFile/>"#,
+        b"<KeePassFile><Meta",
+    ] {
+        assert!(check_xml_for_tests(bad).is_err(), "{}", String::from_utf8_lossy(bad));
+    }
+    let nested = format!("{}{}", "<a>".repeat(200), "</a>".repeat(200));
+    assert!(check_xml_for_tests(nested.as_bytes()).is_err());
+
+    // A vault moved to a new device goes the same way.
+    let moved = a.vault.moved_copy().unwrap();
+    assert!(check_moved(&moved, &a.vault.secret).is_ok());
+    let file = fs::read(&a.paths.database).unwrap();
+    assert!(matches!(
+        check_moved(&file, &a.vault.secret),
+        Err(Error::Unsupported(_))
+    ));
+}
+
+#[test]
+fn a_conflict_never_loses_the_version_not_kept() {
+    let (_dir, mut a, mut b) = two();
+    for side in [&mut a, &mut b] {
+        side.vault.db.meta.history_max_items = Some(2);
+        side.save();
+    }
+    let id = a.login("Mail", "p0");
+    sync(&mut a, &mut b);
+    a.edit(&id, |e| e.password = Some(s("from-a")));
+    for n in 1..=3 {
+        std::thread::sleep(std::time::Duration::from_millis(1050));
+        b.edit(&id, |e| e.password = Some(s(&format!("from-b-{n}"))));
+    }
+    // `a` takes `b`'s version; each side keeps the other's in history.
+    sync_taking(&mut a, &mut b, |_| true);
+    let passwords = |device: &Device| -> Vec<String> {
+        let entry = device
+            .vault
+            .db
+            .entry(EntryId::from_uuid(id.parse().unwrap()))
+            .unwrap();
+        (0..entry.history.as_ref().map_or(0, |h| h.get_entries().len()))
+            .filter_map(|i| entry.historical(i))
+            .map(|v| v.get(fields::PASSWORD).unwrap_or_default().to_owned())
+            .collect()
+    };
+    assert_eq!(a.password(&id), "from-b-3");
+    assert!(
+        passwords(&a).contains(&"from-a".to_owned()),
+        "{:?}",
+        passwords(&a)
+    );
+    assert_eq!(b.password(&id), "from-b-3");
+    assert!(
+        passwords(&b).contains(&"from-a".to_owned()),
+        "{:?}",
+        passwords(&b)
+    );
+}
+
+#[test]
+fn what_is_kept_on_one_computer_blocks_nothing_and_is_never_deleted() {
+    let (_dir, mut a, mut b) = two();
+    let id = a.login("Diary", "p");
+    let work = add_group(&mut a.vault, "Work");
+    let inside = add_entry_in(&mut a.vault, work, "In Work");
+    let api = a.env("api", &[("TOKEN", "t")]);
+    let web = a.env("web", &[("TOKEN", "t")]);
+    let shared_id = a
+        .vault
+        .share_env_variable(&api, "TOKEN", std::slice::from_ref(&web))
+        .unwrap();
+    a.save();
+    sync(&mut a, &mut b);
+    let marker = || CustomDataItem {
+        value: Some(CustomDataValue::String("test".into())),
+        last_modification_time: None,
+    };
+    // `a` keeps an item it synced before to itself: `b` doesn't delete it.
+    a.vault
+        .db
+        .entry_mut(EntryId::from_uuid(id.parse().unwrap()))
+        .unwrap()
+        .custom_data
+        .insert(LOCAL.into(), marker());
+    a.save();
+    let synced = sync(&mut a, &mut b);
+    assert_eq!(
+        synced.b_plan.changes.len(),
+        0,
+        "{:?}",
+        synced.b_plan.changes
+    );
+    assert!(b.vault.entry(&id).is_ok());
+
+    // `b` keeps the login in `Work` and the environment `web` to itself;
+    // `a` deletes both and the shared value.
+    b.vault
+        .db
+        .entry_mut(inside)
+        .unwrap()
+        .custom_data
+        .insert(LOCAL.into(), marker());
+    b.vault
+        .db
+        .entry_mut(EntryId::from_uuid(web.parse().unwrap()))
+        .unwrap()
+        .custom_data
+        .insert(LOCAL.into(), marker());
+    b.save();
+    delete_group(&mut a.vault, work);
+    a.vault.delete_shared_value(&shared_id).unwrap();
+    a.vault.empty_trash().unwrap();
+    a.save();
+    let before = b.value(&web, "TOKEN");
+    for _ in 0..2 {
+        let synced = sync(&mut a, &mut b);
+        // Neither the group a local login is in nor the shared value a
+        // local environment uses is planned for deletion, again and again.
+        let ids: Vec<&String> = synced.b_plan.changes.iter().map(|c| &c.id).collect();
+        assert!(!ids.contains(&&shared_id), "{ids:?}");
+        assert!(!ids.contains(&&work.uuid().to_string()), "{ids:?}");
+    }
+    assert!(b.vault.db.group(work).is_some());
+    assert_eq!(b.value(&web, "TOKEN"), before);
+    let raw = b
+        .vault
+        .db
+        .entry(EntryId::from_uuid(web.parse().unwrap()))
+        .unwrap()
+        .get("TOKEN")
+        .unwrap()
+        .to_owned();
+    assert!(
+        raw.starts_with("{REF:"),
+        "the local environment was rewritten: {raw}"
+    );
+}
+
+#[test]
+fn removal_records_kept_after_a_merge_stay_within_what_a_copy_takes() {
+    let mut records = std::collections::HashMap::new();
+    let now = Times::now();
+    for n in 0..=MAX_DELETED {
+        let when = now - chrono::Duration::seconds(i64::try_from(n).unwrap());
+        records.insert(uuid::Uuid::new_v4(), Some(when));
+    }
+    let oldest = *records.iter().min_by_key(|(_, when)| **when).unwrap().0;
+    newest_removals(&mut records, false);
+    assert_eq!(records.len(), MAX_DELETED);
+    assert!(!records.contains_key(&oldest));
+}
+
+#[test]
+fn an_id_that_is_an_entry_on_one_side_and_a_group_on_the_other_is_never_merged() {
+    let (_dir, mut a, mut b) = two();
+    sync(&mut a, &mut b);
+    let group = add_group(&mut a.vault, "Work");
+    a.save();
+    {
+        let mut root = b.vault.db.root_mut();
+        let mut entry = root
+            .add_entry_with_id(EntryId::from_uuid(group.uuid()))
+            .unwrap();
+        entry.set_unprotected(fields::TITLE, "Not a group");
+    }
+    let bin_like = {
+        let bin = a.vault.recycle_bin();
+        let mut root = b.vault.db.root_mut();
+        let mut entry = root
+            .add_entry_with_id(EntryId::from_uuid(bin.uuid()))
+            .unwrap();
+        entry.set_unprotected(fields::TITLE, "Not the bin");
+        bin.uuid().to_string()
+    };
+    a.save();
+    b.save();
+    let synced = sync(&mut a, &mut b);
+    let touched = |plan: &VaultPlan| -> Vec<String> {
+        plan.changes
+            .iter()
+            .map(|c| c.id.clone())
+            .chain(plan.conflicts.iter().map(|c| c.id.clone()))
+            .collect()
+    };
+    for plan in [&synced.a_plan, &synced.b_plan] {
+        assert!(
+            !touched(plan).contains(&group.uuid().to_string()),
+            "{:?}",
+            touched(plan)
+        );
+        assert!(!touched(plan).contains(&bin_like), "{:?}", touched(plan));
+    }
+    assert!(a.vault.db.group(group).is_some());
+    assert!(b.vault.db.entry(EntryId::from_uuid(group.uuid())).is_some());
+}
+
+#[test]
+fn a_crafted_copy_brings_no_custom_data_and_no_local_items() {
+    let (_dir, a, b) = two();
+    let mut db = b.vault.db.clone();
+    db.meta.custom_data.insert(
+        "sshkm.browser.planted".into(),
+        CustomDataItem {
+            value: Some(CustomDataValue::String("keys".into())),
+            last_modification_time: None,
+        },
+    );
+    let local = {
+        let mut root = db.root_mut();
+        let mut group = root.add_group();
+        group.name = "Planted".into();
+        group.custom_data.insert(
+            LOCAL.into(),
+            CustomDataItem {
+                value: Some(CustomDataValue::String("x".into())),
+                last_modification_time: None,
+            },
+        );
+        group.id()
+    };
+    let peer = a.vault.open_sync_copy(&crafted(&db, &a.vault)).unwrap();
+    assert!(peer.db.meta.custom_data.is_empty());
+    assert!(peer.db.group(local).is_none());
+}
+
+#[test]
+fn groups_follow_the_merge_rules_too() {
+    let (_dir, mut a, mut b) = two();
+    let work = add_group(&mut a.vault, "Work");
+    let old = add_group(&mut a.vault, "Old");
+    a.save();
+    sync(&mut a, &mut b);
+    // Renamed on both sides, differently: asked.
+    a.vault.db.group_mut(work).unwrap().name = "Work (A)".into();
+    b.vault.db.group_mut(work).unwrap().name = "Work (B)".into();
+    // Deleted on one side, renamed on the other: asked.
+    delete_group(&mut a.vault, old);
+    b.vault.db.group_mut(old).unwrap().name = "Older".into();
+    a.save();
+    b.save();
+    let synced = sync(&mut a, &mut b);
+    let mut asked: Vec<(String, ItemKind, Party, Party)> = synced
+        .a_plan
+        .conflicts
+        .iter()
+        .map(|c| (c.id.clone(), c.kind, c.here, c.there))
+        .collect();
+    asked.sort();
+    let mut want = vec![
+        (
+            work.uuid().to_string(),
+            ItemKind::Folder,
+            Party::Changed,
+            Party::Changed,
+        ),
+        (
+            old.uuid().to_string(),
+            ItemKind::Folder,
+            Party::Deleted,
+            Party::Changed,
+        ),
+    ];
+    want.sort();
+    assert_eq!(asked, want);
+
+    // Without a snapshot, a group's removal record decides.
+    let (_dir, mut a, mut b) = two();
+    let gone = add_group(&mut a.vault, "Gone");
+    a.save();
+    drop(std::mem::replace(
+        &mut b.vault,
+        Vault::unlock(&a.paths, &s("master")).unwrap(),
+    ));
+    fs::copy(&a.paths.database, &b.paths.database).unwrap();
+    b.reopen();
+    a.vault.db.group_mut(gone).unwrap().times.last_modification =
+        Some(Times::now() - chrono::Duration::days(2));
+    a.save();
+    b.vault.db.group_mut(gone).unwrap().remove();
+    b.vault
+        .db
+        .deleted_objects
+        .insert(gone.uuid(), Some(Times::now() - chrono::Duration::days(1)));
+    b.save();
+    let synced = sync(&mut a, &mut b);
+    assert!(
+        synced
+            .a_plan
+            .changes
+            .iter()
+            .any(|c| c.id == gone.uuid().to_string() && c.op == ChangeOp::Delete)
+    );
+    assert!(a.vault.db.group(gone).is_none());
 }

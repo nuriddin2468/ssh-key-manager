@@ -97,6 +97,15 @@ pub(super) fn referenced(value: &str) -> Option<Uuid> {
         .flatten()
 }
 
+/// The shared values an environment's variables refer to: each variable's
+/// name and the shared value's UUID.
+pub(in crate::vault) fn shared_references(entry: &keepass::db::Entry) -> Vec<(String, Uuid)> {
+    variables_of(entry)
+        .into_iter()
+        .filter_map(|var| Some((var.name.clone(), referenced(var.value.expose_secret())?)))
+        .collect()
+}
+
 impl Vault {
     /// The value `value` stands for: `None` if it isn't a reference, else
     /// the password of the entry it refers to, or `Err` if there is none.

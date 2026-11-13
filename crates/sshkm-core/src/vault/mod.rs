@@ -28,7 +28,7 @@ pub mod envs;
 mod export;
 mod generator;
 mod import;
-mod kdf;
+pub(crate) mod kdf;
 mod known;
 mod location;
 mod own_devices;

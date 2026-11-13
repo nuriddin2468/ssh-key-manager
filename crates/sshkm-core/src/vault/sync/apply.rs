@@ -23,9 +23,11 @@ use secrecy::SecretString;
 use serde::Serialize;
 use uuid::Uuid;
 
+use super::copy::newest_removals;
 use super::model::{BIN, GROUP, Item, ROOT, Side, fingerprint, is_project_tag};
+use super::plan::skips;
 use super::plan::{ChangeOp, ItemKind};
-use super::{LOCAL, PeerVault, VaultPlan};
+use super::{LOCAL, MAX_ENTRIES, MAX_GROUPS, Pairs, PeerVault, VaultPlan};
 use crate::sync::Hasher;
 use crate::vault::Vault;
 use crate::vault::envs::settle_versions;
@@ -73,6 +75,18 @@ impl VaultCounts {
     }
 }
 
+/// What the user, or the rules, chose to do with a plan.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VaultChoices {
+    /// The changes to make, by id.
+    pub make: BTreeSet<String>,
+    /// Conflicts settled for the other side's version.
+    pub theirs: BTreeSet<String>,
+    /// Conflicts settled for this side's version: the other's goes among
+    /// the entry's earlier versions here too.
+    pub kept: BTreeSet<String>,
+}
+
 /// What [`Vault::apply_sync`] did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct VaultApplied {
@@ -85,21 +99,21 @@ pub struct VaultApplied {
 }
 
 impl Vault {
-    /// Makes the changes of `plan` whose ids are in `make`, and settles the
-    /// conflicts in `theirs` for the other side's version (the rest keep
-    /// this side's, which the other side takes). An item that changed here
-    /// since the plan is left alone. All in memory: on an error nothing is
-    /// changed, and the caller saves.
+    /// Makes the changes of `plan` the `choices` name, and settles its
+    /// conflicts: for the other side's version (`theirs`), or for this
+    /// side's (`kept`), whose entry then keeps the other's among its earlier
+    /// versions, as the other side keeps this one's. An item that changed
+    /// here since the plan is left alone. All in memory: on an error
+    /// nothing is changed, and the caller saves.
     pub fn apply_sync(
         &mut self,
         peer: &PeerVault,
         plan: &VaultPlan,
         hasher: &Hasher,
-        make: &BTreeSet<String>,
-        theirs: &BTreeSet<String>,
+        choices: &VaultChoices,
     ) -> Result<VaultApplied> {
         let snapshot = self.snapshot();
-        match self.apply_inner(peer, plan, hasher, make, theirs) {
+        match self.apply_inner(peer, plan, hasher, choices) {
             Ok(applied) => Ok(applied),
             Err(error) => {
                 self.restore(snapshot);
@@ -113,15 +127,15 @@ impl Vault {
         peer: &PeerVault,
         plan: &VaultPlan,
         hasher: &Hasher,
-        make: &BTreeSet<String>,
-        theirs: &BTreeSet<String>,
+        choices: &VaultChoices,
     ) -> Result<VaultApplied> {
         let mut applied = VaultApplied::default();
         let my_local = super::model::local_set(&self.db);
-        let their_side = Side::new(&peer.db, &plan.pairs, false, &my_local);
+        let (mine_skip, their_skip) = skips(&self.db, peer);
+        let their_side = Side::new(&peer.db, &plan.pairs, false, &their_skip);
         let t_items = their_side.items(hasher);
-        let work = self.work(plan, hasher, &t_items, make, theirs, &mut applied);
-        let mut groups = GroupMap::new(self, &peer.db, &plan.pairs, &my_local);
+        let work = self.work(plan, hasher, &mine_skip, &t_items, choices, &mut applied);
+        let mut groups = GroupMap::new(self, &peer.db, &plan.pairs, &mine_skip, &their_skip);
         let (deletions, rest): (Vec<Work>, Vec<Work>) =
             work.into_iter().partition(|w| w.op == ChangeOp::Delete);
         // Groups first, then entries, then what goes.
@@ -148,9 +162,12 @@ impl Vault {
             let their_entry = t_items
                 .get(&item.id)
                 .and_then(|t| peer.db.entry(EntryId::from_uuid(t.uuid)));
+            let full = self.db.num_entries() >= MAX_ENTRIES;
             let done = their_entry.map_or_else(
                 || Err(Error::invalid("no such entry")),
                 |their| match item.op {
+                    // A vault this full takes no more from a sync.
+                    ChangeOp::Add if full => Err(Error::invalid("too many entries")),
                     ChangeOp::Add => {
                         add_entry(&mut self.db, &mut keeper, &mut groups, &their, &their_side)
                     }
@@ -165,6 +182,17 @@ impl Vault {
                 },
             );
             applied.note(item, done.is_ok());
+        }
+        for id in &choices.kept {
+            let their_entry = t_items
+                .get(id)
+                .filter(|t| t.kind != ItemKind::Folder)
+                .and_then(|t| peer.db.entry(EntryId::from_uuid(t.uuid)));
+            if let Some(their) = their_entry
+                && self.db.entry(their.id()).is_some()
+            {
+                keep_theirs(&mut self.db, &mut keeper, &their);
+            }
         }
         keeper.finish(&mut self.db);
         self.delete(peer, &groups, deletions, &mut applied)?;
@@ -181,12 +209,13 @@ impl Vault {
         &self,
         plan: &VaultPlan,
         hasher: &Hasher,
+        mine_skip: &HashSet<Uuid>,
         t_items: &BTreeMap<String, Item>,
-        make: &BTreeSet<String>,
-        theirs: &BTreeSet<String>,
+        choices: &VaultChoices,
         applied: &mut VaultApplied,
     ) -> Vec<Work> {
-        let now_items = Side::new(&self.db, &plan.pairs, true, &HashSet::new()).items(hasher);
+        let (make, theirs) = (&choices.make, &choices.theirs);
+        let now_items = Side::new(&self.db, &plan.pairs, true, mine_skip).items(hasher);
         let mut work: Vec<Work> = plan
             .changes
             .iter()
@@ -308,6 +337,8 @@ impl Vault {
                 *mine = *when;
             }
         }
+        // Within what another device takes in a copy.
+        newest_removals(&mut self.db.deleted_objects, false);
     }
 
     /// The hashes of each item here, by common id, after a sync with the
@@ -315,7 +346,7 @@ impl Vault {
     /// sides share) what [`super::digests`] compares.
     pub fn sync_items(
         &self,
-        pairs: &BTreeMap<String, String>,
+        pairs: &Pairs,
         hasher: &Hasher,
     ) -> BTreeMap<String, crate::sync::Hashes> {
         Side::new(&self.db, pairs, true, &HashSet::new())
@@ -408,11 +439,12 @@ impl GroupMap {
     fn new(
         vault: &Vault,
         theirs: &Database,
-        pairs: &BTreeMap<String, String>,
-        my_local: &HashSet<Uuid>,
+        pairs: &Pairs,
+        mine_skip: &HashSet<Uuid>,
+        their_skip: &HashSet<Uuid>,
     ) -> Self {
-        let my_side = Side::new(&vault.db, pairs, true, &HashSet::new());
-        let their_side = Side::new(theirs, pairs, false, my_local);
+        let my_side = Side::new(&vault.db, pairs, true, mine_skip);
+        let their_side = Side::new(theirs, pairs, false, their_skip);
         let mine = vault
             .db
             .iter_all_groups()
@@ -471,6 +503,9 @@ impl GroupMap {
                 .ok_or_else(|| Error::invalid("no such group"))?;
         }
         while let Some((common, uuid)) = chain.pop() {
+            if db.num_groups() >= MAX_GROUPS {
+                return Err(Error::invalid("too many groups"));
+            }
             let parent = self.parent_here(uuid)?;
             let mut parent = db
                 .group_mut(parent)
@@ -1040,6 +1075,10 @@ fn update_entry(
         None
     };
     let state = EntryState::of(their);
+    let displaced = db
+        .entry(id)
+        .map(|entry| fingerprint(&entry))
+        .ok_or_else(|| Error::NotFound("entry".into()))?;
     keep_version(db, id);
     let versions = missing_versions(db, id, their);
     add_versions(db, keeper, id, &versions);
@@ -1060,6 +1099,63 @@ fn update_entry(
             entry.times.location_changed = Some(Times::now());
         }
     }
-    settle_versions(db, id, false);
+    settle_keeping(db, id, &[displaced]);
     Ok(())
+}
+
+/// Keeps the other side's version of an entry this side kept in a
+/// conflict among its earlier versions, the entry itself as it is.
+fn keep_theirs(db: &mut Database, keeper: &mut Keeper, their: &EntryRef<'_>) {
+    let id = their.id();
+    let Some(mine) = db.entry(id).map(|entry| EntryState::of(&entry)) else {
+        return;
+    };
+    add_versions(db, keeper, id, &[EntryState::of(their)]);
+    put_state(db, keeper, id, &mine, &all);
+    if let Some(mut entry) = db.entry_mut(id) {
+        entry.times = mine.times.clone();
+    }
+    settle_keeping(db, id, &[fingerprint(their)]);
+}
+
+/// Puts an entry's earlier versions in order and keeps the newest the
+/// vault's limit allows ([`settle_versions`]), but never one of `keep`:
+/// the version a sync just displaced stays, whatever the limit.
+fn settle_keeping(db: &mut Database, id: EntryId, keep: &[[u8; 32]]) {
+    let max = match db.meta.history_max_items {
+        None => Some(10),
+        Some(max) if max < 0 => None,
+        Some(max) => Some(usize::try_from(max).unwrap_or(usize::MAX)),
+    };
+    let Some(entry) = db.entry(id) else {
+        return;
+    };
+    let count = entry.history.as_ref().map_or(0, |h| h.get_entries().len());
+    let mut versions: Vec<(Option<chrono::NaiveDateTime>, bool, Entry)> = (0..count)
+        .filter_map(|i| entry.historical(i))
+        .map(|version| {
+            let kept = keep.contains(&fingerprint(&version));
+            (
+                version.times.last_modification,
+                kept,
+                Entry::clone(&version),
+            )
+        })
+        .collect();
+    versions.sort_by_key(|(time, _, _)| *time);
+    if let Some(max) = max {
+        while versions.len() > max {
+            let Some(oldest) = versions.iter().position(|(_, kept, _)| !kept) else {
+                break;
+            };
+            versions.remove(oldest);
+        }
+    }
+    let mut settled = keepass::db::History::default();
+    for (_, _, version) in versions.into_iter().rev() {
+        settled.add_entry(version);
+    }
+    if let Some(mut entry) = db.entry_mut(id) {
+        entry.history = Some(settled);
+    }
 }

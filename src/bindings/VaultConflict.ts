@@ -24,4 +24,9 @@ fields: Array<string>,
  * Variables taking the other side's version would add or change that
  * make programs load code.
  */
-risky: Array<string>, };
+risky: Array<string>, 
+/**
+ * The other side's version is in the recycle bin and this side's
+ * isn't: taking it moves the item there, as a deletion does.
+ */
+toBin: boolean, };

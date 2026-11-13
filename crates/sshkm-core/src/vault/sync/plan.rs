@@ -117,6 +117,9 @@ pub struct VaultConflict {
     /// Variables taking the other side's version would add or change that
     /// make programs load code.
     pub risky: Vec<String>,
+    /// The other side's version is in the recycle bin and this side's
+    /// isn't: taking it moves the item there, as a deletion does.
+    pub to_bin: bool,
 }
 
 /// What to take from the other device's copy, and what the user decides.
@@ -313,6 +316,7 @@ impl VaultPlan {
                     (None, Some(t)) => (Vec::new(), risky(t, &id, t.hashes.keys(), refs)),
                     _ => (Vec::new(), Vec::new()),
                 };
+                let to_bin = matches!((m, t), (Some(m), Some(t)) if t.in_bin && !m.in_bin);
                 self.conflicts.push(VaultConflict {
                     id,
                     kind,
@@ -321,6 +325,7 @@ impl VaultPlan {
                     there: party(t),
                     fields,
                     risky,
+                    to_bin,
                 });
             }
         }

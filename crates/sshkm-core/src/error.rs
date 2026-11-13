@@ -44,6 +44,9 @@ pub enum ErrorCode {
     VaultLocked,
     /// The user dismissed a system prompt (Touch ID, Windows Hello).
     Cancelled,
+    /// Several wrong master passwords in a row: the next attempt waits a
+    /// little.
+    TooManyAttempts,
 }
 
 impl ErrorCode {
@@ -64,6 +67,7 @@ impl ErrorCode {
             Self::Conflict => "conflict",
             Self::VaultLocked => "vault_locked",
             Self::Cancelled => "cancelled",
+            Self::TooManyAttempts => "too_many_attempts",
         }
     }
 }
@@ -118,6 +122,12 @@ pub enum Error {
     /// See [`ErrorCode::Conflict`].
     #[error("changed on disk: {0}")]
     Conflict(String),
+    /// See [`ErrorCode::TooManyAttempts`].
+    #[error("too many wrong passwords; try again in {retry_in_secs} s")]
+    TooManyAttempts {
+        /// Seconds until the next attempt is taken.
+        retry_in_secs: u64,
+    },
     /// See [`ErrorCode::Io`].
     #[error("I/O error: {context}: {source}")]
     Io {
@@ -144,6 +154,7 @@ impl Error {
             Self::Parse(_) => ErrorCode::Parse,
             Self::PermissionDenied(_) => ErrorCode::PermissionDenied,
             Self::Conflict(_) => ErrorCode::Conflict,
+            Self::TooManyAttempts { .. } => ErrorCode::TooManyAttempts,
             Self::Io { .. } => ErrorCode::Io,
         }
     }
@@ -214,6 +225,7 @@ mod tests {
             ErrorCode::Conflict,
             ErrorCode::VaultLocked,
             ErrorCode::Cancelled,
+            ErrorCode::TooManyAttempts,
         ];
         for code in all {
             let json = serde_json::to_value(code).unwrap();

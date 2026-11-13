@@ -184,6 +184,75 @@ describe('typed logins', () => {
     });
   });
 
+  it('are saved as typed where they were typed, whichever page answers the banner', async () => {
+    const bankFrame = { origin: 'https://bank.example', frameId: 5, tab: { id: 31 } };
+    const newsTop = { origin: 'https://news.example', frameId: 0, tab: { id: 31 } };
+    client.sameSite.mockResolvedValue(false);
+    client.request.mockImplementation(async (action: Record<string, unknown>) => {
+      const check = action.check as { username: string } | undefined;
+      if (check?.username === 'admin') {
+        return { ok: true, value: { status: 'update', entryId: 'bank-admin', title: 'Admin' } };
+      }
+      if (check) return { ok: true, value: { status: 'new' } };
+      return { ok: true, value: { entryId: 'x' } };
+    });
+    // Typed in the bank's sign-in frame, on a page of another site.
+    await send({ kind: 'capture', username: 'alice', password: 'typed' }, bankFrame);
+    const offer = (await send({ kind: 'pendingSave' }, newsTop)) as { id: string };
+    expect(offer).toMatchObject({ site: 'bank.example', username: '', elsewhere: true });
+
+    // Only the top frame answers the banner.
+    expect(await send({ kind: 'save', id: offer.id }, { ...newsTop, frameId: 2 })).toBeNull();
+    await send({ kind: 'dismissSave', id: offer.id }, { ...newsTop, frameId: 2 });
+    expect(client.request).not.toHaveBeenCalledWith(
+      expect.objectContaining({ save: expect.anything() }),
+    );
+
+    // That page has no username field: a username from it counts for nothing.
+    const reply = await send({ kind: 'save', id: offer.id, username: 'admin' }, newsTop);
+    expect(reply).toEqual({ ok: true, mode: 'save' });
+    expect(client.request).not.toHaveBeenCalledWith(
+      expect.objectContaining({ update: expect.anything() }),
+    );
+    expect(client.request).toHaveBeenLastCalledWith({
+      save: { origin: 'https://bank.example', username: 'alice', password: 'typed' },
+    });
+  });
+
+  it('keep a username the vault supplied off the page, and use it unless one is typed', async () => {
+    const site = { origin: 'https://store.example', tab: { id: 32 } };
+    client.request.mockImplementation(async (action: Record<string, unknown>) => {
+      if ('logins' in action) {
+        return {
+          ok: true,
+          value: { logins: [{ id: 'e1', title: 'Shop', username: 'bob', exact: true }] },
+        };
+      }
+      if ('check' in action)
+        return { ok: true, value: { status: 'update', entryId: 'e1', title: 'Shop' } };
+      return { ok: true, value: { entryId: 'e1' } };
+    });
+    // A password-change form with no username field.
+    await send({ kind: 'capture', username: '', password: 'new1', change: true }, site);
+    const offer = (await send({ kind: 'pendingSave' }, site)) as { id: string };
+    expect(offer).toEqual({
+      id: offer.id,
+      site: 'store.example',
+      username: '',
+      mode: 'update',
+      title: 'Shop',
+      fromVault: true,
+    });
+    // The banner's field left empty: the vault's login is updated.
+    await send({ kind: 'save', id: offer.id, username: '' }, site);
+    expect(client.request).toHaveBeenCalledWith({
+      check: { origin: 'https://store.example', username: 'bob', password: 'new1' },
+    });
+    expect(client.request).toHaveBeenLastCalledWith({
+      update: { origin: 'https://store.example', entryId: 'e1', password: 'new1' },
+    });
+  });
+
   it('are offered in full only on pages of the site they were typed on', async () => {
     world.session.pending = {
       1: {

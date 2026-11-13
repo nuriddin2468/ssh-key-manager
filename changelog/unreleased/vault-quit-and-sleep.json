@@ -1,0 +1,6 @@
+{
+  "kind": "security",
+  "en": "Passwords: quitting the app clears a copied password the clipboard still holds, locking when idle counts the time the computer slept, and a new recovery key leaves the screen when the vault locks. Until you confirm it's saved, the app reminds you after unlocking and shows it again after a yes in a system dialog.",
+  "ru": "Пароли: при выходе из приложения скопированный пароль, если он ещё в буфере обмена, стирается, «Блокировать при бездействии» учитывает время сна компьютера, а новый ключ восстановления исчезает с экрана, когда хранилище блокируется. Пока вы не подтвердите, что сохранили его, приложение напоминает о нём после разблокировки и показывает снова после согласия в системном окне.",
+  "uz": "Parollar: ilovadan chiqilganda hali buferda turgan nusxalangan parol tozalanadi, «Faoliyat boʻlmasa qulflash» kompyuter uxlagan vaqtni ham hisoblaydi, yangi tiklash kaliti esa ombor qulflanganda ekrandan ketadi. Uni saqlaganingizni tasdiqlamaguningizcha, ilova ombor ochilgandan keyin bu haqda eslatadi va tizim oynasida rozilik bergach yana koʻrsatadi."
+}

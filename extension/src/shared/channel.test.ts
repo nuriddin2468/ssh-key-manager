@@ -9,6 +9,7 @@ import {
   newKeyPair,
   openResponse,
   pairingCode,
+  pairingCommitment,
   sealRequest,
   toBase64,
 } from './channel';
@@ -45,7 +46,10 @@ describe('the channel', () => {
   it('computes what the app computes', async () => {
     const clientPublic = fromBase64(vectors.clientPublic);
     const appPublic = fromBase64(vectors.appPublic);
-    expect(await pairingCode(vectors.clientId, clientPublic)).toBe(vectors.code);
+    expect(toBase64(await pairingCommitment(vectors.clientId, clientPublic))).toBe(
+      vectors.commitment,
+    );
+    expect(await pairingCode(vectors.clientId, clientPublic, appPublic)).toBe(vectors.code);
 
     const material = await deriveKeyBytes(
       await clientKey(),
@@ -106,6 +110,14 @@ describe('the channel', () => {
         fromBase64(vectors.responseSealed),
       ),
     ).rejects.toThrow();
+  });
+
+  it('shows a code that changes with the app’s key', async () => {
+    const clientPublic = fromBase64(vectors.clientPublic);
+    const appPublic = fromBase64(vectors.appPublic);
+    const other = appPublic.slice();
+    other[64] = (other[64] ?? 0) ^ 1;
+    expect(await pairingCode(vectors.clientId, clientPublic, other)).not.toBe(vectors.code);
   });
 
   it('makes fresh ids and keys', async () => {

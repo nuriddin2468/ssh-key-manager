@@ -28,10 +28,23 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     The master password does not encrypt the database directly: it opens a copy of
     the recovery key kept in `vault.keys`, encrypted with XChaCha20-Poly1305 under a
     key derived with Argon2id (128 MiB, 3 passes). There is no way back without the
-    master password or the recovery key.
+    master password or the recovery key. Losing or damaging `vault.keys` loses
+    nothing: the lock screen then asks for the recovery key, which opens the database
+    alone and writes a new `vault.keys` (a damaged one is kept next to it, as
+    `vault.keys.damaged-<time>`). A `vault.keys` written by a newer version of the app
+    is left alone: the app asks to be updated instead of offering recovery.
+  - Master password checks run one at a time, in whichever window or for whichever
+    action they are made (unlocking; exporting, a new master password or recovery key,
+    device unlock, adding an own device), and so do attempts with the recovery key or a
+    KeePass file's password. After three wrong ones in a row, the next attempt is
+    refused until a wait has passed: 1 second, doubling up to 30 seconds; a right one
+    resets the count. The count is kept in memory and starts again with the app. It
+    slows guessing through the app; someone with a copy of `vault.keys` is slowed only
+    by Argon2id.
   - While unlocked, the decrypted database is held only by the Rust process and is
-    dropped when the vault locks: on request, after inactivity, after sleep, and
-    optionally when the window is minimised or closed. With **Settings → Background**
+    dropped when the vault locks: on request, after inactivity (time the computer
+    slept counts as inactivity), after sleep, when the screen locks, and optionally
+    when the window is minimised or closed. With **Settings → Background**
     on, closing the window only hides it and the app goes on in the tray (the menu bar
     on macOS), so browser autofill keeps working; the vault then locks by the same
     rules, and the tray menu shows whether it is unlocked and locks it. Showing an
@@ -47,7 +60,7 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - Copying a password, a 2FA code or the recovery key goes from Rust straight to the
     clipboard, marked so clipboard history (and Windows' cloud clipboard) skip it, and
     is cleared after 30 seconds by default if nothing else was copied. Locking the vault
-    clears it at once.
+    or quitting the app clears it at once.
   - The secret generator on the Tools page makes its passwords, tokens and keys in Rust
     from the operating system's random number generator, as the vault does. It shows
     the value it made; copying it, or a `.env` line, an `export` or a connection URL
@@ -60,7 +73,22 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     over key slots changed elsewhere is refused.
   - Key derivation settings read from `vault.keys` or a `.kdbx` header (memory, passes
     and lanes; each lane is a thread started for every quarter of every pass) are
-    capped before use, so a tampered file can't make unlocking run for hours.
+    capped before use, so a tampered file can't make unlocking run for hours. A
+    KeePass file's header is validated strictly before the file is parsed, and KeePass 1
+    (`.kdb`) files are refused. A vault file replaced by one its key doesn't open locks
+    the vault; a file that doesn't open isn't decrypted again until it changes.
+  - The screen lock is noticed on macOS and Windows. On Linux it is noticed through
+    systemd-logind: the session's `Lock` signal (which `loginctl lock-session` sends)
+    and its `LockedHint` (which GNOME, KDE, Cinnamon, MATE, Xfce and light-locker set);
+    without logind, through the desktop's screensaver service. A locker that tells
+    neither, such as swaylock or i3lock started from a key binding, isn't noticed:
+    there the vault locks after inactivity or sleep only.
+  - A new recovery key on the screen (after making the vault, or in Settings) goes
+    when the vault locks. Until you confirm it's saved, the app reminds you after each
+    unlock, and keeps only a note of the vault's id meanwhile. Only the app sets that
+    note, when it makes a key; the page can only clear it. The key is shown again only
+    when you ask and say yes in a system dialog, every time: then it is read from the
+    unlocked vault, whose password it is.
   - A 2FA secret the app can't make codes for (HOTP, a period of 0 or over 5 minutes,
     fewer than 6 or more than 10 digits), from an import, a contact or a KeePass file,
     is refused or kept as unreadable instead of crashing the app.
@@ -692,13 +720,17 @@ Settings then asks to move the app to Applications.
   - saving or updating that login;
   - changing the username or password of one of its logins, or moving one to the
     vault's recycle bin (the popup, and the "couldn't sign in?" banner).
-- Changing or removing a login sends no secret back and asks nothing in the app: the
-  old version stays in the entry's history, and a removed login stays in the recycle
-  bin, where the app restores it. Nothing is ever deleted for good from the browser.
-  The extension asks the user before it removes one. A browser may change at most ten
-  logins a minute, so a program holding its keys can't clear out a site's logins at
-  once. An app from before these questions can't read them and answers `invalid`,
-  which the extension shows as "update the app".
+- Saving, updating, changing or removing a login sends no secret back and asks nothing
+  in the app: the old version stays in the entry's history, and a removed login stays
+  in the recycle bin, where the app restores it. Nothing is ever deleted for good from
+  the browser. The extension asks the user before it removes one. A browser may save,
+  update, change or remove at most ten logins a minute, so a program holding its keys
+  can't clear out a site's logins at once. Changes from the browsers back the vault up
+  at most once an hour, so a burst of them doesn't push the older backups out; keeping
+  on for a day would, but the entry's history and the recycle bin still hold what was
+  changed. An app from
+  before these questions can't read them and answers `invalid`, which the extension
+  shows as "update the app".
 - One more question needs no pairing and carries nothing from the vault: whether two
   origins are the same site, by the same rules as below. The extension asks it to tell
   how much a save offer may show on the page.
@@ -733,15 +765,19 @@ Settings then asks to move the app to Applications.
     own. A page's own focus (`focus()`, `autofocus`) opens nothing, though the browser
     marks it as trusted; events a page script makes up are ignored.
   - A pick counts only once the menu has been on screen for half a second, uncovered at
-    the point clicked, and only while the page hasn't restyled, moved or hidden it, so
-    a page can't slip it under a click or key press meant for something else. A layer
+    the point clicked, at the size and place it was put, and only while the page hasn't
+    restyled, moved or hidden it, so a page can't slip it under a click or key press
+    meant for something else. A CSS `zoom` on the page scales even the menu: the menu
+    undoes it when it opens, and a page that zooms it after that gets no pick. A layer
     the page opens later over the menu sends the menu back to the front, and the wait
     starts again.
-  - In Chrome and Edge the browser also confirms that nothing covers the menu, not even
-    a layer that lets clicks through. Firefox has no way to tell that, so there a
-    script on the site could still lay a see-through decoy over the menu; the app's
-    question then names the login before it first fills that page. Later fills of that
-    login there in the same session aren't asked about.
+  - In Chrome and Edge the browser also confirms, for a click and a key press alike,
+    that nothing covers the menu or fades it, not even a layer that lets clicks through
+    or a see-through frame around it. Firefox has no way to tell that, so there a
+    script on the site could still lay a see-through decoy over the menu, or show the
+    site's own sign-in page in a see-through frame; the app's question then names the
+    login before it first fills that page. Later fills of that login there in the same
+    session aren't asked about.
   - Fields that are nearly transparent, smaller than 8 pixels, or outside the window get
     no menu.
 - Nothing else of the vault is reachable: not other entries, 2FA secrets, notes, key
@@ -768,11 +804,12 @@ Settings then asks to move the app to Applications.
   (`unlock.html`), not the main window's, and has its own capability
   (`src-tauri/capabilities/unlock.json`): `vault_status`, `vault_unlock`,
   `vault_unlock_device` and closing itself, nothing else of the app.
-- The browsers may ask at most five times a minute, all together. While the system
-  prompt is up, asking again does nothing; while the window is open, asking again only
-  brings it forward. So neither a page (the menu takes only the user's own clicks
-  anyway) nor a program that can start the native host can bury the screen in
-  windows.
+- The browsers may bring up a prompt or a window at most five times a minute, all
+  together: unlocking, **Open app**, and connecting while the vault is locked or
+  missing. While the system prompt is up, asking again does nothing; while the window
+  is open, asking again only brings it forward. So neither a page (the menu takes only
+  the user's own clicks anyway) nor a program that can start the native host can bury
+  the screen in windows or keep taking the focus.
 - Where the system decides, the window may not get its way: on Windows a program in
   the background may be refused the focus (the app first sends a synthetic Alt key
   press, which Windows counts as the user's input to it), and on Wayland the
@@ -788,26 +825,34 @@ script names the page by the origin the browser reports for the sending frame, n
 by what the page or the content script says. A frame from another site gets that
 site's logins only. Opaque origins (`null`, `data:`, sandboxed frames) get nothing:
 the background falls back to the frame's address only when the browser reports no
-origin at all. The menu and the save banner live in closed shadow roots on a plain
-`div`, so page scripts can't read the logins listed. A password the user typed waits
-for the banner in the background's `storage.session` (memory only). It is offered for
-at most three minutes, dropped at the next page load after that or when the tab
-closes, and never goes back to a page. On a page of another site, for example after a
-sign-in that sends you on, the banner names only the site where it was typed, not the
-username or the saved login's title. Only a login the user put in themselves is sent to
-be checked: its password typed, pasted or dropped into the field by the user (or filled
-by the extension) and not set or changed by a page script since, and the form sent by
-the user's own Enter, click or key press. A page that sets the values and calls
-`requestSubmit()` gets nothing checked. A tab can send typed logins to check at most
-about once a second. Whether the banner appears still tells the page whether the login
-the user just typed there is saved, which is about a password the page was given
-anyway; the banner's size is the same whether it offers to save or to update, whatever
-the saved login's title. The banner's username is a field the user can change (a form
-may send a password alone); key presses in it stop at the banner, but a page listening
-in the capture phase still sees them, which tells it the username of its own login. A
-login typed on another site gets no such field. The username sent with the first step
-of a two-step login waits in `storage.session` for five minutes, for that tab only,
-and names a password sent there without one on the same site.
+origin at all. The menu and the banners live in closed shadow roots on a plain `div`,
+so page scripts can't reach the logins listed. A page's find-in-page (`window.find`)
+does search closed shadow roots, so what comes from the vault (titles, usernames,
+another site's name) is drawn as CSS generated content, which it doesn't search. The
+menu is as tall whatever it shows, so its size doesn't tell how many logins the site
+has. A password the user typed waits for the banner in the background's
+`storage.session` (memory only). It is offered for at most three minutes, dropped at
+the next page load after that or when the tab closes, and never goes back to a page.
+It is saved for the origin it was typed on, and only the top frame's banner can save
+or dismiss it. On a page of another site, for example after a sign-in that sends you
+on, the banner names only the site where it was typed, not the username or the saved
+login's title, and has no username field; a username sent from such a page counts for
+nothing. Only a login the user put in themselves is sent to be checked: its password
+typed, pasted or dropped into the field by the user (or filled by the extension) and
+not set or changed by a page script since, and the form sent by the user's own Enter,
+click or key press. A page that sets the values and calls `requestSubmit()` gets
+nothing checked. A tab can send typed logins to check at most about once a second.
+Whether the banner appears still tells the page whether the login the user just typed
+there is saved, which is about a password the page was given anyway; the banner's size
+is the same whether it offers to save or to update, whatever the saved login's title.
+The banner's username is a field the user can change (a form may send a password
+alone). It holds only a username the user typed on that site, so what the page could
+learn from it (find-in-page matches field values in Chrome, and a page listening in
+the capture phase sees the key presses, which stop at the banner otherwise) is the
+username of its own login. A username the vault supplied is not put in it. A login
+typed on another site gets no such field. The username sent with the first step of a
+two-step login waits in `storage.session` for five minutes, for that tab only, and
+names a password sent there without one on the same site.
 
 A password-change form (a current password, then a new one and its copy) passes on the
 new password, under the same rules: typed by the user and sent by them. A form that
@@ -835,11 +880,18 @@ user's organization or another extension controls is left alone.
 **Pairing.**
 
 - A browser must be paired before it gets anything but the vault's lock state.
-- The extension makes a P-256 key pair and a random client id. Both the extension and
-  the app show a six-digit code computed from them, and the user connects in the app
-  after checking that the codes match.
+- The extension makes a P-256 key pair and a random client id, and first sends only a
+  hash of its public key. The app answers with a key pair it makes for this pairing;
+  only then does the extension send its public key, which must match the hash. Both
+  the extension and the app show a six-digit code computed from the client id and both
+  public keys, and the user connects in the app after checking that the codes match.
+  So something between the browser and the app (a program that took the host's place)
+  can't make the codes match but by chance: it must choose the key it gives each side
+  before it learns the other side's.
 - Pairing needs an unlocked vault. Only one pairing waits at a time, for at most two
-  minutes.
+  minutes, and at most five pairings start a minute. An extension from before this way
+  of pairing is refused, and the app says that it needs an update; browsers paired
+  before keep working.
 - Both sides derive two AES-256-GCM keys (requests, responses) with HKDF-SHA-256 from
   the ECDH secret. The app's key pair is used once and dropped.
 - The app keeps a pairing in the vault's encrypted custom data
@@ -854,10 +906,14 @@ user's organization or another extension controls is left alone.
   old ones; it keeps the last 30 retired keys. A request sealed with retired keys and
   sent after they were retired means someone else holds a copy of them: the app forgets
   the pairing at once and tells the user. One sent before (a late request of the
-  extension itself) is refused, nothing more. While the keys change, the extension
-  holds back its other requests (a Web Lock shared by its background and its pages),
-  so none goes out with the old keys afterwards. Key changes take no backup of the
-  vault.
+  extension itself) is refused, nothing more. The extension asks for new keys again
+  only if it never got the answer, so it never uses keys a later change replaced: those
+  are retired too, and a request sealed with them, whenever it was sent, revokes the
+  pairing. So a program holding a copy can't change the keys over the extension's own
+  change unnoticed. A browser may change its keys at most twice a minute. While the
+  keys change, the extension holds back its other requests (a Web Lock shared by its
+  background and its pages), so none goes out with the old keys afterwards. Key changes
+  take no backup of the vault.
 - **Settings → Browser autofill** lists paired browsers and can disconnect each one.
   The extension's own Disconnect also removes its pairing from the vault when the vault
   is unlocked; when it's locked, only the extension forgets its keys.
@@ -906,7 +962,8 @@ user's organization or another extension controls is left alone.
   extension's pairing keys. With them, while the vault is open, it learns the titles
   and usernames of the logins of any site it names, and gets the passwords the user
   allowed that browser to fill in this session; any other password needs the user's
-  yes. Once the extension changed its keys, using the copy revokes the pairing. Where
+  yes. Once the extension changed its keys, using the copy revokes the pairing, as
+  does the extension's next request when the copy changed the keys over it. Where
   it can read the app's memory (on Windows a program of the same user can; macOS
   protects the signed app, and many Linux distributions allow it only to the app's
   parent) or click the app's dialog, it gets more. No password manager's browser integration

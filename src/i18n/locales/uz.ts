@@ -665,6 +665,8 @@ const uz = {
       'Ombor bir vaqtning oʻzida boshqa kompyuterda oʻzgartirildi. Oʻsha versiya saqlab qolindi, sizning oʻzgarishingiz esa alohida nusxaga yozildi.',
     vault_locked: 'Ombor qulflangan. Uni oching va qayta urinib koʻring.',
     cancelled: 'Bekor qilindi.',
+    too_many_attempts:
+      'Muvaffaqiyatsiz urinishlar juda koʻp. Biroz kuting va qayta urinib koʻring.',
     unknown: 'Kutilmagan xato.',
   },
   keys: {
@@ -2218,6 +2220,14 @@ const uz = {
     meta_one: '{{count}} ta yozuv',
     meta_other: '{{count}} ta yozuv',
     loadFailed: 'Omborni ochib boʻlmadi',
+    keysTooNew:
+      'Bu omborni SSH Key Manager’ning yangiroq versiyasi oʻzgartirgan. Uni ochish uchun ilovani yangilang.',
+    unsavedKeyTitle: 'Yangi tiklash kaliti hali saqlanmagan',
+    unsavedKeyText: 'Ombor siz uni saqlaganingizni tasdiqlashingizdan oldin qulflandi.',
+    unsavedKeyCardText:
+      'Ombor siz uni saqlaganingizni tasdiqlashingizdan oldin qulflandi. Kalitni yana koʻrsating va saqlang: asosiy parolni unutsangiz, faqat u kirishni qaytaradi.',
+    unsavedKeyShow: 'Kalitni koʻrsatish',
+    unsavedKeyLater: 'Keyinroq',
     createTitle: 'Parollarni kalitlaringiz yonida saqlang',
     createText:
       'Server parollari, kalit parol iboralari va sayt loginlari — bitta shifrlangan omborda.',
@@ -4263,6 +4273,8 @@ const uz = {
     pairDecline: 'Rad etish',
     pairConnect: 'Ulash',
     pairExpired: 'Ulanish soʻrovining vaqti tugadi',
+    extensionOutdated:
+      '{{browser}} brauzeridagi SSH Key Manager kengaytmasi eskirgan. Uni yangilang va qayta ulang. Agar brauzerning kengaytmalar doʻkoni hali yangilanishni taklif qilmasa, bir necha kundan keyin qayta urinib koʻring.',
     paired: '{{browser}} ulandi',
     unlockRequest: 'Brauzerda parollarni toʻldirish uchun omborni oching',
   },

@@ -231,10 +231,15 @@ skip a tombstone (it lacks `name`) and keep an extra field when they read a live
 ## Risky changes and deletions
 
 **Deletions.** An entry leaving the vault, an entry moved to the recycle bin, and a group
-deleted each count as one. More than 5 incoming (`MASS_DELETE`, hosts and vault counted
-together) need the user's yes: on the side that connected, in the review; the other side
-puts them off, its snapshot untouched for them, until its user syncs from it — PR 1's rule
-for each device.
+deleted each count as one. Deletions from a device are limited over time, not per sync:
+those this computer made from one device without asking in the last 24 hours count
+with the ones a sync brings, and past 5 (`MASS_DELETE`, hosts and vault counted together)
+all of that sync's need the user's yes: on the side that connected, in the review; the
+other side puts them off, its snapshot untouched for them, until its user syncs from it.
+The count is kept with that device's snapshot. Before a day's first sync deletions, the
+file (`~/.ssh/config`, the vault) is kept as it was in a backup the rotation of 20
+never removes, for 30 days (`fsutil::keep_backup`); a new recovery key re-encrypts it
+like the others.
 
 **Risky variables (new).** A variable whose value goes into a shell's environment
 (`envs_run`) or a `.env` file can make programs load code. Adding or changing one of these
@@ -282,7 +287,7 @@ has; the risk is damage and code running on this computer.
 | A stranger, or a former own device, syncs                           | PR 1: Noise XX, the own-vault proof, both in each other's registry; a removed device stays a tombstone                            |
 | A different vault gets merged                                       | proof, then the copy must open with this secret and have this root                                                                |
 | A copy built to exhaust memory or CPU                               | 256 MiB, KDF bounds (`kdf::check_kdbx`), item and depth limits, history cap                                                       |
-| Mass deletion                                                       | more than 5 need a yes on each device; backup before the save                                                                     |
+| Mass deletion                                                       | more than 5 a day from one device need a yes on each device; a kept backup before a day's first deletions                         |
 | Values overwritten or emptied                                       | the previous version stays in each entry's history; backup before the save; step 2 adds undo                                      |
 | Code run through a variable (`NODE_OPTIONS`, `LD_PRELOAD`, `PATH`…) | risky variables need the review and the system dialog                                                                             |
 | Code run through a host directive                                   | PR 1's risky directives, unchanged                                                                                                |

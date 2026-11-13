@@ -496,8 +496,13 @@ fn a_new_recovery_key_re_encrypts_backups_and_conflict_copies() {
     db.save(&mut bytes, key(&s("someone else"))).unwrap();
     std::fs::write(&stranger, &bytes).unwrap();
 
+    // A backup a sync kept before deletions.
+    let kept = fsutil::keep_backup(&fx.paths.database, &fx.backups())
+        .unwrap()
+        .unwrap();
     let new_key = vault.new_recovery_key(&s("master"), &fx.backups()).unwrap();
     let mut copies = fsutil::list_backups(&fx.backups(), "vault.kdbx");
+    copies.push(kept);
     copies.retain(|path| path != &stranger);
     copies.push(PathBuf::from(copy));
     assert!(copies.len() >= 4);

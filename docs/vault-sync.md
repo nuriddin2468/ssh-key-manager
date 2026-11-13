@@ -108,7 +108,9 @@ conflict shows are read from the copy in memory, one at a time, when the user as
 **Checks on the copy before anything is planned** (`Vault::open_sync_copy`, failure = `Broken`,
 nothing applied):
 - it is KDBX 4 without compression (the sender writes it so), so its payload is no larger
-  than the file; the payload is decrypted here (`vault::sync::payload`, not by the
+  than the file, with an outer header of at most 64 KiB; its key derivation parameters are
+  read typed, as the `keepass` crate reads them, and the cost limits are checked on the
+  values used; the payload is decrypted here (`vault::sync::payload`, not by the
   `keepass` crate) and checked before the crate parses anything: at most 65,536
   attachments in its inner header, and its XML at most 96 levels deep and 8,388,608
   elements, no document type, no attachment stored compressed in it (the crate allocates,

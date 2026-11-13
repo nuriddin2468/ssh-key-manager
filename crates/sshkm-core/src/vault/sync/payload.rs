@@ -15,6 +15,7 @@ use secrecy::{ExposeSecret, SecretString};
 use sha2::{Digest, Sha256, Sha512};
 use zeroize::Zeroizing;
 
+use crate::vault::kdf;
 use crate::{Error, Result};
 
 /// Outer header field ids.
@@ -23,6 +24,12 @@ const CIPHER: u8 = 2;
 const MASTER_SEED: u8 = 4;
 const IV: u8 = 7;
 const KDF_PARAMETERS: u8 = 11;
+/// Value types of a variant dictionary.
+const VARIANT_U32: u8 = 0x04;
+const VARIANT_U64: u8 = 0x05;
+const VARIANT_BYTES: u8 = 0x42;
+/// Longest outer header read: a real one is well under a kilobyte.
+pub(crate) const MAX_HEADER: usize = 64 * 1024;
 /// Inner header field ids.
 const INNER_END: u8 = 0;
 const INNER_BINARY: u8 = 3;
@@ -164,6 +171,9 @@ impl<'a> OuterHeader<'a> {
             let len = usize::try_from(len).map_err(|_| malformed())?;
             let value = bytes.get(pos + 5..pos + 5 + len).ok_or_else(cut_off)?;
             pos += 5 + len;
+            if pos > MAX_HEADER {
+                return Err(malformed());
+            }
             match id {
                 END => break,
                 CIPHER => cipher = Some(value),
@@ -183,34 +193,40 @@ impl<'a> OuterHeader<'a> {
     }
 }
 
-/// The key derived from `composite` as the header's KDF parameters say.
+/// The key derived from `composite` as the header's KDF parameters say,
+/// read as the `keepass` crate reads them: each value of its own type (a
+/// value of another type is refused, never read as a number), the last of
+/// a repeated key. The limits on cost ([`kdf::check_aes`],
+/// [`kdf::check_argon2`]) are checked here on the very values used.
 fn transform(dict: &[u8], composite: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
     let entries = variant_dictionary(dict)?;
-    let get = |key: &[u8]| {
-        entries
-            .iter()
-            .rev()
-            .find(|(k, _)| *k == key)
-            .map(|(_, value)| *value)
-    };
-    let number = |key: &[u8]| -> Result<u64> {
-        match get(key).ok_or_else(malformed)? {
-            value if value.len() == 8 => Ok(u64::from_le_bytes(
-                value.try_into().map_err(|_| malformed())?,
-            )),
-            value if value.len() == 4 => Ok(u64::from(u32::from_le_bytes(
-                value.try_into().map_err(|_| malformed())?,
-            ))),
+    let typed = |key: &[u8], kind: u8| -> Result<&[u8]> {
+        match entries.iter().rev().find(|entry| entry.1 == key) {
+            Some((found, _, value)) if *found == kind => Ok(*value),
             _ => Err(malformed()),
         }
     };
-    let id = get(b"$UUID").ok_or_else(malformed)?;
-    let salt = get(b"S").ok_or_else(malformed)?;
+    let u64_of = |key: &[u8]| -> Result<u64> {
+        let value = typed(key, VARIANT_U64)?;
+        Ok(u64::from_le_bytes(
+            value.try_into().map_err(|_| malformed())?,
+        ))
+    };
+    let u32_of = |key: &[u8]| -> Result<u32> {
+        let value = typed(key, VARIANT_U32)?;
+        Ok(u32::from_le_bytes(
+            value.try_into().map_err(|_| malformed())?,
+        ))
+    };
+    let id = typed(b"$UUID", VARIANT_BYTES)?;
+    let salt = typed(b"S", VARIANT_BYTES)?;
     if id == KDF_AES_KDBX3 || id == KDF_AES_KDBX4 {
         use aes::cipher::{BlockEncrypt, KeyInit};
+        let rounds = u64_of(b"R")?;
+        kdf::check_aes(rounds)?;
         let cipher = aes::Aes256::new_from_slice(salt).map_err(|_| malformed())?;
         let mut key = Zeroizing::new(composite.to_vec());
-        for _ in 0..number(b"R")? {
+        for _ in 0..rounds {
             for half in key.as_chunks_mut::<16>().0 {
                 cipher.encrypt_block(aes::Block::from_mut_slice(half));
             }
@@ -226,19 +242,20 @@ fn transform(dict: &[u8], composite: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
             ));
         }
     };
-    let version = argon2::Version::from_u32(u32::try_from(number(b"V")?).map_err(|_| malformed())?)
-        .map_err(|_| malformed())?;
-    let to_u32 = |n: u64| u32::try_from(n).map_err(|_| malformed());
+    let version = argon2::Version::from_u32(u32_of(b"V")?).map_err(|_| malformed())?;
     // As the `keepass` crate derives it: memory in bytes, no secret and no
     // associated data.
+    let (memory_kib, iterations, lanes) = (u64_of(b"M")? / 1024, u64_of(b"I")?, u32_of(b"P")?);
+    kdf::check_argon2(memory_kib, iterations, u64::from(lanes))?;
+    let to_u32 = |n: u64| u32::try_from(n).map_err(|_| malformed());
     let config = argon2::Config {
         ad: &[],
         hash_length: 32,
-        lanes: to_u32(number(b"P")?)?,
-        mem_cost: to_u32(number(b"M")? / 1024)?,
+        lanes,
+        mem_cost: to_u32(memory_kib)?,
         secret: &[],
         thread_mode: argon2::ThreadMode::Parallel,
-        time_cost: to_u32(number(b"I")?)?,
+        time_cost: to_u32(iterations)?,
         variant,
         version,
     };
@@ -247,8 +264,11 @@ fn transform(dict: &[u8], composite: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
         .map_err(|_| malformed())
 }
 
-/// A KDBX 4 variant dictionary's entries: key and value bytes, in order.
-fn variant_dictionary(dict: &[u8]) -> Result<Vec<(&[u8], &[u8])>> {
+/// An entry of a variant dictionary: its value's type, its key, its value.
+type VariantEntry<'a> = (u8, &'a [u8], &'a [u8]);
+
+/// A KDBX 4 variant dictionary's entries, in order.
+fn variant_dictionary(dict: &[u8]) -> Result<Vec<VariantEntry<'_>>> {
     let mut entries = Vec::new();
     let mut pos = 2;
     loop {
@@ -270,7 +290,7 @@ fn variant_dictionary(dict: &[u8]) -> Result<Vec<(&[u8], &[u8])>> {
         };
         let (key, next) = field(pos + 1)?;
         let (value, next) = field(next)?;
-        entries.push((key, value));
+        entries.push((kind, key, value));
         pos = next;
     }
 }
@@ -421,6 +441,109 @@ mod tests {
                 Err(Error::WrongPassphrase)
             ));
         }
+    }
+
+    /// `bytes` with its outer header's fields as `edit` makes them (called
+    /// with each field, the end included), and the header's hash made to
+    /// match: what anyone can do without the secret, since the hash has no
+    /// key.
+    fn rewritten(bytes: &[u8], edit: impl Fn(u8, &[u8]) -> Vec<(u8, Vec<u8>)>) -> Vec<u8> {
+        let mut header = bytes[..12].to_vec();
+        let mut pos = 12;
+        loop {
+            let id = bytes[pos];
+            let len = usize::try_from(u32::from_le_bytes(
+                bytes[pos + 1..pos + 5].try_into().unwrap(),
+            ))
+            .unwrap();
+            let value = &bytes[pos + 5..pos + 5 + len];
+            pos += 5 + len;
+            for (id, value) in edit(id, value) {
+                header.push(id);
+                header.extend_from_slice(&u32::try_from(value.len()).unwrap().to_le_bytes());
+                header.extend_from_slice(&value);
+            }
+            if id == END {
+                break;
+            }
+        }
+        let mut out = header.clone();
+        out.extend_from_slice(&Sha256::digest(&header));
+        out.extend_from_slice(&bytes[pos + 32..]);
+        out
+    }
+
+    /// `bytes` with one more entry at the end of its KDF parameters.
+    fn with_kdf_entry(bytes: &[u8], kind: u8, key: &[u8], value: &[u8]) -> Vec<u8> {
+        rewritten(bytes, |id, dict| {
+            if id != KDF_PARAMETERS {
+                return vec![(id, dict.to_vec())];
+            }
+            let mut dict = dict[..dict.len() - 1].to_vec();
+            dict.push(kind);
+            dict.extend_from_slice(&u32::try_from(key.len()).unwrap().to_le_bytes());
+            dict.extend_from_slice(key);
+            dict.extend_from_slice(&u32::try_from(value.len()).unwrap().to_le_bytes());
+            dict.extend_from_slice(value);
+            dict.push(0);
+            vec![(id, dict)]
+        })
+    }
+
+    #[test]
+    fn a_kdf_value_of_another_type_or_past_the_limits_is_refused() {
+        let secret = SecretString::from("secret");
+        let aes = written(OuterCipherConfig::AES256, KdfConfig::Aes { rounds: 10 });
+        let argon = written(
+            OuterCipherConfig::AES256,
+            KdfConfig::Argon2 {
+                iterations: 2,
+                memory: 1024 * 1024,
+                parallelism: 2,
+                version: argon2::Version::Version13,
+            },
+        );
+        let huge = u64::MAX.to_le_bytes();
+        for bytes in [
+            // A count of rounds or of memory as bytes, not a number: the
+            // header check, which reads numbers only, lets it by.
+            with_kdf_entry(&aes, VARIANT_BYTES, b"R", &huge),
+            with_kdf_entry(&argon, VARIANT_BYTES, b"M", &huge),
+            with_kdf_entry(&argon, VARIANT_BYTES, b"I", &huge),
+            with_kdf_entry(&argon, VARIANT_U64, b"P", &huge),
+            // A number of the right type, past the limits.
+            with_kdf_entry(&aes, VARIANT_U64, b"R", &huge),
+            with_kdf_entry(&argon, VARIANT_U32, b"P", &[0, 0, 1, 0]),
+        ] {
+            let started = std::time::Instant::now();
+            assert!(decrypt(&bytes, &secret).is_err());
+            // A vault moved to a new device goes the same way.
+            assert!(super::super::check_moved(&bytes, &secret).is_err());
+            assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        }
+        // The same values, typed and within the limits, still work.
+        let typed = with_kdf_entry(&aes, VARIANT_U64, b"R", &10u64.to_le_bytes());
+        assert!(matches!(
+            decrypt(&typed, &secret),
+            Err(Error::WrongPassphrase)
+        ));
+    }
+
+    #[test]
+    fn a_header_too_large_is_refused() {
+        let secret = SecretString::from("secret");
+        let bytes = written(OuterCipherConfig::AES256, KdfConfig::Aes { rounds: 10 });
+        let large = rewritten(&bytes, |id, value| {
+            if id == END {
+                vec![(13, vec![1; MAX_HEADER]), (id, value.to_vec())]
+            } else {
+                vec![(id, value.to_vec())]
+            }
+        });
+        assert!(decrypt(&large, &secret).is_err());
+        assert!(super::super::check_moved(&large, &secret).is_err());
+        assert!(kdf::check_uncompressed_kdbx4(&large, MAX_HEADER).is_err());
+        assert!(kdf::check_uncompressed_kdbx4(&bytes, MAX_HEADER).is_ok());
     }
 
     #[test]

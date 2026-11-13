@@ -137,8 +137,9 @@ fn read_bounded(bytes: &[u8], secret: &SecretString) -> Result<Database> {
     if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_DATABASE_SIZE {
         return Err(Error::invalid("the copy is too large"));
     }
+    // The header's size first: the checks after it read all of it.
+    kdf::check_uncompressed_kdbx4(bytes, payload::MAX_HEADER)?;
     kdf::check_kdbx(bytes)?;
-    kdf::check_uncompressed_kdbx4(bytes)?;
     let decrypted = payload::decrypt(bytes, secret)?;
     let xml = payload::xml_start(&decrypted, MAX_ATTACHMENTS)?;
     check_xml(&decrypted[xml..])?;

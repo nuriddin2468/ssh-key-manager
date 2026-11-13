@@ -4160,7 +4160,7 @@ const en = {
     enableHint:
       'The SSH Key Manager extension for Chrome, Edge and Firefox fills logins from the vault and offers to save new ones.',
     extension: 'Extension',
-    extensionHint: 'For Chrome, Edge, Brave and other Chromium browsers.',
+    extensionHint: 'For Chrome, Edge, Brave and other Chromium browsers, and for Firefox.',
     browsers: 'Browsers',
     notSetUp: '{{name}} · not set up',
     noBrowsers: 'No supported browser found',

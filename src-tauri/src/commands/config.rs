@@ -339,6 +339,11 @@ fn title(risk: Risk) -> Localized {
             "Дать серверу доступ к этому компьютеру?",
             "Serverga bu kompyuterdan foydalanishga ruxsat berilsinmi?",
         ),
+        Risk::Exposed => Localized::new(
+            "Let others use your connections?",
+            "Разрешить другим пользоваться вашими подключениями?",
+            "Boshqalar ulanishlaringizdan foydalansinmi?",
+        ),
         Risk::HostKeys => Localized::new(
             "Check servers less strictly?",
             "Проверять серверы менее строго?",
@@ -364,6 +369,11 @@ fn heading(risk: Risk) -> Localized {
             "The server that gets access to this computer:",
             "Сервер, который получает доступ к этому компьютеру:",
             "Bu kompyuterdan foydalana oladigan server:",
+        ),
+        Risk::Exposed => Localized::new(
+            "Others on your network or this computer can use the connection:",
+            "Другие в вашей сети или на этом компьютере смогут пользоваться подключением:",
+            "Tarmogʻingizdagi yoki shu kompyuterdagi boshqalar ulanishdan foydalana oladi:",
         ),
         Risk::HostKeys => Localized::new(
             "ssh checks less strictly that the server is genuine:",

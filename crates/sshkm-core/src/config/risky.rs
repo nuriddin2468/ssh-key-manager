@@ -1,13 +1,16 @@
 //! Directives that make `ssh` run a program or load code on this computer,
-//! hand the server access to it, send that access to another server, or
-//! check less whether a server is the real one, whenever the user connects.
-//! A change that adds one must be approved by the user outside the webview,
-//! so the app finds the ones an edit adds.
+//! hand the server access to it, send that access to another server, let
+//! others use the connection, or check less whether a server is the real
+//! one, whenever the user connects. A change that adds one must be approved
+//! by the user outside the webview, so the app finds the ones an edit adds.
 //!
 //! The list follows `ssh_config(5)`. Run code ([`Risk::RunsCode`]):
 //!
 //! - run a program: `ProxyCommand`, `LocalCommand` (and `PermitLocalCommand`,
 //!   which turns it on), `KnownHostsCommand`, `Match … exec`, `XAuthLocation`;
+//! - run a command on every server the block applies to: `RemoteCommand`.
+//!   The server could run anything there anyway, but it is not the server
+//!   that adds the line;
 //! - load a library: `PKCS11Provider` (also spelled `SmartcardDevice`),
 //!   `SecurityKeyProvider`;
 //! - read more configuration from elsewhere, which may do any of the above:
@@ -27,10 +30,12 @@
 //! Let the server use this computer ([`Risk::ServerAccess`]): `ForwardAgent`
 //! (it can sign in elsewhere with every key in the agent while the session
 //! lasts), `ForwardX11` and `ForwardX11Trusted` (it can read and type into
-//! the display), and a `RemoteForward` that is dynamic (the server reaches
-//! anything this computer can) or leads to a local socket or a path built
-//! from variables (`${SSH_AUTH_SOCK}` hands over the agent, the Docker
-//! socket the computer).
+//! the display), every `RemoteForward` (the server reaches a port of this
+//! computer or of its network; anything this computer can, when dynamic;
+//! the agent or the Docker socket, through a local socket), and `SendEnv`
+//! of anything but the locale (`LANG`, `LANGUAGE`, `LC_*`, `COLORTERM`,
+//! `NO_COLOR`): the server reads the values of this computer's variables,
+//! which may hold secrets.
 //!
 //! Say which server gets that access ([`Risk::Destination`]): `HostName`,
 //! `Port`, `User`, `ProxyJump`, `HostKeyAlias`, `CanonicalDomains` and
@@ -44,14 +49,19 @@
 //! such access applies to does not. Files read through `Include` are not
 //! looked at (adding an `Include` asks anyway).
 //!
+//! Let others use the connection ([`Risk::Exposed`]): `GatewayPorts` other
+//! than `no`, and a `LocalForward` or `DynamicForward` that listens on every
+//! address (`*`, an empty one) or on one that isn't loopback, so anyone on
+//! the network reaches what the server reaches; a `ControlPath` other than
+//! `none` outside the home folder (`~/…` or `%d/…`), where another user of
+//! this computer may put a socket of their own for `ssh` to hand the
+//! session to.
+//!
 //! Check less whether the server is the real one ([`Risk::HostKeys`]):
 //! `StrictHostKeyChecking` other than `yes` or `ask` (new keys accepted
 //! unasked), `UserKnownHostsFile` and `GlobalKnownHostsFile` (which keys
 //! are trusted), `VerifyHostKeyDNS` other than `no` or `ask` (keys trusted
 //! from DNS), `NoHostAuthenticationForLocalhost` other than `no`.
-//!
-//! `RemoteCommand` is not on the list: it runs on the server, which can run
-//! anything there anyway.
 //!
 //! The keyword is read as OpenSSH reads it: in any case and without its
 //! quotes, and the value as [`lex`] reads it for that keyword.
@@ -59,6 +69,7 @@
 //! [`keyword`]: super::lexer::keyword
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 
 use super::SshConfig;
 use super::lexer::{Directive, LineKind, is_trailing_ws, lex, split_args};
@@ -72,16 +83,20 @@ pub enum Risk {
     ServerAccess,
     /// It says which server gets such access.
     Destination,
+    /// Others on the network, or other users of this computer, can use the
+    /// connection.
+    Exposed,
     /// `ssh` checks less whether the server is the real one.
     HostKeys,
 }
 
 impl Risk {
     /// Every kind, in the order the confirmation lists them.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::RunsCode,
         Self::ServerAccess,
         Self::Destination,
+        Self::Exposed,
         Self::HostKeys,
     ];
 }
@@ -313,13 +328,15 @@ pub(crate) fn matches_pattern(pattern: &[u8], name: &[u8]) -> bool {
 /// harmless; they are compared case-sensitively, as exactly as OpenSSH does
 /// or more so, and anything else counts.
 fn risk(key: &str, d: &Directive<'_>, rest: &str) -> Option<Risk> {
-    use Risk::{HostKeys, RunsCode, ServerAccess};
+    use Risk::{Exposed, HostKeys, RunsCode, ServerAccess};
     // Commands are taken literally: `"none"` is a program called `none`.
     let literal = d.value;
     let args = split_args(d.value).0;
     let is = |words: &[&str]| matches!(args.as_slice(), [only] if words.contains(&only.as_str()));
     let (risk, risky) = match key {
-        "proxycommand" | "localcommand" | "knownhostscommand" => (RunsCode, literal != "none"),
+        "proxycommand" | "localcommand" | "knownhostscommand" | "remotecommand" => {
+            (RunsCode, literal != "none")
+        }
         "pkcs11provider" | "smartcarddevice" => (RunsCode, !is(&["none"])),
         "securitykeyprovider" => (RunsCode, !is(&["internal"])),
         "identityagent" => (RunsCode, !is(&["none", "SSH_AUTH_SOCK"])),
@@ -339,16 +356,22 @@ fn risk(key: &str, d: &Directive<'_>, rest: &str) -> Option<Risk> {
             !args.iter().all(|arg| arg.chars().all(is_name_char)),
         ),
         "forwardagent" | "forwardx11" | "forwardx11trusted" => (ServerAccess, !is(&["no"])),
-        // Dynamic (no second argument, or an empty one, as `readconf.c`
-        // reads it), or to a local socket or a variable.
-        "remoteforward" => (
+        // To a port or a socket here, or dynamic: whatever it leads to, the
+        // server reaches it through this computer.
+        "remoteforward" => (ServerAccess, true),
+        "sendenv" => (
             ServerAccess,
-            match args.as_slice() {
-                [_, target, ..] if !target.is_empty() => args[1..]
-                    .iter()
-                    .any(|arg| arg.contains(['/', '\\', '$', '%'])),
-                _ => true,
-            },
+            !args.iter().all(|name| sends_only_the_locale(name)),
+        ),
+        "gatewayports" => (Exposed, !is(&["no"])),
+        "localforward" | "dynamicforward" => (
+            Exposed,
+            args.first()
+                .is_some_and(|listen| listens_beyond_loopback(listen)),
+        ),
+        "controlpath" => (
+            Exposed,
+            !is(&["none"]) && !args.first().is_some_and(|path| is_in_home(path)),
         ),
         "stricthostkeychecking" => (HostKeys, !is(&["yes", "ask"])),
         "userknownhostsfile" | "globalknownhostsfile" => (HostKeys, true),
@@ -357,6 +380,39 @@ fn risk(key: &str, d: &Directive<'_>, rest: &str) -> Option<Risk> {
         _ => return None,
     };
     risky.then_some(risk)
+}
+
+/// A `SendEnv` pattern that sends nothing but the locale, as distributions
+/// set it (`SendEnv LANG LC_*`), or that takes names off the list (`-NAME`).
+fn sends_only_the_locale(pattern: &str) -> bool {
+    pattern.starts_with('-')
+        || matches!(pattern, "LANG" | "LANGUAGE" | "COLORTERM" | "NO_COLOR")
+        || pattern.starts_with("LC_")
+}
+
+/// Whether the listening side of a `LocalForward` or `DynamicForward`
+/// (`[address:]port`, IPv6 in brackets, or a socket path) names an address
+/// that isn't loopback: `*`, an empty one (every address), or any other. A
+/// port alone listens as `GatewayPorts` says (on loopback by default), and
+/// a socket path is a file only its owner can use.
+fn listens_beyond_loopback(listen: &str) -> bool {
+    let address = match listen.strip_prefix('[') {
+        Some(rest) => rest.split_once(']').map_or(rest, |(address, _)| address),
+        None => match listen.split_once(':') {
+            Some((address, _)) => address,
+            None => return false,
+        },
+    };
+    !(address == "localhost" || address.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback()))
+}
+
+/// Whether a `ControlPath` is in the user's home folder (`~/…` or `%d/…`),
+/// where other users can't write, without going back out of it (`..`) or
+/// through a variable.
+fn is_in_home(path: &str) -> bool {
+    (path.starts_with("~/") || path.starts_with("%d/"))
+        && !path.contains('$')
+        && !path.split(['/', '\\']).any(|part| part == "..")
 }
 
 /// A control character other than a tab.

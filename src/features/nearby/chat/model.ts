@@ -1,6 +1,7 @@
 import { useMutation } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toastError } from '@/api/useAppMutation';
+import { AppError } from '@/lib/ipc';
 import type { ChatEntry } from '@/bindings/ChatEntry';
 
 /** The terms a secret or variables may have, in seconds: an hour, a day, a week. */
@@ -24,7 +25,10 @@ export function useChatAction<TVars, TResult>(
     // The variables may hold a secret: gone as soon as nothing shows them.
     gcTime: 0,
     onSuccess,
-    onError: (error) => toastError(t, error),
+    // A no in the system dialog is the user's own answer: nothing to report.
+    onError: (error) => {
+      if (AppError.from(error).code !== 'cancelled') toastError(t, error);
+    },
   });
 }
 

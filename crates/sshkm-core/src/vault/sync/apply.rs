@@ -19,7 +19,7 @@ use keepass::Database;
 use keepass::db::{
     CustomDataItem, Entry, EntryId, EntryMut, EntryRef, GroupId, GroupRef, Icon, Times, Value,
 };
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -30,7 +30,8 @@ use super::plan::{ChangeOp, ItemKind};
 use super::{LOCAL, MAX_ENTRIES, MAX_GROUPS, Pairs, PeerVault, VaultPlan};
 use crate::sync::Hasher;
 use crate::vault::Vault;
-use crate::vault::envs::settle_versions;
+use crate::vault::envs::{is_environment, is_shared, referenced, settle_versions, variables_of};
+use crate::vault::fields;
 use crate::{Error, Result};
 
 /// How many items of one kind a sync added, changed and removed here.
@@ -386,6 +387,33 @@ impl Vault {
             .get(name)
             .ok_or_else(|| Error::NotFound("field".into()))?;
         Ok(SecretString::from(value.get().clone()))
+    }
+}
+
+impl PeerVault {
+    /// The value the variable `name` takes from the copy's item `id`, for
+    /// the system dialog that asks to allow it: the environment's variable,
+    /// or the shared value's password; a reference to a shared value is
+    /// read from the copy. `None` when the copy has none.
+    pub fn variable(&self, id: &str, name: &str) -> Option<SecretString> {
+        let uuid = Uuid::parse_str(id).ok()?;
+        let entry = self.db.entry(EntryId::from_uuid(uuid))?;
+        let value = if is_environment(&entry) {
+            variables_of(&entry)
+                .into_iter()
+                .find(|var| var.name == name)?
+                .value
+        } else if is_shared(&entry) {
+            SecretString::from(entry.get(fields::PASSWORD).unwrap_or_default())
+        } else {
+            return None;
+        };
+        let Some(shared) = referenced(value.expose_secret()) else {
+            return Some(value);
+        };
+        let entry = self.db.entry(EntryId::from_uuid(shared))?;
+        (is_shared(&entry) && !is_environment(&entry))
+            .then(|| SecretString::from(entry.get(fields::PASSWORD).unwrap_or_default()))
     }
 }
 

@@ -43,8 +43,8 @@ pub use self::dotenv::{ParseProblem, ParsedEnv, ProblemKind};
 pub use self::files::{EnvFile, EnvKind, FileLevel};
 pub use self::format::{EnvFormat, render};
 pub(crate) use self::shared::is_shared;
-pub(in crate::vault) use self::shared::shared_references;
 pub use self::shared::{SharedUse, SharedValue};
+pub(in crate::vault) use self::shared::{referenced, shared_references};
 use super::export::{checked_target, write_private};
 use super::{Vault, check_field, duplicate, in_group, parse_id, rfc3339};
 use crate::{Error, Result};
@@ -496,7 +496,7 @@ fn check_variables(vars: &[EnvVariable]) -> Result<()> {
 fn check_no_references(vars: &[EnvVariable]) -> Result<()> {
     match vars
         .iter()
-        .find(|var| shared::referenced(var.value.expose_secret()).is_some())
+        .find(|var| referenced(var.value.expose_secret()).is_some())
     {
         Some(var) => Err(Error::invalid(format!(
             "{} refers to a vault entry, which only the vault sets",

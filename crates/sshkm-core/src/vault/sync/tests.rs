@@ -1020,6 +1020,17 @@ fn variables_that_load_code_are_flagged() {
     };
     assert_eq!(risky(&env), ["NODE_OPTIONS"]);
     assert_eq!(risky(&other), ["LD_PRELOAD"]);
+    // The system dialog shows the values the copy brings.
+    let value = |id: &str, name: &str| {
+        peer.variable(id, name)
+            .map(|v| v.expose_secret().to_owned())
+    };
+    assert_eq!(
+        value(&env, "NODE_OPTIONS").as_deref(),
+        Some("--require /tmp/x.js")
+    );
+    assert_eq!(value(&other, "LD_PRELOAD").as_deref(), Some("/tmp/x.so"));
+    assert_eq!(value(&other, "MISSING"), None);
     let label = |id: &str| {
         plan.changes
             .iter()
@@ -1370,6 +1381,11 @@ fn a_shared_value_a_variable_that_loads_code_uses_is_flagged() {
     let change = plan.changes.iter().find(|c| c.id == shared_id).unwrap();
     assert_eq!(change.kind, ItemKind::Shared);
     assert_eq!(change.risky, ["NODE_OPTIONS"]);
+    // Its value as the copy has it, read through the variable too.
+    for id in [&shared_id, &web] {
+        let value = peer.variable(id, "NODE_OPTIONS").unwrap();
+        assert_eq!(value.expose_secret(), "--import=./x.mjs");
+    }
 }
 
 #[test]

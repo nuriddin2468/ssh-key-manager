@@ -4225,7 +4225,8 @@ const uz = {
     enableHint:
       'Chrome, Edge va Firefox uchun SSH Key Manager kengaytmasi ombordagi loginlarni toʻldiradi va yangilarini saqlashni taklif qiladi.',
     extension: 'Kengaytma',
-    extensionHint: 'Chrome, Edge, Brave va Chromium asosidagi boshqa brauzerlar hamda Firefox uchun.',
+    extensionHint:
+      'Chrome, Edge, Brave va Chromium asosidagi boshqa brauzerlar hamda Firefox uchun.',
     browsers: 'Brauzerlar',
     notSetUp: '{{name}} · sozlanmagan',
     noBrowsers: 'Mos brauzer topilmadi',

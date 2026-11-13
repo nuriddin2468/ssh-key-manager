@@ -184,12 +184,14 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     Values never reach the interface, errors or logs; the compare dialog compares only
     an environment's own files. Whether Git ignores or has committed a file is asked of
     `git` (as are the files of a working tree for the leak scanner) so that a
-    repository's own settings can't make it run a program: Git is told which repository
-    to read, the nearest `.git` above the file, so a folder in the project laid out
-    like a repository is never taken for it; it runs no file system monitor
-    (`core.fsmonitor` off), fetches nothing (no transport, not even the objects a
-    partial clone left out) and gets none of the app's `GIT_*` environment. A line
-    goes into `.gitignore` only when you ask.
+    repository's own settings can't make it run a program. Git finds the repository as
+    it always does, so its own check that the repository belongs to you applies
+    (`safe.directory`), but a folder in the project laid out like a bare repository is
+    never taken for one (`safe.bareRepository=explicit`). It runs no file system
+    monitor (`core.fsmonitor` off), may use no transport at all, whatever the
+    repository's settings say (`GIT_ALLOW_PROTOCOL`), so it fetches nothing, not even
+    the objects a partial clone left out, and it gets none of the app's `GIT_*`
+    environment. A line goes into `.gitignore` only when you ask.
   - An edit of a managed file goes to the vault, whoever made it: any program that can
     write in the folder (a build tool, an AI agent) changes what the vault holds, and,
     through a shared value, the files of every environment that uses it, in any
@@ -228,11 +230,11 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     own), given only the paths of those two lists, waiting on a pipe from the app.
     When the app goes without putting them away (it crashed, or was killed or forced
     to quit), the guard removes the listed level-2 files still as the app left them
-    and the temporary files next to them, tells the readers waiting on the listed
-    pipes that the app isn't running, removes the pipes that are still the app's, and
-    exits. A file changed since stays. If there is no guard (it went too, in a power
-    cut or with the whole session, or the app went during the round that would have
-    started it), the app's next start does the same.
+    and the temporary files and folders of writes next to them, tells the readers
+    waiting on the listed pipes that the app isn't running, removes the pipes that
+    are still the app's, and exits. A file changed since stays. If there is no guard
+    (it went too, in a power cut or with the whole session, or the app went during
+    the round that would have started it), the app's next start does the same.
   - **AI tools' rules.** When you say so for a project folder, the app adds a line
     naming each of its managed files to the AI tools' ignore files (`.cursorignore`
     and the like in the folder, `.aiderignore` at the top of the Git working tree) and

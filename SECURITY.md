@@ -120,7 +120,12 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     `~/.ssh`, never over the vault's files. Shell lines quote every value in `'…'`,
     so sourcing the file runs nothing a value holds. When the file would be inside a
     Git working tree that doesn't ignore it (`git check-ignore`; without `git`, any
-    working tree counts), nothing is written until you confirm in the app.
+    working tree counts), nothing is written until you confirm in the app. A note,
+    or an environment's name, that the app writes as a `#` comment line (in an
+    export, or the first line a virtual file answers) stays on that one line:
+    control characters and U+2028 and U+2029, which some readers end a line at
+    (Node's `dotenv`, so Vite and Next.js, and YAML 1.1), become spaces, so the rest
+    of a comment is never read as a variable.
   - **Managed `.env` files.** A `local` environment can be written to files in the
     folders of the projects that hold it; a `remote` one never is. The interface names
     a file only as a project folder and a path in it. The app takes plain names ending
@@ -130,12 +135,25 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     anything in `~/.ssh` or over the vault's files. A binding is checked again each
     time it is used, so one that arrives from another computer or an edited database
     is held to the same rules. A file is written by renaming a new private file over
-    it (mode 0600, or the private access list on Windows; the temporary file is named
-    `<file>.sshkm-….tmp`, so `.env*` ignore rules cover it, and one a crash leaves is
-    removed on the next round), so a link put in its place is replaced, never written
-    through; a file that isn't there is only ever created, never written over. It is
-    read without following links, as a regular file only, and written only if its
-    folder is still the one it was found in. A missing folder is never created.
+    it (mode 0600, or the private access list on Windows), so a link put in its place
+    is replaced, never written through; a file that isn't there is only ever created,
+    never written over. It is read without following links, as a regular file only.
+    Its folder is opened once and checked as it was opened: still the folder the file
+    was found in, and inside the project folder (by file identity, walking up from the
+    folder that was opened). The file is then read, written, made a pipe or deleted
+    through that open folder, so a folder swapped meanwhile for a link or for another
+    folder gets nothing; a level-2 file or a pipe removed later is looked at and
+    removed through its folder held open in the same way, and only if it is still the
+    file or pipe the app listed. On Windows the folder is held open, so it can't be
+    renamed or deleted while the file is written, and checked by the path Windows
+    gives for the folder held; the file is then written by its path. The temporary
+    file of a write is named `<file>.sshkm-….tmp`: ignore rules like `.env*` cover it,
+    an exact `.env` rule doesn't. It is there only while the file is written, and is
+    listed before it is made, so one a crash leaves is removed by the guard (below),
+    or else by the next start or the next round. A missing folder is never created.
+    A file is bound at the interface's request, without a system dialog: any
+    environment of a project, a remote one too (at level 2 or 3), to a `.env` path in
+    that project's folders; any warning about it comes from the interface.
   - Managed files and the vault are kept in step both ways. Per file, each computer
     keeps a keyed hash of the variables both last agreed on (`env-files.json` in the
     app's data folder; the key is in the vault, so the hashes say nothing without it).
@@ -156,6 +174,58 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     an environment's own files. Whether Git ignores or has committed a file is asked of `git` with
     `core.fsmonitor` off, so a repository's own settings can't make it run a program;
     a line goes into `.gitignore` only when you ask.
+  - An edit of a managed file goes to the vault, whoever made it: any program that can
+    write in the folder (a build tool, an AI agent) changes what the vault holds, and,
+    through a shared value, the files of every environment that uses it, in any
+    project. Undo and the entry's history keep what it was.
+  - **Files only while the vault is unlocked** (level 2) are written when the vault
+    unlocks, and again whenever one is missing while it is unlocked. Before the vault
+    locks, when the app quits and before an update is installed, one last round takes
+    their edits to the vault and they are removed; one the vault couldn't take (both
+    sides changed, lines it can't read), or one changed after that round, stays until
+    the next unlock, and the app says so. Each is kept out of Time Machine, Dropbox
+    and the File Provider folders (iCloud Drive, and OneDrive and Dropbox in
+    `~/Library/CloudStorage`) by attributes set before it holds anything; on Linux
+    only Dropbox's attribute, on Windows Dropbox's stream, set before the file takes
+    its place. Limits: a file is removed by unlinking it, not overwritten first, so
+    its contents can stay in free blocks of the disk; snapshots of the whole volume
+    (the local APFS snapshots Time Machine takes, Btrfs or ZFS snapshots) and backup
+    tools that don't read those attributes can keep a copy; and the files aren't
+    removed before the computer sleeps, only when the vault locks (with locking after
+    sleep on, as the computer wakes). The app keeps a list of them in
+    `env-files-unlocked.json` in its data folder (each file's path, identity, size
+    and time of change; no value, nor a hash of one), and lists each write before it
+    makes it.
+  - **Virtual files** (level 3, macOS and Linux) leave nothing on disk: in place of
+    the file, a named pipe (mode 0600) the app answers while it runs, with the
+    variables while the vault is unlocked and otherwise a comment saying why. Any
+    program running as you can open the pipe and read the values while the vault is
+    unlocked: a pipe doesn't say who reads it, and the app checks only that the pipe
+    is its own (by its identity), never who the reader is. When the vault locks, an
+    answer left unread in the pipe is taken out at once, and no more of one is
+    written. A file saved over the pipe is taken like any edit, and the pipe comes
+    back. The pipes go when the app quits, after the readers waiting are told that it
+    isn't running; the list of them, `env-files-virtual.json`, holds where and which
+    they are, no values.
+  - **The guard.** While there are level-2 or virtual files, the app runs its own
+    program a second time as a guard (on macOS and Linux in a process group of its
+    own), given only the paths of those two lists, waiting on a pipe from the app.
+    When the app goes without putting them away (it crashed, or was killed or forced
+    to quit), the guard removes the listed level-2 files still as the app left them
+    and the temporary files next to them, tells the readers waiting on the listed
+    pipes that the app isn't running, removes the pipes that are still the app's, and
+    exits. A file changed since stays. If there is no guard (it went too, in a power
+    cut or with the whole session, or the app went during the round that would have
+    started it), the app's next start does the same.
+  - **AI tools' rules.** When you say so for a project folder, the app adds a line
+    naming each of its managed files to the AI tools' ignore files (`.cursorignore`
+    and the like in the folder, `.aiderignore` at the top of the Git working tree) and
+    a deny rule naming it by full path to Claude Code's `~/.claude/settings.json`, and
+    does so for files bound there later. They are added at the interface's request,
+    without a system dialog; they only ever name the folder's managed files, and
+    nothing else in those files changes. They are requests the tools honour, not
+    access control: a tool that doesn't read them, or a command it runs, can still
+    read the files.
   - **Run in terminal** starts your own shell (`$SHELL` as a login shell, or
     `%ComSpec%` on Windows) in the in-app terminal with the variables added to its
     environment. Nothing is written to disk, but the shell and everything it starts

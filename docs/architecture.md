@@ -162,13 +162,19 @@ translates.
   another computer) and after a bound file changes: it watches the folders of the
   bound files for their names, so editors that save by renaming are seen. A round
   saves the files' edits to the vault first, then writes files, and tells the UI with
-  `env-files-changed`. The revisions are kept in `env-files.json`.
+  `env-files-changed`. The revisions are kept in `env-files.json`. A file is read,
+  written, made a pipe or removed through its folder, opened once and checked as it
+  was opened (`vault/envs/files/folder.rs`: `openat`/`renameat` relative to that
+  folder on macOS and Linux; on Windows the folder is held open, not to be renamed
+  or deleted, and checked by its handle's path).
   - A file kept only while the vault is unlocked (level 2) is written by the round
     after an unlock and removed before the vault locks (`VaultHooks::before_lock`
     runs one last round first) and when the app quits. Each round lists those files,
     as they are on disk (identity, size, time; no values), in
-    `env-files-unlocked.json`; a file still as listed is removed, one edited since
-    stays until the next unlock. A crash or a forced quit is caught by the guard
+    `env-files-unlocked.json`, and lists each write there before it makes it (the
+    file's temporary files, and a level-2 file as it will be); a file still as listed
+    is removed, one edited since stays until the next unlock. A crash or a forced
+    quit is caught by the guard
     (`src-tauri/src/env_guard.rs`): the app's own executable run with
     `--sshkm-env-guard`, which sweeps the list when the pipe from the app closes; the
     next start sweeps it too. Level-2 files get the Time Machine, Dropbox and File

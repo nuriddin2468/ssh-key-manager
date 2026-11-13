@@ -1100,15 +1100,16 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   settings) and without entries or groups marked `sshkm.local`. The receiver opens it
   only with its own secret and only if its root is this vault's: two vaults are never
   merged. The copy is written without compression, and the receiver refuses one that
-  is compressed and checks its XML, decrypted, before parsing it (at most 96 levels and
-  8,388,608 elements, no document type, no attachment stored compressed), so reading a
-  copy never inflates or recurses beyond bounds. It refuses a copy over 256 MiB, with key
-  derivation settings out of bounds,
-  more than 65,536 entries, 8,192 groups, 64 levels or 262,144 removal records, or an
-  entry with a group's id; leaves out an id that is an entry on one side and a group on
-  the other; takes at most 64 earlier versions of an entry; counts a
-  time more than five minutes ahead of its clock as now; and never reads the copy's
-  custom data. Changes are found against a snapshot of keyed HMACs per field, never
+  is compressed, decrypts it itself and checks it before the KeePass library parses
+  anything: at most 65,536 attachments, its XML at most 96 levels and 8,388,608
+  elements, no document type, no attachment stored compressed, and a list of local
+  items no longer than any copy needs. So reading a copy never inflates, allocates or
+  recurses beyond bounds. It refuses a copy over 256 MiB, with key derivation settings
+  out of bounds, more than 65,536 entries, 8,192 groups, 64 levels or 262,144 removal
+  records, or an entry with a group's id; leaves out an id that is an entry on one side
+  and a group on the other; takes at most 64 earlier versions of an entry; counts a time
+  more than five minutes ahead of its clock as now; and never reads the copy's custom
+  data. Changes are found against a snapshot of keyed HMACs per field, never
   values, as for hosts. An entry or group only one side changed takes that side's
   fields; one both changed differently, or one deleted and the other changed, is the
   user's choice, which shows the names of the fields that differ. A text field's two
@@ -1137,8 +1138,9 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   `.env` file comes with its environment's kind and level as one value, so a sync
   never lowers its protection: a level-3 file on a system without pipes, or a level-1
   file of a remote environment, is never written. What a computer keeps to itself
-  (`sshkm.local`) goes in its copy as UUIDs only, so the other side never takes it for
-  deleted, and here it blocks the deletion of its group and of a shared value it uses.
+  (`sshkm.local`) goes in its copy as UUIDs only, without the custom icons only it
+  uses, so the other side never takes it for deleted; one a copy carries all the same
+  is left out. Here it blocks the deletion of its group and of a shared value it uses.
   After a merge, removal records stay within what a copy may carry, and entries and
   groups within the limits. Contacts sync as records, the one changed last winning; a
   removed one stays as a tombstone.

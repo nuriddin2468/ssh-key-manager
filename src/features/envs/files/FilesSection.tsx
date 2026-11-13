@@ -556,7 +556,7 @@ function AgentPrompt({ project, folder, onChoose }: AgentPromptProps) {
   return (
     <div
       role="note"
-      data-section="agent"
+      data-hue="agent"
       className="flex flex-col gap-2 rounded-xl border border-[rgb(var(--accent-rgb)/0.25)] bg-[rgb(var(--accent-rgb)/0.07)] px-3 py-2.5"
     >
       <p className="flex items-start gap-2 text-[12.5px] leading-[18px] text-fg-2">

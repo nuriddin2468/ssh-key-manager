@@ -23,7 +23,7 @@ export function Chip({ label, count, pressed, onClick }: ChipProps) {
     >
       {label}
       {count !== undefined ? (
-        <span className={cn('tabular-nums', pressed ? 'text-[var(--accent-1)]' : 'text-subtle')}>
+        <span className={cn('tabular-nums', pressed ? 'text-[var(--accent-fg)]' : 'text-subtle')}>
           {count}
         </span>
       ) : null}

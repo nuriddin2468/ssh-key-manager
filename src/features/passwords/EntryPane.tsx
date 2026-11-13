@@ -546,7 +546,7 @@ function LinkChip({ tone, icon, children, className, ...rest }: LinkChipProps) {
       type="button"
       {...rest}
       // Hosts' colour or keys', from their sections.
-      data-section={tone === 'blue' ? 'hosts' : 'keys'}
+      data-hue={tone === 'blue' ? 'hosts' : 'keys'}
       className={cn(
         'pressable inline-flex h-[24px] max-w-full items-center gap-1.5 rounded-md border px-2 font-mono text-[12px]',
         'border-[rgb(var(--accent-rgb)/0.3)] bg-[rgb(var(--accent-rgb)/0.12)] text-[var(--accent-text)] hover:bg-[rgb(var(--accent-rgb)/0.2)] data-[state=open]:bg-[rgb(var(--accent-rgb)/0.2)]',

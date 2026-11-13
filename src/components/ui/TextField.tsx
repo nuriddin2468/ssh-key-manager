@@ -39,7 +39,7 @@ export function TextField({
       </label>
       <div
         className={cn(
-          'field flex h-9 items-center overflow-hidden rounded-[10px] transition-colors focus-within:border-[rgb(var(--accent-rgb)/0.55)] focus-within:shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.15)]',
+          'field flex h-9 items-center overflow-hidden rounded-[10px] transition-colors focus-within:border-[rgb(var(--accent-rgb)/var(--edge-alpha))] focus-within:shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.15)]',
           error && 'border-critical-solid/60',
         )}
       >

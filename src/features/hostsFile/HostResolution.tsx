@@ -57,7 +57,7 @@ export function HostResolution({ form }: { form: HostForm }) {
     <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 rounded-xl border border-line bg-fill-subtle px-3 py-2">
       <Network
         aria-hidden="true"
-        data-section="hostsFile"
+        data-hue="hostsFile"
         className="size-4 shrink-0 text-[var(--accent-fg)]"
         strokeWidth={1.9}
       />

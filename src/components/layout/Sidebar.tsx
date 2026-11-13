@@ -162,7 +162,7 @@ export function Sidebar() {
                 aria-label={t('projects.newProject')}
                 title={t('projects.newProject')}
                 onClick={() => setCreating(true)}
-                className="pressable grid size-5 place-items-center rounded-md bg-ink/[0.05] text-muted outline-none hover:bg-ink/10 hover:text-fg focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]"
+                className="pressable grid size-5 place-items-center rounded-md bg-ink/[0.05] text-muted outline-none hover:bg-ink/10 hover:text-fg focus-visible:ring-2 focus-visible:ring-[rgb(var(--focus-rgb)/var(--ring-alpha))]"
               >
                 <Plus className="size-3" strokeWidth={2.4} />
               </button>
@@ -352,7 +352,7 @@ function NavGroup({
             aria-expanded={!folded}
             aria-controls={listId}
             onClick={onFold}
-            className="-ml-1 flex items-center gap-1 rounded-md px-1 text-[11px] font-semibold text-label outline-none hover:text-fg-2 focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]"
+            className="-ml-1 flex items-center gap-1 rounded-md px-1 text-[11px] font-semibold text-label outline-none hover:text-fg-2 focus-visible:ring-2 focus-visible:ring-[rgb(var(--focus-rgb)/var(--ring-alpha))]"
           >
             {label}
             <ChevronDown
@@ -408,7 +408,7 @@ function NavItem({
       aria-current={active ? 'page' : undefined}
       onClick={onClick}
       className={cn(
-        'pressable-soft flex h-8 shrink-0 items-center gap-[9px] rounded-lg px-2 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]',
+        'pressable-soft flex h-8 shrink-0 items-center gap-[9px] rounded-lg px-2 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--focus-rgb)/var(--ring-alpha))]',
         active ? 'bg-nav-current-bg text-nav-current shadow-nav' : 'text-nav hover:bg-ink/[0.05]',
         className,
       )}

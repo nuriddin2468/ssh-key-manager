@@ -110,7 +110,7 @@ interface OtherOptionsProps {
 }
 
 const INPUT =
-  'field h-[34px] rounded-[10px] px-[11px] font-mono text-[12.5px] outline-none focus:border-[rgb(var(--accent-rgb)/0.55)]';
+  'field h-[34px] rounded-[10px] px-[11px] font-mono text-[12.5px] outline-none focus:border-[rgb(var(--accent-rgb)/var(--edge-alpha))]';
 
 /** Any ssh_config option without its own control, as name/value rows. */
 export function OtherOptions({ rows, onChange }: OtherOptionsProps) {

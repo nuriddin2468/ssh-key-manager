@@ -243,7 +243,7 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
           ) : null}
           {hasPrivate(key) && !key.inAgent ? (
             <Button
-              data-section="agent"
+              data-hue="agent"
               className="border border-[rgb(var(--accent-rgb)/0.35)] bg-[rgb(var(--accent-rgb)/0.12)] text-[var(--accent-text)] hover:bg-[rgb(var(--accent-rgb)/0.2)]"
               variant="ghost"
               icon={<Cpu className="size-[15px]" strokeWidth={1.75} />}
@@ -470,7 +470,7 @@ function UsedByChip({
     <button
       type="button"
       onClick={host ? undefined : onOpenHosts}
-      data-section="hosts"
+      data-hue="hosts"
       className="inline-flex h-[22px] items-center rounded-md border px-2 font-mono text-[11.5px] border-[rgb(var(--accent-rgb)/0.3)] bg-[rgb(var(--accent-rgb)/0.12)] text-[var(--accent-text)] hover:bg-[rgb(var(--accent-rgb)/0.2)] data-[state=open]:bg-[rgb(var(--accent-rgb)/0.2)]"
     >
       {label}

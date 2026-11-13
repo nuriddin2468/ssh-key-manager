@@ -399,7 +399,7 @@ function Row({
             onClick={open.onOpen}
             className={cn(
               text,
-              '-my-0.5 block max-w-full rounded py-0.5 text-left decoration-ink/40 underline-offset-[3px] outline-none hover:underline focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]',
+              '-my-0.5 block max-w-full rounded py-0.5 text-left decoration-ink/40 underline-offset-[3px] outline-none hover:underline focus-visible:ring-2 focus-visible:ring-[rgb(var(--focus-rgb)/var(--ring-alpha))]',
             )}
           >
             {title}
@@ -515,7 +515,7 @@ function useHostsCard(
   return {
     id: 'hosts',
     icon: (
-      <Server data-section="hosts" className="size-3.5 text-[var(--accent-fg)]" strokeWidth={2.2} />
+      <Server data-hue="hosts" className="size-3.5 text-[var(--accent-fg)]" strokeWidth={2.2} />
     ),
     title: t('projects.cards.hosts'),
     count: hosts.length,
@@ -670,7 +670,7 @@ function useHostsFileCard(
     id: 'hostsFile',
     icon: (
       <Network
-        data-section="hostsFile"
+        data-hue="hostsFile"
         className="size-3.5 text-[var(--accent-fg)]"
         strokeWidth={2.2}
       />
@@ -963,7 +963,7 @@ function useFoldersCard(
     id: 'folders',
     icon: (
       <FolderOpen
-        data-section="terminal"
+        data-hue="terminal"
         className="size-3.5 text-[var(--accent-fg)]"
         strokeWidth={2.2}
       />
@@ -1067,7 +1067,7 @@ function StageChip({ env, label, back }: { env: EnvSummary; label: string; back:
       aria-label={open}
       onClick={() => navigate({ page: 'envs', envId: env.id, back })}
       className={cn(
-        'pressable inline-flex h-[22px] min-w-12 max-w-[140px] shrink-0 items-center justify-center rounded-full px-2 font-mono text-[11.5px] outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]',
+        'pressable inline-flex h-[22px] min-w-12 max-w-[140px] shrink-0 items-center justify-center rounded-full px-2 font-mono text-[11.5px] outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--focus-rgb)/var(--ring-alpha))]',
         isProduction(env.name)
           ? 'bg-production/18 text-production-text hover:bg-production/28'
           : 'bg-fill text-fg-2 hover:bg-fill-pressed',
@@ -1256,11 +1256,7 @@ function useEnvironmentsCard(
   return {
     id: 'environments',
     icon: (
-      <Variable
-        data-section="envs"
-        className="size-3.5 text-[var(--accent-fg)]"
-        strokeWidth={2.2}
-      />
+      <Variable data-hue="envs" className="size-3.5 text-[var(--accent-fg)]" strokeWidth={2.2} />
     ),
     title: t('projects.cards.environments'),
     count: ids.length,
@@ -1296,7 +1292,7 @@ function useLoginsCard(
     id: 'logins',
     icon: (
       <RectangleEllipsis
-        data-section="passwords"
+        data-hue="passwords"
         className="size-3.5 text-[var(--accent-fg)]"
         strokeWidth={2.2}
       />
@@ -1361,11 +1357,7 @@ function useKeysCard(
   return {
     id: 'keys',
     icon: (
-      <KeyRound
-        data-section="keys"
-        className="size-3.5 text-[var(--accent-fg)]"
-        strokeWidth={2.2}
-      />
+      <KeyRound data-hue="keys" className="size-3.5 text-[var(--accent-fg)]" strokeWidth={2.2} />
     ),
     title: t('projects.cards.keys'),
     count: keys.length,
@@ -1447,7 +1439,7 @@ function useTunnelsCard(hosts: string[]): CardSpec | null {
     id: 'tunnels',
     icon: (
       <ArrowLeftRight
-        data-section="tools"
+        data-hue="tools"
         className="size-3.5 text-[var(--accent-fg)]"
         strokeWidth={2.2}
       />
@@ -1518,7 +1510,7 @@ function useFindingsCard(members: Members, library: Library): CardSpec | null {
     id: 'findings',
     icon: (
       <ShieldCheck
-        data-section="audit"
+        data-hue="audit"
         className="size-3.5 text-[var(--accent-fg)]"
         strokeWidth={2.2}
       />

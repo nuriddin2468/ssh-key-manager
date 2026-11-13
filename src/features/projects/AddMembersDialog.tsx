@@ -228,7 +228,7 @@ export function AddMembersDialog({
                 key={item.kind}
                 value={item.kind}
                 className={cn(
-                  'pressable inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12.5px] outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]',
+                  'pressable inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12.5px] outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--focus-rgb)/var(--ring-alpha))]',
                   'border-line-strong bg-ink/[0.04] text-fg-2 hover:bg-ink/[0.08]',
                   'data-[state=checked]:border-[rgb(var(--accent-rgb)/0.5)] data-[state=checked]:bg-[rgb(var(--accent-rgb)/0.14)] data-[state=checked]:text-[var(--accent-text)]',
                 )}

@@ -361,10 +361,7 @@ function EntryRow({ entry, selected, onSelect }: EntryRowProps) {
   const mark = avatar(entry.title);
   const link =
     entry.kind === 'host' && entry.host ? (
-      <span
-        data-section="hosts"
-        className="truncate font-mono text-[12px] text-[var(--accent-text)]"
-      >
+      <span data-hue="hosts" className="truncate font-mono text-[12px] text-[var(--accent-text)]">
         {entry.host}
       </span>
     ) : entry.kind === 'key' && entry.keyFingerprint ? (

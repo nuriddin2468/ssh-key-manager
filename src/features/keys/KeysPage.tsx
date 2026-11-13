@@ -262,7 +262,7 @@ function KeyRow({ keyView: key, selected, attention, onSelect }: KeyRowProps) {
           <>
             <Cpu
               role="img"
-              data-section="agent"
+              data-hue="agent"
               aria-label={key.inAgent ? t('keys.statusUnlocked') : t('keys.statusLocked')}
               className={cn(
                 'size-4',

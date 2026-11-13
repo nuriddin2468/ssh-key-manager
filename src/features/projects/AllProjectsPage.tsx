@@ -333,7 +333,7 @@ function HealthStrip() {
           type="button"
           aria-label={t('projects.openAudit')}
           onClick={() => navigate({ page: 'audit' })}
-          className="rounded text-fg-2 decoration-ink/40 underline-offset-[3px] outline-none hover:underline focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]"
+          className="rounded text-fg-2 decoration-ink/40 underline-offset-[3px] outline-none hover:underline focus-visible:ring-2 focus-visible:ring-[rgb(var(--focus-rgb)/var(--ring-alpha))]"
         >
           {t('nav.audit')}
         </button>
@@ -559,7 +559,7 @@ function ProjectCard({
               type="button"
               aria-label={t('projects.home.open', { name })}
               onClick={open}
-              className="block max-w-full truncate rounded text-left outline-none after:absolute after:inset-0 after:rounded-2xl after:content-[''] focus-visible:after:ring-2 focus-visible:after:ring-[rgb(var(--accent-rgb)/0.6)]"
+              className="block max-w-full truncate rounded text-left outline-none after:absolute after:inset-0 after:rounded-2xl after:content-[''] focus-visible:after:ring-2 focus-visible:after:ring-[rgb(var(--focus-rgb)/var(--ring-alpha))]"
             >
               {name}
             </button>

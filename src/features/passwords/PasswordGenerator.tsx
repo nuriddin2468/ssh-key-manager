@@ -266,7 +266,7 @@ function NumberSlider({ label, value, min, max, sliderMax = max, onChange }: Num
             if (event.target.value !== '' && next >= min && next <= max) onChange(Math.round(next));
           }}
           onBlur={() => onChange(clamp(Number(text), min, max))}
-          className="field h-7 w-14 rounded-md px-2 text-right font-mono text-[12.5px] tabular-nums outline-none focus:border-[rgb(var(--accent-rgb)/0.55)]"
+          className="field h-7 w-14 rounded-md px-2 text-right font-mono text-[12.5px] tabular-nums outline-none focus:border-[rgb(var(--accent-rgb)/var(--edge-alpha))]"
         />
       </div>
       <input

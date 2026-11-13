@@ -99,7 +99,7 @@ export function AuthorizedLinePanel() {
             aria-invalid={keyError ? true : undefined}
             aria-describedby={keyError ? `${keyId}-error` : undefined}
             className={cn(
-              'field resize-none rounded-[10px] px-[11px] py-2 font-mono text-[12px] leading-[18px] break-all text-fg outline-none focus:border-[rgb(var(--accent-rgb)/0.55)] focus:shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.15)]',
+              'field resize-none rounded-[10px] px-[11px] py-2 font-mono text-[12px] leading-[18px] break-all text-fg outline-none focus:border-[rgb(var(--accent-rgb)/var(--edge-alpha))] focus:shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.15)]',
               keyError && 'border-critical-solid/60',
             )}
           />

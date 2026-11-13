@@ -22,7 +22,7 @@ export function SearchField({
   return (
     <label
       className={cn(
-        'flex h-[30px] min-w-[150px] items-center gap-[7px] rounded-lg border border-line bg-fill px-2.5 text-subtle focus-within:border-[rgb(var(--accent-rgb)/0.5)]',
+        'flex h-[30px] min-w-[150px] items-center gap-[7px] rounded-lg border border-line bg-fill px-2.5 text-subtle focus-within:border-[rgb(var(--accent-rgb)/var(--ring-alpha-soft))]',
         className,
       )}
     >

@@ -179,7 +179,7 @@ export function SecretGenerator() {
                     aria-label={`${text.title}. ${text.hint}`}
                     className={cn(
                       'pressable-soft flex items-center gap-2.5 rounded-xl px-2 py-1.5 text-left outline-none',
-                      'focus-visible:shadow-[0_0_0_2px_rgb(var(--accent-rgb)/0.55)]',
+                      'focus-visible:shadow-[0_0_0_2px_rgb(var(--focus-rgb)/var(--edge-alpha))]',
                       id === preset ? 'selected-row' : 'hover:bg-ink/[0.05]',
                     )}
                   >

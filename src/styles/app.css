@@ -267,6 +267,14 @@
   /* The focus ring and text selection, in the page's accent. */
   --focus-alpha: 0.9;
   --selection-alpha: 0.35;
+  /*
+   * Components' own focus cues, with the page's colour: rings
+   * (`ring-[rgb(var(--focus-rgb)/var(--ring-alpha))]`) and a focused field's
+   * edge (`/var(--edge-alpha)`). Solid in the light theme, 3:1 or more.
+   */
+  --ring-alpha: 0.6;
+  --ring-alpha-soft: 0.5;
+  --edge-alpha: 0.55;
   color-scheme: dark;
 }
 
@@ -367,6 +375,9 @@
   --count-to: #be123c;
   --focus-alpha: 1;
   --selection-alpha: 0.24;
+  --ring-alpha: 1;
+  --ring-alpha-soft: 1;
+  --edge-alpha: 1;
 }
 
 /*
@@ -381,13 +392,18 @@
  *   --glow-a, --glow-b      the page's background light
  *
  * The light theme keeps the gradients and darkens the rest.
+ *
+ * To show something in another section's colour (a violet agent chip on the
+ * Keys page), give it data-hue="agent" and use the variables above: its
+ * accents change, its focus ring stays the page's.
  */
 :root,
 [data-section="overview"],
 [data-section="projects"],
 [data-section="project"],
 [data-section="personal"],
-[data-section="suggestions"] {
+[data-section="suggestions"],
+[data-hue="suggestions"] {
   --accent-1: #5eead4;
   --accent-2: #a78bfa;
   --accent-ink: #06201e;
@@ -396,7 +412,8 @@
   --glow-a: rgb(20 184 166 / 0.22);
   --glow-b: rgb(124 58 237 / 0.2);
 }
-[data-section="keys"] {
+[data-section="keys"],
+[data-hue="keys"] {
   --accent-1: #5eead4;
   --accent-2: #14b8a6;
   --accent-ink: #06201e;
@@ -405,7 +422,8 @@
   --glow-a: rgb(20 184 166 / 0.22);
   --glow-b: rgb(124 58 237 / 0.1);
 }
-[data-section="hosts"] {
+[data-section="hosts"],
+[data-hue="hosts"] {
   --accent-1: #93c5fd;
   --accent-2: #3b82f6;
   --accent-ink: #071833;
@@ -414,7 +432,8 @@
   --glow-a: rgb(37 99 235 / 0.26);
   --glow-b: rgb(20 184 166 / 0.1);
 }
-[data-section="agent"] {
+[data-section="agent"],
+[data-hue="agent"] {
   --accent-1: #c4b5fd;
   --accent-2: #8b5cf6;
   --accent-ink: #1e0b47;
@@ -423,7 +442,8 @@
   --glow-a: rgb(124 58 237 / 0.28);
   --glow-b: rgb(37 99 235 / 0.1);
 }
-[data-section="known"] {
+[data-section="known"],
+[data-hue="known"] {
   --accent-1: #fde68a;
   --accent-2: #f59e0b;
   --accent-ink: #3a2203;
@@ -432,7 +452,8 @@
   --glow-a: rgb(217 119 6 / 0.22);
   --glow-b: rgb(37 99 235 / 0.1);
 }
-[data-section="hostsFile"] {
+[data-section="hostsFile"],
+[data-hue="hostsFile"] {
   --accent-1: #a5b4fc;
   --accent-2: #6366f1;
   --accent-ink: #110f3d;
@@ -441,7 +462,8 @@
   --glow-a: rgb(79 70 229 / 0.24);
   --glow-b: rgb(20 184 166 / 0.08);
 }
-[data-section="audit"] {
+[data-section="audit"],
+[data-hue="audit"] {
   --accent-1: #fda4af;
   --accent-2: #f43f5e;
   --accent-ink: #3b0712;
@@ -450,7 +472,8 @@
   --glow-a: rgb(225 29 72 / 0.22);
   --glow-b: rgb(124 58 237 / 0.1);
 }
-[data-section="passwords"] {
+[data-section="passwords"],
+[data-hue="passwords"] {
   --accent-1: #f9a8d4;
   --accent-2: #ec4899;
   --accent-ink: #3f0a24;
@@ -459,7 +482,8 @@
   --glow-a: rgb(219 39 119 / 0.22);
   --glow-b: rgb(124 58 237 / 0.08);
 }
-[data-section="envs"] {
+[data-section="envs"],
+[data-hue="envs"] {
   --accent-1: #d9f99d;
   --accent-2: #84cc16;
   --accent-ink: #1a2e05;
@@ -468,7 +492,8 @@
   --glow-a: rgb(101 163 13 / 0.22);
   --glow-b: rgb(37 99 235 / 0.08);
 }
-[data-section="terminal"] {
+[data-section="terminal"],
+[data-hue="terminal"] {
   --accent-1: #86efac;
   --accent-2: #22c55e;
   --accent-ink: #052e16;
@@ -477,7 +502,8 @@
   --glow-a: rgb(22 163 74 / 0.22);
   --glow-b: rgb(37 99 235 / 0.08);
 }
-[data-section="nearby"] {
+[data-section="nearby"],
+[data-hue="nearby"] {
   --accent-1: #fdba74;
   --accent-2: #f97316;
   --accent-ink: #3a1503;
@@ -486,7 +512,8 @@
   --glow-a: rgb(234 88 12 / 0.22);
   --glow-b: rgb(124 58 237 / 0.08);
 }
-[data-section="tools"] {
+[data-section="tools"],
+[data-hue="tools"] {
   --accent-1: #67e8f9;
   --accent-2: #06b6d4;
   --accent-ink: #042f37;
@@ -495,7 +522,8 @@
   --glow-a: rgb(8 145 178 / 0.22);
   --glow-b: rgb(124 58 237 / 0.08);
 }
-[data-section="settings"] {
+[data-section="settings"],
+[data-hue="settings"] {
   --accent-1: #cbd5e1;
   --accent-2: #64748b;
   --accent-ink: #0b1220;
@@ -531,9 +559,17 @@
 [data-section="hosts"] {
   --glow-strong: rgb(37 99 235 / 0.32);
 }
-/* Set where the section is, so it resolves to that section's colours. */
+/*
+ * Set where the section is, so it resolves to that section's colours. The
+ * focus ring keeps the page's colour (--focus-rgb), also inside an element
+ * that borrows another section's colours with data-hue.
+ */
 :root,
 [data-section] {
+  --accent-fg: var(--accent-1);
+  --focus-rgb: var(--accent-rgb);
+}
+[data-hue] {
   --accent-fg: var(--accent-1);
 }
 
@@ -557,82 +593,83 @@
   --glow-a: rgb(20 184 166 / 0.12);
   --glow-b: rgb(124 58 237 / 0.08);
 }
-[data-theme="light"] [data-section="keys"] {
+[data-theme="light"] :is([data-section="keys"], [data-hue="keys"]) {
   --accent-text: #115e59;
   --accent-rgb: 13 148 136;
   --glow-a: rgb(20 184 166 / 0.12);
   --glow-b: rgb(124 58 237 / 0.05);
 }
-[data-theme="light"] [data-section="hosts"] {
+[data-theme="light"] :is([data-section="hosts"], [data-hue="hosts"]) {
   --accent-text: #1d4ed8;
   --accent-rgb: 37 99 235;
   --glow-a: rgb(37 99 235 / 0.12);
   --glow-b: rgb(20 184 166 / 0.06);
 }
-[data-theme="light"] [data-section="agent"] {
+[data-theme="light"] :is([data-section="agent"], [data-hue="agent"]) {
   --accent-text: #6d28d9;
   --accent-rgb: 124 58 237;
   --glow-a: rgb(124 58 237 / 0.12);
   --glow-b: rgb(37 99 235 / 0.06);
 }
-[data-theme="light"] [data-section="known"] {
+[data-theme="light"] :is([data-section="known"], [data-hue="known"]) {
   --accent-1: #fcd34d;
   --accent-text: #92400e;
   --accent-rgb: 180 83 9;
   --glow-a: rgb(217 119 6 / 0.12);
   --glow-b: rgb(37 99 235 / 0.05);
 }
-[data-theme="light"] [data-section="hostsFile"] {
+[data-theme="light"] :is([data-section="hostsFile"], [data-hue="hostsFile"]) {
   --accent-text: #4338ca;
   --accent-rgb: 79 70 229;
   --glow-a: rgb(79 70 229 / 0.12);
   --glow-b: rgb(20 184 166 / 0.05);
 }
-[data-theme="light"] [data-section="audit"] {
+[data-theme="light"] :is([data-section="audit"], [data-hue="audit"]) {
   --accent-text: #be123c;
   --accent-rgb: 225 29 72;
   --glow-a: rgb(225 29 72 / 0.1);
   --glow-b: rgb(124 58 237 / 0.05);
 }
-[data-theme="light"] [data-section="passwords"] {
+[data-theme="light"] :is([data-section="passwords"], [data-hue="passwords"]) {
   --accent-text: #be185d;
   --accent-rgb: 219 39 119;
   --glow-a: rgb(219 39 119 / 0.1);
   --glow-b: rgb(124 58 237 / 0.05);
 }
-[data-theme="light"] [data-section="envs"] {
+[data-theme="light"] :is([data-section="envs"], [data-hue="envs"]) {
   --accent-1: #bef264;
   --accent-text: #3f6212;
   --accent-rgb: 77 124 15;
   --glow-a: rgb(101 163 13 / 0.12);
   --glow-b: rgb(37 99 235 / 0.05);
 }
-[data-theme="light"] [data-section="terminal"] {
+[data-theme="light"] :is([data-section="terminal"], [data-hue="terminal"]) {
   --accent-text: #166534;
   --accent-rgb: 21 128 61;
   --glow-a: rgb(22 163 74 / 0.12);
   --glow-b: rgb(37 99 235 / 0.05);
 }
-[data-theme="light"] [data-section="nearby"] {
+[data-theme="light"] :is([data-section="nearby"], [data-hue="nearby"]) {
   --accent-text: #9a3412;
   --accent-rgb: 234 88 12;
   --glow-a: rgb(234 88 12 / 0.1);
   --glow-b: rgb(124 58 237 / 0.05);
 }
-[data-theme="light"] [data-section="tools"] {
+[data-theme="light"] :is([data-section="tools"], [data-hue="tools"]) {
   --accent-text: #155e75;
   --accent-rgb: 8 145 178;
   --glow-a: rgb(8 145 178 / 0.12);
   --glow-b: rgb(124 58 237 / 0.05);
 }
-[data-theme="light"] [data-section="settings"] {
+[data-theme="light"] :is([data-section="settings"], [data-hue="settings"]) {
   --accent-text: #334155;
   --accent-rgb: 100 116 139;
   --glow-a: rgb(100 116 139 / 0.12);
   --glow-b: rgb(37 99 235 / 0.05);
 }
 :root[data-theme="light"],
-[data-theme="light"] [data-section] {
+[data-theme="light"] [data-section],
+[data-theme="light"] [data-hue] {
   --accent-fg: var(--accent-text);
 }
 [data-theme="light"] [data-section="agent"] {
@@ -696,12 +733,17 @@
   box-shadow: var(--elevation-raised);
 }
 @utility field {
+  --field-edge: var(--color-line-field);
   background: var(--color-field);
-  border: 1px solid var(--color-line-field);
-  /* Text fields and selects, not buttons: their edge is what shows them. */
+  border: 1px solid var(--field-edge);
+  /*
+   * Text fields and selects, not buttons: their edge is what shows them. Only
+   * the variable changes, so focus and error borders (`focus-within:border-…`,
+   * `border-critical-solid/60`) still win as they did.
+   */
   &:is(input, textarea, [role="combobox"]),
   &:has(input:not([type="checkbox"], [type="radio"], [type="hidden"]), textarea) {
-    border-color: var(--color-line-input);
+    --field-edge: var(--color-line-input);
   }
 }
 @utility dialog-surface {
@@ -829,7 +871,7 @@
     cursor: default;
   }
   :focus-visible {
-    outline: 2px solid rgb(var(--accent-rgb) / var(--focus-alpha));
+    outline: 2px solid rgb(var(--focus-rgb) / var(--focus-alpha));
     outline-offset: 2px;
   }
   ::selection {

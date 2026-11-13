@@ -677,7 +677,7 @@ function VariableRow({
           {variable.shared ? (
             <span
               title={t('envs.shared.badge', { count: users })}
-              data-section="tools"
+              data-hue="tools"
               className="shrink-0 text-[var(--accent-fg)]"
             >
               <Link2 aria-hidden="true" className="size-3.5" strokeWidth={2} />

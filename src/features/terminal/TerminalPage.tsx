@@ -314,7 +314,7 @@ function EmptySessions({
             <Laptop aria-hidden="true" className="size-4 shrink-0 text-subtle" strokeWidth={2} />
             <span className="truncate">{shellName(t, shell)}</span>
             <span className="shrink-0 text-subtle">{t('terminal.picker.local')}</span>
-            <span className="ml-auto shrink-0 text-[var(--accent-1)]">
+            <span className="ml-auto shrink-0 text-[var(--accent-fg)]">
               {t('terminal.picker.open')}
             </span>
           </button>
@@ -332,7 +332,7 @@ function EmptySessions({
             <span className="shrink-0 text-subtle">
               {formatRelative(new Date(host.at), i18n.language)}
             </span>
-            <span className="ml-auto shrink-0 text-[var(--accent-1)]">
+            <span className="ml-auto shrink-0 text-[var(--accent-fg)]">
               {t('terminal.empty.connect')}
             </span>
           </button>

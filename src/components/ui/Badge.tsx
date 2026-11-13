@@ -8,13 +8,13 @@ const tones = {
   warning: 'border-warning-solid/35 bg-warning-solid/10 text-warning',
   critical: 'border-critical-solid/35 bg-critical-solid/10 text-critical',
   info: 'border-info-solid/30 bg-info-solid/12 text-info',
-  // Another section's colour (the agent's, the tools'), from `SECTION` below.
+  // Another section's colour (the agent's, the tools'), from `HUE` below.
   violet:
     'border-[rgb(var(--accent-rgb)/0.3)] bg-[rgb(var(--accent-rgb)/0.12)] text-[var(--accent-text)]',
   cyan: 'border-[rgb(var(--accent-rgb)/0.3)] bg-[rgb(var(--accent-rgb)/0.12)] text-[var(--accent-text)]',
 } as const;
 
-const SECTION: Partial<Record<keyof typeof tones, string>> = { violet: 'agent', cyan: 'tools' };
+const HUE: Partial<Record<keyof typeof tones, string>> = { violet: 'agent', cyan: 'tools' };
 
 export type BadgeTone = keyof typeof tones;
 
@@ -35,7 +35,7 @@ export function Badge({
 }: BadgeProps) {
   return (
     <span
-      data-section={SECTION[tone]}
+      data-hue={HUE[tone]}
       className={cn(
         'inline-flex h-[22px] shrink-0 items-center whitespace-nowrap border px-2 text-[11px] font-medium',
         pill ? 'h-[18px] rounded-full px-[7px] text-[10.5px] font-semibold' : 'rounded-md',

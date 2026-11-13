@@ -1,7 +1,8 @@
 //! A small synchronous client for the system `ssh-agent`.
 //!
 //! - Unix: the socket in `SSH_AUTH_SOCK` (or an explicit path), with read and
-//!   write timeouts.
+//!   write timeouts. Nothing is sent until the kernel says the process
+//!   serving it runs as this user or as root.
 //! - Windows: `SSH_AUTH_SOCK` if it names a pipe, else OpenSSH's
 //!   `\\.\pipe\openssh-ssh-agent`. A Unix-socket value (Cygwin, MSYS, Git
 //!   Bash) is ignored by [`socket_from_env`]; passed to [`AgentClient::new`]
@@ -17,6 +18,8 @@
 //! offer a named pipe whose name depends on the user). Users of Pageant can
 //! enable Pageant's OpenSSH compatibility or point `SSH_AUTH_SOCK` at its pipe.
 
+#[cfg(unix)]
+mod peer;
 mod proto;
 mod transport;
 

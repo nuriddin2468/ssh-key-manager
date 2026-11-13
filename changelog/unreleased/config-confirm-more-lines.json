@@ -1,0 +1,6 @@
+{
+  "kind": "notice",
+  "en": "More ~/.ssh/config lines now need your yes in a system dialog: RemoteCommand, SendEnv beyond the language settings, every RemoteForward, GatewayPorts, forwards on all addresses, and a ControlPath outside your home folder.",
+  "ru": "Больше строк ~/.ssh/config теперь требуют вашего согласия в системном окне: RemoteCommand, SendEnv сверх языковых настроек, любой RemoteForward, GatewayPorts, пробросы на всех адресах и ControlPath вне домашней папки.",
+  "uz": "~/.ssh/config dagi koʻproq qatorlar endi tizim oynasida roziligingizni talab qiladi: RemoteCommand, til sozlamalaridan tashqari SendEnv, har qanday RemoteForward, GatewayPorts, barcha manzillardagi yoʻnaltirishlar va uy papkasidan tashqaridagi ControlPath."
+}

@@ -39,6 +39,8 @@ const CHECK_OUTCOME: Record<ReturnType<typeof explain>['kind'], ConnectionOutcom
   otpRejected: 'oneTimeCodeRejected',
   passphraseMissing: 'passphraseMissing',
   otherAccount: 'failed',
+  notFilled: 'failed',
+  fillLimited: 'failed',
   keysRejected: 'keysRejected',
   commandFailed: 'failed',
   failed: 'failed',

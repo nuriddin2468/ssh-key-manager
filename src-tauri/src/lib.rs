@@ -456,6 +456,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     }
     watcher::start(app.handle(), &paths.dir, &hosts_file);
     commands::agent::check_agent_pipes();
+    askpass::fill::attach(app.handle().clone());
     let bridge = Arc::new(browser::Bridge::new(&data_dir));
     let nearby = Arc::new(nearby::Nearby::new(data_dir.clone()));
     nearby.attach(app.handle().clone());

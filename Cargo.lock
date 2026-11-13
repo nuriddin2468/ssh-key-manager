@@ -5407,6 +5407,7 @@ dependencies = [
  "portable-pty",
  "rand_core 0.6.4",
  "reqwest",
+ "rfd",
  "rustls",
  "semver",
  "serde",

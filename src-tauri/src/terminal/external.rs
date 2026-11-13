@@ -50,7 +50,11 @@ mod platform {
             format!("#!/bin/sh\nclear\nexec ssh -- '{alias}'\n"),
         )?;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))?;
-        spawn_detached(Command::new("open").args(["-a", "Terminal"]).arg(&script))?;
+        spawn_detached(
+            Command::new("/usr/bin/open")
+                .args(["-a", "Terminal"])
+                .arg(&script),
+        )?;
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(30));
             drop(dir);
@@ -69,18 +73,31 @@ mod platform {
 
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-    /// Windows Terminal if installed, else a console window.
+    /// Windows Terminal if installed (found on `PATH`, where Windows puts
+    /// it), else a console window through `cmd.exe` from the system folder.
+    /// `ssh.exe` is looked up on `PATH` as usual, but never in the folder
+    /// the app was started in: both start in the home folder and are told
+    /// not to search the current one.
     pub fn open(alias: &str) -> AppResult<()> {
-        if spawn_detached(Command::new("wt.exe").args(["new-tab", "ssh.exe", "--", alias])).is_ok()
-        {
+        let safe = |command: &mut Command| {
+            if let Some(home) = sshkm_core::paths::home_dir() {
+                command.current_dir(home);
+            }
+            command.env("NoDefaultCurrentDirectoryInExePath", "1");
+        };
+        let mut terminal = Command::new("wt.exe");
+        terminal.args(["new-tab", "ssh.exe", "--", alias]);
+        safe(&mut terminal);
+        if spawn_detached(&mut terminal).is_ok() {
             return Ok(());
         }
         // `start` opens the new console; `cmd` itself stays hidden.
-        spawn_detached(
-            Command::new("cmd.exe")
-                .args(["/c", "start", "", "ssh.exe", "--", alias])
-                .creation_flags(CREATE_NO_WINDOW),
-        )?;
+        let mut console = Command::new(sshkm_core::paths::system32("cmd.exe"));
+        console
+            .args(["/c", "start", "", "ssh.exe", "--", alias])
+            .creation_flags(CREATE_NO_WINDOW);
+        safe(&mut console);
+        spawn_detached(&mut console)?;
         Ok(())
     }
 }
@@ -94,7 +111,8 @@ mod platform {
     use crate::error::{AppError, AppResult};
 
     /// The first terminal emulator found, each with its way of running a
-    /// command.
+    /// command. They and `ssh` are found on `PATH`: the user's own programs,
+    /// wherever they are installed.
     const TERMINALS: [(&str, &[&str]); 10] = [
         ("x-terminal-emulator", &["-e"]),
         ("gnome-terminal", &["--"]),

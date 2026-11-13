@@ -12,6 +12,7 @@ use sshkm_core::authorized_keys::{self, AuthorizedKeys};
 
 use super::keys::find_key;
 use super::{Shared, blocking};
+use crate::askpass::fill::{self, FillDialog, Program};
 use crate::askpass::{AskedPrompt, Connection, PromptAccount, Secrets};
 use crate::error::{AppError, AppResult};
 use crate::process::{self, Output};
@@ -212,23 +213,21 @@ fn key_blob(public_key: &str) -> AppResult<String> {
 }
 
 /// A host alias the app runs `ssh` (or a terminal with `ssh`) with: letters,
-/// digits and `. _ - @ : [ ]`, not starting with `-`. Every command that
-/// hands a name from the page to `ssh` checks it here.
+/// digits and `. _ - @ : [ ]`, with no part of it, before or after an `@`
+/// or `:`, starting with `-`. Every command that hands a name from the page
+/// to `ssh` checks it here.
 ///
 /// `ssh` puts the name into commands it runs through the shell: `%h` and `%n`
 /// in a `ProxyCommand` or `Match exec`, and the command a `ProxyJump`
 /// becomes. Only OpenSSH 9.6 and later refuse a name with shell syntax
-/// there, so without this a script in the page could run its own commands
-/// through a `Host *.corp` block that is already in the config.
+/// there, or a host part (after the last `@`) that the program would read as
+/// an option, so without this a script in the page could run its own
+/// commands through a `Host *.corp` block that is already in the config.
 pub fn check_alias(alias: &str) -> AppResult<()> {
-    let plain = !alias.is_empty()
-        && !alias.starts_with('-')
-        && alias
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "._-@:[]".contains(c));
-    if !plain {
+    if !sshkm_core::tunnels::is_plain_alias(alias) {
         return Err(AppError::invalid(
-            "not a host alias: only letters, digits and . _ - @ : [ ] can be used",
+            "not a host alias: only letters, digits and . _ - @ : [ ] can be used, \
+             and no part of it may start with -",
         ));
     }
     Ok(())
@@ -267,8 +266,8 @@ pub fn run_ssh(
     timeout: Duration,
 ) -> AppResult<SshRun> {
     check_alias(alias)?;
-    let target = match ssh_target(alias)? {
-        Ok(target) => target,
+    let (target, program) = match ssh_target(alias)? {
+        Ok(found) => found,
         // `ssh` cannot read its configuration for this host: report what it
         // said, as a failed run would.
         Err(output) => {
@@ -283,12 +282,23 @@ pub fn run_ssh(
         && !askpass.contains(&"KbdInteractiveAuthentication=no")
         && !options.contains(&"KbdInteractiveAuthentication=no");
     let session = state.askpass_session(secrets)?;
+    session.expect_connection(
+        Connection::new(
+            state.openssh_version().as_deref(),
+            keyboard_interactive,
+            target.proxied,
+        )
+        .through_command(program.is_some()),
+    );
+    if let Some(program) = program {
+        session.confirm_fills(FillDialog::new(
+            alias,
+            Some(&target.account.user),
+            Some(&target.account.host),
+            program,
+        ));
+    }
     session.expect_account(target.account);
-    session.expect_connection(Connection::new(
-        state.openssh_version().as_deref(),
-        keyboard_interactive,
-        target.proxied,
-    ));
     let mut command = process::command("ssh");
     session.configure(&mut command);
     command
@@ -297,7 +307,9 @@ pub fn run_ssh(
         .args(options)
         .args(["-T", "--", alias])
         .args(remote);
-    let output = process::run_command(&mut command, input, timeout)?;
+    // The time the user spends on a fill-in question is not the run's.
+    let output =
+        process::run_command_pausing(&mut command, input, timeout, || session.time_asking())?;
     Ok(SshRun {
         output,
         prompts: session.asked(),
@@ -335,16 +347,20 @@ struct Target {
     keyboard_interactive: bool,
 }
 
-/// What `ssh -G` says about `alias`. `Err` holds the output of a failed
-/// `ssh -G`.
-fn ssh_target(alias: &str) -> AppResult<Result<Target, Output>> {
+/// What `ssh -G` says about `alias`, and a program on the way that may run
+/// another `ssh` (see [`fill::program_on_the_way`]). `Err` holds the output
+/// of a failed `ssh -G`.
+fn ssh_target(alias: &str) -> AppResult<Result<(Target, Option<Program>), Output>> {
     let output = process::run("ssh", &["-G", "--", alias], Duration::from_secs(10))?;
     if !output.success {
         return Ok(Err(output));
     }
-    parse_ssh_g(&output.stdout)
-        .map(Ok)
-        .ok_or_else(|| AppError::invalid("ssh -G printed no user or host name"))
+    let target = parse_ssh_g(&output.stdout)
+        .ok_or_else(|| AppError::invalid("ssh -G printed no user or host name"))?;
+    Ok(Ok((
+        target,
+        fill::program_on_the_way(alias, Some(&output.stdout)),
+    )))
 }
 
 fn parse_ssh_g(text: &str) -> Option<Target> {
@@ -546,6 +562,14 @@ mod tests {
             "a#b",
             "сервер",
             "ｐｒｏｄ",
+            // A host (after the last `@`) or any other part that `%h` would
+            // hand a proxy program as an option.
+            "x@-e.corp",
+            "a@b@-v",
+            "x@--help",
+            "x@-oProxyCommand",
+            "-x@host",
+            "host:-p",
         ] {
             let error = check_alias(alias).expect_err(alias);
             assert_eq!(error.code(), ErrorCode::InvalidInput, "{alias:?}");

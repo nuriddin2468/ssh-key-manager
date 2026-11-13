@@ -1,12 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
-import { isTauri } from '@tauri-apps/api/core';
-import { open as openFile } from '@tauri-apps/plugin-dialog';
 import { Copy, FileKey2, FolderOpen, KeyRound, LockKeyhole, Save } from 'lucide-react';
 import { type FormEvent, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
-import { useEnvironment, useKeys } from '@/api/queries';
+import { useKeys } from '@/api/queries';
 import { toastError, useAppMutation } from '@/api/useAppMutation';
 import type { KeyFileFormat } from '@/bindings/KeyFileFormat';
 import type { KeyFileInfo } from '@/bindings/KeyFileInfo';
@@ -38,7 +36,6 @@ interface Opened {
  */
 export function KeyConverterPanel() {
   const { t } = useTranslation();
-  const environment = useEnvironment();
   const keys = useKeys();
   const [path, setPath] = useState<string | null>(null);
   const [opened, setOpened] = useState<Opened | null>(null);
@@ -54,17 +51,12 @@ export function KeyConverterPanel() {
     setPath(next);
     setOpened(null);
   };
+  // The backend opens the file dialog and reads only the file picked there
+  // (or a key in ~/.ssh).
   const pick = async () => {
     try {
-      const file = isTauri()
-        ? await openFile({
-            multiple: false,
-            directory: false,
-            title: t('toolSsh.convert.source'),
-            defaultPath: environment.data?.paths.home,
-          })
-        : '/Users/dev/Downloads/server-key.ppk';
-      if (typeof file === 'string') choose(file);
+      const file = await api.keyConvertPick();
+      if (file !== null) choose(file);
     } catch (error) {
       toastError(t, error);
     }
@@ -182,7 +174,7 @@ function KeyDetails({ info }: { info: KeyFileInfo }) {
                   {t(`toolSsh.convert.${name}`)}
                 </dt>
                 <dd className="flex min-w-0 items-center gap-1.5">
-                  <code className="selectable min-w-0 flex-1 rounded-lg border border-white/[0.07] bg-terminal px-2.5 py-1.5 font-mono text-[12px] break-all">
+                  <code className="selectable min-w-0 flex-1 rounded-lg border border-ink/[0.07] bg-terminal px-2.5 py-1.5 font-mono text-[12px] break-all">
                     {value}
                   </code>
                   <IconButton
@@ -200,7 +192,7 @@ function KeyDetails({ info }: { info: KeyFileInfo }) {
             <pre
               role="img"
               aria-label={`${t('toolSsh.convert.randomart')}: ${prints.sha256}`}
-              className="rounded-[11px] border border-white/[0.07] bg-terminal px-3 py-2 font-mono text-[12px] leading-[1.25] text-fg-2"
+              className="rounded-[11px] border border-ink/[0.07] bg-terminal px-3 py-2 font-mono text-[12px] leading-[1.25] text-fg-2"
             >
               {prints.randomart}
             </pre>

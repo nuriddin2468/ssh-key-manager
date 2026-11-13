@@ -391,6 +391,13 @@ characters as `<U+…>`.
 - **Adding received variables to an environment**, listing the names, the
   values they replace and the names that change how programs start.
 
+Showing or copying a received (or sent) secret, or a secret variable, counts against
+the same budget as a vault password (`secret_gate::take_secret`: ten in a row, then one
+every six minutes; past that each is asked for), naming the secret and the computer it
+came from. Sending to another computer is asked every time rather than once per
+environment while unlocked (as `secret_gate::confirm_env_secrets` does for a shell or a
+file): each send goes somewhere new.
+
 Texts and secrets the user types in the composer go without a dialog: the
 page has them already. The page never picks a peer or an address: contacts
 come from the vault, addresses from the backend's own browsing, and a send

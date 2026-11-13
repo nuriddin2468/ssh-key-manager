@@ -24,34 +24,31 @@ pub struct Prompt {
 }
 
 /// `text` from elsewhere as a dialog shows it: control characters and
-/// invisible or direction-changing ones as `<U+…>`, so it can neither add
-/// lines of its own nor read differently from what it is, and at most
-/// [`SHOWN_CHARS`] characters. (`confirm::shown` once #65 is in.)
+/// invisible or direction-changing ones as `<U+…>`, at most [`SHOWN_CHARS`]
+/// characters ([`crate::confirm::shown`]).
 pub fn shown(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for (i, c) in text.chars().enumerate() {
-        if i == SHOWN_CHARS {
-            let rest = text.chars().count() - SHOWN_CHARS;
-            let _ = write!(out, "… (+{rest})");
-            break;
-        }
-        let invisible = matches!(
-            c,
-            '\u{00AD}'
-                | '\u{061C}'
-                | '\u{180E}'
-                | '\u{200B}'..='\u{200F}'
-                | '\u{202A}'..='\u{202E}'
-                | '\u{2060}'..='\u{2069}'
-                | '\u{FEFF}'
+    crate::confirm::shown(text, SHOWN_CHARS)
+}
+
+/// A received secret or variable, as the reveal and copy budget names it
+/// ([`crate::secret_gate::take_secret`]): `name` is the variable's, else
+/// `label` the secret's; `peer` the computer it came from.
+pub fn chat_value(peer: &str, label: &str, name: Option<&str>) -> Localized {
+    let peer = shown(peer);
+    if let Some(name) = name {
+        let name = shown(name);
+        return Localized::new(
+            format!("{name} from “{peer}”"),
+            format!("{name} от «{peer}»"),
+            format!("«{peer}» dan {name}"),
         );
-        if c.is_control() || invisible {
-            let _ = write!(out, "<U+{:04X}>", u32::from(c));
-        } else {
-            out.push(c);
-        }
     }
-    out
+    let label = shown(label);
+    Localized::new(
+        format!("the secret “{label}” from “{peer}”"),
+        format!("секрет «{label}» от «{peer}»"),
+        format!("«{peer}» dan «{label}» maxfiy qiymati"),
+    )
 }
 
 /// Variable names as a dialog lists them: the first few, and how many more.

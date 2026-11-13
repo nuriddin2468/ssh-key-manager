@@ -24,6 +24,7 @@ pub mod nearby;
 pub mod projects;
 pub mod quick;
 pub mod remote;
+pub mod reveal;
 pub mod shell_history;
 pub mod ssh_tools;
 pub mod terminal;

@@ -206,7 +206,7 @@ export function QuickWindow() {
   return (
     <main
       data-section="overview"
-      className="flex h-full flex-col overflow-hidden border border-white/10 bg-[linear-gradient(180deg,rgb(26_31_46),rgb(15_18_28))]"
+      className="flex h-full flex-col overflow-hidden border border-line-strong bg-[linear-gradient(180deg,var(--color-dialog-from),var(--color-dialog-to))]"
     >
       <h1 className="sr-only">{t('palette.quick.title')}</h1>
       {unlocking ? (
@@ -257,7 +257,7 @@ function UnlockForm({
 
   return (
     <div data-section="passwords" className="flex min-h-0 flex-1 flex-col">
-      <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-white/[0.07] px-3">
+      <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-ink/[0.07] px-3">
         <Button size="sm" variant="ghost" icon={<ArrowLeft className="size-4" />} onClick={onBack}>
           {t('palette.quick.back')}
         </Button>

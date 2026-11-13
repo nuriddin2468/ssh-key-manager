@@ -154,7 +154,7 @@ export function JumpHostPanel() {
 
       {changes.length > 0 ? (
         <Section title={t('toolSsh.jump.preview')}>
-          <pre className="selectable overflow-x-auto rounded-[11px] border border-white/[0.07] bg-terminal px-3 py-2.5 font-mono text-[12px] leading-[1.65]">
+          <pre className="selectable overflow-x-auto rounded-[11px] border border-ink/[0.07] bg-terminal px-3 py-2.5 font-mono text-[12px] leading-[1.65]">
             {changes.map((change, index) => (
               <span key={change.host.id} className="block">
                 {index > 0 ? '\n' : ''}

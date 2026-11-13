@@ -1,5 +1,3 @@
-import { isTauri } from '@tauri-apps/api/core';
-import { open as openFile } from '@tauri-apps/plugin-dialog';
 import {
   createContext,
   type ReactNode,
@@ -12,8 +10,7 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
-import { useEnvironment } from '@/api/queries';
-import { toastError, useAppMutation } from '@/api/useAppMutation';
+import { useAppMutation } from '@/api/useAppMutation';
 import type { KeyView } from '@/bindings/KeyView';
 import { Dialog } from '@/components/ui/Dialog';
 import { UnlockDialog } from '@/features/agent/UnlockDialog';
@@ -72,7 +69,6 @@ export function DialogsProvider({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const settings = useSettings();
-  const environment = useEnvironment();
   const [open, setOpen] = useState<Open>(null);
   const close = useCallback(() => setOpen(null), []);
   // Its own state, so it opens above another of these dialogs instead of
@@ -106,9 +102,12 @@ export function DialogsProvider({ children }: { children: ReactNode }) {
       api.agentAdd(vars.key.id, null, vars.lifetime),
     { success: (_, vars) => t('keys.unlocked', { name: vars.key.name }) },
   );
-  const importMutation = useAppMutation((source: string) => api.importKey(source, null), {
-    success: (key) => t('keys.imported', { name: key.name }),
-    onSuccess: (key) => navigate({ page: 'keys', keyId: key.id }),
+  // The backend opens the file dialog itself; `null` when it was cancelled.
+  const importMutation = useAppMutation(() => api.importKey(), {
+    success: (key) => (key ? t('keys.imported', { name: key.name }) : undefined),
+    onSuccess: (key) => {
+      if (key) navigate({ page: 'keys', keyId: key.id });
+    },
   });
 
   const value = useMemo<DialogsValue>(
@@ -125,23 +124,9 @@ export function DialogsProvider({ children }: { children: ReactNode }) {
       },
       unlockVault: (options) => showVault(options ?? {}),
       rotateKey: (key) => setRotating(key),
-      importKey: async () => {
-        try {
-          const source = isTauri()
-            ? await openFile({
-                multiple: false,
-                directory: false,
-                title: t('keys.import'),
-                defaultPath: environment.data?.paths.home,
-              })
-            : '/Users/dev/Downloads/id_ed25519_laptop';
-          if (typeof source === 'string') importMutation.mutate(source);
-        } catch (error) {
-          toastError(t, error);
-        }
-      },
+      importKey: async () => importMutation.mutate(undefined),
     }),
-    [settings.defaultLifetime, addPlain, importMutation, environment.data, t, showVault],
+    [settings.defaultLifetime, addPlain, importMutation, showVault],
   );
 
   return (

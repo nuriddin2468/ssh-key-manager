@@ -57,8 +57,14 @@ const MAX_USERNAME = 256;
 interface Pending {
   id: string;
   tabId: number;
+  /** Where it was typed: it is saved for this origin, and offered on pages of its site. */
   origin: string;
   username: string;
+  /**
+   * The username came from the vault, not from the user (a password-change
+   * form without one): the banner shows no field with it.
+   */
+  usernameFromVault?: boolean;
   password: string;
   mode: 'save' | 'update';
   entryId?: string;
@@ -311,7 +317,11 @@ async function capture(
 ) {
   if (!password) return;
   let username = typed || (await usernameBefore(tabId, origin));
-  if (!username && change) username = await changedUsername(tabId, origin);
+  let usernameFromVault = false;
+  if (!username && change) {
+    username = await changedUsername(tabId, origin);
+    usernameFromVault = username !== '';
+  }
   const check = await request<CheckResult>({ check: { origin, username, password } });
   if (!check.ok && check.problem !== 'locked') return;
   if (check.ok && check.value.status === 'saved') {
@@ -325,6 +335,7 @@ async function capture(
     tabId,
     origin,
     username,
+    usernameFromVault,
     password,
     mode: update ? 'update' : 'save',
     entryId: update?.entryId,
@@ -337,21 +348,37 @@ async function capture(
 }
 
 /**
+ * Whether a login typed on `typedOn` belongs to the site of the page at
+ * `origin`. The app knows the Public Suffix List, so it tells what a site
+ * is; unless it says they are the same, they count as different.
+ */
+async function sameSiteAs(typedOn: string, origin: string): Promise<boolean> {
+  return typedOn === origin || (await sameSite(typedOn, origin).catch(() => false));
+}
+
+/**
  * The save offer for the tab's top page at `origin`. One typed on another
  * site (a sign-in that sent the tab on, or a sign-in frame) names only that
  * site: its username and the saved login's title are not this page's
- * business. Unless the app says the sites are the same, they count as
- * different.
+ * business. Nor is a username the vault supplied, here or elsewhere: the
+ * banner names the login by its title then.
  */
 async function pendingFor(tabId: number, origin: string): Promise<PendingSaveReply> {
   const pending = (await loadPending())[tabId];
   if (!pending) return null;
   const site = new URL(pending.origin).host;
-  // The app knows the Public Suffix List, so it tells what a site is.
-  const same =
-    pending.origin === origin || (await sameSite(pending.origin, origin).catch(() => false));
-  if (!same) {
+  if (!(await sameSiteAs(pending.origin, origin))) {
     return { id: pending.id, site, username: '', mode: pending.mode, elsewhere: true };
+  }
+  if (pending.usernameFromVault) {
+    return {
+      id: pending.id,
+      site,
+      username: '',
+      mode: pending.mode,
+      title: pending.title,
+      fromVault: true,
+    };
   }
   return {
     id: pending.id,
@@ -363,15 +390,23 @@ async function pendingFor(tabId: number, origin: string): Promise<PendingSaveRep
 }
 
 /**
- * Saves or updates the waiting login, checking again first: the vault may
- * have changed, and the user may have changed the username in the banner
- * (`typed`; none for a banner without the field).
+ * Saves or updates the waiting login for the origin it was typed on,
+ * checking again first: the vault may have changed, and the user may have
+ * changed the username in the banner (`typed`; none for a banner without
+ * the field). Only a page of that site has the field, so a username from
+ * any other page counts for nothing. The field starts empty when the vault
+ * named the login: left so, it keeps the vault's username.
  */
-async function save(tabId: number, id: string, typed?: string): Promise<SaveReply> {
+async function save(tabId: number, page: string, id: string, typed?: string): Promise<SaveReply> {
   const pending = (await loadPending())[tabId];
   if (!pending || pending.id !== id) return { ok: false, problem: 'expired' };
+  // Saved for the origin it was typed on, whichever page the banner is on.
   const { origin, password } = pending;
-  const username = typed ?? pending.username;
+  const fromField =
+    typed !== undefined &&
+    !(pending.usernameFromVault && typed === '') &&
+    (await sameSiteAs(origin, page));
+  const username = fromField ? typed : pending.username;
   const check = await request<CheckResult>({ check: { origin, username, password } });
   if (!check.ok) return { ok: false, problem: check.problem };
   let done: Result<unknown> = { ok: true, value: null };
@@ -441,13 +476,14 @@ async function handle(
       return null;
     case 'pendingSave':
       return frameId === 0 ? pendingFor(tabId, origin) : null;
+    // The banner is the top frame's.
     case 'save': {
-      if (!isString(message.id, 64)) return null;
+      if (!isString(message.id, 64) || frameId !== 0) return null;
       const typed = isString(message.username, MAX_USERNAME) ? message.username.trim() : undefined;
-      return save(tabId, message.id, typed);
+      return save(tabId, origin, message.id, typed);
     }
     case 'dismissSave':
-      if (isString(message.id, 64)) await dropPending(tabId, message.id);
+      if (isString(message.id, 64) && frameId === 0) await dropPending(tabId, message.id);
       return null;
     default:
       return null;

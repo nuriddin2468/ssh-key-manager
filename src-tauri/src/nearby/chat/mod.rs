@@ -1080,19 +1080,58 @@ impl Nearby {
     }
 
     /// A secret's value, or a variable's (`name`), for the page to show.
+    /// It counts against the budget of secrets the page may take
+    /// ([`crate::secret_gate::take_secret`]), as a vault password does.
     pub fn chat_reveal(&self, key: &str, id: &str, name: Option<&str>) -> AppResult<SecretString> {
-        let peer = self.kept_peer(key)?;
-        self.require_vault()?;
-        self.read(&peer, |chat| value_of(chat, id, name, unix_now()))?
+        self.chat_value(key, id, name, crate::secret_gate::Taking::Show)
     }
 
     /// Copies a secret's value, or a variable's, as the vault copies a
-    /// password: kept out of clipboard history and cleared after a while.
+    /// password: kept out of clipboard history and cleared after a while,
+    /// and counted against the same budget.
     pub fn chat_copy(&self, key: &str, id: &str, name: Option<&str>) -> AppResult<CopyResult> {
-        let value = self.chat_reveal(key, id, name)?;
+        let value = self.chat_value(key, id, name, crate::secret_gate::Taking::Copy)?;
         let state = self.state()?;
         let clears_in_secs = Arc::clone(&state.vault).copy(&value, true)?;
         Ok(CopyResult { clears_in_secs })
+    }
+
+    /// A received or sent value, once the budget lets it out (a plain
+    /// variable's goes without counting: the page shows it anyway).
+    fn chat_value(
+        &self,
+        key: &str,
+        id: &str,
+        name: Option<&str>,
+        taking: crate::secret_gate::Taking,
+    ) -> AppResult<SecretString> {
+        let peer = self.kept_peer(key)?;
+        self.require_vault()?;
+        // What it is, read first: the dialog, if any, comes before the value.
+        let counted = self.read(&peer, |chat| counted_label(chat, id, name))??;
+        if let Some(label) = counted {
+            let what = prompt::chat_value(&self.peer_name_or_kept(&peer), &label, name);
+            crate::secret_gate::take_secret(self.app()?, taking, &what)?;
+        }
+        self.read(&peer, |chat| value_of(chat, id, name, unix_now()))?
+    }
+
+    /// The name kept for `peer`: the vault's, or the index's for one removed.
+    fn peer_name_or_kept(&self, peer: &PeerKey) -> String {
+        let chats = self.chats();
+        chats
+            .known
+            .iter()
+            .find(|known| known.key == *peer)
+            .map(|known| known.name.clone())
+            .or_else(|| {
+                chats
+                    .former
+                    .iter()
+                    .find(|former| former.key == *peer)
+                    .map(|former| former.name.clone())
+            })
+            .unwrap_or_else(|| peer.to_string())
     }
 
     /// Wipes a secret or variables this user sent before their term. With
@@ -1645,6 +1684,29 @@ fn set_outcome(chat: &mut Conversation, id: &str, mine: bool, outcome: Outcome) 
         && *its == mine
     {
         *now = outcome;
+    }
+}
+
+/// What the reveal and copy budget counts of secret `id` or its variable
+/// `name`: the secret's label, or `None` for a plain variable, which the
+/// page shows anyway.
+fn counted_label(chat: &Conversation, id: &str, name: Option<&str>) -> AppResult<Option<String>> {
+    let gone = || AppError::not_found("the value is gone");
+    match (&chat.get(id).ok_or_else(gone)?.body, name) {
+        (Body::Secret { label, .. }, None) => Ok(Some(label.clone())),
+        (
+            Body::Variables {
+                variables, label, ..
+            },
+            Some(name),
+        ) => {
+            let var = variables
+                .iter()
+                .find(|var| var.name == name)
+                .ok_or_else(gone)?;
+            Ok(var.secret.then(|| label.clone()))
+        }
+        _ => Err(gone()),
     }
 }
 

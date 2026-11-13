@@ -1,6 +1,4 @@
 import { useQuery } from '@tanstack/react-query';
-import { isTauri } from '@tauri-apps/api/core';
-import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import {
   ChevronRight,
   Clock,
@@ -25,7 +23,7 @@ import { type PointerEvent, useDeferredValue, useEffect, useMemo, useRef, useSta
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
-import { useEnvironment, useHostsFile } from '@/api/queries';
+import { useHostsFile } from '@/api/queries';
 import { errorMessage, toastError } from '@/api/useAppMutation';
 import { useLeaveGuard, useRouter } from '@/app/router';
 import { useFindShortcut } from '@/app/useAppEvents';
@@ -117,7 +115,7 @@ const DROP =
 const EMPTY_VIEW: HostsFileView = { entries: [], invalid: [], groups: [] };
 
 const TOAST_ACTION =
-  '!h-7 !rounded-lg !border !border-white/15 !bg-white/10 !px-2.5 !text-[12.5px] !font-medium !text-fg hover:!bg-white/15';
+  '!h-7 !rounded-lg !border !border-ink/15 !bg-ink/10 !px-2.5 !text-[12.5px] !font-medium !text-fg hover:!bg-ink/15';
 
 type OpenDialog =
   | { kind: 'lookup' }
@@ -189,7 +187,6 @@ export function HostsFilePage({ line, received }: { line?: number; received?: nu
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const hostsFile = useHostsFile();
-  const environment = useEnvironment();
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
   const [dialog, setDialog] = useState<OpenDialog | null>(null);
@@ -270,14 +267,8 @@ export function HostsFilePage({ line, received }: { line?: number; received?: nu
     return () => clearTimeout(timer);
   }, [flash]);
 
-  const reveal = async () => {
-    const path = environment.data?.hostsFile;
-    if (!path || !isTauri()) return;
-    try {
-      await revealItemInDir(path);
-    } catch (error) {
-      toastError(t, error);
-    }
+  const reveal = () => {
+    api.revealPlace({ kind: 'hostsFile' }).catch((error: unknown) => toastError(t, error));
   };
 
   // Draft edits.
@@ -455,7 +446,7 @@ export function HostsFilePage({ line, received }: { line?: number; received?: nu
           label={t('keys.showIn', { app: fileManagerName })}
           variant="secondary"
           icon={<FolderOpen className="size-[15px]" strokeWidth={1.75} />}
-          onClick={() => void reveal()}
+          onClick={reveal}
         />
         {editable ? (
           <>
@@ -483,13 +474,15 @@ export function HostsFilePage({ line, received }: { line?: number; received?: nu
       </Toolbar>
 
       <PageBody>
-        <div className="flex flex-wrap items-center gap-x-[18px] gap-y-3 rounded-[18px] border border-indigo-300/25 bg-[linear-gradient(135deg,rgb(99_102_241/0.16),rgb(255_255_255/0.03)_70%)] px-[18px] py-4 shadow-[inset_0_1px_0_rgb(255_255_255/0.05)]">
-          <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-indigo-400/35 bg-indigo-500/15 text-indigo-200">
+        <div className="flex flex-wrap items-center gap-x-[18px] gap-y-3 rounded-[18px] banner px-[18px] py-4">
+          <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-[rgb(var(--accent-rgb)/0.35)] bg-[color-mix(in_srgb,var(--accent-2)_15%,transparent)] text-[var(--accent-text)]">
             <Signpost aria-hidden="true" className="size-[19px]" strokeWidth={2} />
           </span>
           <span className="flex min-w-[300px] flex-1 flex-col gap-0.5">
-            <span className="font-semibold text-indigo-100">{t('hostsFile.bannerTitle')}</span>
-            <span className="text-[12.5px] leading-[19px] text-[#C9CCEB]">
+            <span className="font-semibold text-[var(--banner-title)]">
+              {t('hostsFile.bannerTitle')}
+            </span>
+            <span className="text-[12.5px] leading-[19px] text-[var(--banner-text)]">
               {t('hostsFile.bannerText')}
             </span>
           </span>
@@ -554,7 +547,7 @@ export function HostsFilePage({ line, received }: { line?: number; received?: nu
                 <div
                   className={cn(
                     GRID,
-                    'sticky top-0 z-10 -mx-1.5 h-9 bg-[rgb(17_21_31/0.94)] pr-[18px] pl-3 text-[11.5px] font-medium tracking-[0.02em] text-subtle backdrop-blur',
+                    'sticky top-0 z-10 -mx-1.5 h-9 bg-sticky/94 pr-[18px] pl-3 text-[11.5px] font-medium tracking-[0.02em] text-subtle backdrop-blur',
                   )}
                 >
                   <span />
@@ -615,7 +608,7 @@ export function HostsFilePage({ line, received }: { line?: number; received?: nu
                       aria-label={group.name}
                       data-drop={droppable ? section.key : undefined}
                       className={cn(
-                        'rounded-xl border border-white/[0.07] bg-white/[0.025] transition-colors duration-150',
+                        'rounded-xl border border-ink/[0.07] bg-ink/[0.025] transition-colors duration-150',
                         group.status === 'ungrouped' && 'border-dashed bg-transparent',
                         over === section.key && DROP,
                       )}
@@ -669,8 +662,8 @@ export function HostsFilePage({ line, received }: { line?: number; received?: nu
                     data-drop={NEW_GROUP}
                     onClick={() => setDialog({ kind: 'create', move: null })}
                     className={cn(
-                      'pressable-soft flex h-11 items-center justify-center gap-2 rounded-xl border border-dashed border-white/[0.12] text-[12.5px] font-medium text-subtle transition-colors duration-150 hover:border-white/20 hover:bg-white/[0.03] hover:text-fg-2',
-                      drag && 'border-white/20 text-fg-2',
+                      'pressable-soft flex h-11 items-center justify-center gap-2 rounded-xl border border-dashed border-ink/[0.12] text-[12.5px] font-medium text-subtle transition-colors duration-150 hover:border-ink/20 hover:bg-fill-subtle hover:text-fg-2',
+                      drag && 'border-ink/20 text-fg-2',
                       over === NEW_GROUP && DROP,
                     )}
                   >
@@ -699,7 +692,7 @@ export function HostsFilePage({ line, received }: { line?: number; received?: nu
       {pending > 0 ? (
         <section
           aria-label={t('hostsFile.pending', { count: pending })}
-          className="flex flex-wrap items-center gap-3 border-t border-white/[0.07] bg-[rgb(11_15_23/0.72)] px-6 py-3"
+          className="flex flex-wrap items-center gap-3 border-t border-ink/[0.07] bg-surface/72 px-6 py-3"
         >
           {stale ? (
             <span role="alert" className="min-w-0 flex-1 text-[12.5px] text-warning">
@@ -729,7 +722,7 @@ export function HostsFilePage({ line, received }: { line?: number; received?: nu
           ref={ghost}
           aria-hidden="true"
           style={{ transform: `translate(${drag.x + 14}px, ${drag.y + 12}px)` }}
-          className="pointer-events-none fixed top-0 left-0 z-[60] flex max-w-[300px] items-center gap-2.5 rounded-xl border border-white/[0.12] bg-popover/95 py-2 pr-3.5 pl-2.5 shadow-[0_18px_40px_-12px_rgb(0_0_0/0.75)] backdrop-blur"
+          className="pointer-events-none fixed top-0 left-0 z-[60] flex max-w-[300px] items-center gap-2.5 rounded-xl border border-ink/[0.12] bg-popover/95 py-2 pr-3.5 pl-2.5 shadow-drag backdrop-blur"
         >
           <DragTile row={drag.row} />
           <span className="flex min-w-0 flex-col">
@@ -882,7 +875,7 @@ function DropHint({ active, children }: { active: boolean; children: string }) {
         'mx-1.5 mb-1 flex h-11 items-center justify-center rounded-lg border border-dashed px-3 text-center text-[12.5px] transition-colors duration-150',
         active
           ? 'border-[rgb(var(--accent-rgb)/0.5)] text-[var(--accent-text)]'
-          : 'border-white/[0.1] text-subtle',
+          : 'border-line-strong text-subtle',
       )}
     >
       {children}
@@ -952,7 +945,7 @@ function GroupHeader({
           aria-expanded={open}
           aria-label={group.name}
           onClick={() => onOpenChange(!open)}
-          className="pressable grid size-5 shrink-0 place-items-center rounded-md text-subtle hover:bg-white/[0.08] hover:text-fg"
+          className="pressable grid size-5 shrink-0 place-items-center rounded-md text-subtle hover:bg-ink/[0.08] hover:text-fg"
         >
           <ChevronRight
             aria-hidden="true"
@@ -1109,7 +1102,7 @@ function EntryLine({
       aria-current={highlighted ? 'true' : undefined}
       className={cn(
         GRID,
-        'group/row min-h-12 rounded-xl py-1 pr-3 pl-1.5 transition-opacity duration-150 hover:bg-white/[0.03]',
+        'group/row min-h-12 rounded-xl py-1 pr-3 pl-1.5 transition-opacity duration-150 hover:bg-fill-subtle',
         highlighted && 'bg-[rgb(var(--accent-rgb)/0.1)] ring-1 ring-[rgb(var(--accent-rgb)/0.55)]',
         status === 'new' && 'bg-ok/[0.05]',
         flashing && 'animate-flash',
@@ -1121,7 +1114,7 @@ function EntryLine({
           <span
             aria-hidden="true"
             onPointerDown={onDragStart}
-            className="grid h-8 w-5 cursor-grab touch-none place-items-center rounded-md text-faint transition-colors duration-100 group-hover/row:text-muted hover:bg-white/[0.07] hover:text-fg"
+            className="grid h-8 w-5 cursor-grab touch-none place-items-center rounded-md text-faint transition-colors duration-100 group-hover/row:text-muted hover:bg-ink/[0.07] hover:text-fg"
           >
             <GripVertical className="size-4" strokeWidth={1.9} />
           </span>

@@ -1,0 +1,6 @@
+{
+  "kind": "notice",
+  "en": "The app now has a light theme and follows your system’s appearance, so if your system is set to light, the app turns light after this update. To keep it dark, choose Dark in Settings → Appearance → Theme. The browser extension follows your browser’s theme too.",
+  "ru": "Теперь у приложения есть светлая тема, и оно следует оформлению системы: если в системе светлое оформление, после обновления приложение станет светлым. Чтобы оставить тёмное, выберите «Тёмная» в «Настройки» → «Оформление» → «Тема». Расширение для браузера тоже следует теме браузера.",
+  "uz": "Ilovada endi yorugʻ mavzu bor va u tizim koʻrinishiga moslashadi: tizimingiz yorugʻ boʻlsa, yangilanishdan keyin ilova ham yorugʻ boʻladi. Qorongʻi qoldirish uchun Sozlamalar → Koʻrinish → Mavzu boʻlimida «Qorongʻi»ni tanlang. Brauzer kengaytmasi ham brauzer mavzusiga moslashadi."
+}

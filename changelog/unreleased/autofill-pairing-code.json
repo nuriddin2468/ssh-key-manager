@@ -1,0 +1,6 @@
+{
+  "kind": "notice",
+  "en": "Connecting a new browser now takes this version of SSH Key Manager and of its browser extension: the code you compare covers the keys of both. Browsers already connected keep working. Until your browser’s extension store offers the extension update, which can take a few days, a new browser can’t be connected.",
+  "ru": "Для подключения нового браузера теперь нужны эта версия SSH Key Manager и эта версия его расширения: сравниваемый код охватывает ключи обеих сторон. Уже подключённые браузеры продолжают работать. Пока магазин расширений браузера не предложит обновление расширения (это может занять несколько дней), новый браузер подключить не получится.",
+  "uz": "Yangi brauzerni ulash uchun endi SSH Key Manager va uning brauzer kengaytmasining shu versiyasi kerak: solishtiriladigan kod ikkala tomonning kalitlarini qamrab oladi. Allaqachon ulangan brauzerlar ishlashda davom etadi. Brauzerning kengaytmalar doʻkoni kengaytma yangilanishini taklif qilmaguncha (bu bir necha kun olishi mumkin) yangi brauzerni ulab boʻlmaydi."
+}

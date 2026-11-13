@@ -33,6 +33,7 @@ import { ToolsPage } from '@/features/tools/ToolsPage';
 import { platform } from '@/lib/platform';
 import { announceUpdate } from '@/lib/releaseNotes';
 import { useSettings } from '@/lib/settings';
+import { useTheme } from '@/lib/theme';
 import { useAutomaticUpdates } from '@/lib/updater';
 import { DialogsProvider } from './dialogs';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -40,6 +41,7 @@ import { RouterProvider, useRouter } from './router';
 import { useAppEvents } from './useAppEvents';
 
 export function App() {
+  const theme = useTheme();
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
@@ -56,11 +58,11 @@ export function App() {
         {/* Toasts start in the empty foot of the sidebar and run on over the page's
             left edge: action buttons sit on the right, so they stay clear. */}
         <Toaster
-          theme="dark"
+          theme={theme}
           position="bottom-left"
           offset={SIDEBAR_INSET}
           toastOptions={{
-            className: '!bg-popover !border-white/10 !text-fg !rounded-xl !shadow-2xl',
+            className: '!bg-popover !border-line-strong !text-fg !rounded-xl !shadow-2xl',
             descriptionClassName: '!text-muted',
           }}
         />

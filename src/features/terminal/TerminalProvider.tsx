@@ -229,16 +229,20 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
             ((!local.env && !local.folder) || shellMissing);
           const folderGone =
             local?.folder !== undefined && appError.code === 'not_found' && !shellGone;
+          // A no in the system dialog that asks before secret values go in.
+          const declined = local !== undefined && appError.code === 'cancelled';
           // The only input `terminal_open` refuses is the alias.
           const detail = shellGone
             ? t('terminal.local.shellMissing')
-            : folderGone
-              ? t('terminal.local.folderMissing')
-              : appError.code === 'invalid_input' && !local
-                ? t('terminal.failed.aliasRefused', { alias })
-                : appError.code === 'not_found' || appError.code === 'unsupported'
-                  ? appError.message
-                  : failure.message;
+            : declined
+              ? t('terminal.local.secretsDeclined')
+              : folderGone
+                ? t('terminal.local.folderMissing')
+                : appError.code === 'invalid_input' && !local
+                  ? t('terminal.failed.aliasRefused', { alias })
+                  : appError.code === 'not_found' || appError.code === 'unsupported'
+                    ? appError.message
+                    : failure.message;
           update(key, (tab) => ({
             ...tab,
             state: { phase: 'failed', failure: { ...failure, message: detail } },

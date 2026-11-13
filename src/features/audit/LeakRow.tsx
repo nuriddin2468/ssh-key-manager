@@ -1,5 +1,3 @@
-import { isTauri } from '@tauri-apps/api/core';
-import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import type { TFunction } from 'i18next';
 import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -93,13 +91,8 @@ export function LeakRow({ group, muted, onIgnore, onRestore }: LeakRowProps) {
     },
   });
 
-  const reveal = async (path: string) => {
-    if (!isTauri()) return;
-    try {
-      await revealItemInDir(path);
-    } catch (error) {
-      toastError(t, error);
-    }
+  const reveal = (id: string) => {
+    api.revealPlace({ kind: 'leak', id }).catch((error: unknown) => toastError(t, error));
   };
 
   const shown = allShown ? group.findings : group.findings.slice(0, FILES_SHOWN);
@@ -154,7 +147,7 @@ export function LeakRow({ group, muted, onIgnore, onRestore }: LeakRowProps) {
           ref={list}
           tabIndex={-1}
           aria-label={t('audit.leaks.filesLabel', { secret: label })}
-          className="flex flex-col gap-0.5 rounded-md border-t border-white/[0.06] pt-2 outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.5)]"
+          className="flex flex-col gap-0.5 rounded-md border-t border-line-soft pt-2 outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--focus-rgb)/var(--ring-alpha-soft))]"
         >
           {shown.map((finding) => {
             const file = shortPath(finding.path);
@@ -179,7 +172,7 @@ export function LeakRow({ group, muted, onIgnore, onRestore }: LeakRowProps) {
                     size="sm"
                     className="h-[26px] px-2"
                     aria-label={t('audit.leaks.showLabel', { file })}
-                    onClick={() => void reveal(finding.path)}
+                    onClick={() => reveal(finding.id)}
                   >
                     {t('audit.leaks.show')}
                   </Button>

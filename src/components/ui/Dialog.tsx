@@ -39,7 +39,7 @@ export function DialogContent({
   const returnFocus = useReturnFocus();
   return (
     <RDialog.Portal>
-      <RDialog.Overlay className="fixed inset-0 z-40 bg-[rgb(4_6_11/0.62)] backdrop-blur-[6px] data-[state=open]:animate-fade-in" />
+      <RDialog.Overlay className="fixed inset-0 z-40 bg-scrim backdrop-blur-[6px] data-[state=open]:animate-fade-in" />
       <div className="pointer-events-none fixed inset-0 z-50 grid place-items-center overflow-y-auto p-4">
         <RDialog.Content
           data-section={section}
@@ -62,7 +62,7 @@ export function DialogContent({
           // `overflow-clip`, not `overflow-hidden`: the glow is wider than the
           // dialog, and a scroll container could be scrolled sideways by a click.
           className={cn(
-            'pointer-events-auto relative flex max-h-[calc(100vh-32px)] w-full max-w-[620px] flex-col overflow-clip rounded-[22px] border border-white/10 bg-[linear-gradient(180deg,rgb(26_31_46/0.97),rgb(15_18_28/0.97))] text-fg shadow-[0_40px_80px_-24px_rgb(0_0_0/0.8),inset_0_1px_0_rgb(255_255_255/0.06)] outline-none data-[state=open]:animate-dialog-in',
+            'pointer-events-auto relative flex max-h-[calc(100vh-32px)] w-full max-w-[620px] flex-col overflow-clip rounded-[22px] border border-line-strong dialog-surface text-fg shadow-dialog outline-none data-[state=open]:animate-dialog-in',
             className,
           )}
         >
@@ -151,7 +151,7 @@ export function DialogBody({ className, children }: { className?: string; childr
 
 export function DialogFooter({ children }: { children: ReactNode }) {
   return (
-    <footer className="relative flex flex-wrap items-center justify-end gap-2.5 border-t border-white/[0.07] px-6 pt-3.5 pb-[18px]">
+    <footer className="relative flex flex-wrap items-center justify-end gap-2.5 border-t border-ink/[0.07] px-6 pt-3.5 pb-[18px]">
       {children}
     </footer>
   );

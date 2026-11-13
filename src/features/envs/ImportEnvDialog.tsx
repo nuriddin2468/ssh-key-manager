@@ -408,7 +408,7 @@ function VariableChoices({ preview, choices, onChange }: VariableChoicesProps) {
               <tr
                 key={variable.name}
                 className={cn(
-                  'h-[42px] border-t border-white/[0.05]',
+                  'h-[42px] border-t border-ink/[0.05]',
                   choice ? 'bg-[rgb(var(--accent-rgb)/0.06)]' : 'opacity-70',
                 )}
               >

@@ -125,7 +125,7 @@ export function FileCompareDialog({ envId, file, onDone }: FileCompareDialogProp
         ) : result ? (
           <div aria-live="polite" className="flex flex-col gap-3">
             {differences === 0 ? (
-              <p className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3.5 py-3 text-fg-2">
+              <p className="flex items-center gap-2 rounded-xl border border-line bg-fill-subtle px-3.5 py-3 text-fg-2">
                 <Check aria-hidden="true" className="size-4 text-ok" strokeWidth={2.2} />
                 {t('envs.compareDialog.identical', { count: result.same.length })}
               </p>

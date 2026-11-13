@@ -80,7 +80,7 @@ export function MyDevices({ status }: { status: NearbyStatus | undefined }) {
             return (
               <li
                 key={device.key}
-                className="flex items-center gap-3 border-b border-white/[0.06] px-4 py-3 last:border-b-0"
+                className="flex items-center gap-3 border-b border-line-soft px-4 py-3 last:border-b-0"
               >
                 <Tile tone="orange" size={34}>
                   <Laptop className="size-4" strokeWidth={2} />
@@ -95,7 +95,7 @@ export function MyDevices({ status }: { status: NearbyStatus | undefined }) {
                         <span className="flex items-center gap-1.5">
                           <span
                             aria-hidden="true"
-                            className={`size-1.5 rounded-full ${here ? 'bg-ok' : 'bg-white/25'}`}
+                            className={`size-1.5 rounded-full ${here ? 'bg-ok' : 'bg-ink/25'}`}
                           />
                           {here ? t('nearby.devices.here') : t('nearby.devices.away')}
                         </span>

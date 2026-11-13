@@ -447,6 +447,8 @@ export function sshToolsHandlers(config: Config): Record<string, Handler> {
       }
       return config.config();
     },
+    // The backend's file dialog: a PuTTY key in Downloads.
+    key_convert_pick: () => '/Users/dev/Downloads/server-key.ppk',
     key_convert_inspect: ({ path, passphrase }) =>
       inspect(String(path), (passphrase as string | null) ?? null, config.keys()),
     key_convert_import: async (args) => {

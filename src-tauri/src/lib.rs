@@ -1,5 +1,6 @@
 //! SSH Key Manager desktop app: Tauri commands over [`sshkm_core`].
 
+mod appearance;
 pub mod askpass;
 mod autostart;
 pub mod browser;
@@ -18,6 +19,7 @@ mod menu;
 pub mod nearby;
 mod process;
 pub mod quick;
+mod secret_gate;
 mod state;
 pub mod terminal;
 mod tray;
@@ -89,6 +91,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             lock_on_minimize(window, event);
             tray::on_window_event(window, event);
+            appearance::on_window_event(window, event);
         })
         // A reloaded page has lost its terminals' channels: end the sessions.
         .on_page_load(|webview, payload| {
@@ -100,6 +103,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             confirm::set_ui_language,
+            appearance::set_appearance,
             commands::environment::get_environment,
             commands::keys::list_keys,
             commands::keys::generate_key,
@@ -134,6 +138,7 @@ pub fn run() {
             commands::ssh_tools::tunnel_stop_all,
             commands::ssh_tools::tunnel_export,
             commands::ssh_tools::set_proxy_jump,
+            commands::ssh_tools::key_convert_pick,
             commands::ssh_tools::key_convert_inspect,
             commands::ssh_tools::key_convert_import,
             commands::ssh_tools::key_convert_save,
@@ -235,6 +240,9 @@ pub fn run() {
             commands::vault::vault_strength,
             commands::vault::vault_change_master,
             commands::vault::vault_new_recovery_key,
+            commands::vault::vault_recovery_key_pending,
+            commands::vault::vault_unsaved_recovery_key,
+            commands::vault::vault_recovery_key_saved,
             commands::vault::vault_set_settings,
             commands::vault_hosts::vault_test_connection,
             commands::vault_hosts::vault_install_public_key,
@@ -255,6 +263,8 @@ pub fn run() {
             commands::vault_files::vault_export_csv,
             commands::vault_files::vault_export_kdbx,
             commands::vault_files::vault_location,
+            commands::vault_files::vault_pick_folder,
+            commands::vault_files::vault_pick_file,
             commands::vault_files::vault_move,
             commands::vault_files::vault_use_file,
             commands::vault_files::vault_use_default,
@@ -311,6 +321,7 @@ pub fn run() {
             commands::projects::projects_suggest_in_folder,
             commands::projects::projects_open_terminal,
             commands::projects::projects_reveal_folder,
+            commands::reveal::reveal_place,
             commands::projects::projects_missing_folders,
             commands::projects::projects_places,
             commands::projects::projects_set_part_folder,
@@ -343,6 +354,13 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to start SSH Key Manager")
         .run(|app, event| {
+            // A secret copied from the vault goes with the app, as with a
+            // lock: ⌘Q, Quit in the tray, closing the window, an update.
+            if let RunEvent::Exit = event
+                && let Some(state) = app.try_state::<Shared>()
+            {
+                state.vault.on_exit();
+            }
             // The `.env` files written only while the vault is unlocked go
             // with the app, and so do the pipes of virtual ones.
             if let RunEvent::Exit = event
@@ -432,6 +450,10 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let hosts_file = hosts_file::system_path();
     let data_dir = app.path().app_data_dir()?;
     let backup_dir = data_dir.join("backups");
+    // What a crash cut short may have left a secret in a temporary file.
+    for dir in [&paths.dir, &data_dir, &backup_dir] {
+        sshkm_core::fsutil::sweep_abandoned_temps(dir);
+    }
     watcher::start(app.handle(), &paths.dir, &hosts_file);
     commands::agent::check_agent_pipes();
     let bridge = Arc::new(browser::Bridge::new(&data_dir));
@@ -463,6 +485,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "macos")]
     menu::install(app)?;
     let background = tray::Background::install(app.handle(), &data_dir);
+    appearance::install(app.handle(), &data_dir);
     show_main_window(app, background.enabled());
     app.manage(background);
     app.manage(quick::Quick::install(app.handle(), &data_dir));

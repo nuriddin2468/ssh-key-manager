@@ -32,6 +32,8 @@ struct Fake {
     /// The prompt left open, to answer later.
     open_prompt: Mutex<Option<FillAnswer>>,
     copies: Mutex<Vec<PairedBrowser>>,
+    /// Browsers told that their extension needs an update.
+    outdated: Mutex<Vec<String>>,
 }
 
 impl Fake {
@@ -53,7 +55,12 @@ impl Fake {
             prompts: Mutex::new(Vec::new()),
             open_prompt: Mutex::new(None),
             copies: Mutex::new(Vec::new()),
+            outdated: Mutex::new(Vec::new()),
         }
+    }
+
+    fn backups(&self) -> usize {
+        std::fs::read_dir(&self.backups).map_or(0, Iterator::count)
     }
 
     /// Answers the prompt left open.
@@ -114,7 +121,10 @@ impl Env for Fake {
         Ok(result)
     }
 
-    fn write_keys<T>(&self, work: impl FnOnce(&mut Vault) -> AppResult<T>) -> AppResult<T> {
+    fn write_without_backup<T>(
+        &self,
+        work: impl FnOnce(&mut Vault) -> AppResult<T>,
+    ) -> AppResult<T> {
         let mut guard = lock(&self.vault);
         let vault = guard
             .as_mut()
@@ -126,6 +136,10 @@ impl Env for Fake {
 
     fn ask(&self, request: Option<&PairingRequest>) {
         lock(&self.asked).push(request.cloned());
+    }
+
+    fn outdated_extension(&self, browser: &str) {
+        lock(&self.outdated).push(browser.to_owned());
     }
 
     fn show(&self) {
@@ -185,19 +199,39 @@ impl Extension {
         }
     }
 
-    fn pair_message(&self) -> Value {
+    /// The first message of a pairing: the client id, and a hash of the key.
+    fn start_message(&self) -> Value {
         json!({
-            "type": "pair",
+            "type": "pairStart",
             "clientId": CLIENT,
-            "publicKey": encode(self.client.public_key()),
-            "nonce": encode(&[7; 12]),
+            "commitment": encode(&self.client.commitment(CLIENT)),
             "browser": "Chrome\n",
         })
     }
 
+    /// The second: the key itself.
+    fn finish_message(&self) -> Value {
+        json!({
+            "type": "pairFinish",
+            "clientId": CLIENT,
+            "publicKey": encode(self.client.public_key()),
+            "nonce": encode(&[7; 12]),
+        })
+    }
+
+    /// Starts a pairing; returns the app's public key for it.
+    fn start(&self, broker: &Broker, env: &Fake) -> Vec<u8> {
+        let reply = send(broker, env, &self.start_message());
+        assert_eq!(reply["type"], "pairStarted", "{reply}");
+        decode(reply["publicKey"].as_str().unwrap(), 65).unwrap()
+    }
+
     /// Pairs, approving or declining in the app once the dialog shows.
     fn pair(&mut self, broker: &Arc<Broker>, env: &Arc<Fake>, approve: bool) -> Value {
-        let message = self.pair_message();
+        let app_public = self.start(broker, env);
+        // The app asks the user only once the extension revealed its key.
+        assert_eq!(broker.pending(), None);
+        let message = self.finish_message();
         let waiting = thread::spawn({
             let (broker, env) = (Arc::clone(broker), Arc::clone(env));
             move || send(&broker, &env, &message)
@@ -205,14 +239,17 @@ impl Extension {
         let request = wait_for_pending(broker);
         assert_eq!(
             request.code,
-            pairing_code(CLIENT, self.client.public_key()),
-            "the app shows the code the extension computes"
+            pairing_code(CLIENT, self.client.public_key(), &app_public),
+            "the app shows the code the extension computes, from both keys"
         );
         assert_eq!(request.browser, "Chrome");
         assert!(broker.decide(&request.id, approve));
         let reply = waiting.join().unwrap();
         if reply["type"] == "paired" {
-            let app_public = decode(reply["publicKey"].as_str().unwrap(), 65).unwrap();
+            assert_eq!(
+                decode(reply["publicKey"].as_str().unwrap(), 65).unwrap(),
+                app_public
+            );
             let keys = self.client.complete(CLIENT, &app_public).unwrap();
             let info = keys
                 .open_response(
@@ -357,13 +394,50 @@ fn unlock_is_asked_for_a_few_times_a_minute_at_most() {
 }
 
 #[test]
+fn the_window_comes_forward_a_few_times_a_minute_at_most() {
+    let broker = Broker::default();
+    let env = Fake::new();
+    for _ in 0..MAX_UNLOCKS {
+        assert_eq!(
+            send(&broker, &env, &json!({ "type": "show" })),
+            json!({ "type": "shown" })
+        );
+    }
+    let limit = u32::try_from(MAX_UNLOCKS).unwrap();
+    for _ in 0..100 {
+        assert_eq!(
+            send(&broker, &env, &json!({ "type": "show" })),
+            error("tooMany")
+        );
+    }
+    assert_eq!(*lock(&env.shown), limit);
+
+    // Unlocking and pairing a locked vault, and unlocking none, count too.
+    *lock(&env.vault) = None;
+    assert_eq!(
+        send(&broker, &env, &json!({ "type": "unlock" })),
+        error("tooMany")
+    );
+    assert_eq!(
+        send(&broker, &env, &Extension::new().start_message()),
+        error("locked")
+    );
+    env.missing.store(true, Ordering::SeqCst);
+    assert_eq!(
+        send(&broker, &env, &json!({ "type": "unlock" })),
+        error("tooMany")
+    );
+    assert_eq!((*lock(&env.shown), *lock(&env.unlocks)), (limit, 0));
+}
+
+#[test]
 fn hello_and_show_need_no_pairing() {
     let broker = Broker::default();
     let env = Fake::new();
     let reply = send(&broker, &env, &json!({ "type": "hello" }));
     assert_eq!(
         reply,
-        json!({ "type": "hello", "app": "SSH Key Manager", "version": "1.2.3", "protocol": 1, "vault": "unlocked" })
+        json!({ "type": "hello", "app": "SSH Key Manager", "version": "1.2.3", "protocol": 2, "vault": "unlocked" })
     );
     assert_eq!(
         send(&broker, &env, &json!({ "type": "show" })),
@@ -443,8 +517,9 @@ fn declined_and_unanswered_pairings_store_nothing() {
     assert_eq!(extension.pair(&broker, &env, false), error("denied"));
 
     let broker = Arc::new(Broker::new(Duration::from_millis(50)));
+    extension.start(&broker, &env);
     assert_eq!(
-        send(&broker, &env, &extension.pair_message()),
+        send(&broker, &env, &extension.finish_message()),
         error("expired")
     );
     assert_eq!(broker.pending(), None);
@@ -461,15 +536,112 @@ fn one_pairing_waits_at_a_time() {
     let broker = Arc::new(Broker::new(Duration::from_secs(5)));
     let env = Arc::new(Fake::new());
     let extension = Extension::new();
-    let message = extension.pair_message();
+    extension.start(&broker, &env);
+    let other = Extension::new();
+    assert_eq!(send(&broker, &env, &other.start_message()), error("busy"));
+    let message = extension.finish_message();
     let first = thread::spawn({
         let (broker, env, message) = (Arc::clone(&broker), Arc::clone(&env), message.clone());
         move || send(&broker, &env, &message)
     });
     let request = wait_for_pending(&broker);
+    assert_eq!(send(&broker, &env, &other.start_message()), error("busy"));
     assert_eq!(send(&broker, &env, &message), error("busy"));
     broker.decide(&request.id, false);
     assert_eq!(first.join().unwrap(), error("denied"));
+}
+
+#[test]
+fn a_pairing_finishes_only_with_the_key_it_started_with() {
+    let broker = Broker::default();
+    let env = Fake::new();
+    // Nothing started.
+    let extension = Extension::new();
+    assert_eq!(
+        send(&broker, &env, &extension.finish_message()),
+        error("expired")
+    );
+
+    // Another key than the one committed to: the pairing ends, unasked.
+    extension.start(&broker, &env);
+    let other = Extension::new();
+    assert_eq!(
+        send(&broker, &env, &other.finish_message()),
+        error("invalid")
+    );
+    assert_eq!(
+        send(&broker, &env, &extension.finish_message()),
+        error("expired")
+    );
+
+    // The same key from another extension than the one that started it.
+    extension.start(&broker, &env);
+    let envelope =
+        json!({ "caller": "chrome-extension://other/", "message": extension.finish_message() });
+    let reply: Value =
+        serde_json::from_slice(&broker.handle(&env, envelope.to_string().as_bytes())).unwrap();
+    assert_eq!(reply, error("invalid"));
+
+    // A malformed start.
+    let mut start = extension.start_message();
+    start["commitment"] = json!(encode(&[1; 31]));
+    assert_eq!(send(&broker, &env, &start), error("invalid"));
+
+    assert!(lock(&env.asked).is_empty(), "the user was never asked");
+    assert_eq!(broker.pending(), None);
+}
+
+#[test]
+fn a_pairing_left_unfinished_gives_way() {
+    let broker = Broker::default().with_start_wait(Duration::from_millis(50));
+    let env = Fake::new();
+    let first = Extension::new();
+    first.start(&broker, &env);
+    let second = Extension::new();
+    assert_eq!(send(&broker, &env, &second.start_message()), error("busy"));
+    thread::sleep(Duration::from_millis(60));
+    second.start(&broker, &env);
+    // The first one's start is gone: its key finishes nothing.
+    assert_eq!(
+        send(&broker, &env, &first.finish_message()),
+        error("invalid")
+    );
+}
+
+#[test]
+fn pairings_start_a_few_times_a_minute_at_most() {
+    let broker = Broker::default().with_start_wait(Duration::ZERO);
+    let env = Fake::new();
+    for _ in 0..MAX_PAIRINGS {
+        Extension::new().start(&broker, &env);
+    }
+    assert_eq!(
+        send(&broker, &env, &Extension::new().start_message()),
+        error("tooMany")
+    );
+}
+
+#[test]
+fn an_extension_too_old_to_pair_is_told_to_update() {
+    let broker = Broker::default();
+    let env = Fake::new();
+    let extension = Extension::new();
+    let old = json!({
+        "type": "pair",
+        "clientId": CLIENT,
+        "publicKey": encode(extension.client.public_key()),
+        "nonce": encode(&[7; 12]),
+        "browser": "Firefox",
+    });
+    assert_eq!(send(&broker, &env, &old), error("outdatedExtension"));
+    assert_eq!(*lock(&env.outdated), ["Firefox"]);
+    assert!(lock(&env.asked).is_empty());
+    assert_eq!(broker.pending(), None);
+    assert_eq!(
+        env.read(false, |vault| Ok(vault.paired_browsers()))
+            .unwrap(),
+        Vec::new()
+    );
 }
 
 #[test]
@@ -485,7 +657,7 @@ fn a_locked_vault_answers_nothing_but_hello() {
         error("locked")
     );
     assert_eq!(
-        send(&broker, &env, &extension.pair_message()),
+        send(&broker, &env, &extension.start_message()),
         error("locked")
     );
     assert_eq!(
@@ -719,6 +891,54 @@ fn a_browser_may_change_only_a_few_logins_a_minute() {
     );
 }
 
+#[test]
+fn saves_and_updates_count_against_the_change_limit() {
+    let (broker, env, extension) = paired();
+    let id = env.add("Shop", "bob", "https://shop.example", "pw");
+    for n in 0..MAX_CHANGES / 2 {
+        let update = json!({ "update": { "origin": "https://shop.example", "entryId": id, "password": format!("new{n}") } });
+        assert_eq!(
+            extension.ask(&broker, &env, &update)["entryId"],
+            id.as_str()
+        );
+        let save = json!({ "save": { "origin": "https://shop.example", "username": format!("user{n}"), "password": "pw" } });
+        assert!(extension.ask(&broker, &env, &save)["entryId"].is_string());
+    }
+    let update = json!({ "update": { "origin": "https://shop.example", "entryId": id, "password": "one more" } });
+    assert_eq!(extension.ask(&broker, &env, &update), error("tooMany"));
+    let save = json!({ "save": { "origin": "https://shop.example", "username": "eve", "password": "pw" } });
+    assert_eq!(extension.ask(&broker, &env, &save), error("tooMany"));
+    let edit =
+        json!({ "edit": { "origin": "https://shop.example", "entryId": id, "username": "x" } });
+    assert_eq!(extension.ask(&broker, &env, &edit), error("tooMany"));
+}
+
+#[test]
+fn changes_from_browsers_cannot_push_the_backups_out() {
+    let (broker, env, extension) = paired();
+    let id = env.add("Shop", "bob", "https://shop.example", "pw");
+    let before = env.backups();
+    // The first change backs the vault up as it was; the next ones don't.
+    for n in 0..MAX_CHANGES {
+        let update = json!({ "update": { "origin": "https://shop.example", "entryId": id, "password": format!("new{n}") } });
+        assert_eq!(
+            extension.ask(&broker, &env, &update)["entryId"],
+            id.as_str()
+        );
+    }
+    assert_eq!(env.backups(), before + 1);
+    // Every change was saved all the same.
+    assert_eq!(
+        lock(&env.vault)
+            .as_ref()
+            .unwrap()
+            .secret(&id, sshkm_core::vault::SecretField::Password)
+            .unwrap()
+            .expose_secret(),
+        format!("new{}", MAX_CHANGES - 1)
+    );
+}
+
 fn fill(extension: &Extension, broker: &Broker, env: &Fake, origin: &str, id: &str) -> Value {
     extension.ask(
         broker,
@@ -938,25 +1158,78 @@ fn keys_change_and_a_copy_of_the_old_ones_is_caught() {
 }
 
 #[test]
-fn a_rekey_whose_answer_was_lost_changes_nothing() {
+fn a_rekey_whose_answer_was_lost_is_simply_asked_again() {
     let (broker, env, extension) = paired();
     let status = json!({ "vault": "unlocked" });
-    let lost = extension.rekey(&broker, &env);
+    let before = env.backups();
+    let _lost = extension.rekey(&broker, &env);
     let next = extension.rekey(&broker, &env);
     // The later rekey replaced the lost one; the old keys still work.
     assert_eq!(extension.ask(&broker, &env, &json!("status")), status);
-    assert_eq!(
-        Extension::with_keys(lost).ask(&broker, &env, &json!("status")),
-        error("invalid")
-    );
-    let backups = || std::fs::read_dir(&env.backups).map_or(0, Iterator::count);
-    let before = backups();
     assert_eq!(
         Extension::with_keys(next).ask(&broker, &env, &json!("status")),
         status
     );
     assert!(lock(&env.copies).is_empty());
-    assert_eq!(backups(), before, "changing keys takes no backup");
+    assert_eq!(env.backups(), before, "changing keys takes no backup");
+}
+
+#[test]
+fn a_copy_that_changes_keys_over_the_browser_is_caught() {
+    let (broker, env, extension) = paired();
+    let status = json!({ "vault": "unlocked" });
+    // The browser changes its keys; a copy of its current ones asks for new
+    // keys too before the browser first used its own.
+    let browsers_next = extension.rekey(&broker, &env);
+    let copy = Extension::with_keys(extension.keys.clone().unwrap());
+    let copys_next = copy.rekey(&broker, &env);
+    assert_eq!(
+        Extension::with_keys(copys_next.clone()).ask(&broker, &env, &json!("status")),
+        status
+    );
+    // The browser's next request shows that two hold its keys.
+    assert_eq!(
+        Extension::with_keys(browsers_next).ask(&broker, &env, &json!("status")),
+        error("revoked")
+    );
+    assert_eq!(lock(&env.copies).len(), 1);
+    assert_eq!(
+        Extension::with_keys(copys_next).ask(&broker, &env, &json!("status")),
+        error("unknownClient")
+    );
+}
+
+#[test]
+fn keys_replaced_before_use_revoke_whenever_they_are_used() {
+    let (broker, env, extension) = paired();
+    // The browser's request sealed before the copy's key change got there,
+    // and delivered after it: it still gives the copy away.
+    let browsers_next = Extension::with_keys(extension.rekey(&broker, &env));
+    let (nonce, early) = browsers_next.sealed(&json!("status"), now() - 1_000);
+    let copy = Extension::with_keys(extension.keys.clone().unwrap());
+    copy.rekey(&broker, &env);
+    assert_eq!(
+        browsers_next.open(&nonce, &send(&broker, &env, &early)),
+        error("revoked")
+    );
+    assert_eq!(lock(&env.copies).len(), 1);
+}
+
+#[test]
+fn keys_change_a_few_times_a_minute_at_most() {
+    let (broker, env, extension) = paired();
+    for _ in 0..MAX_REKEYS {
+        extension.rekey(&broker, &env);
+    }
+    let next = ClientPairing::new();
+    assert_eq!(
+        extension.ask(
+            &broker,
+            &env,
+            &json!({ "rekey": { "publicKey": encode(next.public_key()) } })
+        ),
+        error("tooMany")
+    );
 }
 
 #[test]

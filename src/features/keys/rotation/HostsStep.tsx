@@ -135,7 +135,7 @@ export function HostsStep({
           htmlFor={id}
           className={cn(
             'flex w-full cursor-pointer items-start gap-[11px] rounded-[10px] px-2.5 py-2',
-            selected.has(row.alias) ? 'bg-white/[0.04]' : 'hover:bg-white/[0.03]',
+            selected.has(row.alias) ? 'bg-ink/[0.04]' : 'hover:bg-fill-subtle',
           )}
         >
           <CheckboxControl

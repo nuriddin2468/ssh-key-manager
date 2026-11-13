@@ -351,8 +351,7 @@ struct Parsed {
     skipped: u32,
 }
 
-/// One usable row, with its secrets.
-#[derive(Debug)]
+/// One usable row, with its secrets; its `Debug` shows none of them.
 struct Record {
     index: u32,
     title: String,
@@ -367,6 +366,16 @@ struct Record {
     unreadable_otp: Option<Zeroizing<String>>,
     /// When the password was last changed, if the file says.
     changed_at: Option<chrono::NaiveDateTime>,
+}
+
+impl std::fmt::Debug for Record {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Record")
+            .field("index", &self.index)
+            .field("title", &self.title)
+            .field("url", &self.url)
+            .finish_non_exhaustive()
+    }
 }
 
 fn read(path: &Path) -> Result<Parsed> {

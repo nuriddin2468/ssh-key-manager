@@ -50,6 +50,13 @@ pub(crate) struct KeySlots {
     slots: Vec<Slot>,
 }
 
+/// What every version of the file starts with.
+#[derive(Deserialize)]
+struct FileHeader {
+    format: String,
+    version: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum Slot {
@@ -91,14 +98,31 @@ impl KeySlots {
 
     /// Reads the file together with its SHA-256, which a later write checks
     /// against ([`file_hash`]); `Ok(None)` when it does not exist.
+    ///
+    /// A file a newer version of the app wrote fails with
+    /// [`Error::Unsupported`]; one that isn't a key slots file at all
+    /// (damaged, cut short, too large) fails with [`Error::Parse`].
     pub(crate) fn read(path: &Path) -> Result<Option<(Self, [u8; 32])>> {
         let Some(bytes) = read_file(path)? else {
             return Ok(None);
         };
+        // Its own format and version first: a newer version may have
+        // changed everything else.
+        if let Ok(header) = serde_json::from_slice::<FileHeader>(&bytes)
+            && header.format == FORMAT
+            && header.version > VERSION
+        {
+            return Err(Error::Unsupported(format!(
+                "{} was written by a newer version of SSH Key Manager (version {}); \
+                 update the app to open the vault",
+                path.display(),
+                header.version
+            )));
+        }
         let slots: Self = serde_json::from_slice(&bytes)
             .map_err(|e| Error::Parse(format!("{}: {e}", path.display())))?;
         if slots.format != FORMAT || slots.version != VERSION {
-            return Err(Error::Unsupported(format!(
+            return Err(Error::Parse(format!(
                 "{}: format {} version {}",
                 path.display(),
                 slots.format,
@@ -106,6 +130,24 @@ impl KeySlots {
             )));
         }
         Ok(Some((slots, Sha256::digest(&bytes).into())))
+    }
+
+    /// Moves a damaged key slots file aside, as `<name>.damaged-<time>`, so
+    /// a new one can take its place and the old one is still there to look
+    /// at. Returns where it went.
+    pub(crate) fn set_aside(path: &Path) -> Result<std::path::PathBuf> {
+        let name = path
+            .file_name()
+            .map_or_else(|| "vault.keys".into(), |n| n.to_string_lossy().into_owned());
+        let stamp = time::OffsetDateTime::now_utc().unix_timestamp();
+        let mut aside = path.with_file_name(format!("{name}.damaged-{stamp}"));
+        let mut n = 1;
+        while aside.exists() {
+            aside = path.with_file_name(format!("{name}.damaged-{stamp}-{n}"));
+            n += 1;
+        }
+        std::fs::rename(path, &aside).map_err(|e| Error::io(e, path))?;
+        Ok(aside)
     }
 
     /// Writes the file and returns the SHA-256 of what was written.

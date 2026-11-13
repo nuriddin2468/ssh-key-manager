@@ -514,6 +514,8 @@ function withHistory(check: (args: Record<string, unknown>) => unknown) {
 }
 
 const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
+  // The windows' own light or dark look; a browser has none to set.
+  set_appearance: () => null,
   ...vaultHandlers,
   ...vaultLinkHandlers({ keys: () => keys, hosts, agent: agentLoaded }),
   ...vaultFilesHandlers,
@@ -624,6 +626,12 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   },
   trash_key: ({ keyId }) => {
     keys = keys.filter((k) => k.id !== keyId);
+  },
+  // Stands in for Finder: a key is looked up by its id, as the backend does.
+  reveal_place: ({ place }) => {
+    const target = place as { kind: string; id?: string };
+    if (target.kind === 'key' && !findKey(String(target.id))) return fail('not_found', 'key');
+    return null;
   },
   agent_view: agentView,
   agent_add: ({ keyId, passphrase, lifetimeSecs }) => {

@@ -10,8 +10,10 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
 - **Key passphrases are not stored**, unless you save them in the password vault. They
   travel from the form to the Rust process for one operation and are held in
   `secrecy::SecretString`. They are never logged. Adding a passphrase to a key that has
-  none, or removing one, is confirmed in a system dialog.
-- **Imported keys hold nothing but the key.** A file with anything after the key, or one
+  none, or removing one, is confirmed in a system dialog, and so is writing an
+  encrypted key out without one in the key converter.
+- **Imported keys hold nothing but the key.** The key file is picked in a system dialog
+  the app opens itself. A file with anything after the key, or one
   that isn't a well-formed key, is refused; the app writes the key and its public line
   out again rather than copying the file. Names OpenSSH reserves (`authorized_keys`,
   `rc`, `config`, …) are refused in any letter case. Keys that ask for more than 1024
@@ -24,10 +26,23 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     The master password does not encrypt the database directly: it opens a copy of
     the recovery key kept in `vault.keys`, encrypted with XChaCha20-Poly1305 under a
     key derived with Argon2id (128 MiB, 3 passes). There is no way back without the
-    master password or the recovery key.
+    master password or the recovery key. Losing or damaging `vault.keys` loses
+    nothing: the lock screen then asks for the recovery key, which opens the database
+    alone and writes a new `vault.keys` (a damaged one is kept next to it, as
+    `vault.keys.damaged-<time>`). A `vault.keys` written by a newer version of the app
+    is left alone: the app asks to be updated instead of offering recovery.
+  - Master password checks run one at a time, in whichever window or for whichever
+    action they are made (unlocking; exporting, a new master password or recovery key,
+    device unlock, adding an own device), and so do attempts with the recovery key or a
+    KeePass file's password. After three wrong ones in a row, the next attempt is
+    refused until a wait has passed: 1 second, doubling up to 30 seconds; a right one
+    resets the count. The count is kept in memory and starts again with the app. It
+    slows guessing through the app; someone with a copy of `vault.keys` is slowed only
+    by Argon2id.
   - While unlocked, the decrypted database is held only by the Rust process and is
-    dropped when the vault locks: on request, after inactivity, after sleep, and
-    optionally when the window is minimised or closed. With **Settings → Background**
+    dropped when the vault locks: on request, after inactivity (time the computer
+    slept counts as inactivity), after sleep, when the screen locks, and optionally
+    when the window is minimised or closed. With **Settings → Background**
     on, closing the window only hides it and the app goes on in the tray (the menu bar
     on macOS), so browser autofill keeps working; the vault then locks by the same
     rules, and the tray menu shows whether it is unlocked and locks it. Showing an
@@ -35,11 +50,15 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     count as activity, so it doesn't keep the vault open. Lists and details sent to the
     interface carry no passwords or 2FA secrets; a password (or a key's passphrase)
     reaches the interface only when you choose to reveal it. A 2FA secret never does:
-    only the current code, computed in the Rust process.
+    only the current code, computed in the Rust process. Ten secrets (shown, or
+    copied from the main window: passwords, secret variables, the vault's side of an
+    import's comparison) go without asking in a row, then one more every six minutes,
+    about ten an hour; each one past that is asked for in a system dialog that names
+    it, so the page can't read the vault out one secret after another.
   - Copying a password, a 2FA code or the recovery key goes from Rust straight to the
     clipboard, marked so clipboard history (and Windows' cloud clipboard) skip it, and
     is cleared after 30 seconds by default if nothing else was copied. Locking the vault
-    clears it at once.
+    or quitting the app clears it at once.
   - The secret generator on the Tools page makes its passwords, tokens and keys in Rust
     from the operating system's random number generator, as the vault does. It shows
     the value it made; copying it, or a `.env` line, an `export` or a connection URL
@@ -52,7 +71,22 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     over key slots changed elsewhere is refused.
   - Key derivation settings read from `vault.keys` or a `.kdbx` header (memory, passes
     and lanes; each lane is a thread started for every quarter of every pass) are
-    capped before use, so a tampered file can't make unlocking run for hours.
+    capped before use, so a tampered file can't make unlocking run for hours. A
+    KeePass file's header is validated strictly before the file is parsed, and KeePass 1
+    (`.kdb`) files are refused. A vault file replaced by one its key doesn't open locks
+    the vault; a file that doesn't open isn't decrypted again until it changes.
+  - The screen lock is noticed on macOS and Windows. On Linux it is noticed through
+    systemd-logind: the session's `Lock` signal (which `loginctl lock-session` sends)
+    and its `LockedHint` (which GNOME, KDE, Cinnamon, MATE, Xfce and light-locker set);
+    without logind, through the desktop's screensaver service. A locker that tells
+    neither, such as swaylock or i3lock started from a key binding, isn't noticed:
+    there the vault locks after inactivity or sleep only.
+  - A new recovery key on the screen (after making the vault, or in Settings) goes
+    when the vault locks. Until you confirm it's saved, the app reminds you after each
+    unlock, and keeps only a note of the vault's id meanwhile. Only the app sets that
+    note, when it makes a key; the page can only clear it. The key is shown again only
+    when you ask and say yes in a system dialog, every time: then it is read from the
+    unlocked vault, whose password it is.
   - A 2FA secret the app can't make codes for (HOTP, a period of 0 or over 5 minutes,
     fewer than 6 or more than 10 digits), from an import, a contact or a KeePass file,
     is refused or kept as unreadable instead of crashing the app.
@@ -64,7 +98,10 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - Turning off or loosening auto-lock, lock on sleep, screen lock or minimise, or
     clipboard clearing; turning off device unlock; and moving the vault or switching to
     another file are each confirmed in a system dialog, which the page can't answer or
-    slip under a key press (see "Standard files only").
+    slip under a key press (see "Standard files only"). The folder or file is picked in
+    a system dialog the app opens itself, the confirmation shows its path with control
+    and invisible characters made visible, and a file switched to isn't opened before
+    you confirm.
   - When it is used, a saved key passphrase goes from the vault straight to `ssh-agent`
     or `ssh` inside the Rust process; the interface receives it only when you choose to
     show it, like a password. Copying it goes from Rust straight to the clipboard. To
@@ -93,21 +130,32 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - Exports: the file is chosen in a system dialog the app opens itself, and both
     exports need the master password. The KeePass copy stays encrypted (it opens with
     the recovery key). The CSV export is plain text: it is readable only by you from the
-    moment it is created (mode 0600; on Windows the file is created with an access list
-    for you, SYSTEM and Administrators only, and no one else can open it while it is
-    written). On a drive that can't keep such an access list (FAT or exFAT USB sticks,
-    some network drives) both exports are refused and nothing is written. It is never
-    written into `~/.ssh` or over the vault's own files (compared by file identity, so
-    links and firmlinks don't get around it), and cells that a spreadsheet would run as
-    a formula are defused, except passwords. Files to import are also picked in a
-    system dialog. Imported CSV files can be moved to the Trash right after import.
+    moment it is created (mode 0600 whatever file it replaces, never that file's mode;
+    on Windows the file is created with an access list for you, SYSTEM and
+    Administrators only, and no one else can open it while it is written). Both are
+    written as a new file renamed onto the path you picked, so a link there is
+    replaced, never written through. On a drive that can't keep such an access list
+    (FAT or exFAT USB sticks, some network drives) both exports are refused and nothing
+    is written. It is never written into `~/.ssh` or over the vault's own files
+    (compared by file identity, so links and firmlinks don't get around it), and cells
+    that a spreadsheet would run as a formula are defused, except passwords. Files to
+    import are also picked in a system dialog. Imported CSV files can be moved to the
+    Trash right after import.
+  - Importing straight from a browser reads the logins it saved only after you confirm
+    in a system dialog that names the browser and the profile: not every system asks
+    before another app reads them (Firefox without a primary password never does, nor
+    Chromium browsers on Windows or with an open Linux keyring). The yes holds for that
+    profile until the import dialog closes or the vault locks. The logins read stay in
+    the Rust process for the preview, which carries no passwords, and are wiped when
+    they are imported, the dialog closes or the vault locks.
   - Secret environments (the **Environments** page) are entries of the same vault:
     one per environment, in the group `Environments/<project>`, with a custom field
     per variable; a secret variable's field is protected like a password. Lists,
     details, import previews and comparisons sent to the interface carry names, flags
     and notes, never values: a value reaches it only when you choose to show it (or
     load it to edit it), and copying goes from Rust straight to the clipboard,
-    cleared like a password when the variable is secret. Two environments are
+    cleared like a password when the variable is secret. Secret values count toward
+    the ten in a row above. Two environments are
     compared inside the Rust process; only the names that differ come out.
   - A `.env` file to import is picked in a system dialog the app opens itself and
     read again when you import, at most 1 MiB; nothing in it is expanded or run, and
@@ -116,26 +164,55 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - Exporting an environment writes it in plain text (`.env`, JSON, YAML, shell
     `export` lines, a Docker env file, or a Kubernetes Secret, whose base64 hides
     nothing), to a file picked in a system save dialog, with the same protections as
-    the CSV export: mode 0600 (or the private access list on Windows), never in
-    `~/.ssh`, never over the vault's files. Shell lines quote every value in `'…'`,
+    the CSV export: mode 0600 (or the private access list on Windows), a link at the
+    path replaced rather than written through, never in `~/.ssh`, never over the
+    vault's files. Shell lines quote every value in `'…'`,
     so sourcing the file runs nothing a value holds. When the file would be inside a
     Git working tree that doesn't ignore it (`git check-ignore`; without `git`, any
-    working tree counts), nothing is written until you confirm in the app.
+    working tree counts), nothing is written until you confirm in the app. A note,
+    or an environment's name, that the app writes as a `#` comment line (in an
+    export, or the first line a virtual file answers) stays on that one line:
+    control characters and U+2028 and U+2029, which some readers end a line at
+    (Node's `dotenv`, so Vite and Next.js, and YAML 1.1), become spaces, so the rest
+    of a comment is never read as a variable.
   - **Managed `.env` files.** A `local` environment can be written to files in the
     folders of the projects that hold it; a `remote` one never is. The interface names
     a file only as a project folder and a path in it. The app takes plain names ending
     in a `.env` file's name, never a template to commit (`.env.example`), resolves
     links on the way and refuses a file whose folder isn't that project folder or one
     inside it (by file identity), a file that is a link, a pipe or a device, and
-    anything in `~/.ssh` or over the vault's files. A binding is checked again each
+    anything in `~/.ssh` or over the vault's files. Writing an environment with secret
+    values to a file (binding it, or taking a file under management into an existing
+    environment) is confirmed in a system dialog that names the file and the
+    environment, once per environment until the vault locks. A binding is checked again each
     time it is used, so one that arrives from another computer or an edited database
     is held to the same rules. A file is written by renaming a new private file over
-    it (mode 0600, or the private access list on Windows; the temporary file is named
-    `<file>.sshkm-….tmp`, so `.env*` ignore rules cover it, and one a crash leaves is
-    removed on the next round), so a link put in its place is replaced, never written
-    through; a file that isn't there is only ever created, never written over. It is
-    read without following links, as a regular file only, and written only if its
-    folder is still the one it was found in. A missing folder is never created.
+    it (mode 0600, or the private access list on Windows), so a link put in its place
+    is replaced, never written through; a file that isn't there is only ever created,
+    never written over. It is read without following links, as a regular file only.
+    Its folder is opened once and checked as it was opened: still the folder the file
+    was found in, and inside the project folder (by file identity, walking up from the
+    folder that was opened). The file is then read, written, made a pipe or deleted
+    through that open folder, so a folder swapped meanwhile for a link or for another
+    folder gets nothing; a level-2 file or a pipe removed later is looked at and
+    removed through its folder held open in the same way, and only if it is still the
+    file or pipe the app listed. On Windows the folder is held open, so it can't be
+    renamed or deleted while the file is written, and checked by the path Windows
+    gives for the folder held; the file is then written by its path. On macOS a new
+    file or pipe is made in a folder of its own next to it, `<file>.sshkm-….tmp`
+    (mode 0700, its access list emptied before anything is made in it, so nothing a
+    folder's list hands down is on the file at any moment), under the file's own
+    name, and then renamed into place: ignore rules that name the file (`.env`,
+    `.env*`) cover it there, though not one anchored to the file's own path
+    (`/.env`). On Linux and Windows it is made next to the file as
+    `<file>.sshkm-….tmp`, which `.env*` covers but an exact `.env` doesn't. Either is
+    there only while the file is written, and is listed before it is made, so one a
+    crash leaves (with the values in it) is removed by the guard (below), or else by
+    the next start or the next round; one left while a pipe was made holds only the
+    pipe, and the next round removes it. A missing folder is never created.
+    A file is bound at the interface's request, without a system dialog: any
+    environment of a project, a remote one too (at level 2 or 3), to a `.env` path in
+    that project's folders; any warning about it comes from the interface.
   - Managed files and the vault are kept in step both ways. Per file, each computer
     keeps a keyed hash of the variables both last agreed on (`env-files.json` in the
     app's data folder; the key is in the vault, so the hashes say nothing without it).
@@ -163,12 +240,68 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     repository's settings say (`GIT_ALLOW_PROTOCOL`), so it fetches nothing, not even
     the objects a partial clone left out, and it gets none of the app's `GIT_*`
     environment. A line goes into `.gitignore` only when you ask.
+  - An edit of a managed file goes to the vault, whoever made it: any program that can
+    write in the folder (a build tool, an AI agent) changes what the vault holds, and,
+    through a shared value, the files of every environment that uses it, in any
+    project. Undo and the entry's history keep what it was.
+  - **Files only while the vault is unlocked** (level 2) are written when the vault
+    unlocks, and again whenever one is missing while it is unlocked. Before the vault
+    locks, when the app quits and before an update is installed, one last round takes
+    their edits to the vault and they are removed; one the vault couldn't take (both
+    sides changed, lines it can't read), or one changed after that round, stays until
+    the next unlock, and the app says so. Each is kept out of Time Machine, Dropbox
+    and the File Provider folders (iCloud Drive, and OneDrive and Dropbox in
+    `~/Library/CloudStorage`) by attributes set before it holds anything; on Linux
+    only Dropbox's attribute, on Windows Dropbox's stream, set before the file takes
+    its place. Limits: a file is removed by unlinking it, not overwritten first, so
+    its contents can stay in free blocks of the disk; snapshots of the whole volume
+    (the local APFS snapshots Time Machine takes, Btrfs or ZFS snapshots) and backup
+    tools that don't read those attributes can keep a copy; and the files aren't
+    removed before the computer sleeps, only when the vault locks (with locking after
+    sleep on, as the computer wakes). The app keeps a list of them in
+    `env-files-unlocked.json` in its data folder (each file's path, identity, size
+    and time of change; no value, nor a hash of one), and lists each write before it
+    makes it.
+  - **Virtual files** (level 3, macOS and Linux) leave nothing on disk: in place of
+    the file, a named pipe (mode 0600) the app answers while it runs, with the
+    variables while the vault is unlocked and otherwise a comment saying why. Any
+    program running as you can open the pipe and read the values while the vault is
+    unlocked: a pipe doesn't say who reads it, and the app checks only that the pipe
+    is its own (by its identity), never who the reader is. When the vault locks, an
+    answer left unread in the pipe is taken out at once, and no more of one is
+    written. A file saved over the pipe is taken like any edit, and the pipe comes
+    back. The pipes go when the app quits, after the readers waiting are told that it
+    isn't running; the list of them, `env-files-virtual.json`, holds where and which
+    they are, no values.
+  - **The guard.** While there are level-2 or virtual files, the app runs its own
+    program a second time as a guard (on macOS and Linux in a process group of its
+    own), given only the paths of those two lists, waiting on a pipe from the app.
+    When the app goes without putting them away (it crashed, or was killed or forced
+    to quit), the guard removes the listed level-2 files still as the app left them
+    and the temporary files and folders of writes next to them, tells the readers
+    waiting on the listed pipes that the app isn't running, removes the pipes that
+    are still the app's, and exits. A file changed since stays. If there is no guard
+    (it went too, in a power cut or with the whole session, or the app went during
+    the round that would have started it), the app's next start does the same.
+  - **AI tools' rules.** When you say so for a project folder, the app adds a line
+    naming each of its managed files to the AI tools' ignore files (`.cursorignore`
+    and the like in the folder, `.aiderignore` at the top of the Git working tree) and
+    a deny rule naming it by full path to Claude Code's `~/.claude/settings.json`, and
+    does so for files bound there later. They are added at the interface's request,
+    without a system dialog; they only ever name the folder's managed files, and
+    nothing else in those files changes. They are requests the tools honour, not
+    access control: a tool that doesn't read them, or a command it runs, can still
+    read the files.
   - **Run in terminal** starts your own shell (`$SHELL` as a login shell, or
     `%ComSpec%` on Windows) in the in-app terminal with the variables added to its
     environment. Nothing is written to disk, but the shell and everything it starts
     hold the values in their environment: other programs running as you can read a
     process's environment (`/proc/<pid>/environ` on Linux, `ps -E` on macOS), and the
-    shell may save the commands you type in its history.
+    shell may save the commands you type in its history. Before an environment's secret
+    values go into a shell (here or in a project's terminal), a system dialog names the
+    environment and how many of its values are secret. It asks once per environment
+    until the vault locks: a script in the page could type into a shell that already
+    holds them, so asking for every shell would add clicks, not protection.
 - **Answering `ssh` prompts.** To log in with a password or one-time code, the app acts
   as `ssh`'s askpass program.
   - The secret goes over a local socket only this user can reach (a private 0700
@@ -220,8 +353,15 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     through the host editor's path: a backup first, refused if the file changed
     meanwhile, and a native confirmation for lines that say which server gets access.
   - The key converter decrypts keys in Rust only; the page sees fingerprints and the
-    public key. Converted keys go into `~/.ssh` only as new files (0600), or where you
-    pick in a system save dialog, never over a file in `~/.ssh`. New passphrases use
+    public key. It reads only a file picked in a system dialog the app opens itself, or
+    a private key in `~/.ssh`. Converted keys go into `~/.ssh` only as new files (0600), or where you
+    pick in a system save dialog, as the CSV export is written: readable only by you
+    from the first byte (mode 0600 whatever file it replaces, or the private access
+    list on Windows, where a drive that can't keep one is refused), renamed onto the
+    path itself so a link there is replaced, never written through. A converted key is
+    never saved over a file in `~/.ssh`, compared by file identity, so a link or `..`
+    in the path doesn't get around it. An encrypted key written out without a
+    passphrase is confirmed in a system dialog that names both files. New passphrases use
     the formats' strong options (OpenSSH bcrypt, PuTTY v3 Argon2id, PKCS#8 PBES2 with
     PBKDF2-SHA256 and AES-256); PEM, whose encryption is one round of MD5, is written
     only without a passphrase, and the app says so. The key derivation settings a file
@@ -369,8 +509,31 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - CI checks the Rust dependencies with `cargo deny`: known advisories, crates from
     anywhere but crates.io, and licenses the app can't be shipped with (`deny.toml`).
 - **Standard files only.** The app edits the OpenSSH files in place.
-  - Writes are atomic (temp file plus rename), keep the file's permissions, and follow
-    symlinks.
+  - Writes are atomic: a temporary file next to the file, flushed to disk and renamed
+    over it. What they keep depends on the file:
+    - `config`, `known_hosts` and the app's own data files keep their permissions and
+      follow symlinks, so a `~/.ssh/config` that links into a dotfiles repository
+      stays a link and the repository file is updated.
+    - A private key rewritten in place (a passphrase added, changed or removed)
+      follows a symlink too, but keeps only its owner's permissions: a key others could
+      read becomes 0600 (a 0400 key stays 0400); on Windows it gets the private access
+      list as it is created.
+    - Secrets written where you pick (vault and environment exports, converted keys)
+      and managed `.env` files never follow a link at their path and never take the
+      mode of a file they replace: a new file, readable only by you from its first
+      byte, is renamed onto the path itself.
+    - On macOS a folder's access list can hand entries down to what is made in it, and
+      macOS checks them before the mode. A file the app makes for you alone (mode 0600
+      or stricter), and a level-3 `.env` pipe, is therefore made in a new folder of its
+      own next to where it goes (mode 0700, its access list emptied before anything is
+      made in it) and then renamed into place, so it never carries such an entry, not
+      even for the moment before its contents are written.
+    - A temporary file a crash leaves behind is removed: in `~/.ssh` and the app's
+      data folder at the next start, next to an export or converted key at the next
+      write to that file.
+  - Files the app reads (keys, `config`, `known_hosts`, a vault to switch to) are read
+    only if they are regular files: a pipe or a device is refused without waiting for
+    anything to be written to it (`/dev/null` reads as empty).
   - `config` and `known_hosts` are backed up before every write. An edit is tied to the
     version of the file it was made on and refused if the file changed meanwhile.
   - A change that adds or alters a directive that runs a program, loads a library,
@@ -448,6 +611,18 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     Microsoft as the publisher. PowerShell, `pkexec` and the other system tools the app
     starts are run by their full path in the system folders, never looked up on `PATH`.
 - **Locked-down webview**
+  - The page drives the in-app terminal, so a script running in the page could open a
+    shell and run commands as you. The model therefore rests on no outside code ever
+    running in the page: everything from outside (the SSH config, vault titles, names
+    from contacts, server output) is rendered as text, nothing parses it as HTML (a
+    test refuses HTML sinks in the app and the browser extension), and the Content
+    Security Policy below lets only the app's own scripts run. The system dialogs and
+    the rule that the page never names a file only limit what such a script could
+    take in bulk from the vault and from browsers, or where it could move the vault.
+    Without a dialog it could still read ten secrets, then about ten an hour, the values of
+    environments you let into a shell or a file since the vault was unlocked, and,
+    through a shell, anything you can read: the `.env` files the app already writes,
+    an unencrypted private key, other programs' files. It can always run commands.
   - Strict Content Security Policy: only the app's own scripts run, and no `eval`.
   - Tauri's frozen JavaScript prototype (`freezePrototype`) is off: the terminal
     (xterm.js) assigns its own `toString` while loading, which a frozen prototype
@@ -457,9 +632,20 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     them, and a test checks the list against the commands registered), so a window
     can call only what its capability names: the main window all of them, the
     browser's unlock window only the three that unlock the vault, the quick search
-    window only what it lists and does (see "Quick search" above).
+    window only what it lists and does (see "Quick search" above). Of Tauri's own
+    commands and the plugins' the main window gets only what its page uses: listening to
+    the app's events, moving and maximising the window, opening `http(s)` links and
+    writing the clipboard. It can't change the tray or the menus, read images, send
+    events to the app, or open a file dialog or the file manager at a path it names:
+    files are picked, and shown in Finder, Explorer or Files, by the app's own commands,
+    which find the path themselves.
   - The window only shows the app's own page: navigating elsewhere is refused and new
     windows can't open. Links open in your browser, and only `http` and `https` links.
+    In the terminal a link opens only on ⌘-click (Ctrl-click on Windows and Linux), as
+    in native terminals, and pointing at it shows where it really leads (international
+    host names in their `xn--` form). Pasted text loses its escape and other control
+    characters (tabs and line ends stay), so it can't end bracketed paste early and run
+    what follows without your Enter.
   - Permission fixes apply only what the app's own audit found inside `~/.ssh`, and only
     ever remove permissions.
   - Config fixes from the audit apply only what its rules offer for the file at that
@@ -494,13 +680,17 @@ Settings then asks to move the app to Applications.
   - saving or updating that login;
   - changing the username or password of one of its logins, or moving one to the
     vault's recycle bin (the popup, and the "couldn't sign in?" banner).
-- Changing or removing a login sends no secret back and asks nothing in the app: the
-  old version stays in the entry's history, and a removed login stays in the recycle
-  bin, where the app restores it. Nothing is ever deleted for good from the browser.
-  The extension asks the user before it removes one. A browser may change at most ten
-  logins a minute, so a program holding its keys can't clear out a site's logins at
-  once. An app from before these questions can't read them and answers `invalid`,
-  which the extension shows as "update the app".
+- Saving, updating, changing or removing a login sends no secret back and asks nothing
+  in the app: the old version stays in the entry's history, and a removed login stays
+  in the recycle bin, where the app restores it. Nothing is ever deleted for good from
+  the browser. The extension asks the user before it removes one. A browser may save,
+  update, change or remove at most ten logins a minute, so a program holding its keys
+  can't clear out a site's logins at once. Changes from the browsers back the vault up
+  at most once an hour, so a burst of them doesn't push the older backups out; keeping
+  on for a day would, but the entry's history and the recycle bin still hold what was
+  changed. An app from
+  before these questions can't read them and answers `invalid`, which the extension
+  shows as "update the app".
 - One more question needs no pairing and carries nothing from the vault: whether two
   origins are the same site, by the same rules as below. The extension asks it to tell
   how much a save offer may show on the page.
@@ -535,15 +725,19 @@ Settings then asks to move the app to Applications.
     own. A page's own focus (`focus()`, `autofocus`) opens nothing, though the browser
     marks it as trusted; events a page script makes up are ignored.
   - A pick counts only once the menu has been on screen for half a second, uncovered at
-    the point clicked, and only while the page hasn't restyled, moved or hidden it, so
-    a page can't slip it under a click or key press meant for something else. A layer
+    the point clicked, at the size and place it was put, and only while the page hasn't
+    restyled, moved or hidden it, so a page can't slip it under a click or key press
+    meant for something else. A CSS `zoom` on the page scales even the menu: the menu
+    undoes it when it opens, and a page that zooms it after that gets no pick. A layer
     the page opens later over the menu sends the menu back to the front, and the wait
     starts again.
-  - In Chrome and Edge the browser also confirms that nothing covers the menu, not even
-    a layer that lets clicks through. Firefox has no way to tell that, so there a
-    script on the site could still lay a see-through decoy over the menu; the app's
-    question then names the login before it first fills that page. Later fills of that
-    login there in the same session aren't asked about.
+  - In Chrome and Edge the browser also confirms, for a click and a key press alike,
+    that nothing covers the menu or fades it, not even a layer that lets clicks through
+    or a see-through frame around it. Firefox has no way to tell that, so there a
+    script on the site could still lay a see-through decoy over the menu, or show the
+    site's own sign-in page in a see-through frame; the app's question then names the
+    login before it first fills that page. Later fills of that login there in the same
+    session aren't asked about.
   - Fields that are nearly transparent, smaller than 8 pixels, or outside the window get
     no menu.
 - Nothing else of the vault is reachable: not other entries, 2FA secrets, notes, key
@@ -570,11 +764,12 @@ Settings then asks to move the app to Applications.
   (`unlock.html`), not the main window's, and has its own capability
   (`src-tauri/capabilities/unlock.json`): `vault_status`, `vault_unlock`,
   `vault_unlock_device` and closing itself, nothing else of the app.
-- The browsers may ask at most five times a minute, all together. While the system
-  prompt is up, asking again does nothing; while the window is open, asking again only
-  brings it forward. So neither a page (the menu takes only the user's own clicks
-  anyway) nor a program that can start the native host can bury the screen in
-  windows.
+- The browsers may bring up a prompt or a window at most five times a minute, all
+  together: unlocking, **Open app**, and connecting while the vault is locked or
+  missing. While the system prompt is up, asking again does nothing; while the window
+  is open, asking again only brings it forward. So neither a page (the menu takes only
+  the user's own clicks anyway) nor a program that can start the native host can bury
+  the screen in windows or keep taking the focus.
 - Where the system decides, the window may not get its way: on Windows a program in
   the background may be refused the focus (the app first sends a synthetic Alt key
   press, which Windows counts as the user's input to it), and on Wayland the
@@ -590,26 +785,34 @@ script names the page by the origin the browser reports for the sending frame, n
 by what the page or the content script says. A frame from another site gets that
 site's logins only. Opaque origins (`null`, `data:`, sandboxed frames) get nothing:
 the background falls back to the frame's address only when the browser reports no
-origin at all. The menu and the save banner live in closed shadow roots on a plain
-`div`, so page scripts can't read the logins listed. A password the user typed waits
-for the banner in the background's `storage.session` (memory only). It is offered for
-at most three minutes, dropped at the next page load after that or when the tab
-closes, and never goes back to a page. On a page of another site, for example after a
-sign-in that sends you on, the banner names only the site where it was typed, not the
-username or the saved login's title. Only a login the user put in themselves is sent to
-be checked: its password typed, pasted or dropped into the field by the user (or filled
-by the extension) and not set or changed by a page script since, and the form sent by
-the user's own Enter, click or key press. A page that sets the values and calls
-`requestSubmit()` gets nothing checked. A tab can send typed logins to check at most
-about once a second. Whether the banner appears still tells the page whether the login
-the user just typed there is saved, which is about a password the page was given
-anyway; the banner's size is the same whether it offers to save or to update, whatever
-the saved login's title. The banner's username is a field the user can change (a form
-may send a password alone); key presses in it stop at the banner, but a page listening
-in the capture phase still sees them, which tells it the username of its own login. A
-login typed on another site gets no such field. The username sent with the first step
-of a two-step login waits in `storage.session` for five minutes, for that tab only,
-and names a password sent there without one on the same site.
+origin at all. The menu and the banners live in closed shadow roots on a plain `div`,
+so page scripts can't reach the logins listed. A page's find-in-page (`window.find`)
+does search closed shadow roots, so what comes from the vault (titles, usernames,
+another site's name) is drawn as CSS generated content, which it doesn't search. The
+menu is as tall whatever it shows, so its size doesn't tell how many logins the site
+has. A password the user typed waits for the banner in the background's
+`storage.session` (memory only). It is offered for at most three minutes, dropped at
+the next page load after that or when the tab closes, and never goes back to a page.
+It is saved for the origin it was typed on, and only the top frame's banner can save
+or dismiss it. On a page of another site, for example after a sign-in that sends you
+on, the banner names only the site where it was typed, not the username or the saved
+login's title, and has no username field; a username sent from such a page counts for
+nothing. Only a login the user put in themselves is sent to be checked: its password
+typed, pasted or dropped into the field by the user (or filled by the extension) and
+not set or changed by a page script since, and the form sent by the user's own Enter,
+click or key press. A page that sets the values and calls `requestSubmit()` gets
+nothing checked. A tab can send typed logins to check at most about once a second.
+Whether the banner appears still tells the page whether the login the user just typed
+there is saved, which is about a password the page was given anyway; the banner's size
+is the same whether it offers to save or to update, whatever the saved login's title.
+The banner's username is a field the user can change (a form may send a password
+alone). It holds only a username the user typed on that site, so what the page could
+learn from it (find-in-page matches field values in Chrome, and a page listening in
+the capture phase sees the key presses, which stop at the banner otherwise) is the
+username of its own login. A username the vault supplied is not put in it. A login
+typed on another site gets no such field. The username sent with the first step of a
+two-step login waits in `storage.session` for five minutes, for that tab only, and
+names a password sent there without one on the same site.
 
 A password-change form (a current password, then a new one and its copy) passes on the
 new password, under the same rules: typed by the user and sent by them. A form that
@@ -637,11 +840,18 @@ user's organization or another extension controls is left alone.
 **Pairing.**
 
 - A browser must be paired before it gets anything but the vault's lock state.
-- The extension makes a P-256 key pair and a random client id. Both the extension and
-  the app show a six-digit code computed from them, and the user connects in the app
-  after checking that the codes match.
+- The extension makes a P-256 key pair and a random client id, and first sends only a
+  hash of its public key. The app answers with a key pair it makes for this pairing;
+  only then does the extension send its public key, which must match the hash. Both
+  the extension and the app show a six-digit code computed from the client id and both
+  public keys, and the user connects in the app after checking that the codes match.
+  So something between the browser and the app (a program that took the host's place)
+  can't make the codes match but by chance: it must choose the key it gives each side
+  before it learns the other side's.
 - Pairing needs an unlocked vault. Only one pairing waits at a time, for at most two
-  minutes.
+  minutes, and at most five pairings start a minute. An extension from before this way
+  of pairing is refused, and the app says that it needs an update; browsers paired
+  before keep working.
 - Both sides derive two AES-256-GCM keys (requests, responses) with HKDF-SHA-256 from
   the ECDH secret. The app's key pair is used once and dropped.
 - The app keeps a pairing in the vault's encrypted custom data
@@ -656,10 +866,14 @@ user's organization or another extension controls is left alone.
   old ones; it keeps the last 30 retired keys. A request sealed with retired keys and
   sent after they were retired means someone else holds a copy of them: the app forgets
   the pairing at once and tells the user. One sent before (a late request of the
-  extension itself) is refused, nothing more. While the keys change, the extension
-  holds back its other requests (a Web Lock shared by its background and its pages),
-  so none goes out with the old keys afterwards. Key changes take no backup of the
-  vault.
+  extension itself) is refused, nothing more. The extension asks for new keys again
+  only if it never got the answer, so it never uses keys a later change replaced: those
+  are retired too, and a request sealed with them, whenever it was sent, revokes the
+  pairing. So a program holding a copy can't change the keys over the extension's own
+  change unnoticed. A browser may change its keys at most twice a minute. While the
+  keys change, the extension holds back its other requests (a Web Lock shared by its
+  background and its pages), so none goes out with the old keys afterwards. Key changes
+  take no backup of the vault.
 - **Settings → Browser autofill** lists paired browsers and can disconnect each one.
   The extension's own Disconnect also removes its pairing from the vault when the vault
   is unlocked; when it's locked, only the extension forgets its keys.
@@ -708,7 +922,8 @@ user's organization or another extension controls is left alone.
   extension's pairing keys. With them, while the vault is open, it learns the titles
   and usernames of the logins of any site it names, and gets the passwords the user
   allowed that browser to fill in this session; any other password needs the user's
-  yes. Once the extension changed its keys, using the copy revokes the pairing. Where
+  yes. Once the extension changed its keys, using the copy revokes the pairing, as
+  does the extension's next request when the copy changed the keys over it. Where
   it can read the app's memory (on Windows a program of the same user can; macOS
   protects the signed app, and many Linux distributions allow it only to the app's
   parent) or click the app's dialog, it gets more. No password manager's browser integration

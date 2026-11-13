@@ -79,7 +79,7 @@ export function ShareVariableDialog({ env, variable, onDone }: ShareVariableDial
               return (
                 <li
                   key={other.id}
-                  className="rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-2"
+                  className="rounded-xl border border-ink/[0.07] bg-ink/[0.025] px-3 py-2"
                 >
                   <Checkbox
                     checked={using || chosen.has(other.id)}

@@ -12,6 +12,7 @@ export const browserKey = ['browser'] as const;
 export const PAIRING_EVENT = 'browser-pairing';
 export const CHANGED_EVENT = 'browser-changed';
 export const UNLOCK_EVENT = 'browser-unlock';
+export const OUTDATED_EVENT = 'browser-outdated';
 
 export const useBrowserStatus = () =>
   useQuery({ queryKey: browserKey, queryFn: api.browserStatus });
@@ -21,10 +22,12 @@ interface BrowserEventHandlers {
   onPairing: (request: PairingRequest | null) => void;
   /** The extension asks to unlock the vault. */
   onUnlock: () => void;
+  /** An extension too old to pair asked to, in this browser. */
+  onOutdated: (browser: string) => void;
 }
 
 /** Listens to the bridge's events; refetches the status when they change it. */
-export function useBrowserEvents({ onPairing, onUnlock }: BrowserEventHandlers): void {
+export function useBrowserEvents({ onPairing, onUnlock, onOutdated }: BrowserEventHandlers): void {
   useEffect(() => {
     if (!isTauri()) return;
     const refetch = () => void queryClient.invalidateQueries({ queryKey: browserKey });
@@ -35,11 +38,12 @@ export function useBrowserEvents({ onPairing, onUnlock }: BrowserEventHandlers):
       }),
       listen(CHANGED_EVENT, refetch),
       listen(UNLOCK_EVENT, onUnlock),
+      listen<string>(OUTDATED_EVENT, (event) => onOutdated(event.payload)),
     ];
     return () => {
       for (const promise of unlisten) void promise.then((stop) => stop());
     };
-  }, [onPairing, onUnlock]);
+  }, [onPairing, onUnlock, onOutdated]);
 }
 
 /** Formats a pairing code as two groups of three digits. */

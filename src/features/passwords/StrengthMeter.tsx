@@ -40,14 +40,8 @@ export function useStrength(password: string, context: readonly string[] = []): 
   return password ? strength : null;
 }
 
-const SEGMENT = ['', 'bg-critical-solid', 'bg-warning-solid', 'bg-ok', 'bg-teal-500'] as const;
-const LABEL = [
-  'text-critical',
-  'text-critical',
-  'text-warning',
-  'text-ok',
-  'text-teal-300',
-] as const;
+const SEGMENT = ['', 'bg-critical-solid', 'bg-warning-solid', 'bg-ok', 'bg-ok-solid'] as const;
+const LABEL = ['text-critical', 'text-critical', 'text-warning', 'text-ok', 'text-ok'] as const;
 
 /** Four segments and a label, like the passphrase meter on the Keys page. */
 export function StrengthMeter({
@@ -75,7 +69,7 @@ export function StrengthMeter({
           <span
             key={segment}
             className={cn(
-              'h-1 rounded-sm bg-white/10 transition-colors duration-200',
+              'h-1 rounded-sm bg-ink/10 transition-colors duration-200',
               strength && segment <= score && SEGMENT[score],
             )}
           />

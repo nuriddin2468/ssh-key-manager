@@ -1,6 +1,4 @@
-import { isTauri } from '@tauri-apps/api/core';
-import { revealItemInDir } from '@tauri-apps/plugin-opener';
-import { Clock, FolderOpen, KeyRound } from 'lucide-react';
+import { Clock, FolderOpen, KeyRound, Monitor, Moon, Sun } from 'lucide-react';
 import { type ReactNode, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
@@ -8,6 +6,7 @@ import { useEnvironment } from '@/api/queries';
 import { toastError } from '@/api/useAppMutation';
 import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
+import type { RevealPlace } from '@/bindings/RevealPlace';
 import { Logo } from '@/components/Logo';
 import { PageBody, Toolbar } from '@/components/layout/Toolbar';
 import { Button } from '@/components/ui/Button';
@@ -35,9 +34,22 @@ import { displayPath } from '@/lib/format';
 import { fileManagerName } from '@/lib/platform';
 import { showReleaseNotes } from '@/lib/releaseNotes';
 import { type Settings, updateSettings, useSettings } from '@/lib/settings';
+import { APPEARANCES, type Appearance } from '@/lib/theme';
 import { checkForUpdates, showUpdateNotes, useUpdateState } from '@/lib/updater';
 import { BackgroundSection } from './BackgroundSection';
 import { ShellHistorySection } from './ShellHistorySection';
+
+const THEME_LABEL = {
+  system: 'settings.themeSystem',
+  light: 'settings.themeLight',
+  dark: 'settings.themeDark',
+} as const satisfies Record<Appearance, string>;
+
+const THEME_ICON: Record<Appearance, ReactNode> = {
+  system: <Monitor aria-hidden="true" className="size-3.5 text-subtle" strokeWidth={2} />,
+  light: <Sun aria-hidden="true" className="size-3.5 text-subtle" strokeWidth={2} />,
+  dark: <Moon aria-hidden="true" className="size-3.5 text-subtle" strokeWidth={2} />,
+};
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -46,22 +58,21 @@ export function SettingsPage() {
   const env = environment.data;
   const home = env?.paths.home;
 
-  const reveal = async (path: string) => {
-    if (!isTauri()) return;
-    try {
-      await revealItemInDir(path);
-    } catch (error) {
-      toastError(t, error);
-    }
+  const reveal = (place: RevealPlace) => {
+    api.revealPlace(place).catch((error: unknown) => toastError(t, error));
   };
 
-  const files = env
+  const files: { label: string; path: string; place: RevealPlace }[] = env
     ? [
-        { label: t('settings.sshDir'), path: env.paths.dir },
-        { label: t('settings.config'), path: env.paths.config },
-        { label: t('settings.knownHosts'), path: env.paths.knownHosts },
-        { label: t('settings.hostsFile'), path: env.hostsFile },
-        { label: t('settings.backups'), path: env.backupDir },
+        { label: t('settings.sshDir'), path: env.paths.dir, place: { kind: 'sshDir' } },
+        { label: t('settings.config'), path: env.paths.config, place: { kind: 'config' } },
+        {
+          label: t('settings.knownHosts'),
+          path: env.paths.knownHosts,
+          place: { kind: 'knownHosts' },
+        },
+        { label: t('settings.hostsFile'), path: env.hostsFile, place: { kind: 'hostsFile' } },
+        { label: t('settings.backups'), path: env.backupDir, place: { kind: 'backups' } },
       ]
     : [];
 
@@ -87,6 +98,23 @@ export function SettingsPage() {
                     hint: language.toUpperCase(),
                   })),
                 ]}
+              />
+            </Row>
+          </Group>
+
+          <Group title={t('settings.appearance')}>
+            <Row label={t('settings.theme')}>
+              <Select
+                aria-label={t('settings.theme')}
+                size="sm"
+                className="w-[220px]"
+                value={settings.appearance}
+                onValueChange={(next) => updateSettings({ appearance: next as Appearance })}
+                options={APPEARANCES.map((appearance) => ({
+                  value: appearance,
+                  label: t(THEME_LABEL[appearance]),
+                  icon: THEME_ICON[appearance],
+                }))}
               />
             </Row>
           </Group>
@@ -137,7 +165,7 @@ export function SettingsPage() {
                   size="sm"
                   variant="ghost"
                   icon={<FolderOpen className="size-[15px]" strokeWidth={1.75} />}
-                  onClick={() => void reveal(file.path)}
+                  onClick={() => reveal(file.place)}
                 >
                   {t('keys.showIn', { app: fileManagerName })}
                 </Button>
@@ -185,7 +213,7 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-2">
       <h2 className="px-1 text-[12px] font-semibold tracking-[0.02em] text-subtle">{title}</h2>
-      <div className="glass flex flex-col divide-y divide-white/[0.06] overflow-hidden rounded-2xl">
+      <div className="glass flex flex-col divide-y divide-line-soft overflow-hidden rounded-2xl">
         {children}
       </div>
     </section>

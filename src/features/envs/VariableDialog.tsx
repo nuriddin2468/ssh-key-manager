@@ -149,7 +149,7 @@ export function VariableDialog({ env, variable, onDone }: VariableDialogProps) {
               placeholder={
                 variable && value === null ? t('envs.varForm.keepPlaceholder') : undefined
               }
-              className="field min-h-[60px] resize-y rounded-[10px] px-[11px] py-2 font-mono text-[12.5px] text-fg outline-none focus:border-[rgb(var(--accent-rgb)/0.55)] focus:shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.15)]"
+              className="field min-h-[60px] resize-y rounded-[10px] px-[11px] py-2 font-mono text-[12.5px] text-fg outline-none focus:border-[rgb(var(--accent-rgb)/var(--edge-alpha))] focus:shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.15)]"
             />
             <p id={`${valueId}-hint`} className="text-[12px] text-subtle">
               {variable?.shared

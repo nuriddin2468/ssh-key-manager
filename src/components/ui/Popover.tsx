@@ -38,7 +38,7 @@ export function PreviewPopover({
         sideOffset={6}
         collisionPadding={12}
         aria-labelledby={titleId}
-        className="z-50 flex w-[300px] origin-[var(--radix-popover-content-transform-origin)] flex-col gap-3 rounded-xl border border-white/10 bg-popover p-3.5 text-[12.5px] text-fg shadow-[0_20px_40px_-12px_rgb(0_0_0/0.7)] outline-none data-[state=closed]:pointer-events-none data-[state=closed]:animate-popover-out data-[state=open]:animate-popover-in"
+        className="z-50 flex w-[300px] origin-[var(--radix-popover-content-transform-origin)] flex-col gap-3 rounded-xl border border-line-strong bg-popover p-3.5 text-[12.5px] text-fg shadow-popover outline-none data-[state=closed]:pointer-events-none data-[state=closed]:animate-popover-out data-[state=open]:animate-popover-in"
       >
         <div className="flex items-center gap-2.5">
           {icon}

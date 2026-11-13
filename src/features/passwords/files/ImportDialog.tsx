@@ -522,7 +522,7 @@ function PreviewStep({
         ) : null}
 
         {rows.length === 0 ? (
-          <p className="rounded-2xl border border-dashed border-white/[0.14] px-4 py-8 text-center text-muted">
+          <p className="rounded-2xl border border-dashed border-ink/[0.14] px-4 py-8 text-center text-muted">
             {browser ? t('vaultFiles.import.browser.nothing') : t('vaultFiles.import.nothing')}
           </p>
         ) : (
@@ -632,8 +632,8 @@ function PreviewRow({
       <tr
         onClick={onToggle}
         className={cn(
-          'h-[46px] border-t border-white/[0.05] transition-colors',
-          checked ? 'bg-[rgb(var(--accent-rgb)/0.07)]' : 'hover:bg-white/[0.03]',
+          'h-[46px] border-t border-ink/[0.05] transition-colors',
+          checked ? 'bg-[rgb(var(--accent-rgb)/0.07)]' : 'hover:bg-fill-subtle',
         )}
       >
         <td className="pl-3.5">
@@ -700,7 +700,7 @@ function PreviewRow({
         </td>
       </tr>
       {comparing ? (
-        <tr ref={panel} id={compareId} className="border-t border-white/[0.05] bg-white/[0.02]">
+        <tr ref={panel} id={compareId} className="border-t border-ink/[0.05] bg-ink/[0.02]">
           <td colSpan={5} className="px-3.5 py-3">
             <ComparePasswords row={row} browserName={browserName} />
           </td>
@@ -767,7 +767,7 @@ function ComparePasswords({ row, browserName }: { row: ImportRow; browserName?: 
         {sides.map((side) => (
           <div
             key={side.key}
-            className="flex min-w-0 flex-col gap-1 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2"
+            className="flex min-w-0 flex-col gap-1 rounded-xl border border-line bg-fill-subtle px-3 py-2"
           >
             <dt className="flex items-center gap-1.5 text-[11.5px] font-semibold tracking-[0.02em] text-subtle">
               {side.label}
@@ -885,7 +885,7 @@ function SourceStep({ sources, installed, onPick }: SourceStepProps) {
                     <button
                       type="button"
                       onClick={() => onPick(source)}
-                      className="pressable-soft flex w-full min-w-0 items-center gap-2.5 rounded-[14px] border border-white/[0.09] bg-white/[0.03] p-2.5 text-left hover:bg-white/[0.06]"
+                      className="pressable-soft flex w-full min-w-0 items-center gap-2.5 rounded-[14px] border border-ink/[0.09] bg-fill-subtle p-2.5 text-left hover:bg-fill"
                     >
                       <Tile tone={source.tone} size={30}>
                         <Icon className="size-[15px]" strokeWidth={2} />
@@ -956,7 +956,7 @@ function GuideStep({ source }: { source: ImportSource }) {
           <li key={step} className="flex gap-3">
             <span
               aria-hidden="true"
-              className="grid size-6 shrink-0 place-items-center rounded-full border border-white/[0.12] bg-white/[0.05] text-[12px] font-semibold text-fg-2 tabular-nums"
+              className="grid size-6 shrink-0 place-items-center rounded-full border border-ink/[0.12] bg-ink/[0.05] text-[12px] font-semibold text-fg-2 tabular-nums"
             >
               {index + 1}
             </span>

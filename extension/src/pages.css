@@ -9,12 +9,30 @@
   --subtle: #8892a6;
   --warning: #ffc266;
   --critical: #ff9b9b;
+  --critical-rgb: 255 107 107;
   --ok: #5eead4;
+  --online: #4ade80;
+  --online-rgb: 74 222 128;
   --accent-1: #f9a8d4;
   --accent-2: #ec4899;
   --accent-ink: #3f0a24;
+  /* Accent lines and text on the page: the focus ring, links, the caret. */
+  --accent-fg: #f9a8d4;
   --accent-rgb: 244 114 182;
   --glow-a: rgb(219 39 119 / 0.22);
+  /* Neutral lines and fills are this colour at a low alpha: white here, slate when light. */
+  --ink-rgb: 255 255 255;
+  --card: rgb(var(--ink-rgb) / 0.04);
+  --card-shadow: inset 0 1px 0 rgb(var(--ink-rgb) / 0.04);
+  --knob-shadow: 0 2px 4px rgb(0 0 0 / 0.35);
+  /* A text field's edge: 3:1 or more against the card (WCAG 1.4.11). */
+  --field-line: rgb(255 255 255 / 0.34);
+  --field-line-hover: rgb(255 255 255 / 0.46);
+  --field-bg: rgb(255 255 255 / 0.05);
+  /* A switch that is off; light: an outlined track and a grey knob, 3:1. */
+  --switch-off: rgb(255 255 255 / 0.1);
+  --switch-line: rgb(255 255 255 / 0.1);
+  --knob-off: #fff;
   color-scheme: dark;
   font:
     13px / 1.45 -apple-system,
@@ -26,6 +44,38 @@
   color: var(--fg);
   background: var(--canvas);
   -webkit-font-smoothing: antialiased;
+}
+
+/* The browser's light theme: as the app's light theme (src/styles/app.css). */
+@media (prefers-color-scheme: light) {
+  :root {
+    --canvas: #f6f7f9;
+    --popover: #ffffff;
+    --fg: #0f1420;
+    --fg-2: #2a3242;
+    --muted: #4b5567;
+    --subtle: #5d6779;
+    --warning: #93500a;
+    --critical: #b42318;
+    --critical-rgb: 217 45 32;
+    --ok: #0f766e;
+    --online: #15803d;
+    --online-rgb: 21 128 61;
+    --accent-fg: #be185d;
+    --accent-rgb: 219 39 119;
+    --glow-a: rgb(219 39 119 / 0.1);
+    --ink-rgb: 15 23 42;
+    --card: #ffffff;
+    --card-shadow: 0 1px 2px rgb(15 23 42 / 0.05);
+    --knob-shadow: 0 1px 3px rgb(15 23 42 / 0.3);
+    --field-line: rgb(15 23 42 / 0.5);
+    --field-line-hover: rgb(15 23 42 / 0.62);
+    --field-bg: #ffffff;
+    --switch-off: rgb(15 23 42 / 0.04);
+    --switch-line: rgb(15 23 42 / 0.5);
+    --knob-off: #6b7484;
+    color-scheme: light;
+  }
 }
 * {
   box-sizing: border-box;
@@ -65,9 +115,9 @@ p {
   gap: 6px;
   padding: 14px;
   border-radius: 14px;
-  background: rgb(255 255 255 / 0.04);
-  border: 1px solid rgb(255 255 255 / 0.08);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+  background: var(--card);
+  border: 1px solid rgb(var(--ink-rgb) / 0.08);
+  box-shadow: var(--card-shadow);
 }
 .card h1,
 .card h2 {
@@ -91,8 +141,8 @@ p {
   flex: none;
 }
 .dot.ok {
-  background: #4ade80;
-  box-shadow: 0 0 0 3px rgb(74 222 128 / 0.18);
+  background: var(--online);
+  box-shadow: 0 0 0 3px rgb(var(--online-rgb) / 0.18);
 }
 .dot.warn {
   background: var(--warning);
@@ -104,7 +154,7 @@ p {
 }
 .btn {
   appearance: none;
-  border: 1px solid rgb(255 255 255 / 0.1);
+  border: 1px solid rgb(var(--ink-rgb) / 0.1);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -115,11 +165,11 @@ p {
   font: inherit;
   font-weight: 500;
   color: var(--fg-2);
-  background: rgb(255 255 255 / 0.05);
+  background: rgb(var(--ink-rgb) / 0.05);
   cursor: pointer;
 }
 .btn:hover {
-  background: rgb(255 255 255 / 0.09);
+  background: rgb(var(--ink-rgb) / 0.09);
   color: var(--fg);
 }
 .btn.primary {
@@ -139,7 +189,7 @@ p {
   background: transparent;
 }
 .btn.ghost:hover {
-  background: rgb(255 255 255 / 0.06);
+  background: rgb(var(--ink-rgb) / 0.06);
 }
 .btn.danger {
   border-color: transparent;
@@ -147,10 +197,10 @@ p {
   color: var(--critical);
 }
 .btn.danger:hover {
-  background: rgb(255 107 107 / 0.1);
+  background: rgb(var(--critical-rgb) / 0.1);
 }
 .btn:focus-visible {
-  outline: 2px solid var(--accent-1);
+  outline: 2px solid var(--accent-fg);
   outline-offset: 2px;
 }
 .btn[disabled] {
@@ -171,8 +221,8 @@ p {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  border: 2px solid rgb(255 255 255 / 0.2);
-  border-top-color: var(--accent-1);
+  border: 2px solid rgb(var(--ink-rgb) / 0.2);
+  border-top-color: var(--accent-fg);
   animation: spin 0.8s linear infinite;
   flex: none;
 }
@@ -237,8 +287,8 @@ p {
   gap: 8px;
   padding: 12px 14px;
   border-radius: 14px;
-  background: rgb(255 255 255 / 0.025);
-  border: 1px solid rgb(255 255 255 / 0.07);
+  background: rgb(var(--ink-rgb) / 0.025);
+  border: 1px solid rgb(var(--ink-rgb) / 0.07);
 }
 .setting-row {
   display: flex;
@@ -278,8 +328,8 @@ p {
   padding: 0;
   border: 0;
   border-radius: 999px;
-  background: rgb(255 255 255 / 0.1);
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.1);
+  background: var(--switch-off);
+  box-shadow: inset 0 0 0 1px var(--switch-line);
   cursor: pointer;
   transition: background 150ms;
 }
@@ -291,18 +341,20 @@ p {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 2px 4px rgb(0 0 0 / 0.35);
+  background: var(--knob-off);
+  box-shadow: var(--knob-shadow);
   transition: transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .switch[aria-checked="true"] {
   background: linear-gradient(135deg, var(--accent-1), var(--accent-2));
+  box-shadow: inset 0 0 0 1px rgb(var(--ink-rgb) / 0.1);
 }
 .switch[aria-checked="true"]::after {
+  background: #fff;
   transform: translateX(16px);
 }
 .switch:focus-visible {
-  outline: 2px solid var(--accent-1);
+  outline: 2px solid var(--accent-fg);
   outline-offset: 2px;
 }
 .switch[disabled] {
@@ -321,13 +373,13 @@ p {
   border: 0;
   background: none;
   font: inherit;
-  color: var(--accent-1);
+  color: var(--accent-fg);
   text-decoration: underline;
   text-underline-offset: 2px;
   cursor: pointer;
 }
 .link:focus-visible {
-  outline: 2px solid var(--accent-1);
+  outline: 2px solid var(--accent-fg);
   outline-offset: 2px;
   border-radius: 3px;
 }
@@ -366,7 +418,7 @@ p {
   border-radius: 9px;
 }
 .login:hover {
-  background: rgb(255 255 255 / 0.03);
+  background: rgb(var(--ink-rgb) / 0.03);
 }
 .login-text {
   display: flex;
@@ -400,11 +452,11 @@ p {
   font-size: 12.5px;
 }
 .btn.danger.solid {
-  background: rgb(255 107 107 / 0.14);
+  background: rgb(var(--critical-rgb) / 0.14);
   color: var(--critical);
 }
 .btn.danger.solid:hover {
-  background: rgb(255 107 107 / 0.22);
+  background: rgb(var(--critical-rgb) / 0.22);
 }
 .login-edit {
   display: flex;
@@ -431,22 +483,22 @@ p {
   padding: 0 10px;
   border-radius: 8px;
   /* At least 3:1 against the card, so the field shows where it is (WCAG 1.4.11). */
-  border: 1px solid rgb(255 255 255 / 0.34);
-  background: rgb(255 255 255 / 0.05);
+  border: 1px solid var(--field-line);
+  background: var(--field-bg);
   font:
     12.5px / 30px ui-monospace,
     "Geist Mono",
     Menlo,
     monospace;
   color: var(--fg);
-  caret-color: var(--accent-1);
+  caret-color: var(--accent-fg);
   outline: none;
 }
 .field input:hover {
-  border-color: rgb(255 255 255 / 0.46);
+  border-color: var(--field-line-hover);
 }
 .field input:focus {
-  border-color: var(--accent-1);
+  border-color: var(--accent-fg);
   box-shadow: 0 0 0 3px rgb(var(--accent-rgb) / 0.22);
 }
 .field input:disabled {
@@ -475,11 +527,11 @@ p {
   cursor: pointer;
 }
 .reveal:hover {
-  background: rgb(255 255 255 / 0.06);
+  background: rgb(var(--ink-rgb) / 0.06);
   color: var(--fg);
 }
 .reveal:focus-visible {
-  outline: 2px solid var(--accent-1);
+  outline: 2px solid var(--accent-fg);
   outline-offset: -2px;
 }
 .reveal svg {
@@ -525,7 +577,7 @@ p {
 }
 .remove-row {
   padding-top: 8px;
-  border-top: 1px solid rgb(255 255 255 / 0.07);
+  border-top: 1px solid rgb(var(--ink-rgb) / 0.07);
 }
 .remove-row :where(.btn) {
   height: 28px;

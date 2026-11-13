@@ -51,7 +51,7 @@ export function Tile({ tone, size = 34, glow = false, className, children }: Til
   return (
     <span
       aria-hidden="true"
-      className={cn('grid shrink-0 place-items-center text-white', className)}
+      className={cn('grid shrink-0 place-items-center text-on-solid', className)}
       style={style}
     >
       {children}

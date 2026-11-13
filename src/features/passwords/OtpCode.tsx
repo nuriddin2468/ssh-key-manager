@@ -87,7 +87,7 @@ export function OtpCode({ entryId }: { entryId: string }) {
             cy="10"
             r={RING_RADIUS}
             fill="none"
-            stroke="rgb(255 255 255 / 0.1)"
+            className="stroke-line-strong"
             strokeWidth="2"
           />
           <circle

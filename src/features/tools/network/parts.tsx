@@ -192,7 +192,7 @@ export function Note({
     <div
       className={cn(
         'flex flex-wrap items-start gap-x-2 gap-y-1.5 rounded-xl border px-3 py-2 text-[12.5px] leading-[18px]',
-        tone === 'neutral' && 'border-white/[0.08] bg-white/[0.03] text-fg-2',
+        tone === 'neutral' && 'border-line bg-fill-subtle text-fg-2',
         tone === 'warning' && 'border-warning-solid/30 bg-warning-solid/[0.08] text-warning',
         tone === 'critical' && 'border-critical-solid/30 bg-critical-solid/[0.08] text-critical',
       )}

@@ -131,7 +131,7 @@ export function Sidebar() {
     ) : undefined;
 
   return (
-    <aside className="relative flex w-[232px] shrink-0 flex-col border-r border-white/[0.06] bg-[radial-gradient(260px_220px_at_0%_0%,rgb(20_184_166/0.16),transparent_70%),radial-gradient(320px_280px_at_100%_100%,rgb(124_58_237/0.14),transparent_70%),rgb(17_20_30/0.97)] px-2.5 pb-2.5 shadow-[inset_-1px_0_0_rgb(0_0_0/0.4)]">
+    <aside className="relative flex w-[232px] shrink-0 flex-col border-r border-line-soft sidebar-surface px-2.5 pb-2.5">
       <div
         data-tauri-drag-region
         className={platform === 'macos' ? 'h-[52px] shrink-0' : 'h-3.5 shrink-0'}
@@ -162,7 +162,7 @@ export function Sidebar() {
                 aria-label={t('projects.newProject')}
                 title={t('projects.newProject')}
                 onClick={() => setCreating(true)}
-                className="pressable grid size-5 place-items-center rounded-md bg-white/[0.05] text-muted outline-none hover:bg-white/10 hover:text-fg focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]"
+                className="pressable grid size-5 place-items-center rounded-md bg-ink/[0.05] text-muted outline-none hover:bg-ink/10 hover:text-fg focus-visible:ring-2 focus-visible:ring-[rgb(var(--focus-rgb)/var(--ring-alpha))]"
               >
                 <Plus className="size-3" strokeWidth={2.4} />
               </button>
@@ -204,7 +204,7 @@ export function Sidebar() {
               tile={
                 <span
                   aria-hidden="true"
-                  className="grid size-[22px] shrink-0 place-items-center rounded-[6px] text-ok shadow-[inset_0_0_0_1px_rgb(94_234_212/0.35)]"
+                  className="grid size-[22px] shrink-0 place-items-center rounded-[6px] text-ok inset-ring inset-ring-ok/35"
                 >
                   <Sparkles className="size-[13px]" strokeWidth={2.2} />
                 </span>
@@ -291,7 +291,7 @@ export function Sidebar() {
           />
         </NavGroup>
       </nav>
-      <div className="-mx-1 mt-2 flex shrink-0 flex-col gap-px border-t border-white/[0.06] px-1 pt-2">
+      <div className="-mx-1 mt-2 flex shrink-0 flex-col gap-px border-t border-line-soft px-1 pt-2">
         {/* Shown once there is a tool (src/features/tools). */}
         {TOOLS.length > 0 ? item('tools', t('nav.tools'), 'cyan', Wrench) : null}
         <NavItem
@@ -304,7 +304,7 @@ export function Sidebar() {
               <span
                 role="img"
                 aria-label={t('updates.available', { version: update.version })}
-                className="ml-auto size-[7px] rounded-full bg-teal-300 shadow-[0_0_8px_rgb(94_234_212/0.9)]"
+                className="ml-auto size-[7px] rounded-full bg-ok shadow-[0_0_8px] shadow-ok/90"
               />
             ) : undefined
           }
@@ -352,7 +352,7 @@ function NavGroup({
             aria-expanded={!folded}
             aria-controls={listId}
             onClick={onFold}
-            className="-ml-1 flex items-center gap-1 rounded-md px-1 text-[11px] font-semibold text-[#7C869A] outline-none hover:text-fg-2 focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]"
+            className="-ml-1 flex items-center gap-1 rounded-md px-1 text-[11px] font-semibold text-label outline-none hover:text-fg-2 focus-visible:ring-2 focus-visible:ring-[rgb(var(--focus-rgb)/var(--ring-alpha))]"
           >
             {label}
             <ChevronDown
@@ -362,7 +362,7 @@ function NavGroup({
             />
           </button>
         ) : (
-          <span className="text-[11px] font-semibold text-[#7C869A]">{label}</span>
+          <span className="text-[11px] font-semibold text-label">{label}</span>
         )}
         {action}
       </div>
@@ -408,10 +408,8 @@ function NavItem({
       aria-current={active ? 'page' : undefined}
       onClick={onClick}
       className={cn(
-        'pressable-soft flex h-8 shrink-0 items-center gap-[9px] rounded-lg px-2 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]',
-        active
-          ? 'bg-white/10 text-white shadow-[inset_0_0_0_0.5px_rgb(255_255_255/0.1),0_1px_2px_rgb(0_0_0/0.35)]'
-          : 'text-[#C3CAD6] hover:bg-white/[0.05]',
+        'pressable-soft flex h-8 shrink-0 items-center gap-[9px] rounded-lg px-2 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--focus-rgb)/var(--ring-alpha))]',
+        active ? 'bg-nav-current-bg text-nav-current shadow-nav' : 'text-nav hover:bg-ink/[0.05]',
         className,
       )}
     >
@@ -424,7 +422,7 @@ function NavItem({
       {badge !== undefined ? (
         <span
           title={badgeLabel}
-          className="ml-auto inline-flex h-[18px] min-w-5 items-center justify-center rounded-full bg-[linear-gradient(150deg,#FB7185,#E11D48)] px-1.5 text-[11px] font-bold text-white tabular-nums shadow-[0_2px_8px_-2px_rgb(225_29_72/0.8)]"
+          className="ml-auto inline-flex h-[18px] min-w-5 items-center justify-center rounded-full count-badge px-1.5 text-[11px] font-bold tabular-nums"
         >
           <span aria-hidden="true">{badge}</span>
           <span className="sr-only">{badgeLabel}</span>

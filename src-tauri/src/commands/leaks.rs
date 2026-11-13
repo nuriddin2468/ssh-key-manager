@@ -652,8 +652,7 @@ fn pick_folders(app: &AppHandle) -> Vec<PathBuf> {
         .collect()
 }
 
-/// `git ls-files`, with nothing a repository's own config could make it
-/// run: no file system monitor.
+/// `git ls-files`, run as [`process::git`] runs Git in a working tree.
 struct SystemGit;
 
 impl SystemGit {
@@ -665,17 +664,9 @@ impl SystemGit {
         args: &[&str],
         control: &ScanControl,
     ) -> Option<(Vec<PathBuf>, bool)> {
-        let mut command = process::command("git");
+        let mut command = process::git(folder)?;
         command
-            .args([
-                "-c",
-                "core.fsmonitor=false",
-                "-c",
-                "core.quotePath=off",
-                "-C",
-            ])
-            .arg(folder)
-            .args(["ls-files", "-z"])
+            .args(["-c", "core.quotePath=off", "ls-files", "-z"])
             .args(args)
             .stderr(Stdio::null());
         let mut child = command.spawn().ok()?;

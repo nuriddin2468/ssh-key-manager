@@ -16,7 +16,9 @@ name: Release
 # lockfile (installed without running any package scripts, and run by Node
 # itself, an exact version), and uploads them. Code that runs while building
 # (build scripts, proc macros, npm packages) never shares a machine with the
-# key, and one platform's build can't hand in another platform's files.
+# key, and a build's files count only if they are of its own platform's
+# kinds. Code running in one build job could still replace the files another
+# job uploads (it has the run's artifact access), as it could change its own.
 #
 # Release builds restore no caches: CI saves its caches after running
 # development tools (linters, test runners), so a release builds from the

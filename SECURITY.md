@@ -353,7 +353,9 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     job then checks that each signature is by the key the app trusts and names the
     release's version, and writes `latest.json`. Code that runs while building (build
     scripts, proc macros, npm packages) never shares a machine with the key, though it
-    could still change what its own platform's build produces.
+    could still change what the build jobs produce: code running in one build job has
+    that run's artifact access, so it could replace the files another platform's job
+    uploads before they are signed.
   - Apple code signing and notarization, when set up, run in the macOS build job, with
     secrets of an environment that only that job uses and only version tags can reach.
     Windows installers aren't code-signed yet.

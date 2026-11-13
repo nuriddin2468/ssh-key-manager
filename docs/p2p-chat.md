@@ -327,8 +327,10 @@ Two known bugs come with that code:
   - The app checks every 30 seconds and whenever the vault is unlocked. A value whose
     term ran out while the app was closed or locked is wiped at unlock, before the
     history shows.
-  - The sender can wipe it earlier on both sides with **Wipe now** while the receiver is
-    online.
+  - The sender can wipe it earlier with **Wipe now**, on both computers, while the
+    receiver is online: a link opens if need be, and the wipe goes there before the value
+    goes here, so the dialog's "both computers" is never "here only". Offline, the
+    button is **Wipe here only** and says so; the receiver's copy still goes at its term.
 - **Honest UI.** The secret dialog says that the receiver can copy the value before it
   expires: expiry wipes the app's copy, not what someone copied.
 - **Variables.** The sender picks an environment and ticks variables; the backend reads

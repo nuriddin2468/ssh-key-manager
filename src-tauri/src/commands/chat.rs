@@ -145,14 +145,19 @@ pub async fn chat_copy(
     .await
 }
 
-/// Wipes a secret or variables this user sent, on both computers.
+/// Wipes a secret or variables this user sent: with `everywhere`, on the
+/// other computer too, which must be online; else only here.
 #[tauri::command]
 pub async fn chat_revoke(
     nearby: State<'_, SharedNearby>,
     key: String,
     id: String,
+    everywhere: bool,
 ) -> AppResult<()> {
-    on_chats(&nearby, move |nearby| nearby.chat_revoke(&key, &id)).await
+    on_chats(&nearby, move |nearby| {
+        nearby.chat_revoke(&key, &id, everywhere)
+    })
+    .await
 }
 
 /// Sends a message that didn't arrive again.

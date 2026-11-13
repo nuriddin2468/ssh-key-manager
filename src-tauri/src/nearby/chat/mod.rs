@@ -901,18 +901,40 @@ impl Nearby {
         Ok(CopyResult { clears_in_secs })
     }
 
-    /// Wipes a secret or variables this user sent, on both sides if the
-    /// other is online.
-    pub fn chat_revoke(self: &Arc<Self>, key: &str, id: &str) -> AppResult<()> {
+    /// Wipes a secret or variables this user sent before their term. With
+    /// `everywhere`, on the other computer too: it must be reachable now (a
+    /// link opens if there is none), and the wipe goes there before the
+    /// value goes here, so a "wiped on both" is never a "wiped here only".
+    /// Without, only here.
+    pub fn chat_revoke(self: &Arc<Self>, key: &str, id: &str, everywhere: bool) -> AppResult<()> {
         let peer = self.known_peer(key)?;
-        if !self.edit(&peer, |chat| chat.wipe(id, false))? {
+        let wipeable = self.read(&peer, |chat| {
+            chat.get(id)
+                .is_some_and(|entry| entry.mine && entry.body.expires().is_some())
+        })?;
+        if !wipeable {
             return Err(AppError::not_found("nothing to wipe"));
         }
-        self.chats_changed(Some(&peer));
-        if self.chats().links.contains_key(&peer) {
-            let _ = self.send_frame(&peer, &ChatFrame::Revoke { id: id.to_owned() });
+        if everywhere {
+            self.link_to(&peer)?;
+            self.send_frame(&peer, &ChatFrame::Revoke { id: id.to_owned() })?;
         }
+        self.edit(&peer, |chat| chat.wipe(id, false))?;
+        self.chats_changed(Some(&peer));
         Ok(())
+    }
+
+    /// How many received messages, in every conversation read, the user
+    /// hasn't seen: for the tray menu.
+    pub fn chat_unread(&self) -> u32 {
+        let chats = self.chats();
+        let total: usize = chats
+            .known
+            .iter()
+            .filter_map(|known| chats.conversations.get(&known.key))
+            .map(Conversation::unread)
+            .sum();
+        u32::try_from(total).unwrap_or(u32::MAX)
     }
 
     /// Sends a message again that didn't arrive, under the same id.

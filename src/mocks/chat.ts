@@ -312,10 +312,11 @@ export const chatHandlers: Record<string, (args: Record<string, unknown>) => unk
     }
     return { clearsInSecs: 30 };
   },
-  chat_revoke: ({ key, id }) => {
+  chat_revoke: ({ key, id, everywhere }) => {
     const item = peer(key);
     const found = item && entry(item, id);
     if (!item || !found?.mine) return fail('not_found', 'nothing to wipe');
+    if (everywhere && !online(item)) return fail('not_found', 'the other computer is offline');
     if (found.body.kind === 'secret' || found.body.kind === 'variables') {
       found.body.gone = 'wiped';
       found.body.expires = null;

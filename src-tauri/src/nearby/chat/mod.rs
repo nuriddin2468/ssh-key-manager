@@ -45,7 +45,7 @@ use sshkm_core::p2p::protocol::{EnvVariable, Item, ItemSummary, SecretText};
 use sshkm_core::p2p::{Identity, PeerKey};
 use sshkm_core::vault::envs::{self, EnvInput, risky_variable};
 use sshkm_core::{ErrorCode, ExposeSecret, SecretString, fsutil};
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Listener as _, Manager};
 use tauri_plugin_notification::NotificationExt as _;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -254,6 +254,14 @@ pub(super) struct Chats {
     /// Held by the tick that is running: two never run at once, so two
     /// never go online side by side.
     tick: Mutex<()>,
+    /// Held while conversations are written, or one deleted: a snapshot
+    /// written late never lands over a newer one, or brings back a chat
+    /// deleted meanwhile, and a receipt goes only once its message is on
+    /// disk.
+    write: Mutex<()>,
+    /// Held while this computer is announced: one name at a time, and none
+    /// left behind.
+    announce: Mutex<()>,
 }
 
 #[derive(Default)]
@@ -318,6 +326,14 @@ impl Chats {
     fn lock(&self) -> MutexGuard<'_, ChatInner> {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    fn writing(&self) -> MutexGuard<'_, ()> {
+        self.write.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn announcing(&self) -> MutexGuard<'_, ()> {
+        self.announce.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 impl Nearby {
@@ -325,8 +341,18 @@ impl Nearby {
         self.chats.lock()
     }
 
-    /// Starts the thread that keeps chats as they should be. Called once.
+    /// Starts the thread that keeps chats as they should be, and closes
+    /// them as the vault locks. Called once.
     pub(super) fn watch_chats(self: Arc<Self>) {
+        // At once, not at the next tick: a tick may be slow, and a lock
+        // never waits on one.
+        if let Ok(app) = self.app() {
+            let nearby = Arc::clone(&self);
+            app.listen_any(crate::vault::LOCKED_EVENT, move |_| {
+                let nearby = Arc::clone(&nearby);
+                thread::spawn(move || nearby.chats_locked());
+            });
+        }
         thread::spawn(move || {
             loop {
                 self.chat_tick();
@@ -404,7 +430,8 @@ impl Nearby {
         self.write_conversations();
     }
 
-    /// The vault locked: write what changed, then forget everything.
+    /// The vault locked: offline, what changed written, then everything
+    /// forgotten. From the lock itself, and from every tick while locked.
     fn chats_locked(self: &Arc<Self>) {
         if self.chats().online.is_some() {
             self.go_offline();
@@ -604,7 +631,7 @@ impl Nearby {
         }
         // No key yet means no chat yet: none is made just to look.
         if let Ok(Some(key)) = self.existing_chat_key() {
-            self.read_index(&key);
+            let index_read = self.read_index(&key);
             let peers: Vec<PeerKey> = {
                 let chats = self.chats();
                 chats
@@ -618,29 +645,69 @@ impl Nearby {
                 let _ = self.load(peer);
             }
             // Only with the key: once it is made, the index is read then.
-            self.chats().all_read = true;
+            // An index that couldn't be read is tried again later.
+            self.chats().all_read = index_read;
         }
     }
 
     /// Reads the index of the conversations kept, and with it the ones of
-    /// contacts removed since.
-    fn read_index(&self, key: &[u8; 32]) {
+    /// contacts removed since; returns whether it was read. Only a missing
+    /// index is an empty one: one that can't be read now (another program
+    /// holds it a moment) is left as it is, and isn't written over while
+    /// it isn't read; one this key doesn't open is kept aside.
+    fn read_index(&self, key: &[u8; 32]) -> bool {
+        if self.chats().index.is_some() {
+            return true;
+        }
         let Ok(me) = self.identity().map(|identity| identity.public()) else {
-            return;
+            return false;
         };
         let path = self
             .folder()
             .join(format!("{}.{}", file::INDEX_STEM, file::EXTENSION));
-        let index = match std::fs::read(&path) {
-            Ok(bytes) => file::open_index(key, &me, &bytes).unwrap_or_else(|error| {
-                log::warn!("nearby: the chat index can't be read: {error}");
-                file::Index::default()
-            }),
-            Err(_) => file::Index::default(),
+        let read = std::fs::read(&path);
+        let Some(mut index) = index_of(
+            read,
+            |bytes| file::open_index(key, &me, bytes),
+            || std::fs::rename(&path, path.with_extension("unreadable")),
+        ) else {
+            return false;
         };
         let mut chats = self.chats();
+        // Read meanwhile by another thread, and maybe added to since.
+        if chats.index.is_some() {
+            return true;
+        }
+        // Conversations written while it wasn't read are listed in it now.
+        let missing: Vec<(PeerKey, file::IndexEntry)> = chats
+            .known
+            .iter()
+            .filter(|known| {
+                !index.peers.contains_key(&known.key.to_string())
+                    && chats
+                        .conversations
+                        .get(&known.key)
+                        .is_some_and(|chat| !chat.entries().is_empty())
+            })
+            .map(|known| {
+                (
+                    known.key,
+                    file::IndexEntry {
+                        name: known.name.clone(),
+                        own: known.own,
+                    },
+                )
+            })
+            .collect();
+        if !missing.is_empty() {
+            for (peer, entry) in missing {
+                index.peers.insert(peer.to_string(), entry);
+            }
+            chats.index_dirty = true;
+        }
         chats.former = former_of(Some(&index), &chats.known);
         chats.index = Some(index);
+        true
     }
 
     /// Changes the conversation with `peer`, read first if need be, and
@@ -672,6 +739,7 @@ impl Nearby {
     /// then the index if it changed, then the receipts of what is stored
     /// for good now.
     fn write_conversations(&self) {
+        let _writing = self.chats.writing();
         let now = Instant::now();
         let (key, due) = {
             let mut chats = self.chats();
@@ -771,30 +839,47 @@ impl Nearby {
         self.write_conversations();
     }
 
-    /// Sends the receipts of the conversations written since.
+    /// Sends the receipts of the conversations written since, each link's
+    /// on a thread of its own: a contact that doesn't read holds up only
+    /// its own receipts, never the caller (the tick, or a lock).
     fn send_receipts(&self) {
-        let ready: Vec<(PeerKey, Vec<String>)> = {
-            let mut chats = self.chats();
-            let peers: Vec<PeerKey> = chats
-                .receipts
-                .keys()
-                .filter(|peer| !chats.dirty.contains(*peer))
-                .copied()
-                .collect();
-            peers
-                .into_iter()
-                .filter_map(|peer| Some((peer, chats.receipts.remove(&peer)?)))
-                .collect()
-        };
-        for (peer, ids) in ready {
-            for chunk in ids.chunks(sshkm_core::p2p::chat::MAX_RECEIPTS) {
-                let _ = self.send_frame(
-                    &peer,
-                    &ChatFrame::Delivered {
-                        ids: chunk.to_vec(),
-                    },
-                );
+        let mut chats = self.chats();
+        let peers: Vec<PeerKey> = chats
+            .receipts
+            .keys()
+            .filter(|peer| !chats.dirty.contains(*peer))
+            .copied()
+            .collect();
+        for peer in peers {
+            let Some(link) = chats.links.get(&peer) else {
+                // No link: they go when the message comes again.
+                chats.receipts.remove(&peer);
+                continue;
+            };
+            // Its last ones still on their way: these go after, next time.
+            if link
+                .receipting
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                continue;
             }
+            let (writer, receipting) = (Arc::clone(&link.writer), Arc::clone(&link.receipting));
+            let ids = chats.receipts.remove(&peer).unwrap_or_default();
+            thread::spawn(move || {
+                for chunk in ids.chunks(sshkm_core::p2p::chat::MAX_RECEIPTS) {
+                    let frame = ChatFrame::Delivered {
+                        ids: chunk.to_vec(),
+                    };
+                    if writer
+                        .send(&sshkm_core::p2p::Message::Chat { frame })
+                        .is_err()
+                    {
+                        writer.shutdown();
+                        break;
+                    }
+                }
+                receipting.store(false, std::sync::atomic::Ordering::SeqCst);
+            });
         }
     }
 
@@ -1108,7 +1193,7 @@ impl Nearby {
         let peer = self.kept_peer(key)?;
         self.require_vault()?;
         // What it is, read first: the dialog, if any, comes before the value.
-        let counted = self.read(&peer, |chat| counted_label(chat, id, name))??;
+        let counted = self.read(&peer, |chat| counted_label(chat, id, name, unix_now()))??;
         if let Some(label) = counted {
             let what = prompt::chat_value(&self.peer_name_or_kept(&peer), &label, name);
             crate::secret_gate::take_secret(self.app()?, taking, &what)?;
@@ -1317,6 +1402,8 @@ impl Nearby {
     pub fn chat_delete(&self, key: &str) -> AppResult<()> {
         let peer = PeerKey::from_base64(key)?;
         let chat_key = self.existing_chat_key()?;
+        // No write of it in flight: none lands after the file goes.
+        let _writing = self.chats.writing();
         {
             let mut chats = self.chats();
             chats.conversations.remove(&peer);
@@ -1539,6 +1626,36 @@ fn former_of(index: Option<&file::Index>, known: &[Known]) -> Vec<Former> {
         .unwrap_or_default()
 }
 
+/// The index, from what reading its file gave: an empty one when there is
+/// none, or when this key can't open it and it was kept aside (`aside`);
+/// none at all when it can't be read now, or kept aside, so that it isn't
+/// written over.
+fn index_of<E: std::fmt::Display>(
+    read: std::io::Result<Vec<u8>>,
+    open: impl FnOnce(&[u8]) -> Result<file::Index, E>,
+    aside: impl FnOnce() -> std::io::Result<()>,
+) -> Option<file::Index> {
+    match read {
+        Ok(bytes) => match open(&bytes) {
+            Ok(index) => Some(index),
+            Err(error) => {
+                log::warn!("nearby: the chat index can't be opened: {error}");
+                aside()
+                    .inspect_err(|error| {
+                        log::warn!("nearby: the chat index was not kept aside: {error}");
+                    })
+                    .ok()
+                    .map(|()| file::Index::default())
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(file::Index::default()),
+        Err(error) => {
+            log::warn!("nearby: the chat index can't be read now: {error}");
+            None
+        }
+    }
+}
+
 /// The contact keys of `peers` (key, own, name), own devices first.
 fn known_of(identity: &Identity, peers: Vec<(PeerKey, bool, String)>) -> Vec<Known> {
     let mut known: Vec<Known> = peers
@@ -1696,7 +1813,14 @@ fn set_outcome(chat: &mut Conversation, id: &str, mine: bool, outcome: Outcome) 
 /// What the reveal and copy budget counts of secret `id` or its variable
 /// `name`: the secret's label, or `None` for a plain variable, which the
 /// page shows anyway.
-fn counted_label(chat: &Conversation, id: &str, name: Option<&str>) -> AppResult<Option<String>> {
+fn counted_label(
+    chat: &Conversation,
+    id: &str,
+    name: Option<&str>,
+    now: i64,
+) -> AppResult<Option<String>> {
+    // A value past its term, or wiped, costs nothing of the budget.
+    value_of(chat, id, name, now).map(drop)?;
     let gone = || AppError::not_found("the value is gone");
     match (&chat.get(id).ok_or_else(gone)?.body, name) {
         (Body::Secret { label, .. }, None) => Ok(Some(label.clone())),
@@ -2105,6 +2229,38 @@ mod tests {
     }
 
     #[test]
+    fn only_a_missing_index_is_an_empty_one() {
+        let kept = || {
+            let mut index = file::Index::default();
+            index.peers.insert(
+                "a".into(),
+                file::IndexEntry {
+                    name: "Kept".into(),
+                    own: false,
+                },
+            );
+            Ok::<_, String>(index)
+        };
+        let never = || -> std::io::Result<()> { panic!("kept aside") };
+        // Read and opened.
+        let index = index_of(Ok(vec![1]), |_| kept(), never).unwrap();
+        assert_eq!(index.peers.len(), 1);
+        // None yet.
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+        let index = index_of(Err(missing), |_| kept(), never).unwrap();
+        assert!(index.peers.is_empty());
+        // Held a moment by another program: not read, so not written over.
+        let held = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(index_of(Err(held), |_| kept(), never).is_none());
+        // Not this key's: kept aside, then a new one; not kept aside, none.
+        let wrong = |_: &[u8]| Err::<file::Index, _>("wrong key");
+        let index = index_of(Ok(vec![1]), wrong, || Ok(())).unwrap();
+        assert!(index.peers.is_empty());
+        let stuck = || Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        assert!(index_of(Ok(vec![1]), wrong, stuck).is_none());
+    }
+
+    #[test]
     fn values_are_read_one_at_a_time_and_not_after_they_go() {
         let mut chat = Conversation::default();
         let entry = entry_of(&secret_frame(TERMS[0]), false, 1).unwrap();
@@ -2114,7 +2270,14 @@ mod tests {
             "s3cret"
         );
         assert!(value_of(&chat, &entry.id, Some("X"), 2).is_err());
+        assert_eq!(
+            counted_label(&chat, &entry.id, None, 2).unwrap().as_deref(),
+            Some("db")
+        );
+        // Past its term, before the sweep: nothing is counted for it.
+        assert!(counted_label(&chat, &entry.id, None, 1 + 3_600).is_err());
         chat.wipe_expired(1 + 3_600);
         assert!(value_of(&chat, &entry.id, None, 2).is_err());
+        assert!(counted_label(&chat, &entry.id, None, 2).is_err());
     }
 }

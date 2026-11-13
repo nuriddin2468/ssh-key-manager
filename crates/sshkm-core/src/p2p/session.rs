@@ -24,7 +24,8 @@
 
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpStream};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use base64ct::{Base64, Encoding};
 use rand_core::{OsRng, RngCore};
@@ -358,6 +359,7 @@ impl Session<TcpStream> {
                 stream: Mutex::new(write),
                 closer,
                 noise,
+                sending_since: Mutex::new(None),
             },
         ))
     }
@@ -399,6 +401,9 @@ pub struct Writer {
     /// The same socket, to hang up without waiting for a send.
     closer: TcpStream,
     noise: Arc<Mutex<snow::TransportState>>,
+    /// When the send going now started: a peer that reads a byte now and
+    /// then can hold one for ever, each write within its timeout.
+    sending_since: Mutex<Option<Instant>>,
 }
 
 impl Writer {
@@ -407,14 +412,29 @@ impl Writer {
     pub fn send(&self, message: &Message) -> Result<()> {
         let json = to_json(message)?;
         let mut stream = self.stream.lock().unwrap_or_else(PoisonError::into_inner);
+        *self.since() = Some(Instant::now());
         let noise = &self.noise;
-        write_json(&mut *stream, &json, &mut |chunk, out| {
+        let sent = write_json(&mut *stream, &json, &mut |chunk, out| {
             noise
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .write_message(chunk, out)
                 .map_err(noise_error)
-        })
+        });
+        *self.since() = None;
+        sent
+    }
+
+    /// How long the send going now has taken; nothing when none is going.
+    /// One that takes long means a peer that doesn't read: hang up.
+    pub fn busy_for(&self) -> Duration {
+        self.since().map_or(Duration::ZERO, |since| since.elapsed())
+    }
+
+    fn since(&self) -> MutexGuard<'_, Option<Instant>> {
+        self.sending_since
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Hangs up: the [`Reader`] stops with an error, and so does a send
@@ -756,6 +776,51 @@ mod tests {
         }
         assert_eq!(seen, 100);
         assert_eq!(responder.join().unwrap(), hello("alice"));
+    }
+
+    #[test]
+    fn a_send_to_a_peer_that_doesnt_read_shows_how_long_it_waits() {
+        let (alice, bob) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (client, server) = pipe();
+        // Bob shakes hands, then reads nothing until told to go.
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        let responder = thread::spawn(move || {
+            let session = accept(server, &bob).unwrap();
+            let _ = wait.recv();
+            drop(session);
+        });
+        let session = connect(client, &alice).unwrap();
+        // As a link's: a write that waits ends by itself too (on Windows,
+        // hanging up may not end one already waiting).
+        session
+            .stream()
+            .set_write_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let (_reader, writer) = session.split().unwrap();
+        let writer = Arc::new(writer);
+        assert_eq!(writer.busy_for(), Duration::ZERO);
+        let sender = {
+            let writer = Arc::clone(&writer);
+            thread::spawn(move || {
+                let big = hello(&"x".repeat(1_000_000));
+                // Until the sockets' buffers fill and a send waits.
+                while writer.send(&big).is_ok() {}
+            })
+        };
+        let started = Instant::now();
+        while writer.busy_for() < Duration::from_millis(300) {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "no send waited"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        // Hanging up ends the send that waits.
+        writer.shutdown();
+        sender.join().unwrap();
+        assert_eq!(writer.busy_for(), Duration::ZERO);
+        go.send(()).unwrap();
+        responder.join().unwrap();
     }
 
     #[test]

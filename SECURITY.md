@@ -340,18 +340,34 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     written to disk except whether it is on (`breaches.json` in the app's data
     folder), and range prefixes are never logged.
 - **Signed updates.** An update is installed only if its signature matches the public key
-  built into the app (`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`).
+  built into the app (`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`), and only
+  if it is newer than the running version.
+  - The signature names the version it was made for, and the app refuses an update whose
+    signature doesn't name the version `latest.json` offers (`requireSignedVersion`), so
+    an older release can't be offered as a newer one. Every release so far carries it.
   - The update check runs in Rust. The page can ask for a check or an install, but can't
     change the server, proxy or headers.
-  - Release builds use GitHub Actions pinned to commit SHAs. The updater signing key is
-    a secret of the `release` environment, which only the signing job uses. That job
-    runs on a fresh runner that never builds or installs the app's code: it downloads
-    the bundles the build jobs made, signs them with the Tauri CLI pinned in the
-    lockfile (installed without running any package scripts), checks that the
-    signatures are by the key the app trusts, and writes `latest.json`. Code that runs
-    while building (build scripts, proc macros, npm packages) never shares a machine
-    with the key, though it could still change what the build jobs produce. Apple code
-    signing and notarization, when set up, run in the macOS build job.
+  - Release builds use GitHub Actions pinned to commit SHAs, and restore no caches: CI
+    saves its caches after running development tools, so a release builds from the
+    lockfiles alone.
+  - The updater signing key is a secret of the `release` environment, which only the
+    signing job uses, on version tags, after a maintainer approves it. That job runs on
+    a fresh runner that never builds or installs the app's code. It downloads each
+    platform's bundles into a folder of their own and stops if a build made a file of
+    another kind, or a file of the same name as another build's. One step gets the key:
+    it runs the Tauri CLI pinned in the lockfile (installed beforehand by pnpm, without
+    running any package scripts) with an exact version of Node, and nothing else. The
+    job then checks that each signature is by the key the app trusts and names the
+    release's version, and writes `latest.json`. Code that runs while building (build
+    scripts, proc macros, npm packages) never shares a machine with the key, though it
+    could still change what the build jobs produce: code running in one build job has
+    that run's artifact access, so it could replace the files another platform's job
+    uploads before they are signed.
+  - Apple code signing and notarization, when set up, run in the macOS build job, with
+    secrets of an environment that only that job uses and only version tags can reach.
+    Windows installers aren't code-signed yet.
+  - CI checks the Rust dependencies with `cargo deny`: known advisories, crates from
+    anywhere but crates.io, and licenses the app can't be shipped with (`deny.toml`).
 - **Standard files only.** The app edits the OpenSSH files in place.
   - Writes are atomic (temp file plus rename), keep the file's permissions, and follow
     symlinks.

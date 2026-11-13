@@ -9,19 +9,27 @@ name: Release
 # Required: TAURI_SIGNING_PRIVATE_KEY (and TAURI_SIGNING_PRIVATE_KEY_PASSWORD if
 # the key has one), the private half of plugins.updater.pubkey in tauri.conf.json,
 # as secrets of the `release` environment. Only the `sign` job uses that
-# environment. It runs on a fresh runner that never builds or installs the
-# app's code: it downloads the bundles the build jobs made, signs them with
-# the Tauri CLI from the lockfile (installed without running any package
-# scripts), and uploads them. Code that runs while building (build scripts,
-# proc macros, npm packages) never shares a machine with the key.
+# environment, and only its signing step gets the key. The job runs on a fresh
+# runner that never builds or installs the app's code: it downloads each
+# platform's bundles into a folder of their own, takes only the kinds of file
+# that platform makes, signs the update bundles with the Tauri CLI from the
+# lockfile (installed without running any package scripts, and run by Node
+# itself, an exact version), and uploads them. Code that runs while building
+# (build scripts, proc macros, npm packages) never shares a machine with the
+# key, and one platform's build can't hand in another platform's files.
 #
-# Optional code signing needs these secrets, as repository secrets, since the
-# build jobs don't use the `release` environment. Apple code signing and
-# notarization run in the macOS build job:
-#   macOS:   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
-#            APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
-#   Windows: configure signing in tauri.conf.json (bundle.windows) or Azure Trusted Signing
-# Without them the builds still succeed, unsigned.
+# Release builds restore no caches: CI saves its caches after running
+# development tools (linters, test runners), so a release builds from the
+# lockfiles alone.
+#
+# Optional Apple code signing and notarization run in the macOS build job, with
+# these secrets of the `apple-signing` environment, which only that job uses
+# (not `release`: build code runs there, and must not share a machine with the
+# updater key). Limit the environment to `v*` tags:
+#   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
+#   APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
+# Without them the macOS build still succeeds, unsigned. Windows installers
+# aren't code-signed yet (README, "Code signing policy").
 #
 # The release notes come from changelog/releases.json, which
 # `node scripts/changelog.mjs release <version>` fills in (changelog/README.md).
@@ -52,11 +60,17 @@ jobs:
         include:
           - platform: macos-latest
             target: universal-apple-darwin
+            environment: apple-signing
           - platform: ubuntu-22.04
             target: ""
+            environment: ""
           - platform: windows-latest
             target: ""
+            environment: ""
     runs-on: ${{ matrix.platform }}
+    # The Apple signing secrets, for the macOS build only. The other builds
+    # use no environment.
+    environment: ${{ matrix.environment }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -66,18 +80,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      # No pnpm or Rust cache (see the top of this file).
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          cache: pnpm
       - name: Check the release notes
         run: node scripts/changelog.mjs check
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
         with:
           toolchain: stable
           targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: pnpm install --frozen-lockfile
       # With createUpdaterArtifacts on, `tauri build` signs the update bundles
       # itself and fails without a key, after bundling. It gets a throwaway
@@ -108,7 +121,8 @@ jobs:
             pnpm tauri build ${TARGET:+--target "$TARGET"} --config src-tauri/tauri.release.conf.json
       # The files to release, named as tauri-action named the release assets:
       # GitHub turns spaces into dots, and the macOS update bundle carries its
-      # architecture. The throwaway signatures stay behind.
+      # architecture. Only the kinds this system makes: whatever else is in
+      # the bundle folder stays behind, the throwaway signatures too.
       - name: Collect the installers
         shell: bash
         env:
@@ -117,9 +131,13 @@ jobs:
           out="$RUNNER_TEMP/release"
           mkdir "$out"
           bundle="target/${TARGET:+$TARGET/}release/bundle"
-          for file in "$bundle"/dmg/*.dmg "$bundle"/macos/*.app.tar.gz "$bundle"/msi/*.msi \
-            "$bundle"/nsis/*-setup.exe "$bundle"/deb/*.deb "$bundle"/rpm/*.rpm \
-            "$bundle"/appimage/*.AppImage; do
+          case $RUNNER_OS in
+            macOS) files=("$bundle"/dmg/*.dmg "$bundle"/macos/*.app.tar.gz) ;;
+            Windows) files=("$bundle"/msi/*.msi "$bundle"/nsis/*-setup.exe) ;;
+            Linux) files=("$bundle"/deb/*.deb "$bundle"/rpm/*.rpm "$bundle"/appimage/*.AppImage) ;;
+            *) echo "unexpected system: $RUNNER_OS"; exit 1 ;;
+          esac
+          for file in "${files[@]}"; do
             [ -f "$file" ] || continue
             name=$(basename "$file")
             case $name in
@@ -139,8 +157,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     # The only job in the release environment, so the only one that can read
-    # the signing key. Required reviewers set on the environment approve it
-    # once every platform has built.
+    # the signing key, and only its signing step gets it. Required reviewers
+    # set on the environment approve it once every platform has built.
     environment: release
     permissions:
       contents: write
@@ -156,28 +174,88 @@ jobs:
         with:
           persist-credentials: false
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
-      # No cache: the build jobs could have written one.
+      # No cache: the build jobs could have written one. Node runs the CLI
+      # with the key, so it is an exact version, updated by hand.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 22
+          node-version: 22.23.4
       # The lockfile pins @tauri-apps/cli and its checksum. Of what this
       # installs, only the CLI ever runs, and no package's install scripts do.
       - name: Install the Tauri CLI
         run: pnpm install --frozen-lockfile --ignore-scripts
+      # Each platform's files by name into a folder of their own, so no build
+      # can replace another's.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: release-*
-          merge-multiple: true
-          path: ${{ runner.temp }}/release
+          name: release-macOS
+          path: ${{ runner.temp }}/builds/macOS
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-Linux
+          path: ${{ runner.temp }}/builds/Linux
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-Windows
+          path: ${{ runner.temp }}/builds/Windows
       # The files come from the build jobs, so only regular files with plain
-      # names of the expected kinds go on to commands, URLs and the manifest.
-      - name: Sign the update bundles
+      # names, one of each kind its platform makes, go on to commands, URLs and
+      # the manifest.
+      - name: Check the bundles
         shell: python3 -I {0}
+        run: |
+          import os, re, sys
+
+          temp = os.environ["RUNNER_TEMP"]
+          kinds = {
+              "macOS": (".app.tar.gz", ".dmg"),
+              "Linux": (".AppImage", ".deb", ".rpm"),
+              "Windows": (".msi", "-setup.exe"),
+          }
+          updates = (".app.tar.gz", ".AppImage", ".deb", ".rpm", ".msi", "-setup.exe")
+          folder = os.path.join(temp, "release")
+          os.mkdir(folder)
+          for system, suffixes in kinds.items():
+              source = os.path.join(temp, "builds", system)
+              found = []
+              for name in sorted(os.listdir(source)):
+                  path = os.path.join(source, name)
+                  if (
+                      not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name)
+                      or os.path.islink(path)
+                      or not os.path.isfile(path)
+                      or not name.endswith(suffixes)
+                  ):
+                      sys.exit(f"unexpected file from the {system} build: {name!r}")
+                  found += [suffix for suffix in suffixes if name.endswith(suffix)]
+                  # Two files of one name stop the release; neither replaces the other.
+                  if os.path.lexists(os.path.join(folder, name)):
+                      sys.exit(f"two builds made {name!r}")
+                  os.rename(path, os.path.join(folder, name))
+              if sorted(found) != sorted(suffixes):
+                  sys.exit(f"the {system} build made {sorted(found)}, not one each of {sorted(suffixes)}")
+          with open(os.path.join(temp, "updates.txt"), "w", encoding="utf-8") as out:
+              for name in sorted(os.listdir(folder)):
+                  if name.endswith(updates):
+                      out.write(f"{name}\n")
+      # The only step with the key. It runs Node and the CLI, and nothing else
+      # (not pnpm).
+      - name: Sign the update bundles
+        shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          import base64, json, os, re, subprocess, sys
+          version=$(node -p 'require("./src-tauri/tauri.conf.json").version')
+          while IFS= read -r name; do
+            node node_modules/@tauri-apps/cli/tauri.js signer sign --app-version "$version" \
+              "$RUNNER_TEMP/release/$name"
+          done < "$RUNNER_TEMP/updates.txt"
+      # Installed apps refuse a signature by another key, or one that doesn't
+      # name the version latest.json offers.
+      - name: Check the signatures
+        shell: python3 -I {0}
+        run: |
+          import base64, json, os, sys
 
           with open("src-tauri/tauri.conf.json", encoding="utf-8") as file:
               config = json.load(file)
@@ -190,27 +268,18 @@ jobs:
 
 
           trusted = key_id(config["plugins"]["updater"]["pubkey"])
-          folder = os.path.join(os.environ["RUNNER_TEMP"], "release")
-          updates = (".app.tar.gz", ".AppImage", ".deb", ".rpm", ".msi", "-setup.exe")
-          for name in sorted(os.listdir(folder)):
-              path = os.path.join(folder, name)
-              if (
-                  not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name)
-                  or os.path.islink(path)
-                  or not os.path.isfile(path)
-                  or not name.endswith(updates + (".dmg",))
-              ):
-                  sys.exit(f"unexpected file from a build: {name!r}")
-              if not name.endswith(updates):
-                  continue
-              subprocess.run(
-                  ["pnpm", "exec", "tauri", "signer", "sign", "--app-version", config["version"], path],
-                  check=True,
-              )
-              # Installed apps would refuse a signature by another key.
-              with open(path + ".sig", encoding="ascii") as sig:
-                  if key_id(sig.read()) != trusted:
-                      sys.exit(f"{name}.sig is not by the key in plugins.updater.pubkey")
+          temp = os.environ["RUNNER_TEMP"]
+          with open(os.path.join(temp, "updates.txt"), encoding="utf-8") as file:
+              names = file.read().split()
+          for name in names:
+              with open(os.path.join(temp, "release", f"{name}.sig"), encoding="ascii") as sig:
+                  text = sig.read()
+              if key_id(text) != trusted:
+                  sys.exit(f"{name}.sig is not by the key in plugins.updater.pubkey")
+              # The trusted comment: tab-separated fields, signed with the file.
+              comment = base64.b64decode(text).decode().splitlines()[2]
+              if f"version:{config['version']}" not in comment.split("\t"):
+                  sys.exit(f"{name}.sig doesn't name version {config['version']}: {comment!r}")
       # The manifest as tauri-action wrote it, plus the release notes. The
       # updater looks up `{os}-{arch}-{installer}` first, then `{os}-{arch}`.
       - name: Write latest.json
@@ -302,11 +371,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      # No pnpm cache, as in the app's builds.
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm extension:package
       # The stores get the version the tag names, which the app has too.

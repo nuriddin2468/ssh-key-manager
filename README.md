@@ -209,9 +209,11 @@ Hosts can point to keys anywhere, and the app shows them. The key list itself co
 
 ## Code signing policy
 
+Windows and macOS installers aren't code-signed yet: Windows signing through SignPath Foundation is being set up (see the [Roadmap](#roadmap)), and this policy describes how it will work. Updates are signed already: the app installs an update only if it carries the project's update signature.
+
 Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
 
-Windows releases are built by GitHub Actions from this repository, and each release is signed only after a maintainer approves it.
+Windows releases are built by GitHub Actions from this repository, and once signing is set up, each release is signed only after a maintainer approves it.
 
 - Committers and reviewers: [nuriddin2468](https://github.com/nuriddin2468)
 - Approvers: [nuriddin2468](https://github.com/nuriddin2468)

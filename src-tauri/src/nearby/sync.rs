@@ -48,7 +48,9 @@ use sshkm_core::sync::{
 };
 use sshkm_core::vault::envs::files::CloudService;
 use sshkm_core::vault::projects::ProjectRecord;
-use sshkm_core::vault::sync::{VaultBase, VaultChange, VaultConflict, VaultCounts, VaultPlan};
+use sshkm_core::vault::sync::{
+    VaultBase, VaultChange, VaultChoices, VaultConflict, VaultCounts, VaultPlan,
+};
 use sshkm_core::vault::{ContactRecord, DeviceRecord, MAX_DATABASE_SIZE};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -358,7 +360,7 @@ fn talk(
         ..SyncSummary::default()
     };
     let mut state = local.state.clone();
-    let (vault_make, vault_theirs) = choose_vault(
+    let vault_choices = choose_vault(
         initiator,
         &sorted.vault,
         &decisions,
@@ -389,7 +391,7 @@ fn talk(
         },
     );
     let vault_written = vault.as_ref().map(|plan| {
-        side.vault_apply(plan, &vault_make, &vault_theirs)
+        side.vault_apply(plan, &vault_choices)
             .map(|applied| summary.vault = applied.counts)
     });
     let vault_now = match &vault {
@@ -876,15 +878,15 @@ fn choose(
     changes
 }
 
-/// The vault's changes to make here and the conflicts to settle for the
-/// other side's version, as [`choose`] does for hosts.
+/// The vault's changes to make here and how its conflicts are settled, as
+/// [`choose`] does for hosts.
 fn choose_vault(
     initiator: bool,
     sorted: &VaultSorted,
     decisions: &SyncDecisions,
     state: &mut SyncState,
     summary: &mut SyncSummary,
-) -> (BTreeSet<String>, BTreeSet<String>) {
+) -> VaultChoices {
     let mut make: BTreeSet<String> = sorted.safe.iter().map(|c| c.id.clone()).collect();
     if initiator {
         for change in &sorted.risky {
@@ -906,7 +908,7 @@ fn choose_vault(
     } else {
         summary.deferred += count(sorted.risky.len() + sorted.removals.len());
     }
-    let mut theirs = BTreeSet::new();
+    let (mut theirs, mut kept) = (BTreeSet::new(), BTreeSet::new());
     for conflict in &sorted.conflicts {
         if decisions.vault_theirs.contains(&conflict.id) {
             if !initiator && !conflict.risky.is_empty() {
@@ -914,11 +916,14 @@ fn choose_vault(
             } else {
                 theirs.insert(conflict.id.clone());
             }
-        } else if !decisions.vault_mine.contains(&conflict.id) {
+        } else if decisions.vault_mine.contains(&conflict.id) {
+            // The other side's version goes among the entry's earlier ones.
+            kept.insert(conflict.id.clone());
+        } else {
             summary.conflicts += 1;
         }
     }
-    (make, theirs)
+    VaultChoices { make, theirs, kept }
 }
 
 /// Sends `message` and reads the other side's: the side that connected
@@ -1504,6 +1509,7 @@ mod tests {
         };
         retitle(&left, "Mail (left)");
         retitle(&right, "Mail (right)");
+        let right_versions = right.real_vault().entry(&mail).unwrap().history_len;
         // The user who started takes the other's version of the conflict;
         // the side that answers puts off the seven moves to the bin.
         left.decisions.vault_theirs = vec![mail.clone()];
@@ -1517,8 +1523,13 @@ mod tests {
         );
         assert_eq!(title(&left, &mail).as_deref(), Some("Mail (right)"));
         assert_eq!(title(&right, &mail).as_deref(), Some("Mail (right)"));
-        // The version not kept stays among the entry's earlier versions.
+        // The version not kept stays among the entry's earlier versions,
+        // on both sides: the side that kept its own has the other's too.
         assert!(left.real_vault().entry(&mail).unwrap().history_len >= 1);
+        assert_eq!(
+            right.real_vault().entry(&mail).unwrap().history_len,
+            right_versions + 1
+        );
 
         // Started from that side, its user sees them and lets them go.
         right.decisions.delete = true;

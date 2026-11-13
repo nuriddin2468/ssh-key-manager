@@ -50,7 +50,8 @@ use sshkm_core::paths::home_dir;
 use sshkm_core::sync::Hasher;
 use sshkm_core::vault::envs::files::{CloudRoots, CloudService};
 use sshkm_core::vault::sync::{
-    ENTRY_SYNC_VERSION, Party, PeerVault, VaultApplied, VaultBase, VaultPlan, digests,
+    ENTRY_SYNC_VERSION, Pairs, Party, PeerVault, VaultApplied, VaultBase, VaultChoices, VaultPlan,
+    check_moved, digests,
 };
 use sshkm_core::vault::{self, Vault};
 use sshkm_core::{ErrorCode, ExposeSecret, SecretString, fsutil};
@@ -1463,10 +1464,8 @@ impl Side for AppSide<'_> {
             .vault
             .with(app, |vault| {
                 let secret = vault.share_secret();
-                Ok((
-                    vault.saved_bytes()?,
-                    SecretText::new(secret.expose_secret()),
-                ))
+                // Not compressed: the new computer reads it within bounds.
+                Ok((vault.moved_copy()?, SecretText::new(secret.expose_secret())))
             })
             .map_err(|_| PairingFailure::NotSaved)
     }
@@ -1477,7 +1476,11 @@ impl Side for AppSide<'_> {
         secret: SecretText,
     ) -> Result<(), PairingFailure> {
         let secret = SecretString::from(secret.expose().to_owned());
-        vault::check_shared(&file, &secret).map_err(|_| PairingFailure::NotSaved)?;
+        check_moved(&file, &secret).map_err(|error| match error {
+            // Sent compressed: the other computer needs the new version.
+            sshkm_core::Error::Unsupported(_) => PairingFailure::Version,
+            _ => PairingFailure::NotSaved,
+        })?;
         let mut slot = self.nearby.slot(self.id);
         let slot = slot.as_mut().ok_or(PairingFailure::Cancelled)?;
         slot.pending = Some(PendingVault { file, secret });
@@ -1578,9 +1581,9 @@ impl Side for AppSide<'_> {
     fn vault_apply(
         &self,
         plan: &VaultPlan,
-        make: &std::collections::BTreeSet<String>,
-        theirs: &std::collections::BTreeSet<String>,
+        choices: &VaultChoices,
     ) -> Result<VaultApplied, PairingFailure> {
+        let (make, theirs) = (&choices.make, &choices.theirs);
         let hasher = self.vault_hasher()?;
         let peer = self
             .nearby
@@ -1605,7 +1608,7 @@ impl Side for AppSide<'_> {
         }
         let mut applied = VaultApplied::default();
         let changed = self.write(|vault| {
-            applied = vault.apply_sync(&peer, plan, &hasher, make, theirs)?;
+            applied = vault.apply_sync(&peer, plan, &hasher, choices)?;
             Ok(!applied.counts.is_empty())
         })?;
         if changed && let Some(app) = self.nearby.app.get() {
@@ -1620,7 +1623,7 @@ impl Side for AppSide<'_> {
         Ok(applied)
     }
 
-    fn vault_items(&self, pairs: &BTreeMap<String, String>) -> Result<VaultItems, PairingFailure> {
+    fn vault_items(&self, pairs: &Pairs) -> Result<VaultItems, PairingFailure> {
         let hasher = self.vault_hasher()?;
         self.read(|vault| {
             let shared = Hasher::new(vault.own_key()?.digest_key());

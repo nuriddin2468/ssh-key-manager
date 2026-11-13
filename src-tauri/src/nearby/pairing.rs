@@ -23,7 +23,7 @@
 //! [`own`]: super::own
 //! [`sync`]: super::sync
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io::{self, ErrorKind};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
@@ -34,7 +34,7 @@ use sshkm_core::p2p::protocol::{
 };
 use sshkm_core::p2p::{Message, PeerKey, Session};
 use sshkm_core::sync::Hashes;
-use sshkm_core::vault::sync::{VaultApplied, VaultBase, VaultPlan};
+use sshkm_core::vault::sync::{Pairs, VaultApplied, VaultBase, VaultChoices, VaultPlan};
 use zeroize::Zeroizing;
 
 use super::sync::{Review, SyncDecisions, SyncLocal, SyncState, SyncSummary, SyncWrite};
@@ -313,21 +313,19 @@ pub trait Side {
     fn vault_plan(&self, _copy: &[u8], _base: &VaultBase) -> Result<VaultPlan, PairingFailure> {
         Err(PairingFailure::Broken)
     }
-    /// Makes the changes of `plan` in `make` and takes the other side's
-    /// version of the conflicts in `theirs`, then saves the vault after a
-    /// backup.
+    /// Makes the changes of `plan` the `choices` name and settles its
+    /// conflicts as they say, then saves the vault after a backup.
     fn vault_apply(
         &self,
         _plan: &VaultPlan,
-        _make: &BTreeSet<String>,
-        _theirs: &BTreeSet<String>,
+        _choices: &VaultChoices,
     ) -> Result<VaultApplied, PairingFailure> {
         Err(PairingFailure::NotSaved)
     }
     /// The vault's items now, with the groups paired as `pairs`: their
     /// snapshots (keyed with this device's key) and their digests (keyed
     /// with the key own devices share).
-    fn vault_items(&self, _pairs: &BTreeMap<String, String>) -> Result<VaultItems, PairingFailure> {
+    fn vault_items(&self, _pairs: &Pairs) -> Result<VaultItems, PairingFailure> {
         Err(PairingFailure::Broken)
     }
 }

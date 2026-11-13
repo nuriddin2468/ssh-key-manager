@@ -2,7 +2,7 @@
 //! [`pairing`](super::pairing), [`transfer`](super::transfer),
 //! [`own`](super::own) and [`sync`](super::sync).
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::VecDeque;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -17,7 +17,9 @@ use sshkm_core::p2p::protocol::{EntrySync, Intent, Item, SecretText, VaultState}
 use sshkm_core::p2p::{Identity, PeerKey, accept, connect};
 use sshkm_core::sync::Hasher;
 use sshkm_core::vault::projects::ProjectRecord;
-use sshkm_core::vault::sync::{PeerVault, VaultApplied, VaultBase, VaultPlan, digests};
+use sshkm_core::vault::sync::{
+    Pairs, PeerVault, VaultApplied, VaultBase, VaultChoices, VaultPlan, digests,
+};
 use sshkm_core::vault::{ContactRecord, DeviceRecord};
 use zeroize::Zeroizing;
 
@@ -368,20 +370,19 @@ impl Side for Script {
     fn vault_apply(
         &self,
         plan: &VaultPlan,
-        make: &BTreeSet<String>,
-        theirs: &BTreeSet<String>,
+        choices: &VaultChoices,
     ) -> Result<VaultApplied, PairingFailure> {
         let peer = self.peer_vault.lock().unwrap();
         let peer = peer.as_ref().ok_or(PairingFailure::Broken)?;
         let mut vault = self.real_vault();
         let applied = vault
-            .apply_sync(peer, plan, &self.vault_hasher(), make, theirs)
+            .apply_sync(peer, plan, &self.vault_hasher(), choices)
             .map_err(|_| PairingFailure::NotSaved)?;
         let backups = &self.real.as_ref().expect("a script with a vault").1;
         vault.save(backups).map_err(|_| PairingFailure::NotSaved)?;
         Ok(applied)
     }
-    fn vault_items(&self, pairs: &BTreeMap<String, String>) -> Result<VaultItems, PairingFailure> {
+    fn vault_items(&self, pairs: &Pairs) -> Result<VaultItems, PairingFailure> {
         let vault = self.real_vault();
         let shared = Hasher::new(vault.own_key().ok_or(PairingFailure::NotOwn)?.digest_key());
         Ok(VaultItems {

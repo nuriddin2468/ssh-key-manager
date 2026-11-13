@@ -48,9 +48,10 @@ use sshkm_core::p2p::protocol::{
 use sshkm_core::p2p::{self, Identity, PeerKey};
 use sshkm_core::sync::Hasher;
 use sshkm_core::vault::sync::{
-    ENTRY_SYNC_VERSION, PeerVault, VaultApplied, VaultBase, VaultPlan, digests,
+    ENTRY_SYNC_VERSION, Pairs, PeerVault, VaultApplied, VaultBase, VaultChoices, VaultPlan,
+    check_moved, digests,
 };
-use sshkm_core::vault::{Vault, VaultPaths, check_shared};
+use sshkm_core::vault::{Vault, VaultPaths};
 use sshkm_core::{ExposeSecret, SecretString};
 use zeroize::Zeroizing;
 
@@ -266,7 +267,7 @@ impl Side for Terminal {
             return Err(PairingFailure::NotSaved);
         };
         let secret = SecretString::from(secret.expose().to_owned());
-        check_shared(&file, &secret).map_err(|_| PairingFailure::NotSaved)?;
+        check_moved(&file, &secret).map_err(|_| PairingFailure::NotSaved)?;
         print!(
             "The vault came ({} bytes). Master password for this computer: ",
             file.len()
@@ -393,8 +394,7 @@ impl Side for Terminal {
     fn vault_apply(
         &self,
         plan: &VaultPlan,
-        make: &std::collections::BTreeSet<String>,
-        theirs: &std::collections::BTreeSet<String>,
+        choices: &VaultChoices,
     ) -> Result<VaultApplied, PairingFailure> {
         let peer = self
             .peer_vault
@@ -406,7 +406,7 @@ impl Side for Terminal {
         let hasher = self.vault_hasher();
         let applied = self
             .with_vault(|vault| {
-                let applied = vault.apply_sync(&peer, plan, &hasher, make, theirs).ok()?;
+                let applied = vault.apply_sync(&peer, plan, &hasher, choices).ok()?;
                 vault.save(&backups).ok()?;
                 Some(applied)
             })
@@ -416,10 +416,7 @@ impl Side for Terminal {
         Ok(applied)
     }
 
-    fn vault_items(
-        &self,
-        pairs: &std::collections::BTreeMap<String, String>,
-    ) -> Result<VaultItems, PairingFailure> {
+    fn vault_items(&self, pairs: &Pairs) -> Result<VaultItems, PairingFailure> {
         let hasher = self.vault_hasher();
         self.with_vault(|vault| {
             let shared = Hasher::new(vault.own_key()?.digest_key());

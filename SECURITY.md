@@ -804,7 +804,10 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   conversation stops before the code. If the other computer has no vault yet (it
   waits for one, `join=1` in its announcement, and takes nothing but being added),
   it gets the vault file in parts (its size and SHA-256 first, at most 256 MiB) and
-  then the vault secret. It checks that the secret opens the file, keeps both in
+  then the vault secret. The file is written for it without compression, and it reads it
+  only within bounds, as a sync copy (below): KDBX 4 not compressed, its XML checked for
+  depth and size before it is parsed; a compressed file, from an older version, is
+  refused with "update the app". It checks that the secret opens the file, keeps both in
   memory only, and writes the file once its user has set a master password of its
   own. Someone else on the network who answers in place of that computer shows a
   code the user never sees on their own screen, and the real computer shows none.
@@ -850,20 +853,26 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   devices share, the key of `.env` revisions, the chat's key, other programs'
   settings) and without entries or groups marked `sshkm.local`. The receiver opens it
   only with its own secret and only if its root is this vault's: two vaults are never
-  merged. It refuses a copy over 256 MiB, with key derivation settings out of bounds,
+  merged. The copy is written without compression, and the receiver refuses one that
+  is compressed and checks its XML, decrypted, before parsing it (at most 96 levels and
+  8,388,608 elements, no document type, no attachment stored compressed), so reading a
+  copy never inflates or recurses beyond bounds. It refuses a copy over 256 MiB, with key
+  derivation settings out of bounds,
   more than 65,536 entries, 8,192 groups, 64 levels or 262,144 removal records, or an
-  entry with a group's id; takes at most 64 earlier versions of an entry; counts a
+  entry with a group's id; leaves out an id that is an entry on one side and a group on
+  the other; takes at most 64 earlier versions of an entry; counts a
   time more than five minutes ahead of its clock as now; and never reads the copy's
   custom data. Changes are found against a snapshot of keyed HMACs per field, never
   values, as for hosts. An entry or group only one side changed takes that side's
   fields; one both changed differently, or one deleted and the other changed, is the
   user's choice, which shows the names of the fields that differ and a field's two
   values only when the user asks, never a 2FA secret. The version not kept stays among
-  the entry's earlier versions. A shared value goes only after the environments here
+  the entry's earlier versions on both computers, whatever the history limit. A shared
+  value goes only after the environments here
   that still use it got their own copies, and references still resolve only to shared
   values. Adding or changing a variable that makes programs load code (`LD_*`,
-  `DYLD_*`, `NODE_OPTIONS`, `PATH`, `BASH_ENV`, `GIT_SSH_COMMAND`, …) is a risky
-  change: the user who started the sync decides on it and allows it in a system
+  `DYLD_*`, `NODE_OPTIONS`, `PATH`, `BASH_ENV`, `GIT_SSH_COMMAND`, …), or the value of a
+  shared value such a variable uses, is a risky change: the user who started the sync decides on it and allows it in a system
   dialog; the other computer puts it off. Deletions and moves to the recycle bin
   count with hosts' toward the same limit of five from one device a day, and the vault
   is kept as it was before a day's first of them, as the config is. Everything is
@@ -871,8 +880,12 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   entry the user changed while deciding is left for the next sync. A binding of a
   `.env` file comes with its environment's kind and level as one value, so a sync
   never lowers its protection: a level-3 file on a system without pipes, or a level-1
-  file of a remote environment, is never written. Contacts sync as records, the one
-  changed last winning; a removed one stays as a tombstone.
+  file of a remote environment, is never written. What a computer keeps to itself
+  (`sshkm.local`) goes in its copy as UUIDs only, so the other side never takes it for
+  deleted, and here it blocks the deletion of its group and of a shared value it uses.
+  After a merge, removal records stay within what a copy may carry, and entries and
+  groups within the limits. Contacts sync as records, the one changed last winning; a
+  removed one stays as a tombstone.
 
 ## Reporting a vulnerability
 

@@ -398,11 +398,17 @@ mod tests {
         let mut list = Leftovers::load(&list_path);
         assert_eq!(list.clone().sweep(), 1);
         assert!(!path.exists() && !new.exists());
-        // Or after: the new one goes.
+        // Or after: the new one goes. Unix lists it before it takes its
+        // place; Windows right after, since a file renamed onto a name just
+        // freed may take the creation time of the file that had it (NTFS
+        // tunneling), which is what tells files apart there.
         fs::write(&new, "A=2, longer\n").unwrap();
+        #[cfg(unix)]
         let meta = fs::metadata(&new).unwrap();
-        list.files.push(Leftover::of_meta(&path, &meta).unwrap());
         fs::rename(&new, &path).unwrap();
+        #[cfg(not(unix))]
+        let meta = fs::metadata(&path).unwrap();
+        list.files.push(Leftover::of_meta(&path, &meta).unwrap());
         assert_eq!(list.sweep(), 1);
         assert!(!path.exists());
         // Temporary files only: the file itself always stays.

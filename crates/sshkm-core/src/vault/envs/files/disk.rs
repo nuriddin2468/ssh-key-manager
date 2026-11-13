@@ -263,8 +263,10 @@ fn read_opened(opened: io::Result<fs::File>, path: &Path) -> Disk {
 /// is listed before anything is written: the target's temporary files, so
 /// the guard and the next start sweep what a crash in the middle leaves,
 /// and, for a level-2 file, the new file as it will be, before it takes
-/// the target's place, so they remove it too. A level-2 file that can't be
-/// listed isn't written.
+/// the target's place (on Windows right after: a file renamed there may
+/// take the creation time of the one it replaces, which is how files are
+/// told apart), so they remove it too. A level-2 file that can't be listed
+/// isn't written.
 pub(super) fn write(
     target: &Target,
     expected: Option<&[u8]>,

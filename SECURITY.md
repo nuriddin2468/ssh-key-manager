@@ -1101,7 +1101,8 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   only with its own secret and only if its root is this vault's: two vaults are never
   merged. The copy is written without compression, and the receiver refuses one that
   is compressed, decrypts it itself and checks it before the KeePass library parses
-  anything: at most 65,536 attachments, its XML at most 96 levels and 8,388,608
+  anything: an outer header of at most 64 KiB, key derivation parameters each of its
+  own type and within bounds as used, at most 65,536 attachments, its XML at most 96 levels and 8,388,608
   elements, no document type, no attachment stored compressed, and a list of local
   items no longer than any copy needs. So reading a copy never inflates, allocates or
   recurses beyond bounds. It refuses a copy over 256 MiB, with key derivation settings

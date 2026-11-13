@@ -202,6 +202,12 @@ fn reads_ssh_invocations() {
                 &["h -i ~/.ssh/k -A"],
             ),
             ("ssh -o ProxyCommand='nc %h %p' -o LocalCommand=x h", &["h"]),
+            // Options the config would ask about are not suggested either.
+            (
+                "ssh -o IdentityAgent=/tmp/agent.sock -o ForwardX11Trusted=yes \
+                 -o ControlPath=/tmp/cm-%r@%h -o ControlMaster=auto h",
+                &["h -o ControlMaster=auto"],
+            ),
             (
                 "ssh -X -Y -C -N -T -f -4 -L 8080:localhost:80 -D 1080 h",
                 &["h"],

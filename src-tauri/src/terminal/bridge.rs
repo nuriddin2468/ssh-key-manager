@@ -35,7 +35,7 @@ use super::types::{
     FailReason, Failure, PasswordWhy, PromptAnswer, PromptAsk, PromptClosedReason, PromptRequest,
     SaveOffer, SavedTarget, SignIn, Source, TerminalEvent,
 };
-use crate::askpass::{Ask, Interactive, PromptKind, Reply};
+use crate::askpass::{Ask, FillCheck, Filling, Interactive, PromptKind, Reply};
 pub use crate::error::{AppError, AppResult};
 
 /// How long a prompt waits for the user.
@@ -318,7 +318,9 @@ impl Bridge {
             // A new answer replaces one given before for the same thing:
             // that one was wrong.
             state.to_save.retain(|(t, _)| *t != target);
-            if wanted {
+            // Whatever the answer says: a session that can't tell signing in
+            // for sure saves nothing (the offer is none there already).
+            if wanted && self.options.can_save {
                 state.to_save.push((target, value.clone()));
             }
         }
@@ -429,6 +431,36 @@ impl Bridge {
         reply
     }
 
+    /// The saved secret for a prompt that came through a program that may
+    /// run another `ssh`, if one is saved and `check` (the user, in a native
+    /// dialog) says to fill it in. `None` otherwise: the prompt is then
+    /// shown as it is.
+    fn saved_if_allowed(&self, ask: &Ask<'_>, check: &dyn FillCheck) -> Option<Reply> {
+        let (secret, kind) = match &ask.prompt.kind {
+            PromptKind::Password if !self.options.ask_password => {
+                (self.store.password()?, Secret::Password)
+            }
+            PromptKind::OneTimeCode => (self.store.one_time_code()?, Secret::OneTimeCode),
+            PromptKind::Passphrase { key } => (self.store.passphrase(key)?, Secret::Passphrase),
+            _ => return None,
+        };
+        if check.allow(ask.prompt) != Filling::Allowed {
+            return None;
+        }
+        let mut state = self.lock();
+        match &ask.prompt.kind {
+            PromptKind::Password => state.sign_in.password = Some(Source::Vault),
+            PromptKind::OneTimeCode => state.sign_in.one_time_code = Some(Source::Vault),
+            PromptKind::Passphrase { key } => {
+                state.sign_in.key = Some(key.clone());
+                state.sign_in.passphrase = Some(Source::Vault);
+            }
+            _ => {}
+        }
+        state.last_given = Some(kind);
+        Some(Reply::Secret(secret))
+    }
+
     /// Shows the prompt's text as it is, for the user to answer: an
     /// unrecognised prompt, or one the session cannot vouch for (`secret`
     /// then says what it claims to ask, for telling why a session failed).
@@ -507,9 +539,17 @@ impl Interactive for Arc<Bridge> {
             PromptKind::HostKeyConfirm => self.host_key(ask),
             // The session answers other yes/no questions itself.
             PromptKind::Confirm => Reply::No,
-            // It may not be what it says: no saved secret, and not the app's
-            // own password or passphrase dialog.
-            kind if ask.unverified => self.as_it_is(ask, Secret::of(kind)),
+            // It may not be what it says: no saved secret unless the user
+            // says yes to filling it in, and not the app's own password or
+            // passphrase dialog.
+            kind if ask.unverified => {
+                if let Some(check) = ask.confirm_fill
+                    && let Some(reply) = self.saved_if_allowed(ask, check)
+                {
+                    return reply;
+                }
+                self.as_it_is(ask, Secret::of(kind))
+            }
             PromptKind::Password => self.password(ask),
             PromptKind::OneTimeCode => self.one_time_code(ask),
             PromptKind::Passphrase { key } => self.passphrase(ask, key),
@@ -653,6 +693,29 @@ mod tests {
             unverified: bool,
             answer: Option<PromptAnswer>,
         ) -> (Reply, Option<PromptAsk>) {
+            self.ask_with(text, given, foreign, unverified, None, answer)
+        }
+
+        /// [`ask`](Self::ask) for a prompt that came through a program that
+        /// may run another `ssh`: `check` says whether to fill it in.
+        fn ask_through_command(
+            &self,
+            text: &str,
+            check: &dyn FillCheck,
+            answer: Option<PromptAnswer>,
+        ) -> (Reply, Option<PromptAsk>) {
+            self.ask_with(text, 0, false, true, Some(check), answer)
+        }
+
+        fn ask_with(
+            &self,
+            text: &str,
+            given: u32,
+            foreign: bool,
+            unverified: bool,
+            confirm_fill: Option<&dyn FillCheck>,
+            answer: Option<PromptAnswer>,
+        ) -> (Reply, Option<PromptAsk>) {
             let prompt = Prompt::parse(text, "");
             let bridge = &self.bridge;
             thread::scope(|scope| {
@@ -662,6 +725,7 @@ mod tests {
                         foreign,
                         unverified,
                         given,
+                        confirm_fill,
                     })
                 });
                 let shown = match answer {
@@ -702,6 +766,81 @@ mod tests {
 
     const PASSWORD: &str = "(ubuntu@10.0.4.12) Password: ";
     const CODE: &str = "(ubuntu@10.0.4.12) Verification code: ";
+
+    /// The user's answer in the native fill-in dialog, and how often it
+    /// was shown.
+    struct FillAnswer {
+        yes: bool,
+        shown: std::sync::atomic::AtomicU32,
+    }
+
+    impl FillAnswer {
+        fn new(yes: bool) -> Self {
+            Self {
+                yes,
+                shown: std::sync::atomic::AtomicU32::new(0),
+            }
+        }
+
+        fn shown(&self) -> u32 {
+            self.shown.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl FillCheck for FillAnswer {
+        fn allow(&self, _prompt: &Prompt) -> Filling {
+            self.shown.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.yes {
+                Filling::Allowed
+            } else {
+                Filling::Declined
+            }
+        }
+    }
+
+    #[test]
+    fn through_a_proxy_command_saved_secrets_wait_for_a_yes() {
+        let store = || FakeStore {
+            password: Some("saved-pw"),
+            code: Some("123456"),
+            offer: Some(SaveOffer::Update),
+            ..FakeStore::default()
+        };
+        // Yes: the saved secret, and the user isn't asked in the app.
+        let h = harness(store(), Options::default());
+        let yes = FillAnswer::new(true);
+        let (reply, shown) = h.ask_through_command(PASSWORD, &yes, None);
+        assert_eq!(secret(&reply), Some("saved-pw"));
+        assert!(shown.is_none());
+        let (reply, _) = h.ask_through_command(CODE, &yes, None);
+        assert_eq!(secret(&reply), Some("123456"));
+        assert_eq!(yes.shown(), 2);
+        assert_eq!(h.bridge.signed_in().password, Some(Source::Vault));
+
+        // No: as when nothing is saved, the prompt is shown as it is.
+        let h = harness(store(), Options::default());
+        let no = FillAnswer::new(false);
+        let (reply, shown) = h.ask_through_command(PASSWORD, &no, typed("typed-pw", false));
+        assert_eq!(secret(&reply), Some("typed-pw"));
+        assert!(
+            matches!(
+                shown,
+                Some(PromptAsk::Other {
+                    unverified: true,
+                    ..
+                })
+            ),
+            "{shown:?}"
+        );
+        assert_eq!(no.shown(), 1);
+
+        // Nothing saved: nothing to ask about.
+        let h = harness(FakeStore::default(), Options::default());
+        let never = FillAnswer::new(true);
+        let (reply, _) = h.ask_through_command(PASSWORD, &never, typed("typed-pw", false));
+        assert_eq!(secret(&reply), Some("typed-pw"));
+        assert_eq!(never.shown(), 0);
+    }
 
     #[test]
     fn saved_secrets_are_given_once_then_the_user_is_asked() {
@@ -1072,6 +1211,7 @@ mod tests {
                     foreign: false,
                     unverified: false,
                     given: 0,
+                    confirm_fill: None,
                 })
             });
             let request = h.prompts.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -1388,6 +1528,32 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, TerminalEvent::Saved { .. }))
         );
+    }
+
+    /// A tunnel on Windows reads signing in from output a server can fake:
+    /// even an answer that asks to be saved, and a sign-in, save nothing.
+    #[test]
+    fn where_saving_isnt_offered_an_answer_asking_for_it_saves_nothing() {
+        let h = harness(
+            FakeStore {
+                offer: Some(SaveOffer::Update),
+                ..FakeStore::default()
+            },
+            Options {
+                can_save: false,
+                ..Options::default()
+            },
+        );
+        h.ask(PASSWORD, 0, false, typed("pw", true));
+        h.ask(
+            "Enter passphrase for key '/home/u/.ssh/id_ed25519': ",
+            0,
+            false,
+            typed("pp", true),
+        );
+        h.bridge.signed_in();
+        h.bridge.save_answers();
+        assert!(h.saved.lock().unwrap().is_empty());
     }
 
     #[test]

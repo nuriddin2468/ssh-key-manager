@@ -63,6 +63,10 @@ fn exchange_stream<S: Read + Write>(stream: &mut S, request: &[u8]) -> io::Resul
     Ok(body)
 }
 
+/// Unix: the socket's server is checked before anything is sent: it must
+/// run as this user or as root. A socket in a folder others can write to
+/// (`ssh-agent -a /tmp/…`) may be another user's while the agent is not
+/// running, and would then receive the decrypted keys added to the agent.
 #[cfg(unix)]
 pub(crate) fn request(
     socket: &Path,
@@ -71,11 +75,34 @@ pub(crate) fn request(
 ) -> Result<Vec<u8>, TransportError> {
     use std::os::unix::net::UnixStream;
     let mut stream = UnixStream::connect(socket).map_err(|e| TransportError::from_io(&e))?;
+    check_server(&stream).map_err(|e| TransportError::from_io(&e))?;
     stream
         .set_read_timeout(Some(timeout))
         .and_then(|()| stream.set_write_timeout(Some(timeout)))
         .map_err(|e| TransportError::from_io(&e))?;
     exchange_stream(&mut stream, request).map_err(|e| TransportError::from_io(&e))
+}
+
+/// Refuses an agent socket served by another user.
+#[cfg(unix)]
+fn check_server(stream: &std::os::unix::net::UnixStream) -> io::Result<()> {
+    let peer = super::peer::peer_uid(stream)?;
+    if trusted_server(peer, super::peer::own_uid()) {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("refusing the agent's socket: user {peer} serves it, not you"),
+        ))
+    }
+}
+
+/// Whether an agent socket served by the user `peer` may get requests from
+/// the user `own`: its own, or the system's (root), which holds the socket
+/// macOS's `launchd` starts the agent on.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn trusted_server(peer: u32, own: u32) -> bool {
+    peer == own || peer == 0
 }
 
 /// Sends `request` over a pipe only once `check` says its server is trusted
@@ -249,6 +276,36 @@ mod tests {
         let mut s = duplex(&[0, 0, 0, 1, 6]);
         assert_eq!(exchange_checked(&mut s, Some(trusted), &[17]).unwrap(), [6]);
         assert_eq!(s.output, [0, 0, 0, 1, 17]);
+    }
+
+    #[test]
+    fn only_this_user_or_the_system_serves_the_agent() {
+        assert!(trusted_server(501, 501));
+        assert!(trusted_server(0, 501));
+        assert!(trusted_server(0, 0));
+        assert!(!trusted_server(502, 501));
+        assert!(!trusted_server(501, 0));
+    }
+
+    /// A socket this process serves is this user's.
+    #[cfg(unix)]
+    #[test]
+    fn a_socket_of_this_user_passes_the_check() {
+        use std::os::unix::net::{UnixListener, UnixStream};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let stream = UnixStream::connect(&path).unwrap();
+        let (served, _) = listener.accept().unwrap();
+        assert_eq!(
+            super::super::peer::peer_uid(&stream).unwrap(),
+            super::super::peer::own_uid()
+        );
+        assert_eq!(
+            super::super::peer::peer_uid(&served).unwrap(),
+            super::super::peer::own_uid()
+        );
+        check_server(&stream).unwrap();
     }
 
     #[test]

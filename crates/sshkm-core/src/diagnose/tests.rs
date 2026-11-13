@@ -902,3 +902,14 @@ fn diagnoses_serialise_for_the_ui() {
     );
     assert_eq!(json["hop"], serde_json::Value::Null);
 }
+
+#[test]
+fn the_version_line_is_known_with_or_without_a_debug_prefix() {
+    assert!(is_version("OpenSSH_9.9p2, LibreSSL 3.3.6"));
+    assert!(is_version("debug1: OpenSSH_10.5p1, LibreSSL 3.3.6"));
+    assert!(is_version("OpenSSH_for_Windows_9.5p1, LibreSSL 3.8.2"));
+    assert!(!is_version(
+        "debug1: Reading configuration data /etc/ssh/ssh_config"
+    ));
+    assert!(!is_version("OpenSSH_9.9p2"));
+}

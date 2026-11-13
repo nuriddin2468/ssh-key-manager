@@ -877,6 +877,14 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
     and the sync between own devices keeps that custom data per computer. Deleting a
     chat or a value removes it from the app's files; copies the system made of the
     encrypted file before (Time Machine, snapshots) stay as safe as the vault.
+  - _Asked natively._ Sending variables, offering a login or an environment,
+    accepting one into the vault and adding received variables to an environment
+    each wait for a system dialog the page can't answer (`confirm::require`, with
+    its one-second rule). It names what goes and to or from whom, lists replaced
+    values and risky names, and shows names from elsewhere with their hidden
+    characters as `<U+…>`. Texts and secrets typed in the composer need none: the
+    page has them already. The page never names a peer's address or marks one
+    online; sends go only to a contact the backend recognised.
   - _Notifications_ say who wrote and how many messages, never what.
   - _Older versions._ Every `Hello` names what the app can do (`features`). A message,
     item or summary of a kind a version doesn't know parses as unknown and ends as

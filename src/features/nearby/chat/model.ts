@@ -1,8 +1,8 @@
 import { useMutation } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { toastError } from '@/api/useAppMutation';
-import { AppError } from '@/lib/ipc';
 import type { ChatEntry } from '@/bindings/ChatEntry';
+import { AppError } from '@/lib/ipc';
 
 /** The terms a secret or variables may have, in seconds: an hour, a day, a week. */
 export const TERMS = [

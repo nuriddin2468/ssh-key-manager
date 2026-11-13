@@ -1,0 +1,6 @@
+{
+  "kind": "security",
+  "en": "When the app asks Git whether a .env file is ignored or committed, and when the Leak scanner lists the files of a repository, a project's own Git settings can no longer make Git run a program.",
+  "ru": "Когда приложение спрашивает Git, игнорирует ли он файл .env и закоммичен ли файл, и когда «Поиск утечек» перечисляет файлы репозитория, собственные настройки Git проекта больше не могут заставить Git запустить программу.",
+  "uz": "Ilova Gitdan .env fayl eʼtiborsiz qoldirilganmi yoki commit qilinganmi deb soʻraganda va «Sizib chiqishlarni qidirish» repozitoriy fayllarini sanaganda, loyihaning oʻz Git sozlamalari endi Gitga dastur ishga tushirtira olmaydi."
+}

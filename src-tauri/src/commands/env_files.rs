@@ -633,14 +633,11 @@ pub(crate) fn planned_git_state(root: &Path, path: &Path) -> GitInfo {
     let Ok(rest) = path.strip_prefix(nearest) else {
         return outside;
     };
-    let mut command = process::command("git");
-    command
-        .args(["-c", "core.fsmonitor=false", "-C"])
-        .arg(nearest)
-        .args(["check-ignore", "-q", "--"])
-        .arg(rest);
-    let ignored = process::run_command(&mut command, None, Duration::from_secs(5))
-        .is_ok_and(|output| output.code == Some(0));
+    let ignored = process::git(nearest).is_some_and(|mut command| {
+        command.args(["check-ignore", "-q", "--"]).arg(rest);
+        process::run_command(&mut command, None, Duration::from_secs(5))
+            .is_ok_and(|output| output.code == Some(0))
+    });
     GitInfo {
         state: if ignored {
             GitState::Ignored
@@ -656,10 +653,10 @@ fn tracked(path: &Path) -> bool {
     let (Some(folder), Some(name)) = (path.parent(), path.file_name()) else {
         return false;
     };
-    let mut command = process::command("git");
+    let Some(mut command) = process::git(folder) else {
+        return false;
+    };
     command
-        .args(["-c", "core.fsmonitor=false", "-C"])
-        .arg(folder)
         .args(["ls-files", "--error-unmatch", "--"])
         .arg(name);
     process::run_command(&mut command, None, Duration::from_secs(5))

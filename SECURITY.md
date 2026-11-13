@@ -1115,6 +1115,68 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   it waits for the next sync. A change turned down is not asked about again until it
   changes. A conflict is the user's choice too. Both files are backed up before a sync
   writes them, and a file changed meanwhile is not written.
+- **Chats.** Contacts and the user's own devices can chat: texts, secrets that
+  expire, variables and the items above as cards ([design](docs/p2p-chat.md)).
+  - _Only while both are online._ A computer is online while its vault is unlocked
+    and Nearby is open in a visible window, and two minutes after (hiding to the tray
+    counts as leaving). There is no outbox, no relay and no background listener.
+  - _Presence only contacts recognise._ The app announces `_sshkm-chat._tcp` under a
+    random name that changes every ten minutes, with one tag per contact: an
+    HMAC-SHA256 of the announcing device, the name and the window, keyed with the
+    _contact key_, HKDF over the X25519 of the two device keys (salt `sshkm contact`).
+    Nothing is stored or exchanged for it, and it is gone once either side removes the
+    other. The tags are shuffled and padded with random ones to 16, 32 or 64, so a
+    stranger learns only that an app with Nearby open is there and that bucket.
+  - _A knock before the handshake._ The chat port sends a random 16-byte challenge
+    and waits up to 5 seconds for an HMAC of it with a contact key; anyone else is
+    hung up on before the Noise handshake, so they never get the device key. The
+    challenge and the knock are the handshake's prologue (`sshkm-chat/1` ‖ challenge ‖
+    knock), so a chat session can't pass for a pairing one. Both `Hello`s must name
+    `chat/1`; an older version is never connected to for a chat.
+  - _Limits._ Frames of at most 1 MiB; texts and secrets of 16 KiB; terms from five
+    minutes to seven days; 30 frames at once, then two a second (more closes the
+    session and turns that contact away for a minute); three offers waiting; 16 chat
+    sessions and 8 connections at the knock. A frame that doesn't pass the checks is
+    refused; one that doesn't parse ends the session. Each message has a random id,
+    and one received twice is kept once.
+  - _Secrets._ Values reach the page only when the user clicks Show, one at a time,
+    and hide again after 30 seconds; Copy goes through the app's clipboard, like a
+    password. Both count against the same budget as the vault's passwords
+    (`secret_gate::take_secret`: ten in a row, then one every six minutes, each one
+    past that asked for in a native dialog naming the secret and the computer it came
+    from). Each side wipes a value when its term ends (at the next unlock if the
+    app was closed). The sender can wipe it earlier on both computers while the
+    receiver is online: the wipe goes there first, and if it can't, nothing is wiped
+    and the user is told. Offline, the sender can wipe it here only, which the button
+    says; the receiver's copy then goes at its term. The receiver may have copied it
+    before: the app says so. Secret frames are padded to 512 bytes,
+    so their length doesn't tell a password's.
+  - _Variables_ are added to an environment only after the user reviews them: new
+    names are ticked, replacing a value never is, and names that change how programs
+    start (`envs::risky_variable`: `PATH`, `LD_*`, `NODE_OPTIONS`, …) are flagged and
+    never ticked. _Items_ go as in Sending above, with every check.
+  - _Storage._ History is not in the vault file: each conversation is
+    `chats/<id>.chat` in the app's data folder, XChaCha20-Poly1305 with a key derived
+    from 32 random bytes the vault keeps for this computer (`sshkm.chat.<device key>`
+    in its custom data), both devices' keys as associated data, and a name that is an
+    HMAC of the other device's key. So it is readable only while the vault is
+    unlocked, on this computer only; vault backups and a synced vault never carry it,
+    and the sync between own devices keeps that custom data per computer. Deleting a
+    chat or a value removes it from the app's files; copies the system made of the
+    encrypted file before (Time Machine, snapshots) stay as safe as the vault.
+  - _Asked natively._ Sending variables, offering a login or an environment,
+    accepting one into the vault and adding received variables to an environment
+    each wait for a system dialog the page can't answer (`confirm::require`, with
+    its one-second rule). It names what goes and to or from whom, lists replaced
+    values and risky names, and shows names from elsewhere with their hidden
+    characters as `<U+…>`. Texts and secrets typed in the composer need none: the
+    page has them already. The page never names a peer's address or marks one
+    online; sends go only to a contact the backend recognised.
+  - _Notifications_ say who wrote and how many messages, never what.
+  - _Older versions._ Every `Hello` names what the app can do (`features`). A message,
+    item or summary of a kind a version doesn't know parses as unknown and ends as
+    "needs the new version"; an item that needs a feature the other side didn't name
+    is never offered.
 - **Syncing server keys.** `known_hosts` only grows: a computer adds the other's keys
   for a host it has no key for, counting a matching `@cert-authority` line as one, and
   never adds a key it marked `@revoked`; such keys are shown as a difference. For a

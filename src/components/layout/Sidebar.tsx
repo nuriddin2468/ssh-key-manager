@@ -37,6 +37,7 @@ import { Logo } from '@/components/Logo';
 import { Dialog } from '@/components/ui/Dialog';
 import { Tile, type Tone } from '@/components/ui/Tile';
 import { useEnvs } from '@/features/envs/queries';
+import { useChatList } from '@/features/nearby/chat/queries';
 import { personal } from '@/features/projects/model';
 import { ProjectDialog } from '@/features/projects/ProjectDialog';
 import { PersonalTile, ProjectTile } from '@/features/projects/ProjectTile';
@@ -55,6 +56,8 @@ export const SIDEBAR_INSET = 10;
 
 export function Sidebar() {
   const { t } = useTranslation();
+  // Chat messages not read yet, while the vault is unlocked.
+  const unreadChats = (useChatList().data?.chats ?? []).reduce((sum, chat) => sum + chat.unread, 0);
   const { route } = useRouter();
   const navigate = useFreshNavigate();
   const environment = useEnvironment();
@@ -279,7 +282,15 @@ export function Sidebar() {
             Network,
             hostsFile.data?.view.entries.filter((entry) => entry.enabled).length,
           )}
-          {item('nearby', t('nav.nearby'), 'orange', Radar)}
+          <NavItem
+            label={t('nav.nearby')}
+            tone="orange"
+            icon={Radar}
+            active={route.page === 'nearby'}
+            badge={unreadChats > 0 ? unreadChats : undefined}
+            badgeLabel={t('nearby.chat.unread', { count: unreadChats })}
+            onClick={() => navigate({ page: 'nearby' })}
+          />
           <NavItem
             label={t('nav.audit')}
             tone="rose"

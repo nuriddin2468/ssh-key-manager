@@ -1,6 +1,14 @@
 # Chats: messages between Nearby contacts
 
-Status: **approved** (with the decisions at the end); being built.
+Status: **built**: core and backend in [#63](https://github.com/nuriddin2468/ssh-key-manager/pull/63), the UI in [#66](https://github.com/nuriddin2468/ssh-key-manager/pull/66).
+
+Not built of what this design describes:
+
+- **Opening a conversation from its notification.** `tauri-plugin-notification` has no
+  click callback on desktop; clicking a notification brings the app forward, as the
+  system does, and the unread count shows where.
+- **Send again on an offer that ended.** The card says it ended; the item is offered
+  again from the composer's **+** menu.
 
 A chat lets two paired computers (Nearby contacts) or two of the user's own devices send
 each other text, secret values that expire, environment variables and the items Nearby
@@ -494,9 +502,10 @@ shows a system notification:
 - **Title and body.** The title is the contact's name; the body is "New message" or "3 new
   messages".
 - **Never any content.** Not even a text, and never a secret's label or value.
-- **Rate.** At most one per conversation per 30 seconds. Clicking it opens the
-  conversation.
-- **Unread counts** show on the Chats tab, on Nearby in the sidebar and in the tray menu.
+- **Rate.** At most one per conversation per 30 seconds.
+- **Unread counts** show on the Chats tab, on Nearby in the sidebar and in the tray menu
+  (which opens the chats). Messages are read only while the window is in front, so what
+  comes while it isn't stays unread and notifies.
 - **New dependency.** This needs `tauri-plugin-notification`, the official plugin. macOS
   asks the user's permission the first time.
 

@@ -15,11 +15,17 @@
 //!   ([`sshkm_core::chat`]); in memory only while the vault is unlocked.
 //! - **Secrets.** A secret's value, or variables', reaches the page only
 //!   when the user asks for it, one at a time, and goes when its term ends.
+//! - **Asked natively.** A secret that leaves the vault for another computer
+//!   (variables, a login, an environment) and anything received that goes
+//!   into the vault are asked about in a system dialog the page can't
+//!   answer ([`prompt`]), naming what and to or from whom. Contacts and
+//!   their addresses come from the vault and the network, never the page.
 //!
 //! The UI follows [`CHATS_EVENT`].
 
 mod link;
 mod presence;
+mod prompt;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::SocketAddr;
@@ -758,6 +764,9 @@ impl Nearby {
         if !TERMS.contains(&ttl) {
             return Err(AppError::invalid("not a term the app offers"));
         }
+        let peer = self.known_peer(key)?;
+        // Online first: nothing is asked that can't go now.
+        self.link_to(&peer)?;
         let state = self.state()?;
         let (label, variables) = state.vault.with(self.app()?, |vault| {
             let env = vault.environment(env_id)?;
@@ -781,6 +790,12 @@ impl Nearby {
         if variables.is_empty() {
             return Err(AppError::invalid("no variables picked"));
         }
+        let picked: Vec<String> = variables.iter().map(|var| var.name.clone()).collect();
+        self.ask(&prompt::send_variables(
+            &self.peer_name(&peer),
+            &label,
+            &picked,
+        ))?;
         let frame = ChatFrame::Variables {
             id: new_id(),
             label,
@@ -808,8 +823,11 @@ impl Nearby {
                 "the other computer can't take this yet: its app needs the new version",
             ));
         }
-        let id = new_id();
         let summary = item.summary();
+        if let Some(prompt) = prompt::send_item(&self.peer_name(&peer), &summary) {
+            self.ask(&prompt)?;
+        }
+        let id = new_id();
         self.chats().offers.insert(
             id.clone(),
             Offer {
@@ -825,6 +843,19 @@ impl Nearby {
     /// The user's answer to an item offered.
     pub fn chat_answer(self: &Arc<Self>, key: &str, id: &str, accept: bool) -> AppResult<()> {
         let peer = self.known_peer(key)?;
+        if accept {
+            let summary = self
+                .chats()
+                .incoming
+                .get(id)
+                .filter(|incoming| incoming.peer == peer && !incoming.accepted)
+                .map(|incoming| incoming.summary.clone())
+                .ok_or_else(|| AppError::not_found("the offer has ended"))?;
+            // What goes into the vault is said yes to where the page can't.
+            if let Some(prompt) = prompt::accept_item(&self.peer_name(&peer), &summary) {
+                self.ask(&prompt)?;
+            }
+        }
         {
             let mut chats = self.chats();
             let incoming = chats
@@ -961,6 +992,45 @@ impl Nearby {
             return Err(AppError::invalid("no variables picked"));
         }
         let state = self.state()?;
+        let (env_label, review) = match target {
+            VarTarget::Existing { env_id } => {
+                let label = state.vault.with(self.app()?, |vault| {
+                    let env = vault.environment(env_id)?;
+                    let project = vault.env_label(&env.summary);
+                    Ok(envs::label(
+                        Some(project.as_str()).filter(|label| !label.is_empty()),
+                        &env.summary.name,
+                    ))
+                })?;
+                (label, self.chat_review_variables(key, id, Some(env_id))?)
+            }
+            VarTarget::New { name } => (name.trim().to_owned(), Vec::new()),
+        };
+        let listed = |want: &dyn Fn(&VarReview) -> bool| -> Vec<String> {
+            picked
+                .iter()
+                .filter(|var| {
+                    review
+                        .iter()
+                        .any(|item| item.name == var.name && want(item))
+                })
+                .map(|var| var.name.clone())
+                .collect()
+        };
+        let replaced = listed(&|item| item.change == VarChange::Replaces);
+        let risky: Vec<String> = picked
+            .iter()
+            .filter(|var| risky_variable(&var.name))
+            .map(|var| var.name.clone())
+            .collect();
+        let all: Vec<String> = picked.iter().map(|var| var.name.clone()).collect();
+        self.ask(&prompt::add_variables(
+            &self.peer_name(&peer),
+            &env_label,
+            &all,
+            &replaced,
+            &risky,
+        ))?;
         let env_id = state
             .vault
             .change(self.app()?, &state.backup_dir, |vault| {
@@ -1019,6 +1089,20 @@ impl Nearby {
         self.read_known();
         self.chats().found.clear();
         self.chats_changed(None);
+    }
+
+    /// Asks in a system dialog the page can't answer; a no is an error.
+    fn ask(&self, prompt: &prompt::Prompt) -> AppResult<()> {
+        crate::confirm::require(self.app()?, &prompt.title, &prompt.body, &prompt.approve)
+    }
+
+    /// The name this vault keeps for `peer`.
+    fn peer_name(&self, peer: &PeerKey) -> String {
+        self.chats()
+            .known
+            .iter()
+            .find(|known| known.key == *peer)
+            .map_or_else(|| peer.to_string(), |known| known.name.clone())
     }
 
     /// The contact or device with this key.

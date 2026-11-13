@@ -335,7 +335,7 @@ function SuggestionCard({
             {suggestion.reasons.map((reason) => (
               <li
                 key={JSON.stringify(reason)}
-                className="rounded-[7px] bg-white/[0.05] px-2 py-0.5 text-[11.5px] text-fg-2"
+                className="rounded-[7px] bg-ink/[0.05] px-2 py-0.5 text-[11.5px] text-fg-2"
               >
                 {reasonText(t, reason)}
               </li>
@@ -344,7 +344,7 @@ function SuggestionCard({
           <div className="grid gap-x-4 gap-y-1 sm:grid-cols-2">
             {KINDS.filter((kind) => suggestion[kind].length > 0).map((kind) => (
               <fieldset key={kind} className="contents">
-                <legend className="col-span-full mt-1 text-[11px] font-semibold text-[#7C869A]">
+                <legend className="col-span-full mt-1 text-[11px] font-semibold text-label">
                   {t(`projects.cards.${kind}`)}
                 </legend>
                 {suggestion[kind].map((value) => {

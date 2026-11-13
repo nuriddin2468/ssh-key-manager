@@ -269,7 +269,7 @@ function Intro({
   return (
     <section
       aria-labelledby="projects-intro"
-      className="glass flex flex-col gap-2.5 rounded-2xl bg-[radial-gradient(500px_200px_at_0%_0%,rgb(45_212_191/0.10),transparent_70%)] p-[18px]"
+      className="glass flex flex-col gap-2.5 rounded-2xl bg-[radial-gradient(500px_200px_at_0%_0%,rgb(var(--accent-rgb)/0.10),transparent_70%)] p-[18px]"
     >
       <h2 id="projects-intro" className="text-[17px] font-semibold tracking-[-0.015em]">
         {t('projects.home.introTitle')}
@@ -333,7 +333,7 @@ function HealthStrip() {
           type="button"
           aria-label={t('projects.openAudit')}
           onClick={() => navigate({ page: 'audit' })}
-          className="rounded text-fg-2 decoration-white/40 underline-offset-[3px] outline-none hover:underline focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]"
+          className="rounded text-fg-2 decoration-ink/40 underline-offset-[3px] outline-none hover:underline focus-visible:ring-2 focus-visible:ring-[rgb(var(--focus-rgb)/var(--ring-alpha))]"
         >
           {t('nav.audit')}
         </button>
@@ -388,14 +388,14 @@ function Banner({
     <div
       className={cn(
         'flex flex-wrap items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] text-fg-2',
-        tone === 'ok' ? 'border border-[rgb(94_234_212/0.22)] bg-[rgb(94_234_212/0.08)]' : 'glass',
+        tone === 'ok' ? 'border border-ok/22 bg-ok/[0.08]' : 'glass',
       )}
     >
       <span
         aria-hidden="true"
         className={cn(
           'grid size-7 shrink-0 place-items-center rounded-lg',
-          tone === 'ok' ? 'bg-[rgb(94_234_212/0.14)] text-ok' : 'bg-white/[0.06] text-muted',
+          tone === 'ok' ? 'bg-ok/14 text-ok' : 'bg-fill text-muted',
         )}
       >
         {icon}
@@ -550,7 +550,7 @@ function ProjectCard({
   const open = () => navigate(project ? { page: 'project', id: project.id } : { page: 'personal' });
 
   return (
-    <li className="glass relative flex min-w-0 flex-col gap-2.5 rounded-2xl p-3.5 transition-colors hover:bg-white/[0.05]">
+    <li className="glass relative flex min-w-0 flex-col gap-2.5 rounded-2xl p-3.5 transition-colors hover:bg-ink/[0.05]">
       <div className="flex items-center gap-2.5">
         {project ? <ProjectTile project={project} size={32} /> : <PersonalTile size={32} />}
         <div className="min-w-0 flex-1">
@@ -559,7 +559,7 @@ function ProjectCard({
               type="button"
               aria-label={t('projects.home.open', { name })}
               onClick={open}
-              className="block max-w-full truncate rounded text-left outline-none after:absolute after:inset-0 after:rounded-2xl after:content-[''] focus-visible:after:ring-2 focus-visible:after:ring-[rgb(var(--accent-rgb)/0.6)]"
+              className="block max-w-full truncate rounded text-left outline-none after:absolute after:inset-0 after:rounded-2xl after:content-[''] focus-visible:after:ring-2 focus-visible:after:ring-[rgb(var(--focus-rgb)/var(--ring-alpha))]"
             >
               {name}
             </button>
@@ -639,7 +639,7 @@ function ProjectCard({
       )}
       {quick.folder || quick.host ? (
         // Only the buttons sit above the card's link: the rest of the row opens it.
-        <div className="mt-auto flex flex-wrap items-center gap-1.5 border-t border-white/[0.045] pt-2.5">
+        <div className="mt-auto flex flex-wrap items-center gap-1.5 border-t border-ink/[0.045] pt-2.5">
           {project && quick.folder ? (
             <FolderActions
               project={project}

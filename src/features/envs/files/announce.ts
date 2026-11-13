@@ -36,7 +36,7 @@ const SHOWN_NAMES = 4;
 /** The Undo button in a toast, as the recycle bin's Undo looks. */
 export const TOAST_ACTION_CLASSES = {
   actionButton:
-    '!h-7 !rounded-lg !border !border-white/15 !bg-white/10 !px-2.5 !text-[12.5px] !font-medium !text-fg hover:!bg-white/15',
+    '!h-7 !rounded-lg !border !border-ink/15 !bg-ink/10 !px-2.5 !text-[12.5px] !font-medium !text-fg hover:!bg-ink/15',
 };
 
 /** Conflicts already told of, so a round that changes nothing says nothing. */

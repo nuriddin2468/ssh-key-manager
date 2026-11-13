@@ -70,9 +70,9 @@ function UnlockForm({
         <>
           <DeviceUnlock kind={deviceKind} />
           <div className="flex items-center gap-3 text-[12px] text-subtle">
-            <span aria-hidden="true" className="h-px flex-1 bg-white/[0.08]" />
+            <span aria-hidden="true" className="h-px flex-1 bg-ink/[0.08]" />
             {t('passwords.orMaster')}
-            <span aria-hidden="true" className="h-px flex-1 bg-white/[0.08]" />
+            <span aria-hidden="true" className="h-px flex-1 bg-ink/[0.08]" />
           </div>
         </>
       ) : null}

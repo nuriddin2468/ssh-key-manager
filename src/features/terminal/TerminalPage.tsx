@@ -309,12 +309,12 @@ function EmptySessions({
             type="button"
             aria-label={t('terminal.local.openNamed', { shell: shellName(t, shell) })}
             onClick={onOpenShell}
-            className="pressable-soft flex h-[38px] min-w-0 items-center gap-2.5 rounded-[10px] bg-white/[0.04] px-2.5 hover:bg-white/[0.07]"
+            className="pressable-soft flex h-[38px] min-w-0 items-center gap-2.5 rounded-[10px] bg-ink/[0.04] px-2.5 hover:bg-ink/[0.07]"
           >
             <Laptop aria-hidden="true" className="size-4 shrink-0 text-subtle" strokeWidth={2} />
             <span className="truncate">{shellName(t, shell)}</span>
             <span className="shrink-0 text-subtle">{t('terminal.picker.local')}</span>
-            <span className="ml-auto shrink-0 text-[var(--accent-1)]">
+            <span className="ml-auto shrink-0 text-[var(--accent-fg)]">
               {t('terminal.picker.open')}
             </span>
           </button>
@@ -326,13 +326,13 @@ function EmptySessions({
             type="button"
             aria-label={t('terminal.empty.connectTo', { alias: host.alias })}
             onClick={() => onConnect(host.alias)}
-            className="pressable-soft flex h-[38px] min-w-0 items-center gap-2.5 rounded-[10px] bg-white/[0.04] px-2.5 hover:bg-white/[0.07]"
+            className="pressable-soft flex h-[38px] min-w-0 items-center gap-2.5 rounded-[10px] bg-ink/[0.04] px-2.5 hover:bg-ink/[0.07]"
           >
             <span className="truncate font-mono">{host.alias}</span>
             <span className="shrink-0 text-subtle">
               {formatRelative(new Date(host.at), i18n.language)}
             </span>
-            <span className="ml-auto shrink-0 text-[var(--accent-1)]">
+            <span className="ml-auto shrink-0 text-[var(--accent-fg)]">
               {t('terminal.empty.connect')}
             </span>
           </button>
@@ -340,7 +340,7 @@ function EmptySessions({
         <button
           type="button"
           onClick={onAllHosts}
-          className="pressable-soft flex h-[38px] items-center rounded-[10px] px-2.5 text-muted hover:bg-white/[0.05] hover:text-fg"
+          className="pressable-soft flex h-[38px] items-center rounded-[10px] px-2.5 text-muted hover:bg-ink/[0.05] hover:text-fg"
         >
           {t('terminal.empty.allHosts')}
         </button>

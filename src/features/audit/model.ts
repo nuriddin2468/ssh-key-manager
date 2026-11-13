@@ -14,10 +14,11 @@ export const SEVERITY_ORDER: Severity[] = ['critical', 'warning', 'info'];
 /** Hosts a finding names before it says how many more there are. */
 const HOSTS_NAMED = 3;
 
+/** Each severity's colour, as a CSS value (for `style`: SVG strokes, bars, dots). */
 export const SEVERITY_COLORS: Record<Severity, string> = {
-  critical: '#FF6B6B',
-  warning: '#FFB547',
-  info: '#6CB4FF',
+  critical: 'var(--color-critical-solid)',
+  warning: 'var(--color-warning-solid)',
+  info: 'var(--color-info-solid)',
 };
 
 /** Findings per key id, for the key list and details panel. */

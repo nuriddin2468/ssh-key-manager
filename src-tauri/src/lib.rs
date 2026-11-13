@@ -1,5 +1,6 @@
 //! SSH Key Manager desktop app: Tauri commands over [`sshkm_core`].
 
+mod appearance;
 pub mod askpass;
 mod autostart;
 pub mod browser;
@@ -89,6 +90,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             lock_on_minimize(window, event);
             tray::on_window_event(window, event);
+            appearance::on_window_event(window, event);
         })
         // A reloaded page has lost its terminals' channels: end the sessions.
         .on_page_load(|webview, payload| {
@@ -100,6 +102,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             confirm::set_ui_language,
+            appearance::set_appearance,
             commands::environment::get_environment,
             commands::keys::list_keys,
             commands::keys::generate_key,
@@ -455,6 +458,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "macos")]
     menu::install(app)?;
     let background = tray::Background::install(app.handle(), &data_dir);
+    appearance::install(app.handle(), &data_dir);
     show_main_window(app, background.enabled());
     app.manage(background);
     app.manage(quick::Quick::install(app.handle(), &data_dir));

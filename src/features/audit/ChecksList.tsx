@@ -58,7 +58,7 @@ export function ChecksList({
           aria-expanded={open}
           aria-controls={listId}
           onClick={onToggle}
-          className="pressable -ml-1.5 inline-flex items-center gap-1.5 rounded-lg px-1.5 py-1 hover:bg-white/[0.05]"
+          className="pressable -ml-1.5 inline-flex items-center gap-1.5 rounded-lg px-1.5 py-1 hover:bg-ink/[0.05]"
         >
           <ChevronRight
             aria-hidden="true"

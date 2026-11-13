@@ -117,8 +117,8 @@ export function HostCard({
       style={{ viewTransitionName: `host-card-${host.id}` }}
       className={cn(
         // `relative`: screen-reader text inside stays in the card, so the scrolling list clips it.
-        'glass pressable-soft relative flex min-w-0 flex-col gap-3 rounded-2xl p-3.5 active:bg-white/[0.06]',
-        selected ? 'selected-row' : 'hover:bg-white/[0.06]',
+        'glass pressable-soft relative flex min-w-0 flex-col gap-3 rounded-2xl p-3.5 active:bg-fill',
+        selected ? 'selected-row' : 'hover:bg-fill',
       )}
     >
       <div className="flex items-start gap-[11px]">

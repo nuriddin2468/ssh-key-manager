@@ -79,9 +79,9 @@ export function ReleaseNotesDialog() {
           icon={
             <Tile tone="teal" size={34}>
               {offer ? (
-                <Download aria-hidden="true" className="size-4 text-white" strokeWidth={2.25} />
+                <Download aria-hidden="true" className="size-4 text-on-solid" strokeWidth={2.25} />
               ) : (
-                <Sparkles aria-hidden="true" className="size-4 text-white" strokeWidth={2.25} />
+                <Sparkles aria-hidden="true" className="size-4 text-on-solid" strokeWidth={2.25} />
               )}
             </Tile>
           }

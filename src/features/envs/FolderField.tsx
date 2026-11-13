@@ -117,7 +117,7 @@ export function useFolderField({
       />
       <p className="text-[12px] text-subtle">{t('envs.form.folderHint', { part: name })}</p>
       {file ? (
-        <div className="flex flex-col gap-1 rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-2.5">
+        <div className="flex flex-col gap-1 rounded-xl border border-ink/[0.07] bg-ink/[0.025] px-3 py-2.5">
           <Checkbox
             checked={useFile}
             onCheckedChange={setUseFile}

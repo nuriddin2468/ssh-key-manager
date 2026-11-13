@@ -1,5 +1,6 @@
-# cargo-deny settings. CI runs `cargo deny check advisories` on every push and
-# pull request; every advisory ignored here says why it doesn't apply.
+# cargo-deny settings. CI runs `cargo deny check` (advisories, bans, licenses
+# and sources) on every push and pull request; every advisory ignored here says
+# why it doesn't apply.
 
 [advisories]
 ignore = [
@@ -20,3 +21,45 @@ ignore = [
     # uses on Linux) needs it at build time. No release without it yet.
     { id = "RUSTSEC-2024-0370", reason = "build-time only, through glib-macros of Tauri's GTK bindings; no fixed version" },
 ]
+
+# Every crate comes from crates.io: a git dependency or another registry fails.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+
+[bans]
+# Tauri's dependencies bring several versions of some crates; that only warns.
+multiple-versions = "warn"
+# A dependency without a version requirement fails. The workspace's own crates
+# depend on each other by path, which is fine: none of them is published.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+# The app is AGPL-3.0-only, so it ships only code under licenses that allow
+# that: permissive ones, and MPL-2.0, whose files stay under it. A crate under
+# any other license fails until someone checks it and adds it here.
+[licenses]
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    # The root certificates in webpki-root-certs: data, with the notice kept.
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.93
+
+# The workspace's own crates (AGPL-3.0-only, not published).
+[licenses.private]
+ignore = true

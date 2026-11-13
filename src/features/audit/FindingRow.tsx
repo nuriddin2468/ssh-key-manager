@@ -75,7 +75,7 @@ export function FindingRow({
         <span className="flex flex-wrap items-center gap-2">
           <span className="font-semibold">{title}</span>
           {subject ? (
-            <span className="inline-flex h-5 items-center rounded-md border border-white/10 bg-white/[0.06] px-[7px] font-mono text-[11.5px] text-fg-2">
+            <span className="inline-flex h-5 items-center rounded-md border border-line-strong bg-fill px-[7px] font-mono text-[11.5px] text-fg-2">
               {subject}
             </span>
           ) : null}

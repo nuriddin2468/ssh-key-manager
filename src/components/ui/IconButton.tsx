@@ -3,8 +3,8 @@ import { cn } from '@/lib/cn';
 import { Tooltip } from './Tooltip';
 
 const variants = {
-  secondary: 'field text-fg-2 hover:bg-white/[0.09] hover:text-fg',
-  ghost: 'text-muted hover:bg-white/[0.07] hover:text-fg',
+  secondary: 'field text-fg-2 hover:bg-fill-hover hover:text-fg',
+  ghost: 'text-muted hover:bg-ink/[0.07] hover:text-fg',
   danger: 'field text-critical hover:bg-critical-solid/10',
 } as const;
 

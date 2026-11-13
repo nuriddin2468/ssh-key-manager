@@ -12,9 +12,10 @@
 //!   user picks (exports, converted keys, `.env` files), never do: the new file
 //!   is renamed onto the path itself, and a link there is replaced.
 //!
-//! A file only this user may read is so from its first byte: mode 0600 with
-//! no entries a folder's access list handed down (macOS), or on Windows an
-//! access list of its own, set as it is created.
+//! A file only this user may read is so from the moment it exists: mode 0600,
+//! on macOS made in a new folder of its own whose access list hands nothing
+//! down ([`private_folder`]), on Windows with an access list of its own, set
+//! as it is created.
 
 use std::{
     fmt::Write as _,
@@ -28,6 +29,9 @@ use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::FormatItem, macros::format_description};
 
 use crate::{Error, Result};
+
+#[cfg(target_os = "macos")]
+pub(crate) mod private_folder;
 
 /// Number of backups kept per file name; older ones are deleted.
 pub const BACKUPS_TO_KEEP: usize = 20;
@@ -68,11 +72,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8], new_file_mode: u32) -> Result<()>
         Err(e) if e.kind() == io::ErrorKind::NotFound => None,
         Err(e) => return Err(Error::io(e, &target)),
     };
-    let tmp = write_temp(&target, bytes, existing.as_ref(), new_file_mode)?;
-    tmp.persist(&target)
-        .map_err(|e| Error::io(e.error, &target))?;
-    sync_parent(&target);
-    Ok(())
+    write_and_rename(&target, bytes, existing.as_ref(), new_file_mode, true)
 }
 
 /// [`atomic_write`] for a file only this user may open, such as a private
@@ -81,8 +81,9 @@ pub fn atomic_write(path: &Path, bytes: &[u8], new_file_mode: u32) -> Result<()>
 ///
 /// - Unix: the new file gets the old one's mode without the group and other
 ///   bits (a 0400 key stays 0400, a 0644 one becomes 0600), or 0600 if
-///   nothing is there; on macOS without the entries a folder's access list
-///   hands down ([`drop_inherited_access`]).
+///   nothing is there; on macOS it is made in a folder of its own, so it
+///   never carries the entries a folder's access list hands down
+///   ([`private_folder`]).
 /// - Windows: the file is created with an access list for nobody but this
 ///   user, `SYSTEM` and `Administrators`, and no one else can open it while
 ///   it is written ([`crate::perms::create_private`]). Where the file system
@@ -97,12 +98,81 @@ pub fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     }
     #[cfg(not(windows))]
     {
-        let tmp = write_temp(&target, bytes, None, owner_bits(&target)?)?;
-        tmp.persist(&target)
-            .map_err(|e| Error::io(e.error, &target))?;
-        sync_parent(&target);
-        Ok(())
+        write_and_rename(&target, bytes, None, owner_bits(&target)?, true)
     }
+}
+
+/// Writes `bytes` to a new file next to `target`, with `keep`'s mode or
+/// else `mode`, and renames it onto `target`: over what is there with
+/// `replace`, else only where nothing is ([`Error::AlreadyExists`]). On
+/// macOS a file only its owner may open (no group or other bits) is made
+/// in a folder of its own ([`write_in_private_folder`]).
+fn write_and_rename(
+    target: &Path,
+    bytes: &[u8],
+    keep: Option<&fs::Permissions>,
+    mode: u32,
+    replace: bool,
+) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = keep.map_or(mode, PermissionsExt::mode) & 0o7777;
+        let shared = mode & 0o077 != 0;
+        if !shared {
+            return if write_in_private_folder(target, bytes, mode, replace, false)? {
+                Ok(())
+            } else {
+                Err(Error::AlreadyExists(target.display().to_string()))
+            };
+        }
+    }
+    let tmp = write_temp(target, bytes, keep, mode)?;
+    let persisted = if replace {
+        tmp.persist(target)
+    } else {
+        tmp.persist_noclobber(target)
+    };
+    persisted.map_err(|e| Error::io(e.error, target))?;
+    sync_parent(target);
+    Ok(())
+}
+
+/// Makes the new file `target`, holding `bytes` with `mode`, in a new
+/// folder of its own next to it first ([`private_folder`]), so that it
+/// never carries an entry the folder's access list hands down, not even
+/// before it holds anything; then renames it onto `target`: over what is
+/// there with `replace` (a link is replaced, not followed), else only where
+/// nothing is, returning `false` if something is. With `keep_out`, it is
+/// kept out of backups and cloud folders before it holds anything.
+#[cfg(target_os = "macos")]
+fn write_in_private_folder(
+    target: &Path,
+    bytes: &[u8],
+    mode: u32,
+    replace: bool,
+    keep_out: bool,
+) -> Result<bool> {
+    let (dir, _) = temp_location(target);
+    let name = target
+        .file_name()
+        .ok_or_else(|| Error::invalid(format!("not a file path: {}", target.display())))?;
+    let folder = private_folder::PrivateFolder::make(dir, name).map_err(|e| Error::io(e, dir))?;
+    let mut file = folder.create(name).map_err(|e| Error::io(e, target))?;
+    if keep_out {
+        keep_out_of_copies(&file);
+    }
+    file.write_all(bytes).map_err(|e| Error::io(e, target))?;
+    file.sync_all().map_err(|e| Error::io(e, target))?;
+    set_file_mode(&file, target, mode)?;
+    drop(file);
+    match folder.place(name, name, replace) {
+        Ok(()) => {}
+        Err(e) if !replace && e.kind() == io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(e) => return Err(Error::io(e, target)),
+    }
+    sync_parent(target);
+    Ok(true)
 }
 
 /// The mode of the file at `target` without its group and other bits, or
@@ -163,8 +233,10 @@ pub fn is_private_temp(name: &str, of: &str) -> bool {
 
 /// Removes the temporary files of [`replace_private`]'s writes to `path`
 /// that a crash left next to it: they may hold its contents in plain text.
-/// Only regular files are removed, and the pipes a level-3 file is made
-/// from next to it (`vault::envs::files::pipes::make_over`).
+/// Only regular files are removed, the pipes a level-3 file is made from
+/// next to it (`vault::envs::files::pipes::make_over`), and the private
+/// folders such a file or pipe is made in on macOS, with what is in them
+/// ([`private_folder`]).
 pub fn sweep_private_temps(path: &Path) {
     let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else {
         return;
@@ -177,13 +249,21 @@ pub fn sweep_private_temps(path: &Path) {
             .file_name()
             .to_str()
             .is_some_and(|found| is_private_temp(found, name));
-        if leftover
-            && entry
-                .file_type()
-                .is_ok_and(|kind| kind.is_file() || is_fifo(kind))
-        {
-            let _ = fs::remove_file(entry.path());
+        if leftover && let Ok(kind) = entry.file_type() {
+            remove_leftover(&entry.path(), kind);
         }
+    }
+}
+
+/// Removes a temporary file, pipe or private folder (with what is in it)
+/// that a crash left at `path`; anything else stays.
+fn remove_leftover(path: &Path, kind: fs::FileType) -> bool {
+    if kind.is_file() || is_fifo(kind) {
+        fs::remove_file(path).is_ok()
+    } else if kind.is_dir() {
+        fs::remove_dir_all(path).is_ok()
+    } else {
+        false
     }
 }
 
@@ -191,7 +271,8 @@ pub fn sweep_private_temps(path: &Path) {
 /// crash, a kill or a power cut left there, which may hold a secret in
 /// plain text (a key whose passphrase was being removed, say): regular
 /// files named as those of [`atomic_write`] (`.<file>.<random>.sshkm-tmp`)
-/// and [`replace_private`] (`<file>.sshkm-<random>.tmp`) that haven't
+/// and [`replace_private`] (`<file>.sshkm-<random>.tmp`, also the private
+/// folder a file is made in on macOS, with what is in it) that haven't
 /// changed for a minute, so that no write under way loses its file. For the
 /// folders the app writes into itself (`~/.ssh`, its data folder), at
 /// start-up. Returns how many were removed.
@@ -206,25 +287,28 @@ pub fn sweep_abandoned_temps(dir: &Path) -> usize {
         let Some(name) = name.to_str() else {
             continue;
         };
-        let temporary = (name.starts_with('.')
+        let written = name.starts_with('.')
             && name
                 .strip_suffix(TEMP_SUFFIX)
-                .is_some_and(|rest| rest.len() > 1))
-            || name
-                .rsplit_once(PRIVATE_TEMP.0)
-                .is_some_and(|(of, _)| !of.is_empty() && is_private_temp(name, of));
+                .is_some_and(|rest| rest.len() > 1);
+        let private = name
+            .rsplit_once(PRIVATE_TEMP.0)
+            .is_some_and(|(of, _)| !of.is_empty() && is_private_temp(name, of));
+        if !written && !private {
+            continue;
+        }
         // The entry itself, a link not followed.
-        let abandoned = || {
-            entry.metadata().is_ok_and(|meta| {
-                meta.is_file()
-                    && meta
-                        .modified()
-                        .ok()
-                        .and_then(|at| now.duration_since(at).ok())
-                        .is_some_and(|age| age >= ABANDONED_AFTER)
-            })
+        let Ok(meta) = entry.metadata() else {
+            continue;
         };
-        if temporary && abandoned() && fs::remove_file(entry.path()).is_ok() {
+        let abandoned = meta
+            .modified()
+            .ok()
+            .and_then(|at| now.duration_since(at).ok())
+            .is_some_and(|age| age >= ABANDONED_AFTER);
+        let kind = meta.file_type();
+        let removable = kind.is_file() || (private && kind.is_dir());
+        if abandoned && removable && remove_leftover(&entry.path(), kind) {
             removed += 1;
         }
     }
@@ -243,29 +327,39 @@ fn is_fifo(_: fs::FileType) -> bool {
 }
 
 /// Replaces `path` with a new file that holds `bytes` and that only this
-/// user can read: mode 0600 on Unix, without the entries a folder's access
-/// list hands down on macOS ([`drop_inherited_access`]); on Windows an
-/// access list for nobody but the user, `SYSTEM` and `Administrators`, set
-/// as the file is made, as [`atomic_write_private`] does. Both are in place
-/// before anything is written. Unlike [`atomic_write`], a symbolic link at
-/// `path` is never followed and no mode is taken from what is there: the
-/// new file is renamed over whatever is there, a link included. Without
-/// `overwrite`, nothing is written if something is at `path` by then, and
-/// the call returns `false`. With `keep_out`, the new file is kept out of
-/// backups and cloud folders ([`keep_out_of_copies`]) before it is renamed
-/// into place; on Unix before it holds anything.
+/// user can read: mode 0600 on Unix, on macOS made in a folder of its own
+/// first, so it never carries the entries a folder's access list hands down
+/// ([`write_in_private_folder`]); on Windows an access list for nobody but
+/// the user, `SYSTEM` and `Administrators`, set as the file is made, as
+/// [`atomic_write_private`] does. Both are in place before anything is
+/// written. Unlike [`atomic_write`], a symbolic link at `path` is never
+/// followed and no mode is taken from what is there: the new file is
+/// renamed over whatever is there, a link included. Without `overwrite`,
+/// nothing is written if something is at `path` by then, and the call
+/// returns `false`. With `keep_out`, the new file is kept out of backups
+/// and cloud folders ([`keep_out_of_copies`]) before it is renamed into
+/// place; on Unix before it holds anything.
 pub fn replace_private(path: &Path, bytes: &[u8], overwrite: bool, keep_out: bool) -> Result<bool> {
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let prefix = format!("{name}{}", PRIVATE_TEMP.0);
+    #[cfg(target_os = "macos")]
+    {
+        write_in_private_folder(path, bytes, 0o600, overwrite, keep_out)
+    }
     #[cfg(windows)]
     {
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let prefix = format!("{name}{}", PRIVATE_TEMP.0);
         write_private_at(path, bytes, &prefix, PRIVATE_TEMP.1, overwrite, keep_out)
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let prefix = format!("{name}{}", PRIVATE_TEMP.0);
         let (dir, _) = temp_location(path);
         let mut tmp = tempfile::Builder::new()
             .prefix(&prefix)
@@ -273,9 +367,9 @@ pub fn replace_private(path: &Path, bytes: &[u8], overwrite: bool, keep_out: boo
             .tempfile_in(dir)
             .map_err(|e| Error::io(e, dir))?;
         // tempfile makes it 0600; set again, on the open file, in case a
-        // umask differs, and drop what an access list handed down.
+        // umask differs. A POSIX access list a folder hands down (Linux) is
+        // masked by the group bits, which are off from the start.
         set_file_mode(tmp.as_file(), tmp.path(), 0o600)?;
-        drop_inherited_access(tmp.as_file(), tmp.path())?;
         if keep_out {
             keep_out_of_copies(tmp.as_file());
         }
@@ -482,11 +576,7 @@ pub fn write_new(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     if fs::symlink_metadata(path).is_ok() {
         return Err(Error::AlreadyExists(path.display().to_string()));
     }
-    let tmp = write_temp(path, bytes, None, mode)?;
-    tmp.persist_noclobber(path)
-        .map_err(|e| Error::io(e.error, path))?;
-    sync_parent(path);
-    Ok(())
+    write_and_rename(path, bytes, None, mode, false)
 }
 
 /// Copies `path` into `backup_dir` as `<file name>.<UTC timestamp>.bak` and
@@ -726,37 +816,39 @@ fn set_file_mode(file: &fs::File, path: &Path, mode: u32) -> Result<()> {
     Ok(())
 }
 
-/// Makes the file at `path`, such as a pipe just made there, this user's
-/// alone: mode 0600, and on macOS no entries in its access list, which the
-/// mode doesn't override (see [`drop_inherited_access`]). A link at `path`
-/// isn't followed for the access list.
-pub(crate) fn make_owner_only(path: &Path) -> Result<()> {
-    set_mode(path, 0o600)?;
+/// Makes something new at `path` with `make`, such as a pipe, that only
+/// this user may open: mode 0600, and on macOS made in a new folder of its
+/// own and renamed into place, so that it never carries an entry the
+/// folder's access list hands down, not even before its mode is set
+/// ([`private_folder`]). Fails if something is at `path` by then.
+pub(crate) fn make_private(path: &Path, make: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
     #[cfg(target_os = "macos")]
-    crate::perms::extended_acl::clear_at(path).map_err(|e| Error::io(e, path))?;
-    Ok(())
-}
-
-/// Drops the entries the folder's access list handed down to the new
-/// `file`, found at `path` (macOS): a folder can let everyone read every
-/// file made in it, and macOS checks such entries before the mode, so a
-/// 0600 file would not be private. Fails, so that nothing is written, only
-/// if entries remain. Elsewhere nothing to do: Linux masks a POSIX access
-/// list's entries with the mode's group bits, which are off, and Windows
-/// files that must be private get their own list as they are made.
-#[cfg_attr(not(target_os = "macos"), allow(clippy::unnecessary_wraps))]
-fn drop_inherited_access(file: &fs::File, path: &Path) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    crate::perms::extended_acl::clear(file).map_err(|e| Error::io(e, path))?;
+    {
+        let (dir, _) = temp_location(path);
+        let name = path
+            .file_name()
+            .ok_or_else(|| Error::invalid(format!("not a file path: {}", path.display())))?;
+        let folder =
+            private_folder::PrivateFolder::make(dir, name).map_err(|e| Error::io(e, dir))?;
+        let inside = folder.path().map_err(|e| Error::io(e, dir))?;
+        make(&inside.join(name))?;
+        folder.holds(name).map_err(|e| Error::io(e, path))?;
+        folder
+            .place(name, name, false)
+            .map_err(|e| Error::io(e, path))?;
+        sync_parent(path);
+        Ok(())
+    }
     #[cfg(not(target_os = "macos"))]
-    let _ = (file, path);
-    Ok(())
+    {
+        make(path)?;
+        set_mode(path, 0o600)
+    }
 }
 
 /// The temporary file of [`atomic_write`] and the like, holding `bytes`,
-/// with `keep`'s mode or else `mode`. A file that only its owner may open
-/// (no group or other bits) has the entries an access list handed down
-/// dropped before anything is written ([`drop_inherited_access`]).
+/// with `keep`'s mode or else `mode`. On macOS a file only its owner may
+/// open is made by [`write_in_private_folder`] instead.
 fn write_temp(
     target: &Path,
     bytes: &[u8],
@@ -771,16 +863,6 @@ fn write_temp(
         .suffix(TEMP_SUFFIX)
         .tempfile_in(dir)
         .map_err(|e| Error::io(e, dir))?;
-    #[cfg(unix)]
-    let shared = {
-        use std::os::unix::fs::PermissionsExt;
-        keep.map_or(mode, PermissionsExt::mode) & 0o077 != 0
-    };
-    #[cfg(not(unix))]
-    let shared = true;
-    if !shared {
-        drop_inherited_access(tmp.as_file(), tmp.path())?;
-    }
     tmp.write_all(bytes).map_err(|e| Error::io(e, tmp.path()))?;
     tmp.as_file()
         .sync_all()
@@ -1066,44 +1148,143 @@ mod tests {
         ];
         let folder = dir.path().join(".d.Ab12Cd.sshkm-tmp");
         fs::create_dir(&folder).unwrap();
-        assert_eq!(sweep_abandoned_temps(dir.path()), 2);
+        // The private folder a write was making a file in (macOS), with
+        // the file, and one a write is using now.
+        #[cfg(unix)]
+        let (abandoned, in_use) = {
+            let private = |name: &str, at: SystemTime| {
+                let path = dir.path().join(name);
+                fs::create_dir(&path).unwrap();
+                fs::write(path.join("passwords.csv"), "secret").unwrap();
+                fs::File::open(&path).unwrap().set_modified(at).unwrap();
+                path
+            };
+            (
+                private("passwords.csv.sshkm-Zz99Yy.tmp", old),
+                private("vault.kdbx.sshkm-Qq11Ww.tmp", SystemTime::now()),
+            )
+        };
+        let swept = if cfg!(unix) { 3 } else { 2 };
+        assert_eq!(sweep_abandoned_temps(dir.path()), swept);
         assert!(left.iter().all(|path| !path.exists()));
         assert!(kept.iter().all(|path| path.exists()));
         assert!(folder.is_dir());
+        #[cfg(unix)]
+        {
+            assert!(!abandoned.exists());
+            assert!(in_use.join("passwords.csv").exists());
+        }
         assert_eq!(sweep_abandoned_temps(&dir.path().join("missing")), 0);
     }
 
-    /// Files only this user may read lose what a folder's access list hands
-    /// down (macOS), from the temporary file on; others keep it.
+    /// Files and pipes only this user may open never carry an entry a
+    /// folder's access list hands down (macOS), at no moment: something
+    /// opening every file that appears, while they are written over and
+    /// over, never finds one with an entry. A file others may read keeps
+    /// what the folder hands down.
     #[cfg(target_os = "macos")]
     #[test]
-    fn private_files_drop_what_a_folder_hands_down() {
-        use crate::perms::extended_acl::testing::{entries, sharing_folder};
+    fn private_files_never_carry_what_a_folder_hands_down() {
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        use crate::perms::extended_acl::testing::{carries_entries, entries, sharing_folder};
+
         let dir = sharing_folder();
         let at = |name: &str| dir.path().join(name);
-        assert!(replace_private(&at(".env"), b"A=1\n", false, false).unwrap());
-        assert!(write_private(&at("passwords.csv"), b"x", true).unwrap());
-        atomic_write_private(&at("id_ed25519"), b"key").unwrap();
-        atomic_write(&at("history.json"), b"{}", 0o600).unwrap();
-        write_new(&at("vault.kdbx"), b"db", 0o600).unwrap();
+        let public = at("id_ed25519.pub");
+        write_new(&public, b"ssh-ed25519 AAAA", 0o644).unwrap();
+        assert_eq!(entries(&public), 1);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let seen = Arc::new(AtomicUsize::new(0));
+        let carried = Arc::new(Mutex::new(Vec::new()));
+        let observer = {
+            let (stop, seen, carried) =
+                (Arc::clone(&stop), Arc::clone(&seen), Arc::clone(&carried));
+            let root = dir.path().to_path_buf();
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let mut folders = vec![root.clone()];
+                    while let Some(folder) = folders.pop() {
+                        let Ok(entries) = fs::read_dir(&folder) else {
+                            continue;
+                        };
+                        for entry in entries.filter_map(std::result::Result::ok) {
+                            let path = entry.path();
+                            if entry.file_name() == "id_ed25519.pub" {
+                                continue;
+                            }
+                            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                                folders.push(path);
+                                continue;
+                            }
+                            let opened = fs::OpenOptions::new()
+                                .read(true)
+                                .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
+                                .open(&path);
+                            if let Ok(file) = opened {
+                                seen.fetch_add(1, Ordering::Relaxed);
+                                if carries_entries(&file) {
+                                    carried.lock().unwrap().push(path);
+                                }
+                            }
+                        }
+                    }
+                }
+            })
+        };
+        for round in 0..100 {
+            let text = format!("A={round}\n");
+            let _ = fs::remove_file(at(".env"));
+            assert!(replace_private(&at(".env"), text.as_bytes(), false, true).unwrap());
+            assert!(write_private(&at("passwords.csv"), text.as_bytes(), true).unwrap());
+            atomic_write_private(&at("id_ed25519"), text.as_bytes()).unwrap();
+            atomic_write(&at("history.json"), text.as_bytes(), 0o600).unwrap();
+            let _ = fs::remove_file(at("vault.kdbx"));
+            write_new(&at("vault.kdbx"), text.as_bytes(), 0o600).unwrap();
+            if round % 10 == 0 {
+                let pipe = at("pipe");
+                let _ = fs::remove_file(&pipe);
+                make_private(&pipe, |path| {
+                    let made = std::process::Command::new("mkfifo")
+                        .arg(path)
+                        .status()
+                        .map_err(|e| Error::io(e, path))?;
+                    assert!(made.success());
+                    Ok(())
+                })
+                .unwrap();
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        observer.join().unwrap();
+        assert!(seen.load(Ordering::Relaxed) > 0);
+        assert_eq!(*carried.lock().unwrap(), Vec::<PathBuf>::new());
+
         for name in [
             ".env",
             "passwords.csv",
             "id_ed25519",
             "history.json",
             "vault.kdbx",
+            "pipe",
         ] {
             assert_eq!(entries(&at(name)), 0, "{name}");
+            assert_eq!(mode(&at(name)), 0o600, "{name}");
         }
-        let public = at("id_ed25519.pub");
-        write_new(&public, b"ssh-ed25519 AAAA", 0o644).unwrap();
-        assert_eq!(entries(&public), 1);
-        let pipe = at("pipe");
-        fs::write(&pipe, "").unwrap();
-        assert_eq!(entries(&pipe), 1);
-        make_owner_only(&pipe).unwrap();
-        assert_eq!(entries(&pipe), 0);
-        assert_eq!(mode(&pipe), 0o600);
+        assert!(is_fifo(
+            fs::symlink_metadata(at("pipe")).unwrap().file_type()
+        ));
+        // Nothing else is left in the folder.
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 7);
+        // A pipe is never made over something.
+        let refused = make_private(&at("pipe"), |path| {
+            fs::write(path, "").map_err(|e| Error::io(e, path))
+        });
+        assert_eq!(refused.unwrap_err().code(), crate::ErrorCode::AlreadyExists);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 7);
     }
 
     #[cfg(unix)]

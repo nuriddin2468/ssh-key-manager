@@ -19,6 +19,8 @@ import { useBrowserStatus } from './queries';
 /** The extension's page in the Chrome Web Store; Edge and Brave install from it too. */
 export const CHROME_WEB_STORE =
   'https://chromewebstore.google.com/detail/ssh-key-manager/lkmgdcanagjeajepncgokapkbihahddb';
+/** The extension's page on addons.mozilla.org, which picks the user's language itself. */
+export const FIREFOX_ADD_ONS = 'https://addons.mozilla.org/firefox/addon/ssh-key-manager/';
 
 /**
  * Browser autofill on the Settings page: the switch, which browsers can
@@ -40,10 +42,10 @@ export function BrowserAutofillSection() {
   });
   if (!status) return null;
 
-  const openStore = async () => {
+  const openStore = async (url: string) => {
     try {
-      if (isTauri()) await openUrl(CHROME_WEB_STORE);
-      else window.open(CHROME_WEB_STORE, '_blank', 'noopener,noreferrer');
+      if (isTauri()) await openUrl(url);
+      else window.open(url, '_blank', 'noopener,noreferrer');
     } catch (error) {
       toastError(t, error);
     }
@@ -61,7 +63,7 @@ export function BrowserAutofillSection() {
       <h2 id={titleId} className="px-1 text-[12px] font-semibold tracking-[0.02em] text-subtle">
         {t('browser.title')}
       </h2>
-      <div className="glass flex flex-col divide-y divide-white/[0.06] overflow-hidden rounded-2xl">
+      <div className="glass flex flex-col divide-y divide-line-soft overflow-hidden rounded-2xl">
         <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">
           <span className="flex min-w-0 flex-col">
             <span id={`${switchId}-label`} className="font-medium">
@@ -89,16 +91,26 @@ export function BrowserAutofillSection() {
               {t('browser.extensionHint')}
             </span>
           </span>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="ml-auto shrink-0"
-            icon={<ExternalLink className="size-[15px]" strokeWidth={1.75} />}
-            aria-describedby={`${switchId}-store`}
-            onClick={() => void openStore()}
-          >
-            Chrome Web Store
-          </Button>
+          <span className="ml-auto flex shrink-0 flex-wrap justify-end gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<ExternalLink className="size-[15px]" strokeWidth={1.75} />}
+              aria-describedby={`${switchId}-store`}
+              onClick={() => void openStore(CHROME_WEB_STORE)}
+            >
+              Chrome Web Store
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<ExternalLink className="size-[15px]" strokeWidth={1.75} />}
+              aria-describedby={`${switchId}-store`}
+              onClick={() => void openStore(FIREFOX_ADD_ONS)}
+            >
+              Firefox Add-ons
+            </Button>
+          </span>
         </div>
 
         {status.enabled ? (

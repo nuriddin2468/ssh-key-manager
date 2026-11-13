@@ -114,7 +114,7 @@ export function RotateKeyDialog({ keyView, onDone }: { keyView: KeyView; onDone:
                 ? 'bg-[linear-gradient(90deg,var(--accent-1),var(--accent-2))]'
                 : i === index
                   ? 'bg-[rgb(var(--accent-rgb)/0.45)]'
-                  : 'bg-white/10',
+                  : 'bg-ink/10',
             )}
           />
         ))}

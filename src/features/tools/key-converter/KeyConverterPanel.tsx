@@ -174,7 +174,7 @@ function KeyDetails({ info }: { info: KeyFileInfo }) {
                   {t(`toolSsh.convert.${name}`)}
                 </dt>
                 <dd className="flex min-w-0 items-center gap-1.5">
-                  <code className="selectable min-w-0 flex-1 rounded-lg border border-white/[0.07] bg-terminal px-2.5 py-1.5 font-mono text-[12px] break-all">
+                  <code className="selectable min-w-0 flex-1 rounded-lg border border-ink/[0.07] bg-terminal px-2.5 py-1.5 font-mono text-[12px] break-all">
                     {value}
                   </code>
                   <IconButton
@@ -192,7 +192,7 @@ function KeyDetails({ info }: { info: KeyFileInfo }) {
             <pre
               role="img"
               aria-label={`${t('toolSsh.convert.randomart')}: ${prints.sha256}`}
-              className="rounded-[11px] border border-white/[0.07] bg-terminal px-3 py-2 font-mono text-[12px] leading-[1.25] text-fg-2"
+              className="rounded-[11px] border border-ink/[0.07] bg-terminal px-3 py-2 font-mono text-[12px] leading-[1.25] text-fg-2"
             >
               {prints.randomart}
             </pre>

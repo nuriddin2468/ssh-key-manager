@@ -35,13 +35,16 @@ real `~/.ssh`. Its modules:
   - `install` writes the file with administrator rights; see SECURITY.md.
 - `agent`: a small synchronous client for the ssh-agent protocol.
   - Connects through a Unix socket (`SSH_AUTH_SOCK`), or on Windows a named pipe:
-    `SSH_AUTH_SOCK` if it names one, else the OpenSSH agent's pipe.
+    `SSH_AUTH_SOCK` if it names one, else the OpenSSH agent's pipe. Nothing is sent
+    until the server is known to run as this user or the system: on Unix by the
+    socket's peer credentials (`agent/peer.rs`, through libc), on Windows by the check
+    the app sets.
 - `perms`
   - Unix: checks and fixes file modes.
   - Windows: checks and fixes ACLs, using locale-independent SIDs through PowerShell and
     `icacls`. It also creates files meant for plain-text secrets (the CSV export) with a
-    protected access list already in place, through Win32 (`perms/private_file.rs`, the
-    crate's only `unsafe` code).
+    protected access list already in place, through Win32 (`perms/private_file.rs`,
+    one of the crate's few `unsafe` modules).
 - `audit`: pure rules over the data above. Findings carry machine-readable kinds and
   parameters, so the UI can localise them.
   - `audit/config_risks.rs` reads `ssh_config` settings (host key checking, agent
@@ -259,8 +262,9 @@ translates.
   - One supervisor thread per tunnel that is on runs `ssh -N` with the forward,
     `ExitOnForwardFailure` and `ServerAliveInterval`, its prompts answered by the
     terminal's prompt bridge through an interactive askpass session.
-  - `LogLevel=VERBOSE`'s `Authenticated to …` line tells when signing in is done;
-    `failure` reads why `ssh` stopped. With auto-reconnect a tunnel starts again
+  - `LogLevel=VERBOSE`'s `Authenticated to …` line, read from `ssh`'s own log (a
+    private `-E` file, which servers' banners don't reach), tells when signing in is
+    done; `failure` reads why `ssh` stopped from that log and its stderr. With auto-reconnect a tunnel starts again
     after a growing wait, unless what stopped it needs the user.
   - Every change goes to the page as `tunnels-changed`, and to the tray menu. Tunnels
     stop when the app quits.

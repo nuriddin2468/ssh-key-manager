@@ -1,6 +1,6 @@
 # Chats: messages between Nearby contacts
 
-Status: **design, waiting for review.** Nothing here is built yet.
+Status: **approved** (with the decisions at the end); being built.
 
 A chat lets two paired computers (Nearby contacts) or two of the user's own devices send
 each other text, secret values that expire, environment variables and the items Nearby
@@ -31,12 +31,14 @@ their own, built the way own devices have theirs.
 
 ### When a device is "online"
 
-A device is online for chats while **its vault is unlocked and Nearby is open**, on either
-of its tabs (Computers or Chats). It stays online for **two more minutes** after the user
-leaves Nearby, so that going to Passwords to copy something doesn't drop a conversation.
-Locking the vault ends it at once, including auto-lock and locking on sleep or minimise.
-A window hidden to the tray with Nearby as its page stays online. That is when
-notifications matter (§5).
+A device is online for chats while **its vault is unlocked and Nearby is open in a visible
+window**, focused or not, on either of its tabs (Computers or Chats). It stays online for
+**two more minutes** after the user leaves Nearby, so that going to Passwords to copy
+something doesn't drop a conversation. **Hiding the window to the tray counts as leaving
+Nearby**: the two minutes start, then the device goes offline. Staying online in the tray
+would be the background reachability the user said no to. Locking the vault ends it at
+once, including auto-lock and locking on sleep or minimise. Notifications matter for a
+visible window that isn't focused, and during the two minutes (§5).
 
 While online the app:
 
@@ -134,14 +136,11 @@ dropped while one goes on. Chats don't take that slot and aren't affected by it.
 - **Not activity.** Incoming chat traffic reads and writes with the vault's quiet access.
   It never counts as the user's activity, so it can't keep the vault from auto-locking.
 
-### Background reachability: proposed, not built
+### Background reachability: not built
 
-The proposal is a switch in Nearby, **"Stay reachable for chats while the vault is
-unlocked"**, **off by default**. When on, the chat port and announcement stay up while the
-vault is unlocked, even with Nearby closed, and incoming messages notify (§5). Own devices
-could use it to receive a value from the laptop without opening Nearby on the desktop.
-It is built only if approved, and then as a `notice` in the changelog if it is ever on by
-default.
+A switch "Stay reachable for chats while the vault is unlocked" (off by default) would keep
+the chat port and announcement up with Nearby closed. It is **not built**; it is possible
+later if the user asks for it.
 
 ## 2. Protocol
 
@@ -172,11 +171,17 @@ Chat brings the first new message types, so this comes first:
   }
   ```
 
-  This version says `["chat"]` in every `Hello`. A side sends a message, frame or item
-  kind that came after version 1 only to a peer that named its feature. **A chat frame
-  never goes to a peer that didn't say `chat`.** A later incompatible chat change is a new
-  name (`chat2`). `VERSION` stays 1 and changes only if the framing itself ever has to;
-  everything else is a feature. Older versions ignore `features`.
+  This version says `["chat/1", "personal-env/1"]` in every `Hello`. A side sends a
+  message, frame or item kind that came after version 1 only to a peer that named its
+  feature. **A chat frame never goes to a peer that didn't say `chat/1`.** A later
+  incompatible chat change is a new name (`chat/2`). `VERSION` stays 1 and changes only if
+  the framing itself ever has to; everything else is a feature. Older versions ignore
+  `features`.
+- **Items that need a feature.** `Item::requires()` names the feature an item needs, if
+  any. Today's items need none, except an environment in Personal without a part (fixed
+  below): older receivers refuse its empty project label, so it needs `personal-env/1`.
+  An item the peer can't take is refused **before anything is offered**, with the
+  translated "*{name}* can't take this yet: its SSH Key Manager needs updating".
 - **Fallbacks.** `Message`, `Item` and `ItemSummary` get `#[serde(other)] Unknown`, so an
   unknown kind parses instead of failing. Nothing ever sends `Unknown`.
   - `Item::check` refuses it.
@@ -195,8 +200,10 @@ Chat brings the first new message types, so this comes first:
     `PairingFailure::Unsupported` (translated, same wording), not `Broken`.
   - The existing `Version` failure stays for a peer whose `version` differs.
 - **Tests.** Today's `Hello` read by an older shape and the reverse. Unknown message,
-  item and summary parse to `Unknown`. A declined unknown offer ends as `Unsupported` on
-  both sides. No chat frame goes to a peer without the feature.
+  item and summary parse to `Unknown`. An unknown item summary received is answered
+  cleanly (declined as unsupported) and ends as `Unsupported` on both sides. An item that
+  needs a feature, offered to a peer without it, is refused before sending. No chat frame
+  goes to a peer without `chat/1`.
 
 ### Chat frames
 
@@ -235,8 +242,8 @@ One new message, `Message::Chat { frame: ChatFrame }`, with its own module
   entries in that conversation. `revoke` counts only for a secret or variables the peer
   sent. Anything else is ignored.
 - **Unknown kind.** `ChatFrame` falls back too. A frame of a kind this side doesn't know
-  (only a newer peer breaking the feature rule sends one) is answered with `refused` and
-  reason `unsupported` when it has an id, and dropped otherwise. The session goes on.
+  (only a newer peer breaking the feature rule sends one) is dropped, and the session goes
+  on; the sender sees it as not delivered.
 - **Padding.** `secret` and `variables` frames carry `pad` (spaces) up to the next
   multiple of 512 bytes, so a frame's length doesn't tell a password's length.
 
@@ -332,9 +339,13 @@ Two known bugs come with that code:
     environments (or a new one), see what would be added and what would change, and
     confirm.
   - New names are ticked. Replacing a value the receiver already has is never ticked by
-    default. Names that change how programs start (`PATH`, `LD_PRELOAD`, `DYLD_*`,
-    `NODE_OPTIONS`, `BASH_ENV`, `PYTHONPATH`, `GIT_SSH_COMMAND`, …) are flagged and never
-    ticked by default.
+    default. Names that change how programs start are flagged and never ticked by
+    default. The list is one tested function shared with the vault sync,
+    `envs::risky_variable()`: `PATH`, `LD_*`, `DYLD_*`, `NODE_OPTIONS`, `NODE_PATH`,
+    `PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONHOME`, `PERL5OPT`, `PERL5LIB`, `RUBYOPT`,
+    `RUBYLIB`, `BASH_ENV`, `ENV`, `ZDOTDIR`, `PROMPT_COMMAND`, `GIT_SSH`,
+    `GIT_SSH_COMMAND`, `GIT_EXEC_PATH`, `GIT_CONFIG_*`, `SSH_ASKPASS`,
+    `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`, `JDK_JAVA_OPTIONS`, `DOTNET_STARTUP_HOOKS`.
   - Nothing is saved without that confirmation.
 - **A whole environment** can still go as a card (§2). It is permanent, and its values go
   only after the receiver accepts.
@@ -423,8 +434,9 @@ So the history is per device by construction: the files never leave this compute
 
 ## 5. Notifications
 
-A message, card or secret may arrive while the window is not focused, including hidden to
-the tray. Then the app shows a system notification:
+A message, card or secret may arrive while the window is visible but not focused, or
+during the two minutes after leaving Nearby (hidden to the tray included). Then the app
+shows a system notification:
 
 - **Title and body.** The title is the contact's name; the body is "New message" or "3 new
   messages".
@@ -649,14 +661,15 @@ language's convention. Uzbek uses ʻ (U+02BB).
   1. Core, protocol hygiene and the app's backend, with mocks.
   2. The UI, changelog and docs.
 
-## Open questions
+## Decided in review
 
-1. **Storage outside the vault file.** The history goes in its own files, sealed with a
-   key kept in the vault, rather than inside `vault.kdbx` (§4): vault backups would keep
-   expired secrets, and a synced vault would share the history. Is that what "kept in the
-   vault, encrypted" should mean?
-2. **When online.** Online while Nearby is open, plus two minutes after leaving it, or only
-   while the Chats tab itself is open?
-3. **Notifications.** Is `tauri-plugin-notification` acceptable as a new dependency, for
-   notifications without content?
-4. **Background switch** (§1). Build it later, off by default, or not at all?
+1. **Storage**: history in `chats/<id>.chat`, sealed with a key held in the vault's custom
+   data, meets "encrypted, readable only while unlocked" (§4 keeps the reasons).
+2. **Online**: vault unlocked and Nearby open in a visible window, plus two minutes after
+   leaving it; hiding to the tray counts as leaving (§1).
+3. **Notifications**: `tauri-plugin-notification`, content-free (§5).
+4. **Background switch**: not built; possible later if the user asks (§1).
+5. **Features** in `Hello`, `Unknown` fallbacks, items refused before offering when the
+   peer lacks their feature (§2).
+6. **One list of risky variables**, `envs::risky_variable()`, shared with the vault sync
+   (§3).

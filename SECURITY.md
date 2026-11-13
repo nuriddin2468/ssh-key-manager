@@ -175,9 +175,14 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     (a quote that never closes, a line naming a variable without `=`), or that would
     remove half its variables or more at once, changes nothing until you say so.
     Values never reach the interface, errors or logs; the compare dialog compares only
-    an environment's own files. Whether Git ignores or has committed a file is asked of `git` with
-    `core.fsmonitor` off, so a repository's own settings can't make it run a program;
-    a line goes into `.gitignore` only when you ask.
+    an environment's own files. Whether Git ignores or has committed a file is asked of
+    `git` (as are the files of a working tree for the leak scanner) so that a
+    repository's own settings can't make it run a program: Git is told which repository
+    to read, the nearest `.git` above the file, so a folder in the project laid out
+    like a repository is never taken for it; it runs no file system monitor
+    (`core.fsmonitor` off), fetches nothing (no transport, not even the objects a
+    partial clone left out) and gets none of the app's `GIT_*` environment. A line
+    goes into `.gitignore` only when you ask.
   - An edit of a managed file goes to the vault, whoever made it: any program that can
     write in the folder (a build tool, an AI agent) changes what the vault holds, and,
     through a shared value, the files of every environment that uses it, in any

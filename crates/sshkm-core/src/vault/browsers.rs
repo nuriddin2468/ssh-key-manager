@@ -13,6 +13,7 @@
 //! [`Vault::promote_browser_keys`]). The keys it gave up are kept a while,
 //! retired: they open nothing any more, but a request sealed with one shows
 //! that someone else holds a copy of them ([`BrowserKeys::open_request`]).
+//! So are keys it asked for and then asked to replace before it used them.
 
 use keepass::db::{CustomDataItem, CustomDataValue, Times, Value, fields};
 use secrecy::{ExposeSecret, SecretString};
@@ -100,7 +101,10 @@ pub enum KeysUsed {
     /// The keys it is changing to: from now on they are the current ones.
     Next,
     /// Keys it gave up at `retired_at` (milliseconds since 1970). A request
-    /// sent after that comes from someone else holding a copy of them.
+    /// sent after that comes from someone else holding a copy of them. Keys
+    /// it asked for and that a later key change replaced before it used them
+    /// are retired as of 0: any request sealed with them shows that two hold
+    /// the browser's keys.
     Retired {
         retired_at: u64,
     },
@@ -203,14 +207,31 @@ impl Vault {
 
     /// Records the keys a paired browser asked to change to. They open its
     /// requests alongside the current ones until it first uses them
-    /// ([`Self::promote_browser_keys`]); asking again replaces them.
+    /// ([`Self::promote_browser_keys`]).
+    ///
+    /// Asking again replaces them, and retires the replaced ones as of 0.
+    /// The extension asks again only when it never got the answer, so it
+    /// never uses keys that were replaced: a request sealed with them comes
+    /// from a browser whose key change someone else's overtook, or from that
+    /// someone else. Either way two hold the browser's keys.
     pub fn set_next_browser_keys(&mut self, client_id: &str, keys: &ChannelKeys) -> Result<()> {
         let (request_key, response_key) = keys.to_base64();
         self.change_browser(client_id, |stored| {
-            stored.next = Some(StoredKeys {
+            let replaced = stored.next.replace(StoredKeys {
                 request_key: request_key.to_string(),
                 response_key: response_key.to_string(),
             });
+            if let Some(replaced) = replaced {
+                stored.retired.insert(
+                    0,
+                    RetiredKeys {
+                        request_key: replaced.request_key,
+                        response_key: replaced.response_key,
+                        retired_at: 0,
+                    },
+                );
+                stored.retired.truncate(MAX_RETIRED);
+            }
         })
     }
 
@@ -655,6 +676,44 @@ mod tests {
             vault
                 .promote_browser_keys("someone-else-0123456", 1)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn keys_replaced_before_their_first_use_stay_recognised_as_a_copy() {
+        let (_dir, mut vault) = vault();
+        let browser = PairedBrowser {
+            id: CLIENT.into(),
+            browser: "Chrome".into(),
+            computer: "laptop".into(),
+            paired: String::new(),
+        };
+        let current = new_keys();
+        vault.add_browser(&browser, "", &current).unwrap();
+        // One key change, then another before the first new keys were used.
+        let asked = new_keys();
+        vault.set_next_browser_keys(CLIENT, &asked).unwrap();
+        let again = new_keys();
+        vault.set_next_browser_keys(CLIENT, &again).unwrap();
+
+        let replaced = Some(KeysUsed::Retired { retired_at: 0 });
+        let keys = vault.browser_keys(CLIENT).unwrap();
+        assert_eq!(used(&keys, &current, CLIENT), Some(KeysUsed::Current));
+        assert_eq!(used(&keys, &again, CLIENT), Some(KeysUsed::Next));
+        assert_eq!(used(&keys, &asked, CLIENT), replaced);
+        assert!(
+            keys.answering(KeysUsed::Retired { retired_at: 0 })
+                .is_none()
+        );
+
+        // Once the later keys are in use, the replaced ones stay retired.
+        vault.promote_browser_keys(CLIENT, 5_000).unwrap();
+        let keys = vault.browser_keys(CLIENT).unwrap();
+        assert_eq!(used(&keys, &again, CLIENT), Some(KeysUsed::Current));
+        assert_eq!(used(&keys, &asked, CLIENT), replaced);
+        assert_eq!(
+            used(&keys, &current, CLIENT),
+            Some(KeysUsed::Retired { retired_at: 5_000 })
         );
     }
 

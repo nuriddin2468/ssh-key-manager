@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireTrusted, press } from '../test/user';
 import {
+  drawnText,
   LoginMenu,
   SaveBanner,
   SETTLE_MS,
@@ -118,7 +119,12 @@ describe('cover check', () => {
 
 /** What the page can't see: the surface's own state. */
 function inside(surface: LoginMenu | SaveBanner | SignInBanner) {
-  return surface as unknown as { root: ShadowRoot; list: HTMLElement | null; intact(): boolean };
+  return surface as unknown as {
+    root: ShadowRoot;
+    body: HTMLElement | null;
+    seen: boolean | null;
+    intact(): boolean;
+  };
 }
 
 /** Lets jsdom, which has no top layer, pretend to show popovers. */
@@ -175,13 +181,138 @@ describe('the page changing the surface', () => {
 });
 
 describe('the menu', () => {
-  it('fits its list in the window', () => {
+  it('fits in the window', () => {
     const logins = menu();
     logins.showLogins(field(100), [LOGIN]);
-    expect(inside(logins).list?.style.maxHeight).toBe('264px');
-    // 208 px below the field: the menu stays below, and its list shrinks.
-    logins.showLogins(field(window.innerHeight - 238), [LOGIN]);
-    expect(inside(logins).list?.style.maxHeight).toBe('160px');
+    expect(inside(logins).body?.style.height).toBe('126px');
+    // A short window: the menu goes above the field, and shrinks.
+    const height = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 300 });
+    try {
+      logins.showLogins(field(160), [LOGIN]);
+      expect(inside(logins).body?.style.height).toBe('112px');
+    } finally {
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: height });
+    }
+  });
+
+  it('is as tall with one login as with many, locked or with a notice', () => {
+    const logins = menu();
+    const input = field(100);
+    const many = Array.from({ length: 12 }, (_, n) => ({ ...LOGIN, id: `e${n}` }));
+    const heights = [
+      () => logins.showLogins(input, [LOGIN]),
+      () => logins.showLogins(input, many),
+      () => logins.showLocked(input),
+      () => logins.showNotice(input, 'Confirm in SSH Key Manager'),
+    ].map((show) => {
+      show();
+      return inside(logins).body?.style.height;
+    });
+    expect(new Set(heights)).toEqual(new Set(['126px']));
+  });
+
+  it('draws titles and usernames where find-in-page doesn’t look', () => {
+    const logins = menu();
+    const login = {
+      id: 'e1',
+      title: 'Corp SSO',
+      username: 'alice.smith@corp.example',
+      exact: true,
+    };
+    logins.showLogins(field(100), [login, { ...login, id: 'e2', username: '' }]);
+    const root = inside(logins).root;
+    // `window.find` searches the text of closed shadow roots, not CSS
+    // generated content.
+    expect(root.textContent).not.toContain('Corp SSO');
+    expect(root.textContent).not.toContain('alice.smith');
+    const drawn = [...root.querySelectorAll('[data-text]')].map(drawnText);
+    expect(drawn).toEqual(['Corp SSO', 'alice.smith@corp.example', 'Corp SSO', 'No username']);
+    const style = root.querySelector('style')?.textContent ?? '';
+    expect(style).toContain('[data-text]::before { content: attr(data-text); }');
+  });
+});
+
+describe('a page that scales the surface', () => {
+  const zoomed = (zoom: number | undefined) =>
+    Object.defineProperty(document.documentElement, 'currentCSSZoom', {
+      configurable: true,
+      value: zoom,
+    });
+  const at = (host: HTMLElement, box: { left: number; top: number; width: number }) => {
+    const rect = { ...box, height: 180, right: box.left + box.width, bottom: box.top + 180 };
+    host.getBoundingClientRect = () => ({ ...rect, x: rect.left, y: rect.top, toJSON: () => rect });
+  };
+  const item = (logins: LoginMenu) => {
+    const button = inside(logins).root.querySelector<HTMLButtonElement>('button.item');
+    if (!button) throw new Error('no menu item');
+    return button;
+  };
+  const clickAt = (button: HTMLElement, x: number, y: number) =>
+    fireTrusted(
+      button,
+      new MouseEvent('click', { detail: 1, clientX: x, clientY: y, bubbles: true, composed: true }),
+    );
+
+  afterEach(() => {
+    zoomed(undefined);
+  });
+
+  it('gets it back to its size, where it was put', () => {
+    zoomed(0.1);
+    const logins = menu();
+    logins.showLogins(field(100), [LOGIN]);
+    expect(logins.host.style.getPropertyValue('zoom')).toBe('10');
+    zoomed(1);
+    logins.showLogins(field(100), [LOGIN]);
+    expect(logins.host.style.getPropertyValue('zoom')).toBe('');
+  });
+
+  it('gets no choice from a click on it while it shows smaller or elsewhere', () => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(10_000);
+    const onPick = vi.fn();
+    const logins = new LoginMenu({ onPick, onUnlock: vi.fn(), onLeave: vi.fn() });
+    logins.showLogins(field(100), [LOGIN]);
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      value: () => logins.host,
+    });
+    clock.mockReturnValue(10_000 + SETTLE_MS);
+    // Put at (10, 134), 260 px wide; the page shrank it to a speck.
+    at(logins.host, { left: 1, top: 13.4, width: 26 });
+    expect(inside(logins).intact()).toBe(false);
+    clickAt(item(logins), 5, 20);
+    expect(onPick).not.toHaveBeenCalled();
+    expect(logins.shown).toBe(false);
+
+    // Shown where it was put, it counts.
+    logins.showLogins(field(100), [LOGIN]);
+    clock.mockReturnValue(20_000);
+    at(logins.host, { left: 10, top: 134, width: 260 });
+    expect(inside(logins).intact()).toBe(true);
+    clickAt(item(logins), 50, 150);
+    expect(onPick).toHaveBeenCalledWith(LOGIN);
+  });
+});
+
+describe('a key press in the menu', () => {
+  it('counts only while the browser says nothing hides the menu', () => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(10_000);
+    const onPick = vi.fn();
+    const logins = new LoginMenu({ onPick, onUnlock: vi.fn(), onLeave: vi.fn() });
+    logins.showLogins(field(100), [LOGIN]);
+    clock.mockReturnValue(10_000 + SETTLE_MS);
+    const button = inside(logins).root.querySelector<HTMLButtonElement>('button.item');
+    if (!button) throw new Error('no menu item');
+    const enter = () =>
+      fireTrusted(button, new MouseEvent('click', { detail: 0, bubbles: true, composed: true }));
+    // IntersectionObserver v2 said it is hidden or faded (an invisible frame).
+    inside(logins).seen = false;
+    enter();
+    expect(onPick).not.toHaveBeenCalled();
+    inside(logins).seen = true;
+    enter();
+    expect(onPick).toHaveBeenCalledWith(LOGIN);
   });
 });
 
@@ -193,8 +324,26 @@ describe('the banner', () => {
     const banner = new SaveBanner({ onSave: vi.fn(), onDismiss: vi.fn() });
     banner.show({ id: 'p1', site: 'bank.example', username: '', mode: 'save', elsewhere: true });
     expect(field(banner)).toBeNull();
+    const heading = () => inside(banner).root.querySelector('h2');
+    expect(drawnText(heading())).toContain('bank.example');
+    expect(inside(banner).root.textContent).not.toContain('bank.example');
     banner.show({ id: 'p1', site: 'bank.example', username: 'alice', mode: 'save' });
     expect(field(banner)?.value).toBe('alice');
+  });
+
+  it('keeps a username from the vault, and the saved login’s title, off the page', () => {
+    const banner = new SaveBanner({ onSave: vi.fn(), onDismiss: vi.fn() });
+    banner.show({
+      id: 'p1',
+      site: 'shop.example',
+      username: '',
+      mode: 'update',
+      title: 'Shop (work)',
+      fromVault: true,
+    });
+    expect(field(banner)?.value).toBe('');
+    expect(drawnText(inside(banner).root.querySelector('h2'))).toContain('Shop (work)');
+    expect(inside(banner).root.textContent).not.toContain('Shop (work)');
   });
 
   it('saves with the username the user put in its field', async () => {
@@ -269,7 +418,9 @@ describe('the "couldn\u2019t sign in?" banner', () => {
     const onUpdate = vi.fn();
     const banner = new SignInBanner({ onUpdate, onRemove: vi.fn(), onDismiss: vi.fn() });
     banner.show(login);
-    expect(inside(banner).root.querySelector('.detail')?.textContent).toContain('Bank');
+    const detail = inside(banner).root.querySelector('.detail');
+    expect(drawnText(detail)).toContain('Bank');
+    expect(detail?.textContent).toBe('');
     const [, update] = buttons(banner);
     // Not in the first moments: the page could have put it under a click.
     choose(update);

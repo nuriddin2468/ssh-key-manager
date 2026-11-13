@@ -2,9 +2,11 @@
 // only. It mirrors crates/sshkm-core/src/browser/channel.rs, label for
 // label; channel-vectors.json checks that both compute the same.
 //
-// - Pairing: a P-256 key pair and a random client id; both sides show a
-//   six-digit code made from the id and the public key. The app replies with
-//   its public key, and HKDF-SHA-256 over the ECDH secret gives two
+// - Pairing: a P-256 key pair and a random client id. The extension first
+//   sends only a hash of its public key (`pairingCommitment`); the app
+//   replies with a public key it made for this pairing, and only then does
+//   the extension send its own. Both sides show a six-digit code made from
+//   the id and both public keys. HKDF-SHA-256 over the ECDH secret gives two
 //   AES-256-GCM keys, for requests and for responses.
 // - A request is sealed with a random nonce and the client id as associated
 //   data; its response is bound to the client id and the request's nonce.
@@ -14,6 +16,8 @@ type Bytes = Uint8Array<ArrayBuffer>;
 const encoder = new TextEncoder();
 const LABEL = encoder.encode('sshkm-browser-v1');
 const NONCE_LEN = 12;
+/** Bytes in an uncompressed P-256 public key. */
+export const PUBLIC_KEY_LEN = 65;
 
 export interface ChannelKeys {
   /** Seals requests. */
@@ -67,11 +71,27 @@ export async function newKeyPair(): Promise<{ privateKey: CryptoKey; publicKey: 
   return { privateKey: pair.privateKey, publicKey };
 }
 
-/** The six digits the app shows too. */
-export async function pairingCode(clientId: string, clientPublic: Uint8Array): Promise<string> {
+/** What pairing sends first: a hash of the public key, sent itself once the app sent its own. */
+export async function pairingCommitment(
+  clientId: string,
+  clientPublic: Uint8Array,
+): Promise<Bytes> {
   const digest = await crypto.subtle.digest(
     'SHA-256',
-    concat(LABEL, text(' code '), text(clientId), clientPublic),
+    concat(LABEL, text(' commit '), text(clientId), clientPublic),
+  );
+  return new Uint8Array(digest);
+}
+
+/** The six digits the app shows too, from the id and both public keys. */
+export async function pairingCode(
+  clientId: string,
+  clientPublic: Uint8Array,
+  appPublic: Uint8Array,
+): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    concat(LABEL, text(' code '), text(clientId), clientPublic, appPublic),
   );
   const number = new DataView(digest).getUint32(0);
   return String(number % 1_000_000).padStart(6, '0');

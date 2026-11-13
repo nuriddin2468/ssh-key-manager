@@ -71,7 +71,13 @@ export function BrowserPairing() {
     if (vault?.state === 'locked') dialogs.unlockVault({ description: t('browser.unlockRequest') });
     else if (vault?.state !== 'unlocked') navigate({ page: 'passwords' });
   }, [dialogs, navigate, t]);
-  useBrowserEvents({ onPairing: show, onUnlock });
+  // An older extension pairs a way this app refuses: it needs an update.
+  const onOutdated = useCallback(
+    (browser: string) =>
+      toast.warning(t('browser.extensionOutdated', { browser }), { id: 'browser-outdated' }),
+    [t],
+  );
+  useBrowserEvents({ onPairing: show, onUnlock, onOutdated });
 
   const answer = useMutation({
     mutationFn: (vars: { request: PairingRequest; approve: boolean }) =>

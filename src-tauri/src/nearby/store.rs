@@ -12,6 +12,8 @@ use super::sync::SyncState;
 use crate::error::AppResult;
 
 const DIR: &str = "sync";
+/// Largest state file read: the vault's snapshot is the bulk of it.
+const MAX_STATE: u64 = 64 * 1024 * 1024;
 
 fn path(data_dir: &Path, peer: &PeerKey) -> PathBuf {
     let name = peer.as_bytes().iter().fold(String::new(), |mut hex, b| {
@@ -24,8 +26,11 @@ fn path(data_dir: &Path, peer: &PeerKey) -> PathBuf {
 /// The state of the last sync with `peer`; empty if there was none or
 /// the file can't be read (the next sync then asks about differences).
 pub fn load(data_dir: &Path, peer: &PeerKey) -> SyncState {
-    std::fs::read(path(data_dir, peer))
+    let path = path(data_dir, peer);
+    std::fs::metadata(&path)
         .ok()
+        .filter(|meta| meta.len() <= MAX_STATE)
+        .and_then(|_| std::fs::read(&path).ok())
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default()
 }

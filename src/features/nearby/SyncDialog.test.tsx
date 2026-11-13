@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   nearbyStatus: vi.fn(),
   nearbyDecide: vi.fn(),
   nearbyClose: vi.fn(),
+  nearbySyncValue: vi.fn(),
 }));
 vi.mock('@/api/commands', () => ({ api }));
 
@@ -46,6 +47,73 @@ const deciding: Pairing = {
       ],
       risky: [{ id: 'lab', lines: [{ key: 'ProxyCommand', value: 'ssh -W %h:%p gw' }] }],
       deletions: ['a', 'b', 'c', 'd', 'e', 'f'],
+      vault: { conflicts: [], risky: [], deletions: [] },
+    },
+  },
+};
+
+const noVault = {
+  logins: { added: 0, changed: 0, removed: 0 },
+  environments: { added: 0, changed: 0, removed: 0 },
+  shared: { added: 0, changed: 0, removed: 0 },
+  folders: { added: 0, changed: 0, removed: 0 },
+};
+
+const decidingVault: Pairing = {
+  ...deciding,
+  id: 9,
+  phase: {
+    type: 'decide',
+    review: {
+      conflicts: [],
+      risky: [],
+      deletions: ['old-ci'],
+      vault: {
+        conflicts: [
+          {
+            id: 'mail',
+            kind: 'login',
+            label: 'Mail',
+            here: 'changed',
+            there: 'changed',
+            fields: ['s:Password', 's:otp'],
+            risky: [],
+          },
+          {
+            id: 'stage',
+            kind: 'environment',
+            label: 'Shop · staging',
+            here: 'deleted',
+            there: 'changed',
+            fields: [],
+            risky: [],
+          },
+        ],
+        risky: [
+          {
+            id: 'dev',
+            kind: 'environment',
+            label: 'Shop · dev',
+            op: 'update',
+            fields: ['s:NODE_OPTIONS'],
+            removal: false,
+            fromBin: false,
+            risky: ['NODE_OPTIONS'],
+            version: 'v',
+          },
+        ],
+        deletions: ['a', 'b', 'c', 'd', 'e'].map((label, n) => ({
+          id: label,
+          kind: 'login' as const,
+          label: label.toUpperCase(),
+          op: 'delete' as const,
+          fields: [],
+          removal: true,
+          fromBin: n === 0,
+          risky: [],
+          version: '',
+        })),
+      },
     },
   },
 };
@@ -89,6 +157,55 @@ describe('SyncDialog', () => {
       apply: [],
       decline: [],
       delete: true,
+      vaultMine: [],
+      vaultTheirs: [],
+      vaultApply: [],
+      vaultDecline: [],
+    });
+  });
+
+  it('shows the vault’s conflicts by field, values only when asked', async () => {
+    api.nearbyStatus.mockResolvedValue(status(decidingVault));
+    api.nearbySyncValue.mockImplementation(
+      (_id: number, _item: string, _field: string, theirs: boolean) =>
+        Promise.resolve(theirs ? 'new-secret' : 'old-secret'),
+    );
+    show();
+
+    const dialog = await screen.findByRole('dialog', { name: 'Sync with iMac' });
+    expect(within(dialog).getByText('Changed here and on iMac')).toBeInTheDocument();
+    expect(within(dialog).getByText('Deleted here, changed on iMac')).toBeInTheDocument();
+    expect(within(dialog).getByText('Password')).toBeInTheDocument();
+    expect(within(dialog).queryByText('old-secret')).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Show values' }));
+    // The 2FA secret differs, but is never offered to show.
+    expect(within(dialog).queryByRole('button', { name: 'Show: 2FA' })).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Show: Password' }));
+    expect(await within(dialog).findByText('old-secret')).toBeInTheDocument();
+    expect(within(dialog).getByText('new-secret')).toBeInTheDocument();
+    expect(api.nearbySyncValue).toHaveBeenCalledWith(9, 'mail', 's:Password', true);
+
+    expect(within(dialog).getByText('NODE_OPTIONS')).toBeInTheDocument();
+    expect(within(dialog).getByText('Deleted on iMac: 6')).toBeInTheDocument();
+    expect(within(dialog).getByText('A (from the recycle bin), B, C, D, E')).toBeInTheDocument();
+
+    const mail = within(dialog).getByRole('radiogroup', { name: 'Mail' });
+    await userEvent.click(within(mail).getByRole('radio', { name: 'Take iMac’s' }));
+    const stage = within(dialog).getByRole('radiogroup', { name: 'Shop · staging' });
+    await userEvent.click(within(stage).getByRole('radio', { name: 'Keep this computer’s' }));
+    const dev = within(dialog).getByRole('radiogroup', { name: 'Shop · dev' });
+    await userEvent.click(within(dev).getByRole('radio', { name: 'Don’t add' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Continue' }));
+    expect(api.nearbyDecide).toHaveBeenCalledExactlyOnceWith(9, {
+      mine: [],
+      theirs: [],
+      apply: [],
+      decline: [],
+      delete: false,
+      vaultMine: ['stage'],
+      vaultTheirs: ['mail'],
+      vaultApply: [],
+      vaultDecline: ['dev'],
     });
   });
 
@@ -111,6 +228,8 @@ describe('SyncDialog', () => {
             deferredThere: 3,
             conflicts: 0,
             failed: 0,
+            vault: { ...noVault, logins: { added: 3, changed: 0, removed: 1 } },
+            vaultOff: null,
           },
         },
       }),
@@ -119,6 +238,7 @@ describe('SyncDialog', () => {
 
     const dialog = await screen.findByRole('dialog', { name: 'Synced with iMac' });
     expect(within(dialog).getByText('2 hosts added, 1 host changed')).toBeInTheDocument();
+    expect(within(dialog).getByText('Passwords: 3 added, 1 deleted')).toBeInTheDocument();
     expect(
       within(dialog).getByText(
         '3 changes wait for confirmation on iMac. Sync from there to review them.',
@@ -127,6 +247,41 @@ describe('SyncDialog', () => {
     expect(within(dialog).getByText('Different server keys')).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole('button', { name: 'Done' }));
     expect(api.nearbyClose).toHaveBeenCalledWith(8);
+  });
+
+  it('says why the vault didn’t sync', async () => {
+    api.nearbyStatus.mockResolvedValue(
+      status({
+        id: 10,
+        peer: 'iMac',
+        outgoing: true,
+        kind: 'sync',
+        phase: {
+          type: 'synced',
+          summary: {
+            added: 0,
+            changed: 0,
+            removed: 0,
+            keysAdded: 0,
+            keysDiffer: [],
+            deferred: 0,
+            deferredThere: 0,
+            conflicts: 0,
+            failed: 0,
+            vault: noVault,
+            vaultOff: { type: 'cloud', service: 'dropbox', here: false },
+          },
+        },
+      }),
+    );
+    show();
+    const dialog = await screen.findByRole('dialog', { name: 'Synced with iMac' });
+    expect(within(dialog).getByText('Nothing needed changing.')).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(
+        'The vault wasn’t synced: on iMac it’s in Dropbox, which keeps it in step. Open the same file on this computer.',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('stays out of syncs another device started', async () => {

@@ -434,7 +434,7 @@ const uz = {
     },
     devices: {
       title: 'Mening qurilmalarim',
-      hint: 'Bitta ombor, xostlar sinxron',
+      hint: 'Bitta ombor, hammasi sinxron',
       this: 'Shu kompyuter',
       synced: 'Sinxronlandi: {{time}}',
       never: 'Hali sinxronlanmagan',
@@ -459,7 +459,7 @@ const uz = {
       add: 'Qurilmam sifatida qoʻshish',
       addWith: '{{name}}ni qurilmam sifatida qoʻshish',
       more: '{{name}} uchun yana',
-      what: 'Xostlar, server kalitlari va shu roʻyxat qurilmalaringiz orasida sinxronlanadi. Kirish kalitlari har bir kompyuterda oʻziniki.',
+      what: 'Ombor, xostlar, server kalitlari va shu roʻyxat qurilmalaringiz orasida sinxronlanadi. Kirish kalitlari har bir kompyuterda oʻziniki.',
     },
     own: {
       titleOut: '{{peer}}ni qurilmalarimga qoʻshish',
@@ -488,7 +488,7 @@ const uz = {
       title: '{{peer}} bilan sinxronlash',
       titleDone: '{{peer}} bilan sinxronlandi',
       description:
-        'Xostlar va server kalitlari ikki tomonga oʻtadi. Kirish kalitlari joyida qoladi.',
+        'Xostlar, server kalitlari va ombor ikki tomonga oʻtadi. Kirish kalitlari joyida qoladi.',
       syncing: 'Sinxronlanmoqda…',
       decide:
         'Baʼzi oʻzgarishlar qaroringizni kutmoqda. Tanlanmagani keyingi sinxronlashgacha kutadi.',
@@ -522,9 +522,9 @@ const uz = {
       deferredThere_other:
         '{{count}} ta oʻzgarish {{peer}}da tasdiqlashni kutmoqda. Koʻrib chiqish uchun u yerdan sinxronlang.',
       conflictsLeft_one:
-        'Ikkala kompyuterda oʻzgartirilgan {{count}} ta xost tanlovingizni kutmoqda.',
+        'Ikkala kompyuterda oʻzgartirilgan {{count}} ta narsa tanlovingizni kutmoqda.',
       conflictsLeft_other:
-        'Ikkala kompyuterda oʻzgartirilgan {{count}} ta xost tanlovingizni kutmoqda.',
+        'Ikkala kompyuterda oʻzgartirilgan {{count}} ta narsa tanlovingizni kutmoqda.',
       failed_one: '{{count}} ta oʻzgarishni ~/.ssh/config ga yozib boʻlmadi.',
       failed_other: '{{count}} ta oʻzgarishni ~/.ssh/config ga yozib boʻlmadi.',
       keysDiffer: 'Server kalitlari har xil',
@@ -532,6 +532,64 @@ const uz = {
         'Shu kompyuter va {{peer}} bu serverlarning turli kalitlariga ishonadi. Har biri oʻzinikini saqladi; ulanishdan oldin ularni «Xost kalitini tekshirish» orqali solishtiring.',
       openHosts: '«Xostlar»ni ochish',
       notice: '{{peer}} bilan sinxronlandi',
+      vault: {
+        changedBoth: 'Bu yerda ham, {{peer}}da ham oʻzgartirilgan',
+        deletedHere: 'Bu yerda oʻchirilgan, {{peer}}da oʻzgartirilgan',
+        deletedThere: 'Bu yerda oʻzgartirilgan, {{peer}}da oʻchirilgan',
+        differs: 'Farqi:',
+        showValues: 'Qiymatlarni koʻrsatish',
+        hideValues: 'Qiymatlarni yashirish',
+        show: 'Koʻrsatish',
+        noValues: 'Faqat matnli maydonlarni koʻrsatish mumkin.',
+        historyNote: 'Siz qoldirmagan versiya yozuvning oldingi versiyalari orasida saqlanadi.',
+        riskyVariables: 'Dasturlarga kod yuklatadi',
+        deletions: '{{peer}}da oʻchirildi: {{count}}',
+        fromBin: 'savatdan',
+        kind: {
+          host: 'Xost',
+          login: 'Parol',
+          environment: 'Muhit',
+          shared: 'Umumiy qiymat',
+          folder: 'Papka',
+        },
+        kinds: {
+          hosts: 'Xostlar',
+          logins: 'Parollar',
+          environments: 'Muhitlar',
+          shared: 'Umumiy qiymatlar',
+          folders: 'Papkalar',
+        },
+        line: '{{kind}}: {{changes}}',
+        added: '{{count}} ta qoʻshildi',
+        changed: '{{count}} ta oʻzgardi',
+        removed: '{{count}} ta oʻchirildi',
+        fields: {
+          value: 'Qiymat',
+          title: 'Nomi',
+          username: 'Foydalanuvchi nomi',
+          password: 'Parol',
+          url: 'Manzil',
+          notes: 'Izohlar',
+          otp: '2FA',
+          link: 'Xost yoki kalit',
+          file: '{{name}} fayli',
+          variables: 'Oʻzgaruvchilar tartibi va izohlari',
+          files: '.env fayllar',
+          part: 'Qism',
+          folder: 'Papka',
+          tags: 'Teglar',
+          look: 'Koʻrinish va sozlamalar',
+          custom: 'Boshqa maʼlumotlar',
+          name: 'Nomi',
+        },
+        offCloudHere:
+          'Ombor sinxronlanmadi: bu kompyuterda u {{service}}da turibdi va uni oʻzi sinxronlaydi. Shu faylni {{peer}}da oching.',
+        offCloudThere:
+          'Ombor sinxronlanmadi: {{peer}}da u {{service}}da turibdi va uni oʻzi sinxronlaydi. Shu faylni bu kompyuterda oching.',
+        offVersion: 'Ombor sinxronlanmadi: {{peer}}da ilovaning yangi versiyasi kerak.',
+        cloud:
+          'Omboringiz {{service}}da turibdi va u orqali sinxronlanadi. Bu yerda faqat xostlar va server kalitlari sinxronlanadi.',
+      },
     },
     pairing: {
       title: 'Ulanish',

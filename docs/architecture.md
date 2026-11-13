@@ -133,6 +133,12 @@ real `~/.ssh`. Its modules:
     options in place and new blocks before `Host *`.
   - `host_keys` collects the server keys for those hosts and adds the other's where
     there are none, reporting different keys of one type.
+  - The vault syncs by entries in `vault::sync` (`docs/vault-sync.md`): each device
+    sends a copy of its database without what never syncs (database custom data,
+    anything marked `sshkm.local`), and the other plans the same three-way merge on
+    entries and groups as items of keyed field hashes (`merge::plan_hashed`), then
+    applies it in memory as one change, earlier versions and attachments kept.
+    Contacts sync as records, the one changed last winning.
 
 Errors have a stable `code` (`wrong_passphrase`, `agent_unavailable`, …) that the UI
 translates.
@@ -238,9 +244,13 @@ translates.
     sets a master password (`Vault::join`).
   - `presence` announces this computer to the user's devices while the vault is
     unlocked, on a port that only takes a sync, and finds theirs.
-  - `sync` is a sync's conversation: manifests both ways, each side's plan, the
-    decisions of the user who started it, writing, and agreeing on the next snapshot,
-    which `store` keeps per device in `sync/` in the app's data folder.
+  - `sync` is a sync's conversation: manifests both ways, then (when both sync the
+    vault's entries and neither vault is in a cloud folder) the vaults' copies, each
+    side's plan, the decisions of the user who started it, writing the files and the
+    vault after a backup, and agreeing on the next snapshot, which `store` keeps per
+    device in `sync/` in the app's data folder. During a review the other device's
+    copy stays in memory, for the values of a conflict the user asks to see
+    (`nearby_sync_value`), and goes when the sync ends.
   - `examples/nearby_peer.rs` stands in for another computer, also as a new one
     (`--join`) and as one of the user's devices (`--sync`).
 - **Watcher.** Watches `~/.ssh` and the hosts file so changes made in a terminal appear

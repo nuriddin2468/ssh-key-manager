@@ -22,6 +22,11 @@ apply: Array<string>,
  */
 decline: Array<string>, 
 /**
- * Make the deletions.
+ * Make the deletions, hosts' and the vault's.
  */
-delete: boolean, };
+delete: boolean, 
+/**
+ * The same as `mine`, `theirs`, `apply` and `decline` for the vault's
+ * entries and groups, by id.
+ */
+vaultMine: Array<string>, vaultTheirs: Array<string>, vaultApply: Array<string>, vaultDecline: Array<string>, };

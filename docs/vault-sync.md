@@ -320,55 +320,42 @@ keys, devices and projects still sync. Checked at each sync (the vault may move)
 
 ## UI
 
-`design:design-system` runs before building, `design:ux-copy` for the strings in en, ru and
-uz, `design:accessibility-review` and `design:design-critique` on the result.
+Built with `design:design-system` (the review and summary extend the dialog's existing
+cards, `ChoiceCards`, `Badge` and `Checkbox`, semantic tokens only), `design:ux-copy` for
+every string in en, ru and uz, then `design:accessibility-review` and
+`design:design-critique` on the result (`?nearby=sync` and `?nearby=cloud` in the
+browser preview).
 
-**Sync dialog** (`SyncDialog.tsx`), description line now:
-- en: "Hosts, server keys and the vault go both ways. Sign-in keys stay where they are."
-- ru: "Хосты, ключи серверов и хранилище идут в обе стороны. Ключи для входа остаются на месте."
+**Sync dialog** (`SyncDialog.tsx`), description: "Hosts, server keys and the vault go both
+ways. Sign-in keys stay where they are."
 
-**Review** (`Decide`), one list in sections, each only when it has something:
-- _Changed on both computers_ — hosts (as now), then Passwords, Environments, Shared values,
-  Folders. A row: the item's name (an environment as `Shop · backend · prod`), what happened
-  ("Changed here and on {{peer}}" / "Deleted on {{peer}}, changed here" / "Deleted here,
-  changed on {{peer}}"), the fields that differ ("Differs: Password, URL"), "Show values"
-  (one field at a time, a secret masked until shown; read from the copy in memory), and
-  the existing "Keep this computer's" / "Take {{peer}}'s". Under the section:
-  - en: "The version you don't keep stays among the entry's earlier versions."
-  - ru: "Версия, которую вы не оставите, сохранится среди прежних версий записи."
-- _Runs a program or opens access_ — host directives (as now) and variables:
-  - en: "{{name}} makes programs load code" / ru: "{{name}} заставляет программы загружать код";
-    buttons "Add" / "Don't add" as now.
-- _Deletions_ — one checkbox for all, with the list grouped by kind:
-  - en: "{{peer}} deleted {{count}} items" + "Delete them here too"; items from the
-    recycle bin marked "from the recycle bin";
-  - ru: "{{peer}} удалил {{count}} записей" + "Удалить и здесь".
+**Review** (`Decide`), sections only when they have something:
 
-**Summary** (`Synced`), one line per kind that changed, as now for hosts:
-"Passwords: 3 added, 2 changed, 1 deleted" / "Пароли: добавлено 3, изменено 2, удалена 1";
-the same for Environments, Shared values, Folders, Contacts, Hosts, Server keys; then what
-waits (here, on the other device, conflicts left). When passwords didn't go:
-- cloud — en: "Passwords weren't synced: the vault on {{peer}} is in {{service}}, which
-  keeps it in step. Open the same file on this computer instead."
-  ru: "Пароли не синхронизировались: хранилище на {{peer}} лежит в {{service}}, и оно
-  само его синхронизирует. Откройте этот же файл на этом компьютере."
-  (or "the vault on this computer is in {{service}}" when it is this side's);
-- older version — en: "Passwords weren't synced: {{peer}} needs the new version of the app."
-  ru: "Пароли не синхронизировались: на {{peer}} нужна новая версия приложения."
+- _Changed on both computers_ — hosts as before, then the vault's items: a kind icon (with
+  the kind for screen readers), the item's name (an environment as `Shop · backend ·
+  prod`), what happened ("Changed here and on {{peer}}" / "Deleted here, changed on
+  {{peer}}" / "Changed here, deleted on {{peer}}"), "Differs:" and the fields' names as
+  badges, "Show values" (a text field's two values, one field at a time, when asked;
+  never a 2FA secret; focus stays on the field's row) and "Keep this computer's" / "Take
+  {{peer}}'s". Under them: "The version you don't keep stays among the entry's earlier
+  versions."
+- _Runs a program or opens access_ — host directives as before, and an environment's
+  variables that "Make programs load code", with "Add" / "Don't add".
+- _Deletions_ — "Deleted on {{peer}}: {{count}}", the names by kind (hosts, then the
+  vault's), "(from the recycle bin)" where so, and one "Delete them here too".
 
-**My devices** (`MyDevices.tsx`): when this vault is in a cloud folder, one line under the
-section — en: "Your vault is in {{service}}, so it syncs through it. Here, only hosts and
-server keys sync." / ru: "Хранилище лежит в {{service}} и синхронизируется через него.
-Здесь синхронизируются только хосты и ключи серверов."
+**Summary** (`Synced`): hosts and server keys on one line, then one line per kind of the
+vault's items ("Passwords: 3 added, 1 changed, 2 deleted"), then what waits ("N items
+changed on both computers wait for your choice"). When the vault didn't sync, an info
+notice: "The vault wasn't synced: on {{peer}} it's in {{service}}, which keeps it in
+step. Open the same file on this computer." (or the same for this computer), or
+"{{peer}} needs the new version of the app".
 
-Localization notes: counts use the existing plural keys (`_one/_few/_many/_other` in ru);
-`{{service}}` is a product name, not translated; "earlier versions" matches
-`history_*` ("прежние версии", "oldingi versiyalar"). Uzbek strings are written with the
-same pass.
+**My devices** (`MyDevices.tsx`): when the vault is in a cloud folder, "Your vault is in
+{{service}}, so it syncs through it. Here, only hosts and server keys sync."
 
-New command: `nearby_sync_value(id, item, field, side) -> SecretString`, registered in
-`build.rs` and `lib.rs`, mocked in `src/mocks/nearby.ts` (a `?nearby=sync` review gets a
-vault conflict, a risky variable and seven deletions).
+Commands: `nearby_sync_value(id, item, field, theirs)` and `nearby_vault_cloud()`,
+registered in `build.rs` and `lib.rs`, mocked in `src/mocks/nearby.ts`.
 
 ## One-time import from another vault
 

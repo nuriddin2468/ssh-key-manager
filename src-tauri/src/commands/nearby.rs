@@ -5,7 +5,8 @@
 use std::sync::Arc;
 
 use sshkm_core::vault::Contact;
-use sshkm_core::{ErrorCode, SecretString};
+use sshkm_core::vault::envs::files::CloudService;
+use sshkm_core::{ErrorCode, ExposeSecret, SecretString};
 use tauri::{AppHandle, State};
 
 use super::{Shared, blocking};
@@ -161,6 +162,35 @@ pub async fn nearby_decide(
     decisions: SyncDecisions,
 ) -> AppResult<()> {
     nearby.decide(id, decisions)
+}
+
+/// One text field of a conflict in the sync `id` under review, as this
+/// computer (`theirs` false) or the other one has it, for the user to see.
+/// A 2FA secret is never shown.
+#[tauri::command]
+pub async fn nearby_sync_value(
+    nearby: State<'_, SharedNearby>,
+    id: u32,
+    item: String,
+    field: String,
+    theirs: bool,
+) -> AppResult<String> {
+    on_nearby(&nearby, move |nearby| {
+        Ok(nearby
+            .sync_value(id, &item, &field, theirs)?
+            .expose_secret()
+            .to_owned())
+    })
+    .await
+}
+
+/// The cloud service whose folder holds the vault, if one does: the user's
+/// devices then don't sync its entries, the service does.
+#[tauri::command]
+pub async fn nearby_vault_cloud(
+    nearby: State<'_, SharedNearby>,
+) -> AppResult<Option<CloudService>> {
+    on_nearby(&nearby, |nearby| nearby.vault_cloud()).await
 }
 
 /// Cancels a pairing, or forgets one that is over.

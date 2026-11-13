@@ -177,8 +177,12 @@ It talks to the local network only for **Nearby**, and only when you ask:
   is reachable by your computers on this network, under a name that keeps changing
   and tells others nothing. You can turn this off in **Nearby → My devices**. When
   you sync, your hosts (without your keys or anything else of the computer's own),
-  the server keys you trust for them and the list of your computers go to your other
-  computer, and its come back.
+  the server keys you trust for them, the list of your computers, your contacts and
+  your vault's entries (passwords, environments, shared values, files and folders,
+  encrypted with the vault's secret) go to your other computer, and its come back.
+  The vault's paired browsers and other settings of this computer stay on it. If your
+  vault is in a cloud folder, its entries don't go this way: the cloud service
+  already keeps the file in step.
 
 Each computer you pair with is recorded in your vault with the name it gave and the
 date, and so is each of your own computers. You can remove them on the Nearby page.
@@ -186,7 +190,8 @@ The key that identifies your computer to paired ones is kept in your system's
 credential store. A public key you receive is saved in `~/.ssh`, and its fingerprint
 in `nearby.json` in the app's data folder, so the app knows the key is someone
 else's. For each of your other computers, the app keeps what it needs to tell what
-changed since the last sync: hashes, never the hosts themselves, in the same folder.
+changed since the last sync: keyed hashes, never the hosts or the vault's values
+themselves, in the same folder.
 
 If you say yes to **Find hosts in your shell history?** on the Hosts page, the app reads
 your zsh, bash, fish and PowerShell history on this computer when you open Hosts, to

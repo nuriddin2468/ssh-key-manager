@@ -32,4 +32,10 @@ fromBin: boolean,
 /**
  * Variables it adds or changes that make programs load code.
  */
-risky: Array<string>, };
+risky: Array<string>, 
+/**
+ * The other side's version of the item, as a hash of its fields'
+ * keyed hashes (empty for a deletion): a change the user turned down
+ * isn't asked about again until this changes.
+ */
+version: string, };

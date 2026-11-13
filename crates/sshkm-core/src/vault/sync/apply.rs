@@ -326,7 +326,8 @@ impl Vault {
     }
 
     /// A string field of an item in a conflict, as this side (`theirs`
-    /// false) or the other has it: for the user who asked to see it.
+    /// false) or the other has it: for the user who asked to see it. Never
+    /// a 2FA secret.
     pub fn sync_value(
         &self,
         peer: &PeerVault,
@@ -337,6 +338,10 @@ impl Vault {
         let name = field
             .strip_prefix("s:")
             .ok_or_else(|| Error::invalid("not a text field"))?;
+        // A 2FA secret is never shown, as anywhere else in the app.
+        if name == keepass::db::fields::OTP || name == crate::vault::UNREADABLE_OTP_FIELD {
+            return Err(Error::invalid("a 2FA secret is never shown"));
+        }
         let uuid = Uuid::parse_str(id).map_err(|_| Error::invalid("not an entry"))?;
         let db = if theirs { &peer.db } else { &self.db };
         if !theirs && super::model::local_set(db).contains(&uuid) {

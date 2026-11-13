@@ -1,4 +1,4 @@
-import { Laptop, RefreshCw, Trash2 } from 'lucide-react';
+import { Cloud, Laptop, RefreshCw, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
@@ -11,9 +11,10 @@ import { IconButton } from '@/components/ui/IconButton';
 import { Spinner } from '@/components/ui/Spinner';
 import { SwitchRow } from '@/components/ui/Switch';
 import { Tile } from '@/components/ui/Tile';
+import { cloudName } from '@/features/envs/files/model';
 import { formatRelative } from '@/lib/format';
 import { isActive } from './model';
-import { setStatus, useMyDevices } from './queries';
+import { setStatus, useMyDevices, useVaultCloud } from './queries';
 
 /**
  * The user's own computers: they share the vault and sync hosts. Each can
@@ -22,6 +23,7 @@ import { setStatus, useMyDevices } from './queries';
 export function MyDevices({ status }: { status: NearbyStatus | undefined }) {
   const { t, i18n } = useTranslation();
   const devices = useMyDevices();
+  const cloud = useVaultCloud().data ?? null;
   const [toRemove, setToRemove] = useState<MyDevice | null>(null);
 
   const sync = useAppMutation((key: string | null) => api.nearbySync(key));
@@ -129,6 +131,13 @@ export function MyDevices({ status }: { status: NearbyStatus | undefined }) {
       ) : (
         <p className="text-[12.5px] leading-[18px] text-subtle">{t('nearby.devices.empty')}</p>
       )}
+
+      {others.length > 0 && cloud ? (
+        <p className="flex gap-2 text-[12.5px] leading-[18px] text-subtle">
+          <Cloud aria-hidden="true" className="mt-px size-3.5 shrink-0" strokeWidth={2} />
+          {t('nearby.sync.vault.cloud', { service: cloudName(t, cloud) })}
+        </p>
+      ) : null}
 
       {others.length > 0 && !anyFound ? (
         <p className="text-[12.5px] leading-[18px] text-subtle">

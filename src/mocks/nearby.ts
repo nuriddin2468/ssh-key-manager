@@ -12,8 +12,11 @@
 //   it send a hosts file group or a public key instead.
 // - `?vault=missing&nearby=join`: another computer gives this one its vault
 //   a few seconds after "Get it from my other computer".
-// - `?nearby=sync`: "Sync" brings a conflict, a risky host and many
-//   deletions to decide on.
+// - `?nearby=sync`: "Sync" brings conflicts (a host, a login, an
+//   environment), a risky host, a risky variable and many deletions to
+//   decide on.
+// - `?nearby=cloud`: the vault is in iCloud Drive, so its entries don't
+//   sync with the user's devices; a sync says why.
 // - `?nearby=renamed`: whatever computer the user sends to, a contact
 //   answers that calls itself by that computer's name.
 
@@ -322,6 +325,62 @@ const REVIEW: Review = {
     },
   ],
   deletions: ['old-ci-1', 'old-ci-2', 'old-ci-3', 'old-ci-4', 'old-ci-5', 'old-ci-6', 'old-vpn'],
+  vault: {
+    conflicts: [
+      {
+        id: '3f6c2a10-6d3b-4c1e-9a55-0b7d2e8f4a01',
+        kind: 'login',
+        label: 'GitHub',
+        here: 'changed',
+        there: 'changed',
+        fields: ['s:Password', 's:URL'],
+        risky: [],
+      },
+      {
+        id: '3f6c2a10-6d3b-4c1e-9a55-0b7d2e8f4a02',
+        kind: 'environment',
+        label: 'Shop · backend · staging',
+        here: 'deleted',
+        there: 'changed',
+        fields: [],
+        risky: [],
+      },
+    ],
+    risky: [
+      {
+        id: '3f6c2a10-6d3b-4c1e-9a55-0b7d2e8f4a03',
+        kind: 'environment',
+        label: 'Shop · frontend · local',
+        op: 'update',
+        fields: ['s:NODE_OPTIONS', 'cd:sshkm.env'],
+        removal: false,
+        fromBin: false,
+        risky: ['NODE_OPTIONS'],
+        version: 'mock',
+      },
+    ],
+    deletions: [
+      ['…a04', 'login', 'Old CI token', false],
+      ['…a05', 'login', 'Staging admin', true],
+      ['…a06', 'environment', 'Blog · prod', false],
+    ].map(([id, kind, label, fromBin]) => ({
+      id: `3f6c2a10-6d3b-4c1e-9a55-0b7d2e8f4${String(id).slice(1)}`,
+      kind: kind as 'login' | 'environment',
+      label: String(label),
+      op: 'delete' as const,
+      fields: [],
+      removal: true,
+      fromBin: Boolean(fromBin),
+      risky: [],
+      version: '',
+    })),
+  },
+};
+
+/** The two values of a conflict's field, as each computer has it. */
+const CONFLICT_VALUES: Record<string, [string, string]> = {
+  's:Password': ['correct-horse-1', 'correct-horse-2'],
+  's:URL': ['https://github.com', 'https://github.com/login'],
 };
 
 function syncSummary(decisions: SyncDecisions | null): SyncSummary {
@@ -349,6 +408,29 @@ function syncSummary(decisions: SyncDecisions | null): SyncSummary {
       ? REVIEW.conflicts.length - decisions.mine.length - decisions.theirs.length
       : 0,
     failed: 0,
+    vault:
+      SWITCH === 'cloud'
+        ? {
+            logins: { added: 0, changed: 0, removed: 0 },
+            environments: { added: 0, changed: 0, removed: 0 },
+            shared: { added: 0, changed: 0, removed: 0 },
+            folders: { added: 0, changed: 0, removed: 0 },
+          }
+        : {
+            logins: {
+              added: 3,
+              changed: 1 + (decisions?.vaultTheirs.length ?? 0),
+              removed: decisions?.delete ? 2 : 0,
+            },
+            environments: {
+              added: 2,
+              changed: decisions?.vaultApply.length ?? 0,
+              removed: decisions?.delete ? 1 : 0,
+            },
+            shared: { added: 1, changed: 0, removed: 0 },
+            folders: { added: 1, changed: 0, removed: 0 },
+          },
+    vaultOff: SWITCH === 'cloud' ? { type: 'cloud', service: 'iCloudDrive', here: true } : null,
   };
 }
 
@@ -504,6 +586,16 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
     });
     return undefined;
   },
+  nearby_sync_value: ({ id: raw, field, theirs }) => {
+    const id = Number(raw);
+    if (pairing?.id !== id || pairing.phase.type !== 'decide') {
+      return fail('invalid_input', 'no sync under review');
+    }
+    const values = CONFLICT_VALUES[String(field)];
+    if (!values) return fail('not_found', 'field');
+    return values[theirs ? 1 : 0];
+  },
+  nearby_vault_cloud: () => (SWITCH === 'cloud' ? 'iCloudDrive' : null),
   nearby_decide: ({ id: raw, decisions }) => {
     const id = Number(raw);
     if (pairing?.id !== id || pairing.phase.type !== 'decide') {

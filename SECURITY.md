@@ -839,6 +839,35 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   never adds a key it marked `@revoked`; such keys are shown as a difference. For a
   host it trusts another key of the same type for, it keeps its own and shows both
   fingerprints: one of the two may have met a server pretending.
+- **Syncing the vault.** When both computers sync the vault's entries and neither keeps
+  its vault in a cloud folder (which keeps the file in step itself), each sends the
+  other a copy of its database as bytes over the session: a KDBX file encrypted with the
+  vault's secret, without the database's custom data (paired browsers, the key own
+  devices share, the key of `.env` revisions, the chat's key, other programs'
+  settings) and without entries or groups marked `sshkm.local`. The receiver opens it
+  only with its own secret and only if its root is this vault's: two vaults are never
+  merged. It refuses a copy over 256 MiB, with key derivation settings out of bounds,
+  more than 65,536 entries, 8,192 groups, 64 levels or 262,144 removal records, or an
+  entry with a group's id; takes at most 64 earlier versions of an entry; counts a
+  time more than five minutes ahead of its clock as now; and never reads the copy's
+  custom data. Changes are found against a snapshot of keyed HMACs per field, never
+  values, as for hosts. An entry or group only one side changed takes that side's
+  fields; one both changed differently, or one deleted and the other changed, is the
+  user's choice, which shows the names of the fields that differ and a field's two
+  values only when the user asks, never a 2FA secret. The version not kept stays among
+  the entry's earlier versions. A shared value goes only after the environments here
+  that still use it got their own copies, and references still resolve only to shared
+  values. Adding or changing a variable that makes programs load code (`LD_*`,
+  `DYLD_*`, `NODE_OPTIONS`, `PATH`, `BASH_ENV`, `GIT_SSH_COMMAND`, …) is a risky
+  change: the user who started the sync decides on it and allows it in a system
+  dialog; the other computer puts it off. More than five deletions or moves to the
+  recycle bin, hosts counted with them, need a yes on each computer. Everything is
+  applied in memory as one change and saved once, after a backup of the file; an
+  entry the user changed while deciding is left for the next sync. A binding of a
+  `.env` file comes with its environment's kind and level as one value, so a sync
+  never lowers its protection: a level-3 file on a system without pipes, or a level-1
+  file of a remote environment, is never written. Contacts sync as records, the one
+  changed last winning; a removed one stays as a tombstone.
 
 ## Reporting a vulnerability
 

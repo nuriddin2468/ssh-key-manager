@@ -2,8 +2,9 @@
 //! [`pairing`](super::pairing), [`transfer`](super::transfer),
 //! [`own`](super::own) and [`sync`](super::sync).
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -12,15 +13,16 @@ use sha2::{Digest, Sha256};
 use sshkm_core::config::SshConfig;
 use sshkm_core::known_hosts::KnownHosts;
 use sshkm_core::p2p::own::OwnKey;
-use sshkm_core::p2p::protocol::{Intent, Item, SecretText, VaultState};
+use sshkm_core::p2p::protocol::{EntrySync, Intent, Item, SecretText, VaultState};
 use sshkm_core::p2p::{Identity, PeerKey, accept, connect};
 use sshkm_core::sync::Hasher;
-use sshkm_core::vault::DeviceRecord;
 use sshkm_core::vault::projects::ProjectRecord;
+use sshkm_core::vault::sync::{PeerVault, VaultApplied, VaultBase, VaultPlan, digests};
+use sshkm_core::vault::{ContactRecord, DeviceRecord};
 use zeroize::Zeroizing;
 
-use super::pairing::{PairingFailure, PairingPhase, Purpose, Side, conversation};
-use super::sync::{RiskyChange, SyncDecisions, SyncLocal, SyncState, SyncWrite};
+use super::pairing::{PairingFailure, PairingPhase, Purpose, Side, VaultItems, conversation};
+use super::sync::{RiskyChange, RiskyVariables, SyncDecisions, SyncLocal, SyncState, SyncWrite};
 
 /// The vault a script has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +91,18 @@ pub struct Script {
     pub devices: Mutex<Vec<DeviceRecord>>,
     /// The project records this side sends, and then the other side's.
     pub projects: Mutex<Vec<ProjectRecord>>,
+    /// The contact records this side sends, and then the other side's.
+    pub contact_records: Mutex<Vec<ContactRecord>>,
+    /// What its `Hello` says about syncing the vault's entries.
+    pub entries: Option<EntrySync>,
+    /// A real vault whose entries sync, with its backups' folder.
+    pub real: Option<(Mutex<sshkm_core::vault::Vault>, PathBuf)>,
+    /// The other side's copy during a sync.
+    pub peer_vault: Mutex<Option<PeerVault>>,
+    /// This user allows variables that load code in the system dialog.
+    pub allows_variables: bool,
+    /// The variables the system dialog asked about.
+    pub asked_variables: Mutex<Vec<RiskyVariables>>,
 }
 
 impl Script {
@@ -125,7 +139,42 @@ impl Script {
             sync_state: Mutex::default(),
             devices: Mutex::default(),
             projects: Mutex::default(),
+            contact_records: Mutex::default(),
+            entries: None,
+            real: None,
+            peer_vault: Mutex::default(),
+            allows_variables: true,
+            asked_variables: Mutex::default(),
         }
+    }
+
+    /// [`Self::own`], whose entries sync with the real vault `vault`.
+    pub fn with_vault(
+        name: &'static str,
+        config: &str,
+        vault: sshkm_core::vault::Vault,
+        backups: PathBuf,
+    ) -> Self {
+        let mut script = Self::own(name, "s", config);
+        script.entries = Some(EntrySync::On { version: 1 });
+        script.real = Some((Mutex::new(vault), backups));
+        script
+    }
+
+    /// The real vault, for a test to look at or change.
+    pub fn real_vault(&self) -> std::sync::MutexGuard<'_, sshkm_core::vault::Vault> {
+        self.real
+            .as_ref()
+            .expect("a script with a vault")
+            .0
+            .lock()
+            .unwrap()
+    }
+
+    fn vault_hasher(&self) -> Hasher {
+        Hasher::new(Zeroizing::new(
+            [u8::try_from(self.name.len()).unwrap() + 100; 32],
+        ))
     }
 
     /// One of the user's devices with the vault `secret` and this config.
@@ -261,6 +310,7 @@ impl Side for Script {
             known: self.known.lock().unwrap().clone(),
             devices: Vec::new(),
             projects: self.projects.lock().unwrap().clone(),
+            contacts: self.contact_records.lock().unwrap().clone(),
             state: self.sync_state.lock().unwrap().clone(),
             hasher: Hasher::new(Zeroizing::new([u8::try_from(self.name.len()).unwrap(); 32])),
         })
@@ -274,6 +324,10 @@ impl Side for Script {
         }
         self.devices.lock().unwrap().clone_from(&write.devices);
         self.projects.lock().unwrap().clone_from(&write.projects);
+        self.contact_records
+            .lock()
+            .unwrap()
+            .clone_from(&write.contacts);
         Ok(())
     }
     fn sync_keep(&self, _: PeerKey, state: &SyncState) -> Result<(), PairingFailure> {
@@ -286,6 +340,54 @@ impl Side for Script {
     fn allow_risky(&self, changes: &[RiskyChange]) -> bool {
         self.asked_risky.lock().unwrap().extend_from_slice(changes);
         self.allows_risky
+    }
+    fn allow_risky_variables(&self, changes: &[RiskyVariables]) -> bool {
+        self.asked_variables
+            .lock()
+            .unwrap()
+            .extend_from_slice(changes);
+        self.allows_variables
+    }
+    fn entry_sync(&self) -> Option<EntrySync> {
+        self.entries
+    }
+    fn vault_copy(&self) -> Result<Zeroizing<Vec<u8>>, PairingFailure> {
+        self.real_vault()
+            .sync_copy()
+            .map_err(|_| PairingFailure::NotSaved)
+    }
+    fn vault_plan(&self, copy: &[u8], base: &VaultBase) -> Result<VaultPlan, PairingFailure> {
+        let vault = self.real_vault();
+        let peer = vault
+            .open_sync_copy(copy)
+            .map_err(|_| PairingFailure::Broken)?;
+        let plan = vault.plan_sync(&peer, base, &self.vault_hasher());
+        *self.peer_vault.lock().unwrap() = Some(peer);
+        Ok(plan)
+    }
+    fn vault_apply(
+        &self,
+        plan: &VaultPlan,
+        make: &BTreeSet<String>,
+        theirs: &BTreeSet<String>,
+    ) -> Result<VaultApplied, PairingFailure> {
+        let peer = self.peer_vault.lock().unwrap();
+        let peer = peer.as_ref().ok_or(PairingFailure::Broken)?;
+        let mut vault = self.real_vault();
+        let applied = vault
+            .apply_sync(peer, plan, &self.vault_hasher(), make, theirs)
+            .map_err(|_| PairingFailure::NotSaved)?;
+        let backups = &self.real.as_ref().expect("a script with a vault").1;
+        vault.save(backups).map_err(|_| PairingFailure::NotSaved)?;
+        Ok(applied)
+    }
+    fn vault_items(&self, pairs: &BTreeMap<String, String>) -> Result<VaultItems, PairingFailure> {
+        let vault = self.real_vault();
+        let shared = Hasher::new(vault.own_key().ok_or(PairingFailure::NotOwn)?.digest_key());
+        Ok(VaultItems {
+            snapshots: vault.sync_items(pairs, &self.vault_hasher()),
+            digests: digests(&vault.sync_items(pairs, &shared)),
+        })
     }
 }
 

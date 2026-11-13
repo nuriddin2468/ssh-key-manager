@@ -158,6 +158,8 @@ pub fn run() {
             commands::nearby::nearby_set_reachable,
             commands::nearby::nearby_sync,
             commands::nearby::nearby_decide,
+            commands::nearby::nearby_sync_value,
+            commands::nearby::nearby_vault_cloud,
             commands::known_hosts::read_known_hosts,
             commands::known_hosts::find_known_hosts,
             commands::known_hosts::remove_known_hosts,

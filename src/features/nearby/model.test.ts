@@ -4,13 +4,17 @@ import type { Pairing } from '@/bindings/Pairing';
 import type { SyncSummary } from '@/bindings/SyncSummary';
 import {
   canRetry,
+  canShow,
   clock,
   conflictRows,
+  fieldLabel,
+  fieldLabels,
   isActive,
   isAddress,
   percent,
   secondsLeft,
   summaryLine,
+  summaryLines,
 } from './model';
 
 describe('secondsLeft', () => {
@@ -87,11 +91,54 @@ describe('summaryLine', () => {
     deferredThere: 0,
     conflicts: 0,
     failed: 0,
+    vault: {
+      logins: { added: 0, changed: 0, removed: 0 },
+      environments: { added: 0, changed: 0, removed: 0 },
+      shared: { added: 0, changed: 0, removed: 0 },
+      folders: { added: 0, changed: 0, removed: 0 },
+    },
+    vaultOff: null,
   };
 
   it('names what changed, and says when nothing did', () => {
     expect(summaryLine(t, summary)).toBe('nearby.sync.added:2, nearby.sync.removed:1');
     expect(summaryLine(t, { ...summary, added: 0, removed: 0 })).toBe('nearby.sync.nothing');
+  });
+
+  it('adds a line per kind of the vault’s items', () => {
+    const vault = { ...summary.vault, environments: { added: 1, changed: 2, removed: 0 } };
+    expect(summaryLines(t, { ...summary, added: 0, removed: 0, vault })).toEqual([
+      'nearby.sync.vault.line',
+    ]);
+    expect(summaryLines(t, { ...summary, vault })).toHaveLength(2);
+  });
+});
+
+describe('fieldLabel', () => {
+  const t = ((key: string, options?: { name?: string }) =>
+    options?.name ? `${key}:${options.name}` : key) as unknown as TFunction;
+
+  it('names KeePass fields, variables by their names and the rest by what they are', () => {
+    expect(fieldLabel(t, 's:Password', 'login')).toBe('nearby.sync.vault.fields.password');
+    expect(fieldLabel(t, 's:Password', 'shared')).toBe('nearby.sync.vault.fields.value');
+    expect(fieldLabel(t, 's:DB_URL', 'environment')).toBe('DB_URL');
+    expect(fieldLabel(t, 's:env.URL', 'environment')).toBe('URL');
+    expect(fieldLabel(t, 's:Title', 'environment')).toBe('nearby.sync.vault.fields.title');
+    expect(fieldLabel(t, 'a:key.pem', 'login')).toBe('nearby.sync.vault.fields.file:key.pem');
+    expect(fieldLabel(t, 'cd:sshkm.env.files', 'environment')).toBe(
+      'nearby.sync.vault.fields.files',
+    );
+    expect(fieldLabels(t, ['fg', 'bg', 'icon'], 'login')).toEqual([
+      'nearby.sync.vault.fields.look',
+    ]);
+  });
+
+  it('never offers a 2FA secret or a non-text field to show', () => {
+    expect(canShow('s:Password')).toBe(true);
+    expect(canShow('s:otp')).toBe(false);
+    expect(canShow('s:Unrecognized 2FA secret')).toBe(false);
+    expect(canShow('a:key.pem')).toBe(false);
+    expect(canShow('group')).toBe(false);
   });
 });
 

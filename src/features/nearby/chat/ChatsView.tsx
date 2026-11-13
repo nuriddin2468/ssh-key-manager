@@ -115,8 +115,10 @@ function ChatList({
 }) {
   const { t } = useTranslation();
   const sections = [
-    { title: t('nearby.chat.myDevices'), items: chats.filter((item) => item.own) },
-    { title: t('nearby.chat.paired'), items: chats.filter((item) => !item.own) },
+    { title: t('nearby.chat.myDevices'), items: chats.filter((item) => item.own && !item.removed) },
+    { title: t('nearby.chat.paired'), items: chats.filter((item) => !item.own && !item.removed) },
+    // Chats kept of computers removed since: to read, until deleted.
+    { title: t('nearby.chat.removedSection'), items: chats.filter((item) => item.removed) },
   ].filter((section) => section.items.length > 0);
   return (
     <nav
@@ -165,7 +167,11 @@ function ChatRow({ item, open, onOpen }: { item: ChatSummary; open: boolean; onO
         : (last.text ?? '')
       : t(LAST[last.kind as keyof typeof LAST] ?? LAST.card)
     : '';
-  const presence = item.online ? t('nearby.chat.online') : t('nearby.chat.offline');
+  const presence = item.removed
+    ? t('nearby.chat.removedState')
+    : item.online
+      ? t('nearby.chat.online')
+      : t('nearby.chat.offline');
   return (
     <button
       type="button"
@@ -280,7 +286,11 @@ function Conversation({ peer, focus }: { peer: ChatSummary; focus: boolean }) {
             title={t('nearby.chat.onlineHint')}
             className={cn('text-[12px]', peer.online ? 'text-online' : 'text-subtle')}
           >
-            {peer.online ? t('nearby.chat.online') : t('nearby.chat.offline')}
+            {peer.removed
+              ? t('nearby.chat.removedState')
+              : peer.online
+                ? t('nearby.chat.online')
+                : t('nearby.chat.offline')}
           </span>
         </div>
         <Menu>
@@ -343,7 +353,13 @@ function Conversation({ peer, focus }: { peer: ChatSummary; focus: boolean }) {
         </div>
       )}
 
-      <Composer peer={peer} focus={focus} onOpen={setDialog} />
+      {peer.removed ? (
+        <p className="border-t border-line-soft px-4 py-3 text-[12.5px] leading-[18px] text-subtle">
+          {t('nearby.chat.removedNote', { name: peer.name })}
+        </p>
+      ) : (
+        <Composer peer={peer} focus={focus} onOpen={setDialog} />
+      )}
 
       <Dialog open={dialog !== null} onOpenChange={(next) => (next ? undefined : close())}>
         {dialog === 'secret' ? (

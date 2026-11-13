@@ -328,6 +328,10 @@ const uz = {
       unread_other: '{{count}} ta oʻqilmagan',
     },
     chat: {
+      removedSection: 'Oʻchirilgan kompyuterlar',
+      removedState: 'Oʻchirilgan',
+      removedNote:
+        '{{name}} endi ulangan kompyuter emas. Uning chati siz oʻchirmaguningizcha oʻqish uchun shu yerda saqlanadi; maxfiy qiymatlar baribir oʻz muddatida oʻchadi.',
       online: 'Onlayn',
       offline: 'Oflayn',
       onlineHint: 'Onlayn — u kompyuterda hozir «Yaqin atrofda» ochiq.',

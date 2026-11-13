@@ -323,6 +323,10 @@ const en = {
       unread_other: '{{count}} unread',
     },
     chat: {
+      removedSection: 'Removed computers',
+      removedState: 'Removed',
+      removedNote:
+        '{{name}} is no longer a paired computer. Its chat is kept here to read until you delete it; secrets still go at their term.',
       online: 'Online',
       offline: 'Offline',
       onlineHint: 'Online: Nearby is open on that computer now.',

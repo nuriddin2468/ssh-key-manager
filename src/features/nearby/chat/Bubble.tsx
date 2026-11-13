@@ -13,6 +13,7 @@ import { type ReactNode, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
+import { toastError } from '@/api/useAppMutation';
 import { useRouter } from '@/app/router';
 import type { ChatEntry } from '@/bindings/ChatEntry';
 import type { Gone } from '@/bindings/Gone';
@@ -21,10 +22,12 @@ import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { IconButton } from '@/components/ui/IconButton';
 import { REVEAL_MS } from '@/features/passwords/SavedSecret';
+import { useSecretCall } from '@/features/passwords/vault';
 import { cn } from '@/lib/cn';
 import { formatDuration } from '@/lib/format';
+import { AppError } from '@/lib/ipc';
 import { ItemCard } from '../ItemCard';
-import { secondsUntil, soon, useChatAction } from './model';
+import { secondsUntil, soon, useChatAction, useNow } from './model';
 
 interface BubbleProps {
   peer: { key: string; name: string; online: boolean };
@@ -189,7 +192,17 @@ function MaskedValue({
     const timer = window.setTimeout(() => setValue(null), REVEAL_MS);
     return () => window.clearTimeout(timer);
   }, [value]);
-  const reveal = useChatAction(() => api.chatReveal(peer.key, id, name), setValue);
+  // Not a mutation: its result would stay in the mutation cache after the
+  // value hides. The value lives in this component's state only.
+  const reveal = useSecretCall(() => api.chatReveal(peer.key, id, name));
+  const show = () => {
+    reveal
+      .call()
+      .then(setValue)
+      .catch((error: unknown) => {
+        if (AppError.from(error).code !== 'cancelled') toastError(t, error);
+      });
+  };
   const copy = useChatAction(
     () => api.chatCopy(peer.key, id, name),
     (result) =>
@@ -201,7 +214,9 @@ function MaskedValue({
   );
   return (
     <span className="flex min-w-0 items-center gap-1">
+      {/* Never spoken by the log's live region: shown, it is the secret. */}
       <span
+        aria-live="off"
         className={cn(
           'min-w-0 flex-1 truncate font-mono text-[12.5px]',
           value === null ? 'text-muted' : 'selectable text-fg',
@@ -225,8 +240,8 @@ function MaskedValue({
             <EyeOff className="size-3.5" strokeWidth={2} />
           )
         }
-        disabled={reveal.isPending}
-        onClick={() => (value === null ? reveal.mutate(undefined) : setValue(null))}
+        disabled={reveal.pending}
+        onClick={() => (value === null ? show() : setValue(null))}
       />
       <IconButton
         size="sm"
@@ -242,9 +257,10 @@ function MaskedValue({
 
 function Expiry({ expires }: { expires: string }) {
   const { t, i18n } = useTranslation();
-  const seconds = secondsUntil(expires);
+  const now = useNow();
+  const seconds = secondsUntil(expires, now);
   return (
-    <Badge tone={soon(expires) ? 'warning' : 'neutral'}>
+    <Badge tone={soon(expires, now) ? 'warning' : 'neutral'}>
       {t('nearby.chat.secret.expiresIn', {
         time: formatDuration(Math.max(60, seconds), i18n.language),
       })}
@@ -255,21 +271,31 @@ function Expiry({ expires }: { expires: string }) {
 function Wipe({ peer, id }: { peer: { key: string; name: string; online: boolean }; id: string }) {
   const { t } = useTranslation();
   const [asking, setAsking] = useState(false);
+  // Online, it is wiped on both computers or not at all; offline, here only.
+  const everywhere = peer.online;
   const wipe = useChatAction(
-    () => api.chatRevoke(peer.key, id),
+    () => api.chatRevoke(peer.key, id, everywhere),
     () => setAsking(false),
   );
   return (
     <>
       <Button size="sm" variant="ghost" onClick={() => setAsking(true)}>
-        {t('nearby.chat.secret.wipe')}
+        {everywhere ? t('nearby.chat.secret.wipe') : t('nearby.chat.secret.wipeHere')}
       </Button>
       <ConfirmDialog
         open={asking}
         onOpenChange={setAsking}
-        title={t('nearby.chat.secret.wipeTitle')}
-        description={t('nearby.chat.secret.wipeText', { name: peer.name })}
-        confirmLabel={t('nearby.chat.secret.wipeConfirm')}
+        title={
+          everywhere ? t('nearby.chat.secret.wipeTitle') : t('nearby.chat.secret.wipeHereTitle')
+        }
+        description={
+          everywhere
+            ? t('nearby.chat.secret.wipeText', { name: peer.name })
+            : t('nearby.chat.secret.wipeHereText', { name: peer.name })
+        }
+        confirmLabel={
+          everywhere ? t('nearby.chat.secret.wipeConfirm') : t('nearby.chat.secret.wipeHereConfirm')
+        }
         destructive
         busy={wipe.isPending}
         onConfirm={() => wipe.mutate(undefined)}
@@ -291,7 +317,7 @@ function SecretBody({
   expires: string | null;
   gone: Gone | null;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   if (gone) {
     return (
       <p className="flex items-center gap-1.5 text-subtle">
@@ -300,12 +326,26 @@ function SecretBody({
       </p>
     );
   }
+  const name = label || t('nearby.chat.secret.label');
   return (
     <div className="flex min-w-[240px] flex-col gap-1.5">
-      <span className="flex items-center gap-1.5 text-[12px] font-medium text-fg-2">
+      {/* What a screen reader says of a secret that comes: who, what, until when; never the value. */}
+      {!entry.mine && expires ? (
+        <span className="sr-only">
+          {t('nearby.chat.secret.announce', {
+            name: peer.name,
+            label: name,
+            time: formatDuration(Math.max(60, secondsUntil(expires)), i18n.language),
+          })}
+        </span>
+      ) : null}
+      <span
+        aria-hidden={!entry.mine && expires ? true : undefined}
+        className="flex items-center gap-1.5 text-[12px] font-medium text-fg-2"
+      >
         <KeyRound aria-hidden="true" className="size-3.5" strokeWidth={2} />
         <span dir="auto" className="truncate">
-          {label || t('nearby.chat.secret.label')}
+          {name}
         </span>
       </span>
       <MaskedValue peer={peer} id={entry.id} name={null} />
@@ -343,7 +383,12 @@ function VariablesBody({
       <ul className="flex flex-col gap-1">
         {variables.map((variable) => (
           <li key={variable.name} className="flex min-w-0 items-center gap-2">
-            <span className="shrink-0 font-mono text-[12px] text-fg-2">{variable.name}</span>
+            <span
+              title={variable.name}
+              className="max-w-[45%] shrink-0 truncate font-mono text-[12px] text-fg-2"
+            >
+              {variable.name}
+            </span>
             {variable.risky ? (
               <ShieldAlert
                 role="img"

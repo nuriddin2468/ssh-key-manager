@@ -28,12 +28,14 @@ export type ComposerDialog = 'secret' | 'variables' | PickKind;
 
 interface ComposerProps {
   peer: { key: string; name: string; online: boolean };
+  /** The user just opened this conversation: the field takes the focus. */
+  focus?: boolean;
   /** Opens one of the dialogs that send something other than text. */
   onOpen: (dialog: ComposerDialog) => void;
 }
 
 /** Where the user writes: Enter sends, Shift+Enter breaks the line. */
-export function Composer({ peer, onOpen }: ComposerProps) {
+export function Composer({ peer, focus = false, onOpen }: ComposerProps) {
   const { t } = useTranslation();
   const [text, setText] = useState('');
   const field = useRef<HTMLTextAreaElement>(null);
@@ -44,11 +46,10 @@ export function Composer({ peer, onOpen }: ComposerProps) {
   );
   const offline = !peer.online;
 
-  // Focus moves here when a conversation opens.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: on a new peer only
+  // Focus moves here when the user opens a conversation, not when the tab does.
   useEffect(() => {
-    field.current?.focus();
-  }, [peer.key]);
+    if (focus) field.current?.focus();
+  }, [focus]);
 
   // The field grows with its text, up to six lines.
   useEffect(() => {

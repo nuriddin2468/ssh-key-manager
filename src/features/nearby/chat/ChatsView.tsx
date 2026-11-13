@@ -21,7 +21,7 @@ import { AddVariablesDialog } from './AddVariablesDialog';
 import { Bubble } from './Bubble';
 import { Composer, type ComposerDialog } from './Composer';
 import { ItemPickerDialog } from './ItemPickerDialog';
-import { byDay, useChatAction } from './model';
+import { byDay, useChatAction, useNow } from './model';
 import { useChatHistory, useChatList } from './queries';
 import { SecretDialog } from './SecretDialog';
 import { VariablesDialog } from './VariablesDialog';
@@ -36,6 +36,9 @@ export function ChatsView({ chat }: { chat: string | undefined }) {
   const vault = useVaultStatus().data?.state;
   const list = useChatList();
   const { navigate } = useRouter();
+  // The conversation the user just picked: only then does its composer take
+  // the focus, not when the tab opens (an arrow key on the tabs stays there).
+  const [picked, setPicked] = useState<string>();
   if (vault !== undefined && vault !== 'unlocked') {
     return (
       <EmptyState
@@ -78,14 +81,17 @@ export function ChatsView({ chat }: { chat: string | undefined }) {
       <ChatList
         chats={chats}
         open={open?.key}
-        onOpen={(key) => navigate({ page: 'nearby', tab: 'chats', chat: key })}
+        onOpen={(key) => {
+          setPicked(key);
+          navigate({ page: 'nearby', tab: 'chats', chat: key });
+        }}
       />
       <section
         aria-label={open ? t('nearby.chat.menu', { name: open.name }) : undefined}
         className="glass-raised relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl"
       >
         {open ? (
-          <Conversation key={open.key} peer={open} />
+          <Conversation key={open.key} peer={open} focus={picked === open.key} />
         ) : (
           <EmptyState
             className="my-auto"
@@ -150,6 +156,7 @@ const LAST = {
 
 function ChatRow({ item, open, onOpen }: { item: ChatSummary; open: boolean; onOpen: () => void }) {
   const { t, i18n } = useTranslation();
+  const now = useNow(60_000);
   const last = item.last;
   const preview = last
     ? last.kind === 'text'
@@ -192,7 +199,7 @@ function ChatRow({ item, open, onOpen }: { item: ChatSummary; open: boolean; onO
           </span>
           {last ? (
             <time dateTime={last.at} className="shrink-0 text-[11px] text-subtle">
-              {formatRelative(new Date(last.at), i18n.language)}
+              {formatRelative(new Date(last.at), i18n.language, new Date(now))}
             </time>
           ) : null}
         </span>
@@ -220,7 +227,7 @@ function ChatRow({ item, open, onOpen }: { item: ChatSummary; open: boolean; onO
 
 type Open = ComposerDialog | { add: string } | null;
 
-function Conversation({ peer }: { peer: ChatSummary }) {
+function Conversation({ peer, focus }: { peer: ChatSummary; focus: boolean }) {
   const { t, i18n } = useTranslation();
   const history = useChatHistory(peer.key);
   const [dialog, setDialog] = useState<Open>(null);
@@ -234,14 +241,31 @@ function Conversation({ peer }: { peer: ChatSummary }) {
   );
   const entries = history.data ?? [];
 
-  // What is shown is read; the newest stays in view.
+  // The newest stays in view.
   const count = entries.length;
   // biome-ignore lint/correctness/useExhaustiveDependencies: on new entries only
   useEffect(() => {
-    if (peer.unread > 0) void api.chatMarkRead(peer.key).catch(() => undefined);
     const stream = document.getElementById(`chat-stream-${peer.key}`);
     stream?.scrollTo({ top: stream.scrollHeight });
   }, [count, peer.key]);
+
+  // What the user sees is read: only while the window is in front, so that
+  // what comes meanwhile stays unread and notifies.
+  const unread = peer.unread;
+  useEffect(() => {
+    const read = () => {
+      if (unread > 0 && document.visibilityState === 'visible' && document.hasFocus()) {
+        void api.chatMarkRead(peer.key).catch(() => undefined);
+      }
+    };
+    read();
+    window.addEventListener('focus', read);
+    document.addEventListener('visibilitychange', read);
+    return () => {
+      window.removeEventListener('focus', read);
+      document.removeEventListener('visibilitychange', read);
+    };
+  }, [unread, peer.key]);
 
   const close = () => setDialog(null);
   return (
@@ -279,40 +303,47 @@ function Conversation({ peer }: { peer: ChatSummary }) {
         </Menu>
       </header>
 
-      <div
-        id={`chat-stream-${peer.key}`}
-        role="log"
-        aria-live="polite"
-        aria-label={t('nearby.chat.menu', { name: peer.name })}
-        className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-4 py-4"
-      >
-        {entries.length === 0 ? (
-          <p className="my-auto max-w-[360px] self-center text-center text-[12.5px] leading-[18px] text-subtle">
-            {t('nearby.chat.empty', { name: peer.name })}
-          </p>
-        ) : (
-          byDay(entries).map((day) => (
-            <div key={day.day} className="flex flex-col gap-1.5">
-              <p className="self-center py-1 text-[12px] text-subtle">
-                {new Date(`${day.day}T12:00:00Z`).toLocaleDateString(i18n.language, {
-                  day: 'numeric',
-                  month: 'long',
-                })}
-              </p>
-              {day.entries.map((entry) => (
-                <Bubble
-                  key={entry.id}
-                  peer={peer}
-                  entry={entry}
-                  onAddVariables={(id) => setDialog({ add: id })}
-                />
-              ))}
-            </div>
-          ))
-        )}
-      </div>
+      {/* The log appears with what it holds, so that opening it doesn't read the whole history aloud. */}
+      {history.data === undefined ? (
+        <div className="grid min-h-0 flex-1 place-items-center text-subtle">
+          <Spinner className="size-5" />
+        </div>
+      ) : (
+        <div
+          id={`chat-stream-${peer.key}`}
+          role="log"
+          aria-live="polite"
+          aria-label={t('nearby.chat.menu', { name: peer.name })}
+          className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-4 py-4"
+        >
+          {entries.length === 0 ? (
+            <p className="my-auto max-w-[360px] self-center text-center text-[12.5px] leading-[18px] text-subtle">
+              {t('nearby.chat.empty', { name: peer.name })}
+            </p>
+          ) : (
+            byDay(entries).map((day) => (
+              <div key={day.day} className="flex flex-col gap-1.5">
+                <p className="self-center py-1 text-[12px] text-subtle">
+                  {new Date(day.entries[0]?.at ?? Date.now()).toLocaleDateString(i18n.language, {
+                    day: 'numeric',
+                    month: 'long',
+                  })}
+                </p>
+                {day.entries.map((entry) => (
+                  <Bubble
+                    key={entry.id}
+                    peer={peer}
+                    entry={entry}
+                    onAddVariables={(id) => setDialog({ add: id })}
+                  />
+                ))}
+              </div>
+            ))
+          )}
+        </div>
+      )}
 
-      <Composer peer={peer} onOpen={setDialog} />
+      <Composer peer={peer} focus={focus} onOpen={setDialog} />
 
       <Dialog open={dialog !== null} onOpenChange={(next) => (next ? undefined : close())}>
         {dialog === 'secret' ? (

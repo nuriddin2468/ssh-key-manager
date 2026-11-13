@@ -861,8 +861,11 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   - _Secrets._ Values reach the page only when the user clicks Show, one at a time,
     and hide again after 30 seconds; Copy goes through the app's clipboard, like a
     password. Each side wipes a value when its term ends (at the next unlock if the
-    app was closed), and the sender can wipe it on both sides earlier. The receiver
-    may have copied it before: the app says so. Secret frames are padded to 512 bytes,
+    app was closed). The sender can wipe it earlier on both computers while the
+    receiver is online: the wipe goes there first, and if it can't, nothing is wiped
+    and the user is told. Offline, the sender can wipe it here only, which the button
+    says; the receiver's copy then goes at its term. The receiver may have copied it
+    before: the app says so. Secret frames are padded to 512 bytes,
     so their length doesn't tell a password's.
   - _Variables_ are added to an environment only after the user reviews them: new
     names are ticked, replacing a value never is, and names that change how programs

@@ -158,16 +158,75 @@ describe('a message that did not arrive', () => {
 });
 
 describe('byDay', () => {
-  it('groups entries by the day they came, in order', () => {
-    const at = (iso: string): ChatEntry => ({ ...secret, id: iso, at: iso });
-    const days = byDay([
-      at('2026-11-12T23:00:00Z'),
-      at('2026-11-13T01:00:00Z'),
-      at('2026-11-13T02:00:00Z'),
-    ]);
+  it('groups entries by the local day they came, in order', () => {
+    const at = (day: number, hour: number): ChatEntry => {
+      const iso = new Date(2026, 10, day, hour, 30).toISOString();
+      return { ...secret, id: iso, at: iso };
+    };
+    // Late on the 12th here may already be the 13th in UTC, or the other way round.
+    const days = byDay([at(12, 23), at(13, 0), at(13, 2)]);
     expect(days.map((day) => [day.day, day.entries.length])).toEqual([
       ['2026-11-12', 1],
       ['2026-11-13', 2],
     ]);
+  });
+});
+
+describe('adding received variables', () => {
+  it('ticks only new names that start nothing, and saves nothing until Add', async () => {
+    const review = vi.fn().mockResolvedValue([
+      { name: 'API_KEY', secret: true, change: 'new', risky: false },
+      { name: 'LOG_LEVEL', secret: false, change: 'replaces', risky: false },
+      { name: 'NODE_OPTIONS', secret: false, change: 'new', risky: true },
+      { name: 'PORT', secret: false, change: 'same', risky: false },
+    ]);
+    const addVariables = vi.fn().mockResolvedValue('env-1');
+    Object.assign(api, {
+      chatReviewVariables: review,
+      chatAddVariables: addVariables,
+      envsList: vi.fn().mockResolvedValue([]),
+    });
+    const { stubPointer } = await import('@/features/envs/testing');
+    stubPointer();
+    const { AddVariablesDialog } = await import('./AddVariablesDialog');
+    const { Dialog } = await import('@/components/ui/Dialog');
+    wrap(
+      <Dialog open>
+        <AddVariablesDialog peer={bob} id={secret.id} onDone={() => undefined} />
+      </Dialog>,
+    );
+    const box = async (name: string) =>
+      screen.findByRole('checkbox', { name: new RegExp(`^${name}`) });
+    expect(await box('API_KEY')).toBeChecked();
+    expect(await box('LOG_LEVEL')).not.toBeChecked();
+    expect(await box('NODE_OPTIONS')).not.toBeChecked();
+    expect(await box('PORT')).not.toBeChecked();
+    expect(addVariables).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', { name: 'Add 1 variable' }));
+    await waitFor(() =>
+      expect(addVariables).toHaveBeenCalledWith(
+        'Ym9i',
+        secret.id,
+        { type: 'new', name: 'ThinkPad Bob' },
+        ['API_KEY'],
+      ),
+    );
+  });
+});
+
+describe('wiping a secret this user sent', () => {
+  it('reaches both computers only while the other is online, and says so', async () => {
+    api.chatRevoke.mockResolvedValue(undefined);
+    const mine: ChatEntry = { ...secret, mine: true, delivery: { state: 'delivered' } };
+    const { unmount } = wrap(<Bubble peer={bob} entry={mine} onAddVariables={() => undefined} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Wipe now' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Wipe now' }));
+    await waitFor(() => expect(api.chatRevoke).toHaveBeenCalledWith('Ym9i', secret.id, true));
+    unmount();
+    wrap(<Bubble peer={{ ...bob, online: false }} entry={mine} onAddVariables={() => undefined} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Wipe here only' }));
+    expect(await screen.findByText('Wipe it on this computer?')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Wipe here' }));
+    await waitFor(() => expect(api.chatRevoke).toHaveBeenLastCalledWith('Ym9i', secret.id, false));
   });
 });

@@ -1,4 +1,5 @@
 import { useMutation } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toastError } from '@/api/useAppMutation';
 import type { ChatEntry } from '@/bindings/ChatEntry';
@@ -42,14 +43,31 @@ export function soon(iso: string, now = Date.now()): boolean {
   return secondsUntil(iso, now) < 600;
 }
 
-/** Entries grouped by the day they came, in order. */
+/** The local calendar day of `iso`, as `YYYY-MM-DD`: what the user calls that day. */
+export function localDay(iso: string): string {
+  const date = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/** Entries grouped by the local day they came, in order. */
 export function byDay(entries: ChatEntry[]): { day: string; entries: ChatEntry[] }[] {
   const days: { day: string; entries: ChatEntry[] }[] = [];
   for (const entry of entries) {
-    const day = entry.at.slice(0, 10);
+    const day = localDay(entry.at);
     const last = days.at(-1);
     if (last?.day === day) last.entries.push(entry);
     else days.push({ day, entries: [entry] });
   }
   return days;
+}
+
+/** The time now, again every `ms`: for what counts down or says "5 min ago". */
+export function useNow(ms = 30_000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), ms);
+    return () => window.clearInterval(timer);
+  }, [ms]);
+  return now;
 }

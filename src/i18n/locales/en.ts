@@ -379,6 +379,11 @@ const en = {
         other: 'the other app turned it down',
       },
       secret: {
+        wipeHere: 'Wipe here only',
+        wipeHereTitle: 'Wipe it on this computer?',
+        wipeHereText:
+          'The value goes from this chat now. {{name}} is offline, so its copy goes when its term ends.',
+        wipeHereConfirm: 'Wipe here',
         hidden: 'hidden',
         label: 'Secret',
         show: 'Show',

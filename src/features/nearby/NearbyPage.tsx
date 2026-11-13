@@ -168,7 +168,7 @@ export function NearbyPage() {
 
             <section
               aria-labelledby="nearby-device"
-              className="relative flex shrink-0 flex-wrap items-center gap-[18px] overflow-hidden rounded-[20px] border border-orange-400/20 bg-[linear-gradient(135deg,rgb(234_88_12/0.18),rgb(255_255_255/0.03)_60%)] px-6 py-5 shadow-[inset_0_1px_0_rgb(255_255_255/0.06)]"
+              className="relative flex shrink-0 flex-wrap items-center gap-[18px] overflow-hidden rounded-[20px] banner px-6 py-5 [--banner-fade:60%]"
             >
               <Tile tone="orange" size={56} glow>
                 <Laptop className="size-[26px]" strokeWidth={1.8} />
@@ -235,7 +235,7 @@ export function NearbyPage() {
                 </Button>
               )}
               {joining ? (
-                <p className="w-full rounded-xl border border-orange-400/20 bg-black/10 px-3.5 py-2.5 text-[13px] leading-5 text-fg-2">
+                <p className="w-full rounded-xl border border-[rgb(var(--accent-rgb)/0.2)] bg-shade/10 px-3.5 py-2.5 text-[13px] leading-5 text-fg-2">
                   {t('nearby.join.steps', { name: data?.name ?? '' })}
                 </p>
               ) : null}
@@ -255,7 +255,7 @@ export function NearbyPage() {
                   {devices.map((device) => (
                     <li
                       key={device.id}
-                      className="flex items-center gap-3 border-b border-white/[0.06] px-4 py-3 last:border-b-0"
+                      className="flex items-center gap-3 border-b border-line-soft px-4 py-3 last:border-b-0"
                     >
                       <Tile tone="slate" size={34}>
                         <Laptop className="size-4" strokeWidth={2} />
@@ -309,7 +309,7 @@ export function NearbyPage() {
                   ))}
                 </ul>
               ) : (
-                <div className="flex flex-col items-center gap-1.5 rounded-2xl border border-dashed border-white/[0.14] px-4 py-6 text-center">
+                <div className="flex flex-col items-center gap-1.5 rounded-2xl border border-dashed border-ink/[0.14] px-4 py-6 text-center">
                   <span className="flex items-center gap-2 text-[13px] font-medium text-fg-2">
                     <Radar
                       aria-hidden="true"
@@ -351,7 +351,7 @@ export function NearbyPage() {
                     {(contacts.data ?? []).map((contact) => (
                       <li
                         key={contact.key}
-                        className="flex items-center gap-3 border-b border-white/[0.06] px-4 py-3 last:border-b-0"
+                        className="flex items-center gap-3 border-b border-line-soft px-4 py-3 last:border-b-0"
                       >
                         <Tile tone="orange" size={34}>
                           <Laptop className="size-4" strokeWidth={2} />

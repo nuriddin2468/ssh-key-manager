@@ -1,6 +1,0 @@
-{
-  "kind": "security",
-  "en": "Notes and environment names written as comments in exported files and virtual .env files stay on their own line, so no tool reads a hidden variable from them.",
-  "ru": "Заметки и названия окружений, записанные как комментарии в экспортированных файлах и виртуальных файлах .env, остаются на своей строке, и никакая программа не прочтёт из них скрытую переменную.",
-  "uz": "Eksport qilingan fayllar va virtual .env fayllarda izoh sifatida yozilgan eslatmalar va muhit nomlari oʻz qatorida qoladi, shuning uchun hech bir dastur ulardan yashirin oʻzgaruvchini oʻqimaydi."
-}

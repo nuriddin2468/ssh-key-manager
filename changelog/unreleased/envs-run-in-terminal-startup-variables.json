@@ -1,6 +1,0 @@
-{
-  "kind": "security",
-  "en": "Environments: before Run in terminal or a project's terminal starts a shell with variables that make it or the programs it starts run code, such as PATH, NODE_OPTIONS or GIT_SSH_COMMAND, a system dialog lists them with their values, and asks again when they change.",
-  "ru": "Окружения: прежде чем «Запустить в терминале» или терминал проекта запустит оболочку с переменными, из-за которых она или запущенные из неё программы выполняют код, например PATH, NODE_OPTIONS или GIT_SSH_COMMAND, системное окно показывает их вместе со значениями и спрашивает снова, когда они изменятся.",
-  "uz": "Muhitlar: «Terminalda ishga tushirish» yoki loyiha terminali shellni uni yoki undan ishga tushgan dasturlarni kod bajarishga majbur qiladigan oʻzgaruvchilar, masalan PATH, NODE_OPTIONS yoki GIT_SSH_COMMAND bilan ochishidan oldin tizim oynasi ularni qiymatlari bilan koʻrsatadi va ular oʻzgarganda yana soʻraydi."
-}

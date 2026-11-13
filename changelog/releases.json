@@ -1,5 +1,329 @@
 [
   {
+    "version": "0.11.0",
+    "date": "2026-11-13",
+    "changes": [
+      {
+        "kind": "notice",
+        "en": "Connecting a new browser now takes this version of SSH Key Manager and of its browser extension: the code you compare covers the keys of both. Browsers already connected keep working. Until your browser’s extension store offers the extension update, which can take a few days, a new browser can’t be connected.",
+        "ru": "Для подключения нового браузера теперь нужны эта версия SSH Key Manager и эта версия его расширения: сравниваемый код охватывает ключи обеих сторон. Уже подключённые браузеры продолжают работать. Пока магазин расширений браузера не предложит обновление расширения (это может занять несколько дней), новый браузер подключить не получится.",
+        "uz": "Yangi brauzerni ulash uchun endi SSH Key Manager va uning brauzer kengaytmasining shu versiyasi kerak: solishtiriladigan kod ikkala tomonning kalitlarini qamrab oladi. Allaqachon ulangan brauzerlar ishlashda davom etadi. Brauzerning kengaytmalar doʻkoni kengaytma yangilanishini taklif qilmaguncha (bu bir necha kun olishi mumkin) yangi brauzerni ulab boʻlmaydi."
+      },
+      {
+        "kind": "notice",
+        "en": "More ~/.ssh/config lines now need your yes in a system dialog: RemoteCommand, SendEnv beyond the language settings, every RemoteForward, GatewayPorts, forwards on all addresses, and a ControlPath outside your home folder.",
+        "ru": "Больше строк ~/.ssh/config теперь требуют вашего согласия в системном окне: RemoteCommand, SendEnv сверх языковых настроек, любой RemoteForward, GatewayPorts, пробросы на всех адресах и ControlPath вне домашней папки.",
+        "uz": "~/.ssh/config dagi koʻproq qatorlar endi tizim oynasida roziligingizni talab qiladi: RemoteCommand, til sozlamalaridan tashqari SendEnv, har qanday RemoteForward, GatewayPorts, barcha manzillardagi yoʻnaltirishlar va uy papkasidan tashqaridagi ControlPath."
+      },
+      {
+        "kind": "notice",
+        "en": "A system dialog now asks before an environment's secret values go into a terminal or a .env file (once per environment until the vault locks), before logins are read from a browser for import, before the Key converter writes an encrypted key without a passphrase, and for each secret shown or copied beyond ten in a row (one more is free every six minutes).",
+        "ru": "Теперь системное окно спрашивает, прежде чем секретные значения окружения попадут в терминал или файл .env (раз для окружения, пока хранилище открыто), перед чтением логинов браузера для импорта, перед записью зашифрованного ключа без парольной фразы в «Конвертере ключей» и о каждом секрете сверх десяти подряд (ещё один — раз в шесть минут).",
+        "uz": "Endi tizim oynasi muhitning maxfiy qiymatlari terminalga yoki .env fayliga tushishidan oldin (ombor qulflanmaguncha har bir muhit uchun bir marta), import uchun brauzer loginlari oʻqilishidan oldin, «Kalit konvertori» shifrlangan kalitni parol iborasisiz yozishidan oldin va ketma-ket oʻntadan keyingi har bir sir uchun soʻraydi (har olti daqiqada yana bittasi boʻshaydi)."
+      },
+      {
+        "kind": "notice",
+        "en": "Virtual .env files are served by this version only, on macOS and Linux: update the app on your other computers for them to appear there too.",
+        "ru": "Виртуальные файлы .env отдаёт только эта версия, в macOS и Linux: обновите приложение на других компьютерах, чтобы они появились и там.",
+        "uz": "Virtual .env fayllarni faqat shu versiya beradi, macOS va Linuxda: ular boshqa kompyuterlaringizda ham paydo boʻlishi uchun u yerda ham ilovani yangilang."
+      },
+      {
+        "kind": "notice",
+        "en": "Files kept only while the vault is unlocked are written by this version only: update the app on your other computers for them to appear there too.",
+        "ru": "Файлы, которые держатся на диске, только пока хранилище разблокировано, записывает только эта версия: обновите приложение на других компьютерах, чтобы они появились и там.",
+        "uz": "Faqat ombor ochiqligida saqlanadigan fayllarni faqat shu versiya yozadi: ular boshqa kompyuterlaringizda ham paydo boʻlishi uchun u yerda ham ilovani yangilang."
+      },
+      {
+        "kind": "notice",
+        "en": "Run in terminal now opens in the environment's folder (its part's folder, else where its .env file is, else the project's first folder) instead of your home folder.",
+        "ru": "«Запустить в терминале» теперь открывает терминал в папке окружения (папке его части, иначе там, где лежит его файл .env, иначе в первой папке проекта), а не в домашней папке.",
+        "uz": "«Terminalda ishga tushirish» endi terminalni uy papkangizda emas, muhit papkasida ochadi (qismining papkasida, boʻlmasa .env fayli turgan joyda, boʻlmasa loyihaning birinchi papkasida)."
+      },
+      {
+        "kind": "notice",
+        "en": "Older versions of the app read a shared variable as the text of its reference ({REF:…}), would write that into its .env files, and list shared values among the passwords: update the app on your other computers before sharing variables.",
+        "ru": "Старые версии приложения читают общую переменную как текст ссылки ({REF:…}), записали бы его в файлы .env и показывают общие значения среди паролей: обновите приложение на других компьютерах, прежде чем делиться переменными.",
+        "uz": "Ilovaning eski versiyalari umumiy oʻzgaruvchini havola matni ({REF:…}) sifatida oʻqiydi, uni .env fayllariga yozib qoʻyadi va umumiy qiymatlarni parollar orasida koʻrsatadi: oʻzgaruvchilarni ulashishdan oldin boshqa kompyuterlaringizda ilovani yangilang."
+      },
+      {
+        "kind": "notice",
+        "en": "Environments now belong to a project (or Personal) directly, as logins do, and groups are gone. On update, a project that held a group gets its environments; the group's name becomes their part (backend, frontend…), shown only when a project has more than one. Nothing moves in KeePass: KeePassXC shows a project/<name> tag. Older versions still see the groups.",
+        "ru": "Окружения теперь принадлежат проекту (или «Личному») напрямую, как логины, а группы исчезли. При обновлении проект с группой получает её окружения; имя группы становится их частью (backend, frontend…), видной, только когда частей больше одной. В KeePass ничего не переезжает: KeePassXC показывает тег project/<имя>. Старые версии по-прежнему видят группы.",
+        "uz": "Muhitlar endi loginlar kabi toʻgʻridan-toʻgʻri loyihaga (yoki «Shaxsiy»ga) tegishli, guruhlar yoʻq. Yangilanishda guruhli loyiha uning muhitlarini oladi; guruh nomi ularning qismiga aylanadi (backend, frontend…), qism bittadan koʻp boʻlsagina koʻrinadi. KeePass’da hech narsa koʻchmaydi: KeePassXC project/<nom> tegini koʻrsatadi. Eski versiyalar guruhlarni koʻraveradi."
+      },
+      {
+        "kind": "notice",
+        "en": "The app now has a light theme and follows your system’s appearance, so if your system is set to light, the app turns light after this update. To keep it dark, choose Dark in Settings → Appearance → Theme. The browser extension follows your browser’s theme too.",
+        "ru": "Теперь у приложения есть светлая тема, и оно следует оформлению системы: если в системе светлое оформление, после обновления приложение станет светлым. Чтобы оставить тёмное, выберите «Тёмная» в «Настройки» → «Оформление» → «Тема». Расширение для браузера тоже следует теме браузера.",
+        "uz": "Ilovada endi yorugʻ mavzu bor va u tizim koʻrinishiga moslashadi: tizimingiz yorugʻ boʻlsa, yangilanishdan keyin ilova ham yorugʻ boʻladi. Qorongʻi qoldirish uchun Sozlamalar → Koʻrinish → Mavzu boʻlimida «Qorongʻi»ni tanlang. Brauzer kengaytmasi ham brauzer mavzusiga moslashadi."
+      },
+      {
+        "kind": "notice",
+        "en": "While Nearby is open and the vault is unlocked, your paired computers and devices can see that you’re online and write to you. Others on the network see only a name that keeps changing. Both computers need this version to chat.",
+        "ru": "Пока открыто «Рядом» и хранилище разблокировано, подключённые компьютеры и ваши устройства видят, что вы онлайн, и могут вам писать. Остальные в сети видят только имя, которое постоянно меняется. Для чата нужна эта версия на обоих компьютерах.",
+        "uz": "«Yaqin atrofda» ochiq va ombor ochiq boʻlganda ulangan kompyuterlar va qurilmalaringiz onlayn ekaningizni koʻradi va sizga yoza oladi. Tarmoqdagi boshqalar faqat doim oʻzgarib turadigan nomni koʻradi. Chat uchun ikkala kompyuterda ham shu versiya kerak."
+      },
+      {
+        "kind": "notice",
+        "en": "Nearby: your own computers sync with each other only when both have this version or later, so update the app on all of them. Sending a password or an environment, adding a device, saving a received host that would get access to this computer, and a terminal with variables that run code now ask in a system dialog.",
+        "ru": "«Рядом»: ваши компьютеры синхронизируются друг с другом, только если на обоих эта версия или новее, поэтому обновите приложение на всех. Отправка пароля или окружения, добавление устройства, сохранение полученного хоста с доступом к этому компьютеру и терминал с переменными, которые запускают код, теперь спрашивают в системном окне.",
+        "uz": "«Yaqin atrofda»: kompyuterlaringiz faqat ikkalasida shu yoki yangiroq versiya boʻlsa sinxronlanadi, ilovani hammasida yangilang. Parol yoki muhit yuborish, qurilma qoʻshish, bu kompyuterga kira oladigan olingan xostni saqlash va kod ishga tushiradigan oʻzgaruvchilar bilan terminal endi tizim oynasida soʻraladi."
+      },
+      {
+        "kind": "notice",
+        "en": "Nearby: syncing with your own devices now brings the vault too — passwords, environments, shared values, files and folders — not only hosts. Both computers need this version, also to move the vault to a new one. A vault in a cloud folder (iCloud Drive, Dropbox…) keeps syncing through it instead.",
+        "ru": "«Рядом»: синхронизация со своими устройствами теперь переносит и хранилище — пароли, окружения, общие значения, файлы и папки, а не только хосты. Нужна эта версия на обоих компьютерах, и для переноса хранилища на новый тоже. Хранилище в облачной папке (iCloud Drive, Dropbox…) по-прежнему синхронизируется через неё.",
+        "uz": "«Yaqin atrofda»: oʻz qurilmalaringiz bilan sinxronlash endi faqat xostlarni emas, omborni ham — parollar, muhitlar, umumiy qiymatlar, fayllar va papkalarni oʻtkazadi. Ikkala kompyuterda shu versiya kerak, omborni yangisiga koʻchirish uchun ham. Bulutli papkadagi ombor (iCloud Drive, Dropbox…) avvalgidek u orqali sinxronlanadi."
+      },
+      {
+        "kind": "notice",
+        "en": "The sidebar starts with your projects and Personal; Keys, Hosts, Passwords and Environments move to Library, and Overview is gone: its summary is at the top of Audit. Projects sync to your other devices only once they have this version too.",
+        "ru": "Боковая панель начинается с ваших проектов и «Личного»; ключи, хосты, пароли и окружения переехали в «Библиотеку», а «Обзора» больше нет: его сводка — в начале «Аудита». Проекты синхронизируются с другими устройствами, только когда на них тоже стоит эта версия.",
+        "uz": "Yon panel loyihalaringiz va «Shaxsiy» bilan boshlanadi; kalitlar, xostlar, parollar va muhitlar «Kutubxona»ga koʻchdi, «Umumiy koʻrinish» esa olib tashlandi: uning xulosasi «Audit» boshida. Loyihalar boshqa qurilmalaringizga ularda ham shu versiya boʻlgandagina sinxronlanadi."
+      },
+      {
+        "kind": "notice",
+        "en": "For hosts reached through a program that may run another ssh (a ProxyCommand of the host or of a jump host, a LocalCommand, a KnownHostsCommand, or a jump host the app can't read), the app now asks in a system dialog before it fills in a saved or typed password, 2FA code or passphrase.",
+        "ru": "Для хостов, путь к которым идёт через программу, способную запустить другой ssh (ProxyCommand самого хоста или промежуточного, LocalCommand, KnownHostsCommand или промежуточный хост, который приложение не может прочитать), приложение теперь спрашивает в системном окне, прежде чем подставить сохранённый или введённый пароль, код 2FA или парольную фразу.",
+        "uz": "Boshqa ssh ni ishga tushirishi mumkin boʻlgan dastur (xostning yoki oraliq xostning ProxyCommand, LocalCommand, KnownHostsCommand yoki ilova oʻqiy olmaydigan oraliq xost) orqali ulaniladigan xostlar uchun ilova endi saqlangan yoki kiritilgan parol, 2FA kodi yoki parol iborasini kiritishdan oldin tizim oynasida soʻraydi."
+      },
+      {
+        "kind": "notice",
+        "en": "Links in the terminal now open with ⌘-click (Ctrl-click on Windows and Linux), as in other terminals, and pointing at one shows where it leads.",
+        "ru": "Ссылки в терминале теперь открываются по ⌘-клику (Ctrl-клику в Windows и Linux), как в других терминалах, а если навести на ссылку указатель, видно, куда она ведёт.",
+        "uz": "Terminaldagi havolalar endi boshqa terminallardagidek ⌘ bosib turib bosilganda (Windows va Linux’da Ctrl bilan) ochiladi, havolaga koʻrsatkich olib borilsa, u qayerga olib borishi koʻrinadi."
+      },
+      {
+        "kind": "notice",
+        "en": "Saving a tunnel that listens on all addresses, or a remote tunnel, now asks first in a system dialog that says who can connect and what they reach. Renaming a tunnel or turning auto-reconnect on or off doesn't ask again.",
+        "ru": "Сохранение туннеля, который слушает на всех адресах, или удалённого туннеля теперь сначала спрашивает в системном окне, кто сможет подключиться и куда попадёт. Переименование туннеля или смена автопереподключения не спрашивает снова.",
+        "uz": "Barcha manzillarda tinglaydigan tunnel yoki masofaviy tunnelni saqlash endi avval tizim oynasida kim ulana olishi va qayerga yetishini aytib soʻraydi. Tunnel nomini oʻzgartirish yoki avtomatik qayta ulanishni yoqish-oʻchirish qayta soʻramaydi."
+      },
+      {
+        "kind": "notice",
+        "en": "On Windows, tunnels no longer offer to save a password or passphrase you type, as the terminal there doesn't: the app can't tell for sure that signing in worked.",
+        "ru": "В Windows туннели больше не предлагают сохранить введённый пароль или парольную фразу, как и терминал там: приложение не может точно знать, что вход удался.",
+        "uz": "Windows da tunnellar endi kiritilgan parol yoki parol iborasini saqlashni taklif qilmaydi, u yerdagi terminal kabi: ilova kirish muvaffaqiyatli boʻlganini aniq bila olmaydi."
+      },
+      {
+        "kind": "notice",
+        "en": "On Windows, Run in terminal in Environments now opens PowerShell instead of Command Prompt. To keep Command Prompt, choose it in Settings → Terminal → Default shell.",
+        "ru": "В Windows кнопка «Запустить в терминале» в «Окружениях» теперь открывает PowerShell вместо командной строки. Чтобы оставить командную строку, выберите её в «Настройки» → «Терминал» → «Оболочка по умолчанию».",
+        "uz": "Windowsda Muhitlardagi «Terminalda ishga tushirish» endi Buyruq satri oʻrniga PowerShellni ochadi. Buyruq satrini qoldirish uchun uni Sozlamalar → Terminal → Standart shell boʻlimida tanlang."
+      },
+      {
+        "kind": "security",
+        "en": "Browser autofill is harder to trick: pages can't read the logins in its menu and banners, a page that shrinks or hides the menu gets no fill, and a program with a copy of the extension's keys is caught even if it changes them. Saving and updating from the browser count toward its ten changes a minute and no longer push out vault backups.",
+        "ru": "Автозаполнение в браузере сложнее обмануть: страницы не могут прочитать логины в его меню и баннерах, страница, которая уменьшает или прячет меню, ничего не заполнит, а программа с копией ключей расширения будет обнаружена, даже если сменит их. Сохранение и обновление из браузера учитываются в лимите десяти изменений в минуту и больше не вытесняют резервные копии хранилища.",
+        "uz": "Brauzerda avtomatik toʻldirishni aldash qiyinlashdi: sahifalar menyu va bannerlardagi loginlarni oʻqiy olmaydi, menyuni kichraytirgan yoki yashirgan sahifa hech narsa olmaydi, kengaytma kalitlari nusxasiga ega dastur ularni almashtirsa ham aniqlanadi. Brauzerdan saqlash va yangilash daqiqasiga oʻnta oʻzgarish chegarasiga kiradi va ombor zaxiralarini siqib chiqarmaydi."
+      },
+      {
+        "kind": "security",
+        "en": "Notes and environment names written as comments in exported files and virtual .env files stay on their own line, so no tool reads a hidden variable from them.",
+        "ru": "Заметки и названия окружений, записанные как комментарии в экспортированных файлах и виртуальных файлах .env, остаются на своей строке, и никакая программа не прочтёт из них скрытую переменную.",
+        "uz": "Eksport qilingan fayllar va virtual .env fayllarda izoh sifatida yozilgan eslatmalar va muhit nomlari oʻz qatorida qoladi, shuning uchun hech bir dastur ulardan yashirin oʻzgaruvchini oʻqimaydi."
+      },
+      {
+        "kind": "security",
+        "en": "Managed .env files are written only into the folder the app checked, even if a folder on the way is swapped while it writes; a virtual .env file gives out no values once the vault locks; and files kept only while the vault is unlocked are removed before an update installs and after a crash, however far the app got.",
+        "ru": "Управляемые файлы .env записываются только в папку, которую приложение проверило, даже если папку на пути подменят во время записи; виртуальный файл .env не отдаёт значений, как только хранилище заблокировано; а файлы, которые хранятся только пока хранилище разблокировано, удаляются перед установкой обновления и после сбоя, на каком бы шаге приложение ни остановилось.",
+        "uz": "Boshqariladigan .env fayllar faqat ilova tekshirgan jildga yoziladi, yozish paytida yoʻldagi jild almashtirilsa ham; virtual .env fayl ombor qulflanishi bilan qiymat bermaydi; faqat ombor ochiqligida saqlanadigan fayllar esa yangilanish oʻrnatilishidan oldin va nosozlikdan keyin, ilova qaysi bosqichda toʻxtaganidan qatʼi nazar, oʻchiriladi."
+      },
+      {
+        "kind": "security",
+        "en": "Environments: before Run in terminal or a project's terminal starts a shell with variables that make it or the programs it starts run code, such as PATH, NODE_OPTIONS or GIT_SSH_COMMAND, a system dialog lists them with their values, and asks again when they change.",
+        "ru": "Окружения: прежде чем «Запустить в терминале» или терминал проекта запустит оболочку с переменными, из-за которых она или запущенные из неё программы выполняют код, например PATH, NODE_OPTIONS или GIT_SSH_COMMAND, системное окно показывает их вместе со значениями и спрашивает снова, когда они изменятся.",
+        "uz": "Muhitlar: «Terminalda ishga tushirish» yoki loyiha terminali shellni uni yoki undan ishga tushgan dasturlarni kod bajarishga majbur qiladigan oʻzgaruvchilar, masalan PATH, NODE_OPTIONS yoki GIT_SSH_COMMAND bilan ochishidan oldin tizim oynasi ularni qiymatlari bilan koʻrsatadi va ular oʻzgarganda yana soʻraydi."
+      },
+      {
+        "kind": "security",
+        "en": "When the app asks Git whether a .env file is ignored or committed, and when the Leak scanner lists the files of a repository, a project's own Git settings can no longer make Git run a program.",
+        "ru": "Когда приложение спрашивает Git, игнорирует ли он файл .env и закоммичен ли файл, и когда «Поиск утечек» перечисляет файлы репозитория, собственные настройки Git проекта больше не могут заставить Git запустить программу.",
+        "uz": "Ilova Gitdan .env fayl eʼtiborsiz qoldirilganmi yoki commit qilinganmi deb soʻraganda va «Sizib chiqishlarni qidirish» repozitoriy fayllarini sanaganda, loyihaning oʻz Git sozlamalari endi Gitga dastur ishga tushirtira olmaydi."
+      },
+      {
+        "kind": "security",
+        "en": "Nearby and its chats connect only to computers on your local network. This computer hides after pairing with it is broken off three times before a code shows, and no longer gives away its device key on the port your own devices use.",
+        "ru": "«Рядом» и его чаты подключаются только к компьютерам в вашей локальной сети. Этот компьютер скрывается, если подключение к нему трижды прервали до появления кода, и больше не выдаёт свой ключ устройства на порту, которым пользуются ваши устройства.",
+        "uz": "«Yaqin atrofda» va uning chatlari faqat mahalliy tarmogʻingizdagi kompyuterlarga ulanadi. Kod chiqmasdan oldin unga ulanish uch marta toʻxtatilsa, bu kompyuter yashirinadi va qurilmalaringiz foydalanadigan portda qurilma kalitini endi bermaydi."
+      },
+      {
+        "kind": "security",
+        "en": "Nearby: a received server password is used only for a host here that leads to the same server, variables that make programs run code are left out of a received environment and named, and a received server key is never added for a host your system's known_hosts already trusts.",
+        "ru": "«Рядом»: полученный пароль сервера используется только для хоста здесь, который ведёт на тот же сервер, переменные, из-за которых программы выполняют код, не добавляются в полученное окружение и перечисляются, а полученный ключ сервера не добавляется для хоста, которому уже доверяет системный known_hosts.",
+        "uz": "«Yaqin atrofda»: olingan server paroli faqat shu yerdagi xuddi shu serverga olib boradigan xost uchun ishlatiladi, dasturlarni kod bajarishga majbur qiladigan oʻzgaruvchilar olingan muhitga qoʻshilmaydi va nomlari koʻrsatiladi, olingan server kaliti esa tizim known_hosts ishonadigan xostga qoʻshilmaydi."
+      },
+      {
+        "kind": "security",
+        "en": "Private files stay private in more cases: vault and environment exports and keys saved from Key converter are readable only by you even when they replace an older file or a link, a key whose passphrase you remove becomes readable only by you, and on macOS no private file takes read access that its folder grants to others.",
+        "ru": "Личные файлы остаются личными в большем числе случаев: экспорт хранилища и окружений и ключи, сохранённые из «Конвертера ключей», может прочитать только вы, даже когда они заменяют старый файл или ссылку; ключ, с которого вы сняли парольную фразу, тоже может прочитать только вы; а на macOS личный файл не получает права на чтение, которые папка даёт другим.",
+        "uz": "Shaxsiy fayllar koʻproq holatlarda shaxsiy qoladi: ombor va muhitlar eksportini hamda «Kalit konvertori»dan saqlangan kalitlarni eski fayl yoki havola oʻrniga yozilganda ham faqat siz oʻqiy olasiz, parol iborasi olib tashlangan kalitni ham faqat siz oʻqiy olasiz, macOS’da esa shaxsiy fayl papka boshqalarga beradigan oʻqish huquqini olmaydi."
+      },
+      {
+        "kind": "security",
+        "en": "Tunnels save a typed password only after ssh itself reports the sign-in, keys go only to an ssh-agent running as you or the system, host names starting with a dash are refused, and on Windows ssh is never run from the folder the app was started in.",
+        "ru": "Туннели сохраняют введённый пароль только после того, как сам ssh сообщит о входе, ключи передаются только ssh-agent, запущенному от вашего имени или системы, имена хостов, начинающиеся с дефиса, отклоняются, а в Windows ssh больше не запускается из папки, где запущено приложение.",
+        "uz": "Tunnellar kiritilgan parolni faqat ssh oʻzi kirish haqida xabar bergandan keyin saqlaydi, kalitlar faqat siz yoki tizim nomidan ishlayotgan ssh-agent ga beriladi, defis bilan boshlanadigan xost nomlari rad etiladi, Windows da esa ssh ilova ishga tushirilgan papkadan ishga tushirilmaydi."
+      },
+      {
+        "kind": "security",
+        "en": "Text pasted into the terminal arrives without control characters, so a paste never runs anything before you press Enter.",
+        "ru": "Текст, вставленный в терминал, приходит без управляющих символов, поэтому вставка ничего не запускает, пока вы не нажмёте Enter.",
+        "uz": "Terminalga qoʻyilgan matn boshqaruv belgilarisiz keladi, shuning uchun Enter bosmaguningizcha qoʻyilgan matn hech narsani ishga tushirmaydi."
+      },
+      {
+        "kind": "security",
+        "en": "The app installs an update only if its signature names the version it is offered as, so an older release can't be passed off as a newer one.",
+        "ru": "Приложение устанавливает обновление, только если в его подписи указана та версия, под которой оно предложено, так что старый выпуск нельзя выдать за новый.",
+        "uz": "Ilova yangilanishni faqat uning imzosida taklif qilingan versiya koʻrsatilgan boʻlsa oʻrnatadi, shuning uchun eski versiyani yangisi deb koʻrsatib boʻlmaydi."
+      },
+      {
+        "kind": "security",
+        "en": "Passwords: vault files are checked more strictly before they are opened, and KeePass 1 files are refused. A damaged vault.keys no longer hides the lock screen: the recovery key opens the vault and makes a new one, keeping the damaged file next to it.",
+        "ru": "Пароли: файлы хранилища проверяются строже, прежде чем открыться, а файлы KeePass 1 не открываются. Повреждённый vault.keys больше не прячет экран блокировки: ключ восстановления открывает хранилище и создаёт новый файл, а повреждённый остаётся рядом.",
+        "uz": "Parollar: ombor fayllari ochilishidan oldin qattiqroq tekshiriladi, KeePass 1 fayllari esa ochilmaydi. Shikastlangan vault.keys endi qulf ekranini yashirmaydi: tiklash kaliti omborni ochadi va yangisini yaratadi, shikastlangani esa yonida qoladi."
+      },
+      {
+        "kind": "security",
+        "en": "Passwords: master password checks run one at a time, and after three wrong ones in a row the next try has to wait a moment, a little longer after each further wrong one, so the password can't be guessed quickly through the app.",
+        "ru": "Пароли: мастер-пароль проверяется по одному разу за раз, а после трёх неверных подряд следующая попытка ждёт немного, и после каждой новой ошибки чуть дольше, так что подобрать пароль через приложение быстро не выйдет.",
+        "uz": "Parollar: asosiy parol bir vaqtda faqat bir marta tekshiriladi, ketma-ket uchta notoʻgʻri paroldan keyin esa keyingi urinish biroz kutadi, har bir yangi xatodan keyin yana biroz uzoqroq, shuning uchun parolni ilova orqali tez topib boʻlmaydi."
+      },
+      {
+        "kind": "security",
+        "en": "Passwords: quitting the app clears a copied password the clipboard still holds, locking when idle counts the time the computer slept, and a new recovery key leaves the screen when the vault locks. Until you confirm it's saved, the app reminds you after unlocking and shows it again after a yes in a system dialog.",
+        "ru": "Пароли: при выходе из приложения скопированный пароль, если он ещё в буфере обмена, стирается, «Блокировать при бездействии» учитывает время сна компьютера, а новый ключ восстановления исчезает с экрана, когда хранилище блокируется. Пока вы не подтвердите, что сохранили его, приложение напоминает о нём после разблокировки и показывает снова после согласия в системном окне.",
+        "uz": "Parollar: ilovadan chiqilganda hali buferda turgan nusxalangan parol tozalanadi, «Faoliyat boʻlmasa qulflash» kompyuter uxlagan vaqtni ham hisoblaydi, yangi tiklash kaliti esa ombor qulflanganda ekrandan ketadi. Uni saqlaganingizni tasdiqlamaguningizcha, ilova ombor ochilgandan keyin bu haqda eslatadi va tizim oynasida rozilik bergach yana koʻrsatadi."
+      },
+      {
+        "kind": "new",
+        "en": "Environments can keep AI tools from reading a project folder’s .env files: with your yes for that folder, the app adds them where Cursor, Windsurf, Aider, Gemini CLI, Cline, Roo Code, Continue and JetBrains AI read their ignore files, and to Claude Code’s settings, and does so for files added there later.",
+        "ru": "Окружения могут скрыть файлы .env папки проекта от ИИ-инструментов: с вашего согласия для этой папки приложение добавит их туда, где Cursor, Windsurf, Aider, Gemini CLI, Cline, Roo Code, Continue и JetBrains AI читают свои файлы исключений, и в настройки Claude Code — и так же для файлов, добавленных туда позже.",
+        "uz": "Muhitlar loyiha papkasidagi .env fayllarni AI vositalaridan yashira oladi: shu papka uchun roziligingiz bilan ilova ularni Cursor, Windsurf, Aider, Gemini CLI, Cline, Roo Code, Continue va JetBrains AI istisno fayllarini oʻqiydigan joyga va Claude Code sozlamalariga qoʻshadi, keyin u yerga qoʻshilgan fayllar uchun ham."
+      },
+      {
+        "kind": "new",
+        "en": "Projects show where each environment's .env files stand: on a project's page a line under the environment says the files are in sync or how many need attention, and leads to them. On All projects, a project's card counts its .env files that need attention among its problems. An environment's files also list the names .env.example has that it lacks.",
+        "ru": "Проекты показывают состояние файлов .env каждого окружения: на странице проекта строка под окружением говорит, что файлы синхронны или сколько требуют внимания, и ведёт к ним. На «Всех проектах» карточка проекта учитывает файлы .env, требующие внимания, среди его проблем. Файлы окружения также перечисляют имена из .env.example, которых в нём нет.",
+        "uz": "Loyihalar har bir muhitning .env fayllari holatini koʻrsatadi: loyiha sahifasida muhit ostidagi qator fayllar mosligini yoki nechtasi eʼtibor talab qilishini aytadi va ularga olib boradi. «Barcha loyihalar»da loyiha kartasi eʼtibor talab qiladigan .env fayllarni muammolari qatorida sanaydi. Muhit fayllari .env.example dagi, unda yoʻq nomlarni ham koʻrsatadi."
+      },
+      {
+        "kind": "new",
+        "en": "On macOS and Linux a .env file can be virtual: nothing is kept on disk, and while the app runs it hands the values to each tool that reads the file, or says the vault is locked. Checked with Node dotenv, python-dotenv, Docker Compose, direnv, Vite and Next.js.",
+        "ru": "В macOS и Linux файл .env может быть виртуальным: на диске ничего не хранится, а приложение, пока работает, отдаёт значения каждой программе, которая читает файл, или сообщает, что хранилище заблокировано. Проверено с Node dotenv, python-dotenv, Docker Compose, direnv, Vite и Next.js.",
+        "uz": "macOS va Linuxda .env fayl virtual boʻlishi mumkin: diskda hech narsa saqlanmaydi, ilova esa ishlab turganda faylni oʻqigan har bir dasturga qiymatlarni beradi yoki ombor qulflanganini aytadi. Node dotenv, python-dotenv, Docker Compose, direnv, Vite va Next.js bilan tekshirilgan."
+      },
+      {
+        "kind": "new",
+        "en": "A .env file can be kept on disk only while the vault is unlocked: it’s written when you unlock and removed when the vault locks or the app quits, and after a crash too. Time Machine, Dropbox and iCloud Drive skip it. Remote environments can have such a file.",
+        "ru": "Файл .env можно держать на диске, только пока хранилище разблокировано: он записывается при разблокировке и удаляется, когда хранилище блокируется или приложение закрывается, а также после сбоя. Time Machine, Dropbox и iCloud Drive его пропускают. Такой файл может быть и у удалённого окружения.",
+        "uz": ".env faylni faqat ombor ochiqligida diskda saqlash mumkin: u ombor ochilganda yoziladi va ombor qulflanganda yoki ilova yopilganda, nosozlikdan keyin ham oʻchiriladi. Time Machine, Dropbox va iCloud Drive uni oʻtkazib yuboradi. Bunday fayl masofaviy muhitda ham boʻlishi mumkin."
+      },
+      {
+        "kind": "new",
+        "en": "A part of a project can have its own folder: the project page shows its folders as a tree, with each part's stages. Open terminal in a folder with several parts asks which environment to use, and New environment can take a .env file it finds in the chosen folder.",
+        "ru": "У части проекта может быть своя папка: страница проекта показывает папки деревом, со стадиями каждой части. «Открыть терминал» в папке с несколькими частями спрашивает, какое окружение взять, а «Новое окружение» может взять файл .env, найденный в выбранной папке.",
+        "uz": "Loyiha qismining oʻz papkasi boʻlishi mumkin: loyiha sahifasi papkalarni har bir qismning bosqichlari bilan daraxt koʻrinishida koʻrsatadi. Bir nechta qismli papkada «Terminalni ochish» qaysi muhitni olishni soʻraydi, «Yangi muhit» esa tanlangan papkadagi .env faylini olishi mumkin."
+      },
+      {
+        "kind": "new",
+        "en": "A variable can be shared with other environments, of any project: they use one value, so changing it once, in the app or in any of their .env files, changes it in all of them and in their files, with Undo. “Use its own value here” takes one back.",
+        "ru": "Переменной можно поделиться с другими окружениями любого проекта: у них одно значение, и, изменив его один раз — в приложении или в любом их файле .env, — вы меняете его во всех них и в их файлах, с отменой. «Своё значение здесь» возвращает одному окружению собственное значение.",
+        "uz": "Oʻzgaruvchini istalgan loyihaning boshqa muhitlari bilan ulashish mumkin: ularda bitta qiymat boʻladi, uni bir marta — ilovada yoki ularning istalgan .env faylida — oʻzgartirsangiz, hammasida va fayllarida oʻzgaradi, bekor qilish bilan. «Bu yerda oʻz qiymati» bitta muhitga oʻz qiymatini qaytaradi."
+      },
+      {
+        "kind": "new",
+        "en": "Audit: the leak scanner finds your vault's secrets where they shouldn't be — in the history of Claude Code, Codex and other AI tools, in your shell history, and in project files Git would commit. It reads files on this computer only, names the secret, file and line, never the value, and can redact the value in an AI session.",
+        "ru": "Аудит: «Поиск утечек» находит секреты из хранилища там, где их быть не должно, — в истории Claude Code, Codex и других ИИ-инструментов, в истории оболочки и в файлах проектов, которые попадут в Git. Он только читает файлы на этом компьютере, показывает секрет, файл и строку, но не значение, и может затереть значение в сессии ИИ.",
+        "uz": "Audit: «Sizib chiqishlarni qidirish» ombordagi sirlarni boʻlmasligi kerak boʻlgan joylardan topadi — Claude Code, Codex va boshqa AI vositalari tarixidan, shell tarixidan va Git commit qiladigan loyiha fayllaridan. U faqat shu kompyuterdagi fayllarni oʻqiydi, sir, fayl va qatorni koʻrsatadi, qiymatni emas, va AI seansidagi qiymatni oʻchira oladi."
+      },
+      {
+        "kind": "new",
+        "en": "Environments: write a local environment to .env files in its projects' folders with Add file…, and they stay in sync both ways: an edit in the file reaches the vault (with Undo), a change in the app rewrites the file, and if both changed you compare and choose. The Files view shows each file's state, files Git or a cloud folder would take, and .env files to take under management.",
+        "ru": "Окружения: «Добавить файл…» записывает локальное окружение в файлы .env в папках его проектов, и они синхронны в обе стороны: правка в файле попадает в хранилище (с отменой), изменение в приложении переписывает файл, а если изменились обе стороны, вы сравниваете и выбираете. Вид «Файлы» показывает состояние файлов, риски Git и облака и файлы .env, которые можно взять под управление.",
+        "uz": "Muhitlar: «Fayl qoʻshish…» mahalliy muhitni loyihalari papkalaridagi .env fayllarga yozadi va ular ikki tomonlama mos turadi: fayldagi tahrir omborga tushadi (bekor qilsa boʻladi), ilovadagi oʻzgarish faylni qayta yozadi, ikkalasi oʻzgarsa, solishtirib tanlaysiz. «Fayllar» koʻrinishi fayllar holatini, Git va bulut xavflarini va boshqaruvga olinadigan .env fayllarni koʻrsatadi."
+      },
+      {
+        "kind": "new",
+        "en": "Chats in Nearby: write to a paired computer or one of your devices, send a secret that is hidden and wiped after an hour, a day or a week, share variables, or offer a login, a host or a key. Messages go only while Nearby is open on both computers.",
+        "ru": "Чаты в «Рядом»: пишите подключённому компьютеру или своему устройству, отправляйте секрет, который скрыт и стирается через час, день или неделю, делитесь переменными или предлагайте логин, хост или ключ. Сообщения доходят, только пока «Рядом» открыто на обоих компьютерах.",
+        "uz": "«Yaqin atrofda»da chatlar: ulangan kompyuterga yoki oʻz qurilmangizga yozing, yashirin va bir soat, bir kun yoki bir haftadan keyin oʻchadigan maxfiy qiymat yuboring, oʻzgaruvchilarni ulashing yoki login, xost yoki kalitni taklif qiling. Xabarlar faqat ikkala kompyuterda «Yaqin atrofda» ochiq boʻlganda yetib boradi."
+      },
+      {
+        "kind": "new",
+        "en": "Nearby: when both computers changed the same password or environment, the sync shows which fields differ and lets you keep either version; the other stays among the entry’s earlier versions. Variables that make programs load code need your yes in a system dialog.",
+        "ru": "«Рядом»: если оба компьютера изменили один и тот же пароль или окружение, синхронизация показывает, какие поля отличаются, и даёт оставить любую версию; другая сохранится среди прежних версий записи. Переменные, из-за которых программы загружают код, нужно разрешить в системном окне.",
+        "uz": "«Yaqin atrofda»: ikkala kompyuter bir xil parol yoki muhitni oʻzgartirgan boʻlsa, sinxronlash qaysi maydonlar farq qilishini koʻrsatadi va istalgan versiyani qoldirishga imkon beradi; ikkinchisi yozuvning oldingi versiyalari orasida qoladi. Dasturlarga kod yuklatadigan oʻzgaruvchilarga tizim oynasida ruxsat berishingiz kerak."
+      },
+      {
+        "kind": "new",
+        "en": "Projects: names from the hosts file can be part of a project. Its page shows their entries (name → address) and flags a name the file no longer has. A switch per entry, or one for all of them, goes through the usual review and administrator password, and Undo puts the backup back. Add names from Add or a Hosts file entry's menu; suggestions offer those of a project's hosts and domains.",
+        "ru": "Проекты: имена из файла hosts теперь входят в проект. Страница проекта показывает их записи (имя → адрес) и отмечает имена, которых в файле нет. Переключатель у записи или один на все проходит обычный просмотр и пароль администратора, а «Отменить» возвращает резервную копию. Имена добавляются через «Добавить» или меню записи; предложения берут имена хостов и доменов проекта.",
+        "uz": "Loyihalar: hosts faylidagi nomlar endi loyihaga kiradi. Sahifa ularning yozuvlarini (nom → manzil) koʻrsatadi va faylda yoʻq nomni belgilaydi. Yozuv yoki hammasi uchun bitta kalit odatdagi koʻrib chiqish va administrator paroli bilan ishlaydi, «Bekor qilish» zaxirani qaytaradi. Nomlar «Qoʻshish» yoki yozuv menyusidan qoʻshiladi; takliflar loyiha xostlari va domenlari nomlarini beradi."
+      },
+      {
+        "kind": "new",
+        "en": "All projects is the new home: the app opens there and ⌘1 comes back. A card per project, Personal first, shows what it holds, its problems (audit findings, things missing on this computer) and quick actions: open a terminal in its folder, show it in Finder, Explorer or Files, connect to its host. Audit's numbers, an Unlock prompt and suggested projects sit on top.",
+        "ru": "«Все проекты» — новая главная: приложение открывается здесь, ⌘1 возвращает сюда. Карточка каждого проекта (первой — «Личное») показывает, что в нём есть, его проблемы (находки аудита, чего нет на этом компьютере) и быстрые действия: терминал в папке, папка в Finder, Проводнике или Files, подключение к хосту. Сверху — числа аудита, разблокировка и предложенные проекты.",
+        "uz": "«Barcha loyihalar» — yangi bosh sahifa: ilova shu yerda ochiladi, ⌘1 shu yerga qaytaradi. Har bir loyiha kartasi («Shaxsiy» birinchi) undagi narsalarni, muammolarni (audit topilmalari, bu kompyuterda yoʻq narsalar) va tezkor amallarni koʻrsatadi: papkada terminal, papkani Finder, Explorer yoki Filesda koʻrsatish, xostga ulanish. Yuqorida audit raqamlari, qulfni ochish va takliflar."
+      },
+      {
+        "kind": "new",
+        "en": "Projects: group the hosts, keys, logins, environments and folders of one piece of work, then connect, copy, run or open a terminal in its folder from its page. The app suggests projects from your environments, code folders, ~/.ssh/config and vault; nothing changes until you accept one.",
+        "ru": "Проекты: объедините хосты, ключи, логины, окружения и папки одной работы, а затем подключайтесь, копируйте, запускайте или открывайте терминал в её папке прямо со страницы проекта. Приложение предлагает проекты по вашим окружениям, папкам с кодом, ~/.ssh/config и хранилищу; ничего не меняется, пока вы не примете предложение.",
+        "uz": "Loyihalar: bitta ishning xostlari, kalitlari, loginlari, muhitlari va papkalarini birlashtiring, soʻng loyiha sahifasidan ulaning, nusxalang, ishga tushiring yoki uning papkasida terminal oching. Ilova muhitlaringiz, kod papkalaringiz, ~/.ssh/config va ombor asosida loyihalar taklif qiladi; taklifni qabul qilmaguningizcha hech narsa oʻzgarmaydi."
+      },
+      {
+        "kind": "new",
+        "en": "Terminal: open a shell on this computer next to your ssh sessions, with Local shell or from New session. Choose which one opens in Settings → Terminal: PowerShell, Command Prompt, Git Bash or a WSL distribution on Windows; zsh, bash, fish and others on macOS and Linux. Environments can run their variables in any of them too.",
+        "ru": "Терминал: рядом с сессиями ssh теперь можно открыть оболочку на этом компьютере — кнопкой «Локальная оболочка» или в окне «Новая сессия». Какую открывать, выбирается в «Настройки» → «Терминал»: PowerShell, командная строка, Git Bash или дистрибутив WSL в Windows; zsh, bash, fish и другие в macOS и Linux. Окружения тоже можно запустить в любой из них.",
+        "uz": "Terminal: endi ssh seanslari yonida shu kompyuterdagi shellni ochish mumkin — «Mahalliy shell» tugmasi yoki «Yangi seans» oynasi orqali. Qaysi biri ochilishini Sozlamalar → Terminal boʻlimida tanlang: Windowsda PowerShell, Buyruq satri, Git Bash yoki WSL distributivi; macOS va Linuxda zsh, bash, fish va boshqalar. Muhitlarni ham ularning istalganida ishga tushirish mumkin."
+      },
+      {
+        "kind": "improved",
+        "en": "Environments are listed by project, then by part. New environment asks for a project, an optional part and the stage; when a project gets its second part, it asks what to call the first. An environment's menu has Move to project… and Rename part…, and Compare offers only the stages of the same part.",
+        "ru": "Окружения показаны по проектам, внутри — по частям. «Новое окружение» спрашивает проект, необязательную часть и стадию; когда у проекта появляется вторая часть, просит назвать первую. В меню окружения есть «Перенести в проект…» и «Переименовать часть…», а сравнение предлагает только стадии той же части.",
+        "uz": "Muhitlar loyihalar, ichida qismlar boʻyicha koʻrsatiladi. «Yangi muhit» loyiha, ixtiyoriy qism va bosqichni soʻraydi; loyihada ikkinchi qism paydo boʻlsa, birinchisini nomlashni soʻraydi. Muhit menyusida «Loyihaga koʻchirish…» va «Qismni qayta nomlash…» bor, solishtirish faqat shu qism bosqichlarini taklif qiladi."
+      },
+      {
+        "kind": "improved",
+        "en": "The browser extension is now on Firefox Add-ons too: Settings → Browser autofill links to it next to the Chrome Web Store.",
+        "ru": "Расширение для браузера теперь есть и в Firefox Add-ons: в Настройках → «Автозаполнение в браузере» ссылка на него стоит рядом с Chrome Web Store.",
+        "uz": "Brauzer kengaytmasi endi Firefox Add-onsʼda ham bor: Sozlamalar → «Brauzerda avtomatik toʻldirish» boʻlimida unga havola Chrome Web Store yonida turibdi."
+      },
+      {
+        "kind": "improved",
+        "en": "When the other computer can’t take what you send in Nearby, or sends something this version can’t open, Nearby says which app needs updating instead of “the connection broke”.",
+        "ru": "Если другой компьютер не может принять то, что вы отправляете в «Рядом», или прислал то, что эта версия не умеет открыть, «Рядом» пишет, какое приложение обновить, а не «соединение прервалось».",
+        "uz": "Boshqa kompyuter «Yaqin atrofda»da yuborganingizni qabul qila olmasa yoki bu versiya ocha olmaydigan narsa yuborsa, «Yaqin atrofda» «ulanish uzildi» oʻrniga qaysi ilovani yangilash kerakligini aytadi."
+      },
+      {
+        "kind": "improved",
+        "en": "Nearby: more than five deletions a day from your other devices, all of them together, need your yes, whether they come in one sync or several, and the app keeps your SSH config and vault as they were before them for 30 days. A device a sync adds to your devices is named in the sync's summary and in My devices.",
+        "ru": "«Рядом»: больше пяти удалений за день со всех ваших других устройств вместе требуют вашего согласия, одной синхронизацией или несколькими, а конфиг SSH и хранилище в том виде, какими они были до удалений, приложение хранит 30 дней. Устройство, которое синхронизация добавила в ваши, названо в её итогах и в «Моих устройствах».",
+        "uz": "«Yaqin atrofda»: boshqa qurilmalaringizdan birgalikda bir kunda beshtadan ortiq oʻchirish — bitta sinxronlashda boʻladimi yoki bir nechtasida — roziligingizni talab qiladi, ilova esa SSH konfiguratsiyasi va omborni oʻchirishlardan oldingi holatida 30 kun saqlaydi. Sinxronlash qurilmalaringizga qoʻshgan qurilma uning natijalarida va «Mening qurilmalarim»da koʻrsatiladi."
+      },
+      {
+        "kind": "improved",
+        "en": "Project page: each card shows five rows, problems first, with Show all for the rest, and the two columns no longer push each other down. Click a host, key, login or environment to open it in its section; ← takes you back. Add also makes a new host, key, login or environment right there. A project folder can be shown in Finder, Explorer or Files.",
+        "ru": "Страница проекта: в каждой карточке пять строк, сначала проблемы, остальное — по «Показать все», а колонки больше не сдвигают друг друга. Нажмите на хост, ключ, логин или окружение, чтобы открыть его в разделе; ← вернёт в проект. «Добавить» создаёт новый хост, ключ, логин или окружение прямо здесь. Папку проекта можно показать в Finder, Проводнике или Files.",
+        "uz": "Loyiha sahifasi: har bir kartada beshta qator, avval muammolar, qolgani «Hammasini koʻrsatish»da, ustunlar endi bir-birini surmaydi. Xost, kalit, login yoki muhitni boʻlimida ochish uchun ustiga bosing; ← loyihaga qaytaradi. «Qoʻshish» shu yerda yangi xost, kalit, login yoki muhit yaratadi. Loyiha papkasini Finder, Explorer yoki Files da koʻrsatish mumkin."
+      },
+      {
+        "kind": "fixed",
+        "en": "Environments: Export… as a .env file puts a value with $, a backslash or a backtick in single quotes, so Docker Compose, Vite, Next.js and the shell read it exactly as stored instead of expanding it.",
+        "ru": "Окружения: «Экспорт…» в файл .env берёт значение с $, обратной косой чертой или обратной кавычкой в одинарные кавычки, чтобы Docker Compose, Vite, Next.js и оболочка читали его ровно таким, как оно сохранено, а не подставляли переменные.",
+        "uz": "Muhitlar: .env faylga «Eksport…» $, teskari chiziq yoki teskari tirnoq bor qiymatni bitta tirnoqqa oladi, shunda Docker Compose, Vite, Next.js va shell uni oʻzgaruvchilarni qoʻymasdan, aynan saqlangandek oʻqiydi."
+      },
+      {
+        "kind": "fixed",
+        "en": "Nearby can send an environment in Personal that has no part. The other computer needs this version too.",
+        "ru": "«Рядом» теперь отправляет окружение из «Личного» без части. На другом компьютере тоже нужна эта версия.",
+        "uz": "«Yaqin atrofda» endi «Shaxsiy»dagi qismsiz muhitni yuboradi. Boshqa kompyuterda ham shu versiya kerak."
+      }
+    ]
+  },
+  {
     "version": "0.10.0",
     "date": "2026-11-09",
     "changes": [

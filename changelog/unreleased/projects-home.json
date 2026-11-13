@@ -1,6 +1,0 @@
-{
-  "kind": "new",
-  "en": "All projects is the new home: the app opens there and ⌘1 comes back. A card per project, Personal first, shows what it holds, its problems (audit findings, things missing on this computer) and quick actions: open a terminal in its folder, show it in Finder, Explorer or Files, connect to its host. Audit's numbers, an Unlock prompt and suggested projects sit on top.",
-  "ru": "«Все проекты» — новая главная: приложение открывается здесь, ⌘1 возвращает сюда. Карточка каждого проекта (первой — «Личное») показывает, что в нём есть, его проблемы (находки аудита, чего нет на этом компьютере) и быстрые действия: терминал в папке, папка в Finder, Проводнике или Files, подключение к хосту. Сверху — числа аудита, разблокировка и предложенные проекты.",
-  "uz": "«Barcha loyihalar» — yangi bosh sahifa: ilova shu yerda ochiladi, ⌘1 shu yerga qaytaradi. Har bir loyiha kartasi («Shaxsiy» birinchi) undagi narsalarni, muammolarni (audit topilmalari, bu kompyuterda yoʻq narsalar) va tezkor amallarni koʻrsatadi: papkada terminal, papkani Finder, Explorer yoki Filesda koʻrsatish, xostga ulanish. Yuqorida audit raqamlari, qulfni ochish va takliflar."
-}

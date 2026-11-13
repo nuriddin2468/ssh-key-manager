@@ -1,6 +1,0 @@
-{
-  "kind": "security",
-  "en": "Text pasted into the terminal arrives without control characters, so a paste never runs anything before you press Enter.",
-  "ru": "Текст, вставленный в терминал, приходит без управляющих символов, поэтому вставка ничего не запускает, пока вы не нажмёте Enter.",
-  "uz": "Terminalga qoʻyilgan matn boshqaruv belgilarisiz keladi, shuning uchun Enter bosmaguningizcha qoʻyilgan matn hech narsani ishga tushirmaydi."
-}

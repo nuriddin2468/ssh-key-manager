@@ -1,6 +1,0 @@
-{
-  "kind": "security",
-  "en": "Nearby and its chats connect only to computers on your local network. This computer hides after pairing with it is broken off three times before a code shows, and no longer gives away its device key on the port your own devices use.",
-  "ru": "«Рядом» и его чаты подключаются только к компьютерам в вашей локальной сети. Этот компьютер скрывается, если подключение к нему трижды прервали до появления кода, и больше не выдаёт свой ключ устройства на порту, которым пользуются ваши устройства.",
-  "uz": "«Yaqin atrofda» va uning chatlari faqat mahalliy tarmogʻingizdagi kompyuterlarga ulanadi. Kod chiqmasdan oldin unga ulanish uch marta toʻxtatilsa, bu kompyuter yashirinadi va qurilmalaringiz foydalanadigan portda qurilma kalitini endi bermaydi."
-}

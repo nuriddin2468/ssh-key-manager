@@ -1,6 +1,0 @@
-{
-  "kind": "notice",
-  "en": "Environments now belong to a project (or Personal) directly, as logins do, and groups are gone. On update, a project that held a group gets its environments; the group's name becomes their part (backend, frontend…), shown only when a project has more than one. Nothing moves in KeePass: KeePassXC shows a project/<name> tag. Older versions still see the groups.",
-  "ru": "Окружения теперь принадлежат проекту (или «Личному») напрямую, как логины, а группы исчезли. При обновлении проект с группой получает её окружения; имя группы становится их частью (backend, frontend…), видной, только когда частей больше одной. В KeePass ничего не переезжает: KeePassXC показывает тег project/<имя>. Старые версии по-прежнему видят группы.",
-  "uz": "Muhitlar endi loginlar kabi toʻgʻridan-toʻgʻri loyihaga (yoki «Shaxsiy»ga) tegishli, guruhlar yoʻq. Yangilanishda guruhli loyiha uning muhitlarini oladi; guruh nomi ularning qismiga aylanadi (backend, frontend…), qism bittadan koʻp boʻlsagina koʻrinadi. KeePass’da hech narsa koʻchmaydi: KeePassXC project/<nom> tegini koʻrsatadi. Eski versiyalar guruhlarni koʻraveradi."
-}

@@ -1,6 +1,0 @@
-{
-  "kind": "fixed",
-  "en": "Environments: Export… as a .env file puts a value with $, a backslash or a backtick in single quotes, so Docker Compose, Vite, Next.js and the shell read it exactly as stored instead of expanding it.",
-  "ru": "Окружения: «Экспорт…» в файл .env берёт значение с $, обратной косой чертой или обратной кавычкой в одинарные кавычки, чтобы Docker Compose, Vite, Next.js и оболочка читали его ровно таким, как оно сохранено, а не подставляли переменные.",
-  "uz": "Muhitlar: .env faylga «Eksport…» $, teskari chiziq yoki teskari tirnoq bor qiymatni bitta tirnoqqa oladi, shunda Docker Compose, Vite, Next.js va shell uni oʻzgaruvchilarni qoʻymasdan, aynan saqlangandek oʻqiydi."
-}

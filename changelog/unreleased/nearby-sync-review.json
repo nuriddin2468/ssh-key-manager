@@ -1,6 +1,0 @@
-{
-  "kind": "new",
-  "en": "Nearby: when both computers changed the same password or environment, the sync shows which fields differ and lets you keep either version; the other stays among the entry’s earlier versions. Variables that make programs load code need your yes in a system dialog.",
-  "ru": "«Рядом»: если оба компьютера изменили один и тот же пароль или окружение, синхронизация показывает, какие поля отличаются, и даёт оставить любую версию; другая сохранится среди прежних версий записи. Переменные, из-за которых программы загружают код, нужно разрешить в системном окне.",
-  "uz": "«Yaqin atrofda»: ikkala kompyuter bir xil parol yoki muhitni oʻzgartirgan boʻlsa, sinxronlash qaysi maydonlar farq qilishini koʻrsatadi va istalgan versiyani qoldirishga imkon beradi; ikkinchisi yozuvning oldingi versiyalari orasida qoladi. Dasturlarga kod yuklatadigan oʻzgaruvchilarga tizim oynasida ruxsat berishingiz kerak."
-}

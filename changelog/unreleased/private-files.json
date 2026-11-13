@@ -1,6 +1,0 @@
-{
-  "kind": "security",
-  "en": "Private files stay private in more cases: vault and environment exports and keys saved from Key converter are readable only by you even when they replace an older file or a link, a key whose passphrase you remove becomes readable only by you, and on macOS no private file takes read access that its folder grants to others.",
-  "ru": "Личные файлы остаются личными в большем числе случаев: экспорт хранилища и окружений и ключи, сохранённые из «Конвертера ключей», может прочитать только вы, даже когда они заменяют старый файл или ссылку; ключ, с которого вы сняли парольную фразу, тоже может прочитать только вы; а на macOS личный файл не получает права на чтение, которые папка даёт другим.",
-  "uz": "Shaxsiy fayllar koʻproq holatlarda shaxsiy qoladi: ombor va muhitlar eksportini hamda «Kalit konvertori»dan saqlangan kalitlarni eski fayl yoki havola oʻrniga yozilganda ham faqat siz oʻqiy olasiz, parol iborasi olib tashlangan kalitni ham faqat siz oʻqiy olasiz, macOS’da esa shaxsiy fayl papka boshqalarga beradigan oʻqish huquqini olmaydi."
-}

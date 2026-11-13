@@ -1,6 +1,0 @@
-{
-  "kind": "new",
-  "en": "Projects: group the hosts, keys, logins, environments and folders of one piece of work, then connect, copy, run or open a terminal in its folder from its page. The app suggests projects from your environments, code folders, ~/.ssh/config and vault; nothing changes until you accept one.",
-  "ru": "Проекты: объедините хосты, ключи, логины, окружения и папки одной работы, а затем подключайтесь, копируйте, запускайте или открывайте терминал в её папке прямо со страницы проекта. Приложение предлагает проекты по вашим окружениям, папкам с кодом, ~/.ssh/config и хранилищу; ничего не меняется, пока вы не примете предложение.",
-  "uz": "Loyihalar: bitta ishning xostlari, kalitlari, loginlari, muhitlari va papkalarini birlashtiring, soʻng loyiha sahifasidan ulaning, nusxalang, ishga tushiring yoki uning papkasida terminal oching. Ilova muhitlaringiz, kod papkalaringiz, ~/.ssh/config va ombor asosida loyihalar taklif qiladi; taklifni qabul qilmaguningizcha hech narsa oʻzgarmaydi."
-}

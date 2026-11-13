@@ -1,6 +1,0 @@
-{
-  "kind": "notice",
-  "en": "On Windows, Run in terminal in Environments now opens PowerShell instead of Command Prompt. To keep Command Prompt, choose it in Settings → Terminal → Default shell.",
-  "ru": "В Windows кнопка «Запустить в терминале» в «Окружениях» теперь открывает PowerShell вместо командной строки. Чтобы оставить командную строку, выберите её в «Настройки» → «Терминал» → «Оболочка по умолчанию».",
-  "uz": "Windowsda Muhitlardagi «Terminalda ishga tushirish» endi Buyruq satri oʻrniga PowerShellni ochadi. Buyruq satrini qoldirish uchun uni Sozlamalar → Terminal → Standart shell boʻlimida tanlang."
-}

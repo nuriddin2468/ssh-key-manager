@@ -1,6 +1,0 @@
-{
-  "kind": "new",
-  "en": "A part of a project can have its own folder: the project page shows its folders as a tree, with each part's stages. Open terminal in a folder with several parts asks which environment to use, and New environment can take a .env file it finds in the chosen folder.",
-  "ru": "У части проекта может быть своя папка: страница проекта показывает папки деревом, со стадиями каждой части. «Открыть терминал» в папке с несколькими частями спрашивает, какое окружение взять, а «Новое окружение» может взять файл .env, найденный в выбранной папке.",
-  "uz": "Loyiha qismining oʻz papkasi boʻlishi mumkin: loyiha sahifasi papkalarni har bir qismning bosqichlari bilan daraxt koʻrinishida koʻrsatadi. Bir nechta qismli papkada «Terminalni ochish» qaysi muhitni olishni soʻraydi, «Yangi muhit» esa tanlangan papkadagi .env faylini olishi mumkin."
-}

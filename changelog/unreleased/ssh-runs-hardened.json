@@ -1,6 +1,0 @@
-{
-  "kind": "security",
-  "en": "Tunnels save a typed password only after ssh itself reports the sign-in, keys go only to an ssh-agent running as you or the system, host names starting with a dash are refused, and on Windows ssh is never run from the folder the app was started in.",
-  "ru": "Туннели сохраняют введённый пароль только после того, как сам ssh сообщит о входе, ключи передаются только ssh-agent, запущенному от вашего имени или системы, имена хостов, начинающиеся с дефиса, отклоняются, а в Windows ssh больше не запускается из папки, где запущено приложение.",
-  "uz": "Tunnellar kiritilgan parolni faqat ssh oʻzi kirish haqida xabar bergandan keyin saqlaydi, kalitlar faqat siz yoki tizim nomidan ishlayotgan ssh-agent ga beriladi, defis bilan boshlanadigan xost nomlari rad etiladi, Windows da esa ssh ilova ishga tushirilgan papkadan ishga tushirilmaydi."
-}

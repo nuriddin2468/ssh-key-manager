@@ -1,6 +1,0 @@
-{
-  "kind": "security",
-  "en": "Browser autofill is harder to trick: pages can't read the logins in its menu and banners, a page that shrinks or hides the menu gets no fill, and a program with a copy of the extension's keys is caught even if it changes them. Saving and updating from the browser count toward its ten changes a minute and no longer push out vault backups.",
-  "ru": "Автозаполнение в браузере сложнее обмануть: страницы не могут прочитать логины в его меню и баннерах, страница, которая уменьшает или прячет меню, ничего не заполнит, а программа с копией ключей расширения будет обнаружена, даже если сменит их. Сохранение и обновление из браузера учитываются в лимите десяти изменений в минуту и больше не вытесняют резервные копии хранилища.",
-  "uz": "Brauzerda avtomatik toʻldirishni aldash qiyinlashdi: sahifalar menyu va bannerlardagi loginlarni oʻqiy olmaydi, menyuni kichraytirgan yoki yashirgan sahifa hech narsa olmaydi, kengaytma kalitlari nusxasiga ega dastur ularni almashtirsa ham aniqlanadi. Brauzerdan saqlash va yangilash daqiqasiga oʻnta oʻzgarish chegarasiga kiradi va ombor zaxiralarini siqib chiqarmaydi."
-}

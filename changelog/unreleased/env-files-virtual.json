@@ -1,6 +1,0 @@
-{
-  "kind": "new",
-  "en": "On macOS and Linux a .env file can be virtual: nothing is kept on disk, and while the app runs it hands the values to each tool that reads the file, or says the vault is locked. Checked with Node dotenv, python-dotenv, Docker Compose, direnv, Vite and Next.js.",
-  "ru": "В macOS и Linux файл .env может быть виртуальным: на диске ничего не хранится, а приложение, пока работает, отдаёт значения каждой программе, которая читает файл, или сообщает, что хранилище заблокировано. Проверено с Node dotenv, python-dotenv, Docker Compose, direnv, Vite и Next.js.",
-  "uz": "macOS va Linuxda .env fayl virtual boʻlishi mumkin: diskda hech narsa saqlanmaydi, ilova esa ishlab turganda faylni oʻqigan har bir dasturga qiymatlarni beradi yoki ombor qulflanganini aytadi. Node dotenv, python-dotenv, Docker Compose, direnv, Vite va Next.js bilan tekshirilgan."
-}

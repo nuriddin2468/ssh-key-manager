@@ -5394,7 +5394,7 @@ dependencies = [
 
 [[package]]
 name = "sshkm-app"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "arboard",
  "auto-launch",
@@ -5439,7 +5439,7 @@ dependencies = [
 
 [[package]]
 name = "sshkm-core"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm",
@@ -5497,7 +5497,7 @@ dependencies = [
 
 [[package]]
 name = "sshkm-os"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "apple-native-keyring-store",
  "block2",

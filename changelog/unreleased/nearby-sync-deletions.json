@@ -1,6 +1,0 @@
-{
-  "kind": "improved",
-  "en": "Nearby: more than five deletions a day from your other devices, all of them together, need your yes, whether they come in one sync or several, and the app keeps your SSH config and vault as they were before them for 30 days. A device a sync adds to your devices is named in the sync's summary and in My devices.",
-  "ru": "«Рядом»: больше пяти удалений за день со всех ваших других устройств вместе требуют вашего согласия, одной синхронизацией или несколькими, а конфиг SSH и хранилище в том виде, какими они были до удалений, приложение хранит 30 дней. Устройство, которое синхронизация добавила в ваши, названо в её итогах и в «Моих устройствах».",
-  "uz": "«Yaqin atrofda»: boshqa qurilmalaringizdan birgalikda bir kunda beshtadan ortiq oʻchirish — bitta sinxronlashda boʻladimi yoki bir nechtasida — roziligingizni talab qiladi, ilova esa SSH konfiguratsiyasi va omborni oʻchirishlardan oldingi holatida 30 kun saqlaydi. Sinxronlash qurilmalaringizga qoʻshgan qurilma uning natijalarida va «Mening qurilmalarim»da koʻrsatiladi."
-}

@@ -1,6 +1,0 @@
-{
-  "kind": "improved",
-  "en": "Project page: each card shows five rows, problems first, with Show all for the rest, and the two columns no longer push each other down. Click a host, key, login or environment to open it in its section; ← takes you back. Add also makes a new host, key, login or environment right there. A project folder can be shown in Finder, Explorer or Files.",
-  "ru": "Страница проекта: в каждой карточке пять строк, сначала проблемы, остальное — по «Показать все», а колонки больше не сдвигают друг друга. Нажмите на хост, ключ, логин или окружение, чтобы открыть его в разделе; ← вернёт в проект. «Добавить» создаёт новый хост, ключ, логин или окружение прямо здесь. Папку проекта можно показать в Finder, Проводнике или Files.",
-  "uz": "Loyiha sahifasi: har bir kartada beshta qator, avval muammolar, qolgani «Hammasini koʻrsatish»da, ustunlar endi bir-birini surmaydi. Xost, kalit, login yoki muhitni boʻlimida ochish uchun ustiga bosing; ← loyihaga qaytaradi. «Qoʻshish» shu yerda yangi xost, kalit, login yoki muhit yaratadi. Loyiha papkasini Finder, Explorer yoki Files da koʻrsatish mumkin."
-}

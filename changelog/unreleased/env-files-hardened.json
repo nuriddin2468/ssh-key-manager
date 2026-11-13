@@ -1,6 +1,0 @@
-{
-  "kind": "security",
-  "en": "Managed .env files are written only into the folder the app checked, even if a folder on the way is swapped while it writes; a virtual .env file gives out no values once the vault locks; and files kept only while the vault is unlocked are removed before an update installs and after a crash, however far the app got.",
-  "ru": "Управляемые файлы .env записываются только в папку, которую приложение проверило, даже если папку на пути подменят во время записи; виртуальный файл .env не отдаёт значений, как только хранилище заблокировано; а файлы, которые хранятся только пока хранилище разблокировано, удаляются перед установкой обновления и после сбоя, на каком бы шаге приложение ни остановилось.",
-  "uz": "Boshqariladigan .env fayllar faqat ilova tekshirgan jildga yoziladi, yozish paytida yoʻldagi jild almashtirilsa ham; virtual .env fayl ombor qulflanishi bilan qiymat bermaydi; faqat ombor ochiqligida saqlanadigan fayllar esa yangilanish oʻrnatilishidan oldin va nosozlikdan keyin, ilova qaysi bosqichda toʻxtaganidan qatʼi nazar, oʻchiriladi."
-}

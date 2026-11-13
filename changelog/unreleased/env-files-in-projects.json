@@ -1,6 +1,0 @@
-{
-  "kind": "new",
-  "en": "Projects show where each environment's .env files stand: on a project's page a line under the environment says the files are in sync or how many need attention, and leads to them. On All projects, a project's card counts its .env files that need attention among its problems. An environment's files also list the names .env.example has that it lacks.",
-  "ru": "Проекты показывают состояние файлов .env каждого окружения: на странице проекта строка под окружением говорит, что файлы синхронны или сколько требуют внимания, и ведёт к ним. На «Всех проектах» карточка проекта учитывает файлы .env, требующие внимания, среди его проблем. Файлы окружения также перечисляют имена из .env.example, которых в нём нет.",
-  "uz": "Loyihalar har bir muhitning .env fayllari holatini koʻrsatadi: loyiha sahifasida muhit ostidagi qator fayllar mosligini yoki nechtasi eʼtibor talab qilishini aytadi va ularga olib boradi. «Barcha loyihalar»da loyiha kartasi eʼtibor talab qiladigan .env fayllarni muammolari qatorida sanaydi. Muhit fayllari .env.example dagi, unda yoʻq nomlarni ham koʻrsatadi."
-}

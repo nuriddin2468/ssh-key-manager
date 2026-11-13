@@ -1,6 +1,0 @@
-{
-  "kind": "security",
-  "en": "The app installs an update only if its signature names the version it is offered as, so an older release can't be passed off as a newer one.",
-  "ru": "Приложение устанавливает обновление, только если в его подписи указана та версия, под которой оно предложено, так что старый выпуск нельзя выдать за новый.",
-  "uz": "Ilova yangilanishni faqat uning imzosida taklif qilingan versiya koʻrsatilgan boʻlsa oʻrnatadi, shuning uchun eski versiyani yangisi deb koʻrsatib boʻlmaydi."
-}

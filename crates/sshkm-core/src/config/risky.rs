@@ -364,10 +364,19 @@ fn risk(key: &str, d: &Directive<'_>, rest: &str) -> Option<Risk> {
             !args.iter().all(|name| sends_only_the_locale(name)),
         ),
         "gatewayports" => (Exposed, !is(&["no"])),
-        "localforward" | "dynamicforward" => (
+        // `readconf.c` joins a LocalForward's two words with `:` before
+        // reading it, so the address may be the first word alone.
+        "localforward" => (
+            Exposed,
+            listens_beyond_loopback(
+                &args.iter().take(2).cloned().collect::<Vec<_>>().join(":"),
+                4,
+            ),
+        ),
+        "dynamicforward" => (
             Exposed,
             args.first()
-                .is_some_and(|listen| listens_beyond_loopback(listen)),
+                .is_some_and(|listen| listens_beyond_loopback(listen, 2)),
         ),
         "controlpath" => (
             Exposed,
@@ -390,20 +399,64 @@ fn sends_only_the_locale(pattern: &str) -> bool {
         || pattern.starts_with("LC_")
 }
 
-/// Whether the listening side of a `LocalForward` or `DynamicForward`
-/// (`[address:]port`, IPv6 in brackets, or a socket path) names an address
-/// that isn't loopback: `*`, an empty one (every address), or any other. A
-/// port alone listens as `GatewayPorts` says (on loopback by default), and
-/// a socket path is a file only its owner can use.
-fn listens_beyond_loopback(listen: &str) -> bool {
-    let address = match listen.strip_prefix('[') {
-        Some(rest) => rest.split_once(']').map_or(rest, |(address, _)| address),
-        None => match listen.split_once(':') {
-            Some((address, _)) => address,
-            None => return false,
-        },
+/// Whether a forward (`spec`, as `ssh` reads it: a `LocalForward`'s words
+/// joined with `:`, a `DynamicForward`'s first) names a listening address
+/// that isn't loopback: `*`, an empty one (every address), or any other.
+/// It names one when it has `with_address` fields (4 for a `LocalForward`,
+/// `address:port:host:port`; 2 for a `DynamicForward`). Fewer listen as
+/// `GatewayPorts` says (on loopback by default), or on a socket file only
+/// its owner can use. A spec `ssh` would read otherwise counts.
+fn listens_beyond_loopback(spec: &str, with_address: usize) -> bool {
+    let Some(fields) = forward_fields(spec) else {
+        return true;
     };
+    if fields.len() != with_address {
+        return false;
+    }
+    let address = fields[0].as_str();
     !(address == "localhost" || address.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback()))
+}
+
+/// The fields of a forward as `misc.c`'s `parse_fwd_field` splits them: at
+/// `:`, a field in `[…]` taken as it is, and `\` taking the next character
+/// as it is. `None` for a `[` without its `]` at the end of a field.
+fn forward_fields(spec: &str) -> Option<Vec<String>> {
+    let mut fields = Vec::new();
+    let mut chars = spec.chars().peekable();
+    loop {
+        let mut field = String::new();
+        if chars.peek() == Some(&'[') {
+            chars.next();
+            loop {
+                match chars.next()? {
+                    ']' => break,
+                    c => field.push(c),
+                }
+            }
+            match chars.next() {
+                None => {
+                    fields.push(field);
+                    return Some(fields);
+                }
+                Some(':') => {}
+                Some(_) => return None,
+            }
+            fields.push(field);
+            continue;
+        }
+        loop {
+            match chars.next() {
+                None => {
+                    fields.push(field);
+                    return Some(fields);
+                }
+                Some(':') => break,
+                Some('\\') => field.push(chars.next()?),
+                Some(c) => field.push(c),
+            }
+        }
+        fields.push(field);
+    }
 }
 
 /// Whether a `ControlPath` is in the user's home folder (`~/…` or `%d/…`),

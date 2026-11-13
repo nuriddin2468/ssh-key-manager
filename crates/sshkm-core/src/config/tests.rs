@@ -1174,6 +1174,9 @@ fn listening_for_others_asks() {
         "LocalForward 0.0.0.0:8080 intranet.example:80",
         "LocalForward 192.168.1.5:8080 intranet.example:80",
         "LocalForward [::]:8080 intranet.example:80",
+        // `ssh` joins the two words with `:`.
+        "LocalForward 0.0.0.0 8080:intranet.example:80",
+        "LocalForward * 8080:intranet.example:80",
         "LocalForward \"*:8080\" intranet.example:80",
         "LocalForward \\*:8080 intranet.example:80",
         "DynamicForward 0.0.0.0:1080",
@@ -1193,6 +1196,7 @@ fn listening_for_others_asks() {
         "LocalForward localhost:8080 intranet.example:80",
         "LocalForward 127.0.0.1:8080 intranet.example:80",
         "LocalForward [::1]:8080 intranet.example:80",
+        "LocalForward localhost 8080:intranet.example:80",
         "LocalForward /tmp/local.sock intranet.example:80",
         "DynamicForward 1080",
         "DynamicForward localhost:1080",

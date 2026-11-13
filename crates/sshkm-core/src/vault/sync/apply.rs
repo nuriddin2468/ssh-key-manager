@@ -388,6 +388,26 @@ impl Vault {
             .ok_or_else(|| Error::NotFound("field".into()))?;
         Ok(SecretString::from(value.get().clone()))
     }
+
+    /// Whether `field` of the item `id` is a secret on either side: an
+    /// entry's password, or a field kept protected (a secret variable or
+    /// custom field). Reads no value: the app asks before showing one.
+    pub fn sync_value_secret(&self, peer: &PeerVault, id: &str, field: &str) -> bool {
+        let Some(name) = field.strip_prefix("s:") else {
+            return false;
+        };
+        if name == fields::PASSWORD {
+            return true;
+        }
+        let Ok(uuid) = Uuid::parse_str(id) else {
+            return false;
+        };
+        [&self.db, &peer.db].into_iter().any(|db| {
+            db.entry(EntryId::from_uuid(uuid))
+                .and_then(|entry| entry.fields.get(name).map(Value::is_protected))
+                .unwrap_or(false)
+        })
+    }
 }
 
 impl PeerVault {

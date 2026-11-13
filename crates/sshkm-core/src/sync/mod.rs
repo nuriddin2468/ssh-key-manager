@@ -22,10 +22,11 @@ use serde::{Deserialize, Serialize};
 
 pub use self::host_keys::HostKeys;
 pub use self::merge::{
-    Base, Change, Conflict, Field, Hasher, Item, Plan, agree, digest, digests, plan,
+    Base, Change, Conflict, Field, Hasher, Hashes, Item, Outcome, Plan, agree, agree_hashed,
+    digest, digests, plan, plan_hashed,
 };
 use crate::vault::projects::ProjectRecord;
-use crate::vault::{DeviceRecord, check_records};
+use crate::vault::{ContactRecord, DeviceRecord, MAX_CONTACTS, check_records};
 use crate::{Error, Result};
 
 /// Most hosts one computer sends.
@@ -46,6 +47,9 @@ pub struct Manifest {
     /// Missing from versions before projects.
     #[serde(default)]
     pub projects: Vec<ProjectRecord>,
+    /// The contacts' records; missing from versions before entry sync.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contacts: Vec<ContactRecord>,
 }
 
 impl Manifest {
@@ -86,8 +90,11 @@ impl Manifest {
                 }
             }
         }
-        // Project records are taken one by one when they merge: one this
-        // version can't read is skipped, never the whole sync.
+        // Project and contact records are taken one by one when they merge:
+        // one this version can't read is skipped, never the whole sync.
+        if self.contacts.len() > MAX_CONTACTS {
+            return Err(Error::invalid("too many contacts"));
+        }
         check_records(&self.devices)
     }
 }
@@ -170,6 +177,7 @@ mod tests {
             }],
             devices: Vec::new(),
             projects: Vec::new(),
+            contacts: Vec::new(),
         };
         assert!(fine.check().is_ok());
         let with = |item: Item| Manifest {

@@ -360,9 +360,7 @@ fn meet(
     let initiator = session.is_initiator();
     let hash = session.handshake_hash().to_vec();
     let known = side.knows(peer_key)?;
-    let mine = side
-        .vault(&hash, initiator)
-        .map(|vault| Own { intent, vault });
+    let mine = own(side, &hash, initiator, intent);
     session
         .send(&Message::Hello {
             version: VERSION,
@@ -454,6 +452,15 @@ fn meet(
         }
         Intent::Other => Err(PairingFailure::Version),
     }
+}
+
+/// What this side's `Hello` says about the user's own devices.
+fn own(side: &impl Side, hash: &[u8], initiator: bool, intent: Option<Intent>) -> Option<Own> {
+    side.vault(hash, initiator).map(|vault| Own {
+        intent,
+        vault,
+        entries: None,
+    })
 }
 
 /// The other side's `Hello`.

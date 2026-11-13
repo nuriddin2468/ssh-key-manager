@@ -88,12 +88,107 @@ impl Hasher {
     }
 
     fn field(&self, id: &str, field: &Field) -> String {
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(self.0.as_ref())
-            .unwrap_or_else(|_| unreachable!("HMAC takes any key length"));
+        let mut mac = self.mac();
         absorb(&mut mac, id, field);
         let digest = mac.finalize().into_bytes();
         Base64::encode_string(&digest[..16])
     }
+
+    /// The hash of a field made of any parts, for things that aren't hosts
+    /// (a vault entry's fields): the item's id, the field's name and each
+    /// part, each with its length.
+    pub fn parts(&self, id: &str, key: &str, parts: &[&[u8]]) -> String {
+        let mut mac = self.mac();
+        for part in [id.as_bytes(), key.as_bytes()]
+            .into_iter()
+            .chain(parts.iter().copied())
+        {
+            mac.update(&u64::try_from(part.len()).unwrap_or(u64::MAX).to_be_bytes());
+            mac.update(part);
+        }
+        let digest = mac.finalize().into_bytes();
+        Base64::encode_string(&digest[..16])
+    }
+
+    fn mac(&self) -> Hmac<Sha256> {
+        <Hmac<Sha256> as Mac>::new_from_slice(self.0.as_ref())
+            .unwrap_or_else(|_| unreachable!("HMAC takes any key length"))
+    }
+}
+
+/// An item's fields as hashes, by field name: what the plan compares.
+pub type Hashes = BTreeMap<String, String>;
+
+/// What the plan says about one item, compared by hashes alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    /// Only the other side has it and it's new: add it here.
+    Add,
+    /// Take these fields from the other side; the rest stays.
+    Take(Vec<String>),
+    /// The other side deleted it, and it's as it was here.
+    Delete,
+    /// Both changed it differently, or one deleted what the other changed.
+    Conflict,
+}
+
+/// [`plan`] on hashes: for each item that needs something here, by id,
+/// what. Items alike on both sides, or changed only here, are left out.
+pub fn plan_hashed(
+    base: &Base,
+    mine: &BTreeMap<String, Hashes>,
+    theirs: &BTreeMap<String, Hashes>,
+) -> Vec<(String, Outcome)> {
+    let ids: BTreeSet<&String> = mine.keys().chain(theirs.keys()).collect();
+    let mut out = Vec::new();
+    for id in ids {
+        let (m, t, b) = (mine.get(id), theirs.get(id), base.items.get(id));
+        let outcome = match (m, t) {
+            (None, None) => None,
+            (Some(m), None) => match b {
+                None => None,
+                Some(b) if m == b => Some(Outcome::Delete),
+                Some(_) => Some(Outcome::Conflict),
+            },
+            (None, Some(t)) => match b {
+                None => Some(Outcome::Add),
+                Some(b) if t == b => None,
+                Some(_) => Some(Outcome::Conflict),
+            },
+            (Some(m), Some(t)) if m == t => None,
+            (Some(m), Some(t)) => match b.map(|b| take_fields(b, m, t)) {
+                Some(Some(fields)) if fields.is_empty() => None,
+                Some(Some(fields)) => Some(Outcome::Take(fields)),
+                Some(None) | None => Some(Outcome::Conflict),
+            },
+        };
+        if let Some(outcome) = outcome {
+            out.push((id.clone(), outcome));
+        }
+    }
+    out
+}
+
+/// The fields only the other side changed since `base`; `None` if a field
+/// changed on both sides, differently.
+fn take_fields(base: &Hashes, mine: &Hashes, theirs: &Hashes) -> Option<Vec<String>> {
+    let keys: BTreeSet<&String> = mine
+        .keys()
+        .chain(theirs.keys())
+        .chain(base.keys())
+        .collect();
+    let mut take = Vec::new();
+    for key in keys {
+        let (mv, tv, bv) = (mine.get(key), theirs.get(key), base.get(key));
+        if mv == tv || tv == bv {
+            continue;
+        }
+        if mv != bv {
+            return None;
+        }
+        take.push(key.clone());
+    }
+    Some(take)
 }
 
 /// Feeds an item's id and a field to a hash, each part with its length so
@@ -202,72 +297,37 @@ pub struct Plan {
 /// no base for an item, both versions are new: one that only one side has
 /// is added to the other, and two that differ are a conflict.
 pub fn plan(base: &Base, hasher: &Hasher, mine: &[Item], theirs: &[Item]) -> Plan {
-    let mine: BTreeMap<&str, &Item> = mine.iter().map(|i| (i.id.as_str(), i)).collect();
-    let theirs: BTreeMap<&str, &Item> = theirs.iter().map(|i| (i.id.as_str(), i)).collect();
-    let ids: BTreeSet<&str> = mine.keys().chain(theirs.keys()).copied().collect();
+    let by_id = |items: &[Item]| -> BTreeMap<String, Item> {
+        items.iter().map(|i| (i.id.clone(), i.clone())).collect()
+    };
+    let (mine, theirs) = (by_id(mine), by_id(theirs));
+    let snapshots = |items: &BTreeMap<String, Item>| -> BTreeMap<String, Hashes> {
+        items
+            .iter()
+            .map(|(id, item)| (id.clone(), hasher.snapshot(item)))
+            .collect()
+    };
     let mut plan = Plan::default();
-    for id in ids {
-        let (m, t, b) = (
-            mine.get(id).copied(),
-            theirs.get(id).copied(),
-            base.items.get(id),
-        );
-        let conflict = || Conflict {
-            id: id.to_owned(),
-            mine: m.cloned(),
-            theirs: t.cloned(),
-        };
-        match (m, t) {
-            (None, None) => {}
-            (Some(m), None) => match b {
-                None => {}
-                Some(b) if hasher.snapshot(m) == *b => {
-                    plan.changes.push(Change::Delete(id.to_owned()));
+    for (id, outcome) in plan_hashed(base, &snapshots(&mine), &snapshots(&theirs)) {
+        let (m, t) = (mine.get(&id), theirs.get(&id));
+        match (outcome, m, t) {
+            (Outcome::Add, _, Some(t)) => plan.changes.push(Change::Add(t.clone())),
+            (Outcome::Delete, ..) => plan.changes.push(Change::Delete(id)),
+            (Outcome::Take(fields), Some(m), Some(t)) => {
+                let mut merged = m.clone();
+                for key in &fields {
+                    merged.set(t.field(key), key);
                 }
-                Some(_) => plan.conflicts.push(conflict()),
-            },
-            (None, Some(t)) => match b {
-                None => plan.changes.push(Change::Add(t.clone())),
-                Some(b) if hasher.snapshot(t) == *b => {}
-                Some(_) => plan.conflicts.push(conflict()),
-            },
-            (Some(m), Some(t)) => {
-                if digest(m) == digest(t) {
-                    continue;
-                }
-                match b.and_then(|b| merge_fields(hasher, b, m, t)) {
-                    Some(merged) if digest(&merged) == digest(m) => {}
-                    Some(merged) => plan.changes.push(Change::Update(merged)),
-                    None => plan.conflicts.push(conflict()),
-                }
+                plan.changes.push(Change::Update(merged));
             }
+            _ => plan.conflicts.push(Conflict {
+                id,
+                mine: m.cloned(),
+                theirs: t.cloned(),
+            }),
         }
     }
     plan
-}
-
-/// This computer's item with the fields only the other changed taken from
-/// it; `None` if a field changed on both sides.
-fn merge_fields(
-    hasher: &Hasher,
-    base: &BTreeMap<String, String>,
-    mine: &Item,
-    theirs: &Item,
-) -> Option<Item> {
-    let (m, t) = (hasher.snapshot(mine), hasher.snapshot(theirs));
-    let keys: BTreeSet<&String> = m.keys().chain(t.keys()).chain(base.keys()).collect();
-    let mut merged = mine.clone();
-    for key in keys {
-        let (mv, tv, bv) = (m.get(key), t.get(key), base.get(key));
-        if mv == tv || tv == bv {
-            continue;
-        }
-        if mv != bv {
-            return None;
-        }
-        merged.set(theirs.field(key), key);
-    }
-    Some(merged)
 }
 
 /// The base after a sync: for each item both computers now have alike (by
@@ -279,17 +339,34 @@ pub fn agree(
     mine: &[Item],
     theirs: &BTreeMap<String, String>,
 ) -> Base {
+    let snapshots = mine
+        .iter()
+        .map(|item| (item.id.clone(), hasher.snapshot(item)))
+        .collect();
+    agree_hashed(old, &snapshots, &digests(mine), theirs)
+}
+
+/// [`agree`] on hashes: `mine` are this side's snapshots by id, `ours` and
+/// `theirs` the digests each side has now.
+pub fn agree_hashed(
+    old: &Base,
+    mine: &BTreeMap<String, Hashes>,
+    ours: &BTreeMap<String, String>,
+    theirs: &BTreeMap<String, String>,
+) -> Base {
     let mut items = BTreeMap::new();
-    for item in mine {
-        if theirs.get(&item.id) == Some(&digest(item)) {
-            items.insert(item.id.clone(), hasher.snapshot(item));
-        } else if let Some(base) = old.items.get(&item.id) {
-            items.insert(item.id.clone(), base.clone());
+    for (id, snapshot) in mine {
+        if theirs
+            .get(id)
+            .is_some_and(|digest| ours.get(id) == Some(digest))
+        {
+            items.insert(id.clone(), snapshot.clone());
+        } else if let Some(base) = old.items.get(id) {
+            items.insert(id.clone(), base.clone());
         }
     }
     for (id, base) in &old.items {
-        let here = mine.iter().any(|item| item.id == *id);
-        if !here && theirs.contains_key(id) {
+        if !mine.contains_key(id) && theirs.contains_key(id) {
             items.insert(id.clone(), base.clone());
         }
     }

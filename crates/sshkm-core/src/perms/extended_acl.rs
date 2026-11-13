@@ -1,11 +1,13 @@
-//! Files without the entries of an extended access list (macOS).
+//! Emptying an extended access list (macOS).
 //!
 //! A folder's access list can hand its entries down to every file made in
 //! it (`file_inherit`), and macOS checks those entries before the mode: a
 //! file made with mode 0600 in a folder whose list lets everyone read what
-//! is made in it is readable by everyone. `chmod` leaves the list alone, so
-//! a file meant for this user only has its list emptied here, as
-//! `chmod -N` does, before anything is written to it.
+//! is made in it is readable by everyone. `chmod` leaves the list alone.
+//! Emptying a file's list once it exists comes too late for whoever opened
+//! it in between, so a private file is made in a folder of its own whose
+//! list is emptied here, as `chmod -N` does, before anything is made in it
+//! (`fsutil::private_folder`).
 //!
 //! The functions are those of `<sys/acl.h>` in the system library; every
 //! `unsafe` block has a `// SAFETY:` comment.
@@ -13,10 +15,9 @@
 #![allow(unsafe_code)]
 
 use std::{
-    ffi::{CString, c_char, c_int, c_void},
-    fs, io,
-    os::unix::{ffi::OsStrExt, io::AsRawFd},
-    path::Path,
+    ffi::{c_int, c_void},
+    io,
+    os::fd::{AsFd, AsRawFd},
     ptr,
 };
 
@@ -33,35 +34,22 @@ unsafe extern "C" {
     fn acl_free(object: *mut c_void) -> c_int;
     fn acl_get_entry(acl: Acl, entry_id: c_int, entry: *mut *mut c_void) -> c_int;
     fn acl_get_fd_np(fd: c_int, kind: c_int) -> Acl;
-    fn acl_get_link_np(path: *const c_char, kind: c_int) -> Acl;
     fn acl_set_fd_np(fd: c_int, acl: Acl, kind: c_int) -> c_int;
-    fn acl_set_link_np(path: *const c_char, kind: c_int, acl: Acl) -> c_int;
 }
 
-/// Empties the access list of the open `file`. Fails only if entries are
-/// left that couldn't be removed; a file system without access lists (FAT,
-/// some network shares) has none to remove.
-pub(crate) fn clear(file: &fs::File) -> io::Result<()> {
-    let fd = file.as_raw_fd();
-    // SAFETY: `fd` is open for as long as `file` is borrowed, and `empty`
+/// Empties the access list of the open file or folder `fd`. Fails only if
+/// entries are left that couldn't be removed; a file system without access
+/// lists (FAT, some network shares) has none to remove. For a file that
+/// must be private from its first moment, empty the list of a folder of
+/// its own before the file is made in it (`fsutil::private_folder`).
+pub(crate) fn clear(fd: impl AsFd) -> io::Result<()> {
+    let fd = fd.as_fd();
+    let raw = fd.as_raw_fd();
+    // SAFETY: `raw` is open for as long as `fd` is borrowed, and `empty`
     // is a valid list, which the call only reads.
-    let cleared = with_empty(|empty| unsafe { acl_set_fd_np(fd, empty, ACL_TYPE_EXTENDED) });
+    let cleared = with_empty(|empty| unsafe { acl_set_fd_np(raw, empty, ACL_TYPE_EXTENDED) });
     // SAFETY: as above; the list returned is freed by `has_entries`.
-    settle(cleared, || unsafe { acl_get_fd_np(fd, ACL_TYPE_EXTENDED) })
-}
-
-/// [`clear`] for the file at `path`, without following a link there.
-pub(crate) fn clear_at(path: &Path) -> io::Result<()> {
-    let path = CString::new(path.as_os_str().as_bytes())
-        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
-    // SAFETY: `path` is NUL-terminated and outlives the call, and `empty`
-    // is a valid list, which the call only reads.
-    let cleared =
-        with_empty(|empty| unsafe { acl_set_link_np(path.as_ptr(), ACL_TYPE_EXTENDED, empty) });
-    // SAFETY: as above; the list returned is freed by `has_entries`.
-    settle(cleared, || unsafe {
-        acl_get_link_np(path.as_ptr(), ACL_TYPE_EXTENDED)
-    })
+    settle(cleared, || unsafe { acl_get_fd_np(raw, ACL_TYPE_EXTENDED) })
 }
 
 /// Runs `set` with a new empty list, freed afterwards.
@@ -110,7 +98,19 @@ fn has_entries(acl: Acl) -> bool {
 /// Folders that hand an entry down to what is made in them, for tests.
 #[cfg(test)]
 pub(crate) mod testing {
-    use std::{path::Path, process::Command};
+    use std::{
+        os::fd::{AsFd, AsRawFd},
+        path::Path,
+        process::Command,
+    };
+
+    /// Whether the open file `fd` has an entry in its access list.
+    pub(crate) fn carries_entries(fd: impl AsFd) -> bool {
+        // SAFETY: the descriptor is open while borrowed; the list returned
+        // is freed by `has_entries`.
+        let acl = unsafe { super::acl_get_fd_np(fd.as_fd().as_raw_fd(), super::ACL_TYPE_EXTENDED) };
+        !acl.is_null() && super::has_entries(acl)
+    }
 
     /// How many entries `ls -le` lists in `path`'s access list.
     pub(crate) fn entries(path: &Path) -> usize {
@@ -139,6 +139,8 @@ pub(crate) mod testing {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::{testing::*, *};
 
     #[test]
@@ -152,10 +154,15 @@ mod tests {
         // Nothing to remove is fine too.
         clear(&file).unwrap();
 
-        let other = dir.path().join("other");
-        fs::write(&other, "").unwrap();
-        assert_eq!(entries(&other), 1);
-        clear_at(&other).unwrap();
-        assert_eq!(entries(&other), 0);
+        // A folder's list, through its descriptor.
+        let folder = dir.path().join("folder");
+        fs::create_dir(&folder).unwrap();
+        assert_eq!(entries(&folder), 1);
+        clear(fs::File::open(&folder).unwrap()).unwrap();
+        assert_eq!(entries(&folder), 0);
+        // What is made in it now inherits nothing.
+        let inside = folder.join("file");
+        fs::write(&inside, "").unwrap();
+        assert_eq!(entries(&inside), 0);
     }
 }

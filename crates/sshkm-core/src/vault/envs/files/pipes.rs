@@ -293,8 +293,7 @@ impl PipeList {
 /// Makes a pipe at `path`, readable and writable by this user only, where
 /// nothing is. Fails if something is there by then.
 pub fn make(path: &Path) -> Result<PipeId> {
-    imp::mkfifo(path)?;
-    fsutil::make_owner_only(path)?;
+    fsutil::make_private(path, imp::mkfifo)?;
     PipeId::of(path).ok_or_else(|| Error::invalid(format!("{} isn't a pipe", path.display())))
 }
 

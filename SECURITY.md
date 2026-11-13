@@ -368,10 +368,12 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
       and managed `.env` files never follow a link at their path and never take the
       mode of a file they replace: a new file, readable only by you from its first
       byte, is renamed onto the path itself.
-    - On macOS, a file the app makes for you alone (mode 0600 or stricter) has the
-      entries a folder's access list hands down removed before anything is written to
-      it, since macOS checks those entries before the mode; the same for a level-3
-      `.env` pipe.
+    - On macOS a folder's access list can hand entries down to what is made in it, and
+      macOS checks them before the mode. A file the app makes for you alone (mode 0600
+      or stricter), and a level-3 `.env` pipe, is therefore made in a new folder of its
+      own next to where it goes (mode 0700, its access list emptied before anything is
+      made in it) and then renamed into place, so it never carries such an entry, not
+      even for the moment before its contents are written.
     - A temporary file a crash leaves behind is removed: in `~/.ssh` and the app's
       data folder at the next start, next to an export or converted key at the next
       write to that file.

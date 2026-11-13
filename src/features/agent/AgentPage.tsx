@@ -22,6 +22,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
 import { hasPrivate, isPlain, keyTone } from '@/features/keys/model';
 import { findKeyEntry, useVaultKey } from '@/features/keys/vaultKey';
+import { cn } from '@/lib/cn';
 import { formatDuration, shortFingerprint } from '@/lib/format';
 import { useSettings } from '@/lib/settings';
 import { LifetimeSelect } from './LifetimeSelect';
@@ -83,35 +84,31 @@ export function AgentPage() {
           <>
             <section
               aria-labelledby="agent-title"
-              className="relative flex flex-wrap items-center gap-[22px] overflow-hidden rounded-[20px] border border-violet-400/20 bg-[linear-gradient(135deg,rgb(124_58_237/0.2),rgb(255_255_255/0.03)_60%)] px-6 py-[22px] shadow-[inset_0_1px_0_rgb(255_255_255/0.06)]"
+              className="relative flex flex-wrap items-center gap-[22px] overflow-hidden rounded-[20px] banner px-6 py-[22px] [--banner-fade:60%]"
             >
               <div
                 aria-hidden="true"
                 className="relative grid size-[92px] shrink-0 place-items-center"
               >
                 {running ? (
-                  <span className="absolute inset-0 animate-pulse-ring rounded-[28px] bg-violet-400/45" />
+                  <span className="absolute inset-0 animate-pulse-ring rounded-[28px] bg-[rgb(var(--accent-rgb)/0.45)]" />
                 ) : null}
                 <span
-                  className="relative grid size-20 place-items-center rounded-3xl text-white"
-                  style={{
-                    background: running
-                      ? 'linear-gradient(145deg, #DDD6FE 0%, #8B5CF6 45%, #4C1D95 100%)'
-                      : 'linear-gradient(145deg, #CBD5E1, #475569)',
-                    boxShadow:
-                      '0 24px 44px -16px rgb(124 58 237 / 0.9), inset 0 1px 0 rgb(255 255 255 / 0.5)',
-                  }}
+                  className={cn(
+                    'relative grid size-20 place-items-center rounded-3xl',
+                    running ? 'agent-orb' : 'agent-orb-off',
+                  )}
                 >
                   <Cpu className="size-[38px]" strokeWidth={1.6} />
                 </span>
               </div>
               <div className="flex min-w-[280px] flex-1 flex-col gap-1">
-                <span className="inline-flex items-center gap-2 text-[12.5px] font-medium text-violet-200">
+                <span className="inline-flex items-center gap-2 text-[12.5px] font-medium text-[var(--accent-text)]">
                   <span
                     aria-hidden="true"
                     className={
                       running
-                        ? 'size-2 rounded-full bg-violet-400 shadow-[0_0_10px_#A78BFA]'
+                        ? 'size-2 rounded-full bg-[rgb(var(--accent-rgb))] shadow-[0_0_10px_rgb(var(--accent-rgb))]'
                         : 'size-2 rounded-full bg-faint'
                     }
                   />
@@ -152,7 +149,7 @@ export function AgentPage() {
                       : t('agent.stoppedLinux')}
                 </p>
                 {STOPPED_COMMANDS[platform] ? (
-                  <pre className="selectable rounded-xl border border-white/[0.06] bg-black/40 px-3.5 py-3 font-mono text-[12px] leading-5 text-fg-2">
+                  <pre className="selectable rounded-xl border border-line-soft bg-shade/40 px-3.5 py-3 font-mono text-[12px] leading-5 text-fg-2">
                     {STOPPED_COMMANDS[platform]}
                   </pre>
                 ) : null}
@@ -172,7 +169,7 @@ export function AgentPage() {
                       />
                     ))}
                     {identities.length === 0 ? (
-                      <p className="flex-[1_1_100%] rounded-2xl border border-dashed border-white/[0.14] px-4 py-[26px] text-center text-muted">
+                      <p className="flex-[1_1_100%] rounded-2xl border border-dashed border-ink/[0.14] px-4 py-[26px] text-center text-muted">
                         {t('agent.noneUnlocked')}
                       </p>
                     ) : null}
@@ -261,20 +258,13 @@ function LoadedCard({ identity, keyView }: { identity: AgentIdentityView; keyVie
             viewBox="0 0 48 48"
             className="absolute inset-0"
           >
+            <circle cx="24" cy="24" r="20" fill="none" className="stroke-line" strokeWidth="4" />
             <circle
               cx="24"
               cy="24"
               r="20"
               fill="none"
-              stroke="rgb(255 255 255 / 0.08)"
-              strokeWidth="4"
-            />
-            <circle
-              cx="24"
-              cy="24"
-              r="20"
-              fill="none"
-              stroke="#A78BFA"
+              className="stroke-[rgb(var(--accent-rgb))]"
               strokeWidth="4"
               strokeLinecap="round"
               strokeDasharray="125.66"
@@ -291,7 +281,9 @@ function LoadedCard({ identity, keyView }: { identity: AgentIdentityView; keyVie
         <span className="truncate font-mono font-medium">{name}</span>
         <span
           className={
-            remaining !== null ? 'text-[12.5px] text-violet-200' : 'text-[12.5px] text-muted'
+            remaining !== null
+              ? 'text-[12.5px] text-[var(--accent-text)]'
+              : 'text-[12.5px] text-muted'
           }
         >
           {remaining !== null
@@ -328,7 +320,7 @@ function ReadyRow({ keyView: key }: { keyView: KeyView }) {
         ? t('agent.inVault')
         : t('agent.passphraseSaved');
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-3 border-b border-white/[0.05] px-4 py-3 last:border-b-0">
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-3 border-b border-ink/[0.05] px-4 py-3 last:border-b-0">
       <Tile tone={keyTone(key)} size={32}>
         <KeyRound className="size-4" strokeWidth={2} />
       </Tile>
@@ -349,7 +341,7 @@ function ReadyRow({ keyView: key }: { keyView: KeyView }) {
       </span>
       <Button
         size="sm"
-        className="bg-[linear-gradient(135deg,#C4B5FD,#8B5CF6)] font-semibold text-[#1E0B47] shadow-[0_8px_20px_-8px_rgb(139_92_246/0.85)]"
+        className="bg-[linear-gradient(135deg,var(--accent-1),var(--accent-2))] font-semibold text-[var(--accent-ink)] shadow-[0_8px_20px_-8px_color-mix(in_srgb,var(--accent-2)_85%,transparent)]"
         variant="ghost"
         icon={<LockOpen className="size-3.5" strokeWidth={2} />}
         onClick={() => dialogs.unlockKey(key, lifetime)}

@@ -179,7 +179,7 @@ function Records({ report }: { report: DnsReport }) {
           <span className="text-[12px] text-subtle">{t('toolNetwork.dns.asked', { server })}</span>
         ) : null}
       </div>
-      <ul className="flex flex-col divide-y divide-white/[0.06]">
+      <ul className="flex flex-col divide-y divide-line-soft">
         {report.answers.map((answer) => (
           <AnswerRow key={answer.kind} answer={answer} asked={report.name} />
         ))}

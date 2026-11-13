@@ -173,7 +173,7 @@ export function TunnelDialog({
             <span className="text-[12px] font-semibold text-fg-2">
               {t('tunnels.dialog.command')}
             </span>
-            <code className="selectable rounded-[10px] border border-white/[0.07] bg-terminal px-3 py-2 font-mono text-[12px] break-all text-fg-2">
+            <code className="selectable rounded-[10px] border border-ink/[0.07] bg-terminal px-3 py-2 font-mono text-[12px] break-all text-fg-2">
               {commandText(tunnel)}
             </code>
           </div>

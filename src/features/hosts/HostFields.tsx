@@ -335,7 +335,7 @@ export function ConfigPreview({ lines, changed, className }: ConfigPreviewProps)
   return (
     <div
       className={cn(
-        'selectable overflow-x-auto rounded-[14px] border border-white/[0.06] bg-[#06080d] px-4 py-3.5 font-mono text-[12.5px] leading-[1.75]',
+        'selectable overflow-x-auto rounded-[14px] border border-line-soft bg-terminal px-4 py-3.5 font-mono text-[12.5px] leading-[1.75]',
         className,
       )}
     >
@@ -357,7 +357,7 @@ export function ConfigPreview({ lines, changed, className }: ConfigPreviewProps)
               // A bar beside the line, so the change doesn't rest on colour alone.
               <ins
                 title={t('hosts.editor.changedLine')}
-                className="text-green-300 no-underline before:absolute before:top-[5px] before:bottom-[5px] before:-left-2 before:w-0.5 before:rounded-full before:bg-green-300"
+                className="text-added no-underline before:absolute before:top-[5px] before:bottom-[5px] before:-left-2 before:w-0.5 before:rounded-full before:bg-added"
               >
                 {text}
               </ins>

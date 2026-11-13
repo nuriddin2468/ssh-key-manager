@@ -93,14 +93,17 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - Exports: the file is chosen in a system dialog the app opens itself, and both
     exports need the master password. The KeePass copy stays encrypted (it opens with
     the recovery key). The CSV export is plain text: it is readable only by you from the
-    moment it is created (mode 0600; on Windows the file is created with an access list
-    for you, SYSTEM and Administrators only, and no one else can open it while it is
-    written). On a drive that can't keep such an access list (FAT or exFAT USB sticks,
-    some network drives) both exports are refused and nothing is written. It is never
-    written into `~/.ssh` or over the vault's own files (compared by file identity, so
-    links and firmlinks don't get around it), and cells that a spreadsheet would run as
-    a formula are defused, except passwords. Files to import are also picked in a
-    system dialog. Imported CSV files can be moved to the Trash right after import.
+    moment it is created (mode 0600 whatever file it replaces, never that file's mode;
+    on Windows the file is created with an access list for you, SYSTEM and
+    Administrators only, and no one else can open it while it is written). Both are
+    written as a new file renamed onto the path you picked, so a link there is
+    replaced, never written through. On a drive that can't keep such an access list
+    (FAT or exFAT USB sticks, some network drives) both exports are refused and nothing
+    is written. It is never written into `~/.ssh` or over the vault's own files
+    (compared by file identity, so links and firmlinks don't get around it), and cells
+    that a spreadsheet would run as a formula are defused, except passwords. Files to
+    import are also picked in a system dialog. Imported CSV files can be moved to the
+    Trash right after import.
   - Secret environments (the **Environments** page) are entries of the same vault:
     one per environment, in the group `Environments/<project>`, with a custom field
     per variable; a secret variable's field is protected like a password. Lists,
@@ -116,8 +119,9 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - Exporting an environment writes it in plain text (`.env`, JSON, YAML, shell
     `export` lines, a Docker env file, or a Kubernetes Secret, whose base64 hides
     nothing), to a file picked in a system save dialog, with the same protections as
-    the CSV export: mode 0600 (or the private access list on Windows), never in
-    `~/.ssh`, never over the vault's files. Shell lines quote every value in `'…'`,
+    the CSV export: mode 0600 (or the private access list on Windows), a link at the
+    path replaced rather than written through, never in `~/.ssh`, never over the
+    vault's files. Shell lines quote every value in `'…'`,
     so sourcing the file runs nothing a value holds. When the file would be inside a
     Git working tree that doesn't ignore it (`git check-ignore`; without `git`, any
     working tree counts), nothing is written until you confirm in the app.
@@ -153,9 +157,16 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     (a quote that never closes, a line naming a variable without `=`), or that would
     remove half its variables or more at once, changes nothing until you say so.
     Values never reach the interface, errors or logs; the compare dialog compares only
-    an environment's own files. Whether Git ignores or has committed a file is asked of `git` with
-    `core.fsmonitor` off, so a repository's own settings can't make it run a program;
-    a line goes into `.gitignore` only when you ask.
+    an environment's own files. Whether Git ignores or has committed a file is asked of
+    `git` (as are the files of a working tree for the leak scanner) so that a
+    repository's own settings can't make it run a program. Git finds the repository as
+    it always does, so its own check that the repository belongs to you applies
+    (`safe.directory`), but a folder in the project laid out like a bare repository is
+    never taken for one (`safe.bareRepository=explicit`). It runs no file system
+    monitor (`core.fsmonitor` off), may use no transport at all, whatever the
+    repository's settings say (`GIT_ALLOW_PROTOCOL`), so it fetches nothing, not even
+    the objects a partial clone left out, and it gets none of the app's `GIT_*`
+    environment. A line goes into `.gitignore` only when you ask.
   - **Run in terminal** starts your own shell (`$SHELL` as a login shell, or
     `%ComSpec%` on Windows) in the in-app terminal with the variables added to its
     environment. Nothing is written to disk, but the shell and everything it starts
@@ -214,7 +225,12 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     meanwhile, and a native confirmation for lines that say which server gets access.
   - The key converter decrypts keys in Rust only; the page sees fingerprints and the
     public key. Converted keys go into `~/.ssh` only as new files (0600), or where you
-    pick in a system save dialog, never over a file in `~/.ssh`. New passphrases use
+    pick in a system save dialog, as the CSV export is written: readable only by you
+    from the first byte (mode 0600 whatever file it replaces, or the private access
+    list on Windows, where a drive that can't keep one is refused), renamed onto the
+    path itself so a link there is replaced, never written through. A converted key is
+    never saved over a file in `~/.ssh`, compared by file identity, so a link or `..`
+    in the path doesn't get around it. New passphrases use
     the formats' strong options (OpenSSH bcrypt, PuTTY v3 Argon2id, PKCS#8 PBES2 with
     PBKDF2-SHA256 and AES-256); PEM, whose encryption is one round of MD5, is written
     only without a passphrase, and the app says so. The key derivation settings a file
@@ -333,21 +349,60 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     written to disk except whether it is on (`breaches.json` in the app's data
     folder), and range prefixes are never logged.
 - **Signed updates.** An update is installed only if its signature matches the public key
-  built into the app (`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`).
+  built into the app (`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`), and only
+  if it is newer than the running version.
+  - The signature names the version it was made for, and the app refuses an update whose
+    signature doesn't name the version `latest.json` offers (`requireSignedVersion`), so
+    an older release can't be offered as a newer one. Every release so far carries it.
   - The update check runs in Rust. The page can ask for a check or an install, but can't
     change the server, proxy or headers.
-  - Release builds use GitHub Actions pinned to commit SHAs. The updater signing key is
-    a secret of the `release` environment, which only the signing job uses. That job
-    runs on a fresh runner that never builds or installs the app's code: it downloads
-    the bundles the build jobs made, signs them with the Tauri CLI pinned in the
-    lockfile (installed without running any package scripts), checks that the
-    signatures are by the key the app trusts, and writes `latest.json`. Code that runs
-    while building (build scripts, proc macros, npm packages) never shares a machine
-    with the key, though it could still change what the build jobs produce. Apple code
-    signing and notarization, when set up, run in the macOS build job.
+  - Release builds use GitHub Actions pinned to commit SHAs, and restore no caches: CI
+    saves its caches after running development tools, so a release builds from the
+    lockfiles alone.
+  - The updater signing key is a secret of the `release` environment, which only the
+    signing job uses, on version tags, after a maintainer approves it. That job runs on
+    a fresh runner that never builds or installs the app's code. It downloads each
+    platform's bundles into a folder of their own and stops if a build made a file of
+    another kind, or a file of the same name as another build's. One step gets the key:
+    it runs the Tauri CLI pinned in the lockfile (installed beforehand by pnpm, without
+    running any package scripts) with an exact version of Node, and nothing else. The
+    job then checks that each signature is by the key the app trusts and names the
+    release's version, and writes `latest.json`. Code that runs while building (build
+    scripts, proc macros, npm packages) never shares a machine with the key, though it
+    could still change what the build jobs produce: code running in one build job has
+    that run's artifact access, so it could replace the files another platform's job
+    uploads before they are signed.
+  - Apple code signing and notarization, when set up, run in the macOS build job, with
+    secrets of an environment that only that job uses and only version tags can reach.
+    Windows installers aren't code-signed yet.
+  - CI checks the Rust dependencies with `cargo deny`: known advisories, crates from
+    anywhere but crates.io, and licenses the app can't be shipped with (`deny.toml`).
 - **Standard files only.** The app edits the OpenSSH files in place.
-  - Writes are atomic (temp file plus rename), keep the file's permissions, and follow
-    symlinks.
+  - Writes are atomic: a temporary file next to the file, flushed to disk and renamed
+    over it. What they keep depends on the file:
+    - `config`, `known_hosts` and the app's own data files keep their permissions and
+      follow symlinks, so a `~/.ssh/config` that links into a dotfiles repository
+      stays a link and the repository file is updated.
+    - A private key rewritten in place (a passphrase added, changed or removed)
+      follows a symlink too, but keeps only its owner's permissions: a key others could
+      read becomes 0600 (a 0400 key stays 0400); on Windows it gets the private access
+      list as it is created.
+    - Secrets written where you pick (vault and environment exports, converted keys)
+      and managed `.env` files never follow a link at their path and never take the
+      mode of a file they replace: a new file, readable only by you from its first
+      byte, is renamed onto the path itself.
+    - On macOS a folder's access list can hand entries down to what is made in it, and
+      macOS checks them before the mode. A file the app makes for you alone (mode 0600
+      or stricter), and a level-3 `.env` pipe, is therefore made in a new folder of its
+      own next to where it goes (mode 0700, its access list emptied before anything is
+      made in it) and then renamed into place, so it never carries such an entry, not
+      even for the moment before its contents are written.
+    - A temporary file a crash leaves behind is removed: in `~/.ssh` and the app's
+      data folder at the next start, next to an export or converted key at the next
+      write to that file.
+  - Files the app reads (keys, `config`, `known_hosts`, a vault to switch to) are read
+    only if they are regular files: a pipe or a device is refused without waiting for
+    anything to be written to it (`/dev/null` reads as empty).
   - `config` and `known_hosts` are backed up before every write. An edit is tied to the
     version of the file it was made on and refused if the file changed meanwhile.
   - A change that adds or alters a directive that runs a program, loads a library,

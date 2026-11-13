@@ -88,7 +88,7 @@ export function AreaCards({
               'pressable-soft flex min-w-0 flex-col gap-3 rounded-2xl border p-3.5 text-left',
               pressed
                 ? 'border-[rgb(var(--accent-rgb)/0.45)] bg-[rgb(var(--accent-rgb)/0.1)]'
-                : 'border-white/[0.08] bg-white/[0.04] shadow-[inset_0_1px_0_rgb(255_255_255/0.04)] hover:bg-white/[0.06]',
+                : 'border-line bg-card shadow-card hover:bg-fill',
             )}
           >
             <span className="flex w-full items-center gap-2.5">
@@ -144,10 +144,10 @@ export function AreaCards({
                     className="h-1 flex-1 rounded-full"
                     style={{
                       background: notRun.has(check.id)
-                        ? 'rgb(255 255 255 / 0.08)'
+                        ? 'var(--color-line)'
                         : worstOfCheck
                           ? SEVERITY_COLORS[worstOfCheck]
-                          : 'rgb(94 234 212 / 0.7)',
+                          : 'color-mix(in srgb, var(--color-ok) 70%, transparent)',
                     }}
                   />
                 );

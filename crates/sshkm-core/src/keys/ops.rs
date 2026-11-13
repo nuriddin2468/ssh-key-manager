@@ -269,7 +269,9 @@ pub fn generate(dir: &Path, request: &GenerateRequest) -> Result<KeyInfo> {
 /// Changes, adds (`old = None` for an unencrypted key) or removes
 /// (`new = None` or empty) the passphrase of an OpenSSH private key.
 ///
-/// The file is rewritten atomically and keeps its permissions. Legacy PEM and
+/// The file is rewritten atomically and stays private: it keeps only its
+/// owner's permissions ([`fsutil::atomic_write_private`]), so a key left
+/// readable by others loses that as it loses its passphrase. Legacy PEM and
 /// PKCS#8 keys are [`Error::Unsupported`] (`ssh-keygen -p` converts them).
 pub fn change_passphrase(
     private_path: &Path,
@@ -295,8 +297,7 @@ pub fn change_passphrase(
     let pem = key
         .to_openssh(LineEnding::LF)
         .map_err(|e| key_error("encoding key", &e))?;
-    fsutil::atomic_write(private_path, pem.as_bytes(), 0o600)?;
-    restrict_private_key(private_path);
+    fsutil::atomic_write_private(private_path, pem.as_bytes())?;
     inspect(private_path)
 }
 
@@ -819,6 +820,35 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    /// A key that others could read keeps only its owner's permissions once
+    /// its passphrase is gone; a stricter one stays as strict.
+    #[cfg(unix)]
+    #[test]
+    fn a_key_without_its_passphrase_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".ssh");
+        generate(
+            &dir,
+            &request("work", GenerateAlgorithm::Ed25519, Some("correct horse")),
+        )
+        .unwrap();
+        let pass = secret("correct horse");
+        let path = dir.join("work");
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let plain = change_passphrase(&path, Some(&pass), None).unwrap();
+        assert_eq!(plain.encrypted, Some(false));
+        assert_eq!(mode(&path), 0o600);
+        assert!(plain.permissions.ok, "{:?}", plain.permissions);
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
+        change_passphrase(&path, None, Some(&pass)).unwrap();
+        assert_eq!(mode(&path), 0o400);
+        // No temporary file is left next to it.
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 2);
     }
 
     #[test]

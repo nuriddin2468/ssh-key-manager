@@ -127,7 +127,7 @@ export function ChoiceCards<T extends string>({
                             ? 'shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.14),0_14px_30px_-18px_rgb(var(--accent-rgb)/0.8)]'
                             : 'shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.14)]',
                         )
-                      : 'border-white/[0.09] bg-white/[0.03] hover:bg-white/[0.05]',
+                      : 'border-ink/[0.09] bg-card-subtle hover:bg-ink/[0.05]',
                   )}
                 >
                   {option.tone && Icon ? (
@@ -137,7 +137,7 @@ export function ChoiceCards<T extends string>({
                   ) : (
                     <span
                       aria-hidden="true"
-                      className="mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border border-white/25"
+                      className="mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border border-ink/25"
                     >
                       <RadioGroup.Indicator className="size-2 rounded-full bg-[var(--accent-text)]" />
                     </span>

@@ -2,7 +2,8 @@
 
 A Manifest V3 extension for Chrome, Edge, Brave and Firefox that fills logins from the
 SSH Key Manager vault and offers to save new ones. Install it from the
-[Chrome Web Store](https://chromewebstore.google.com/detail/ssh-key-manager/lkmgdcanagjeajepncgokapkbihahddb). It talks to the app through the
+[Chrome Web Store](https://chromewebstore.google.com/detail/ssh-key-manager/lkmgdcanagjeajepncgokapkbihahddb) or
+[Firefox Add-ons](https://addons.mozilla.org/firefox/addon/ssh-key-manager/). It talks to the app through the
 app's native messaging host; see [SECURITY.md](../SECURITY.md#browser-autofill) for the
 threat model and [docs/architecture.md](../docs/architecture.md#browser-extension) for
 how the pieces fit.

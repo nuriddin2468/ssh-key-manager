@@ -26,7 +26,7 @@ import { ProjectChip, projectDot } from './ProjectTile';
 import { useProjects } from './queries';
 
 const ITEM =
-  'flex h-8 items-center gap-2.5 rounded-lg px-2.5 outline-none select-none transition-colors duration-100 active:bg-white/[0.12] data-[disabled]:opacity-40 data-[highlighted]:bg-white/[0.08]';
+  'flex h-8 items-center gap-2.5 rounded-lg px-2.5 outline-none select-none transition-colors duration-100 active:bg-fill-pressed data-[disabled]:opacity-40 data-[highlighted]:bg-ink/[0.08]';
 
 /**
  * "Add to project" for an item of the library: a submenu that ticks the
@@ -140,7 +140,7 @@ function Wrap({
   }
   return (
     <DropdownMenu.Group>
-      <DropdownMenu.Label className="px-2.5 pt-1 pb-1.5 text-[11px] font-semibold text-[#7C869A]">
+      <DropdownMenu.Label className="px-2.5 pt-1 pb-1.5 text-[11px] font-semibold text-label">
         {label}
       </DropdownMenu.Label>
       {children}
@@ -209,7 +209,7 @@ export function ProjectDots({
       {shown.map((project) => (
         <span
           key={project.id}
-          className="inline-flex h-[18px] max-w-[140px] items-center gap-1 rounded-full bg-white/[0.06] px-1.5 text-[11px] text-fg-2"
+          className="inline-flex h-[18px] max-w-[140px] items-center gap-1 rounded-full bg-fill px-1.5 text-[11px] text-fg-2"
         >
           <span
             aria-hidden="true"
@@ -272,7 +272,7 @@ export function RowProjectButton({ member, name }: { member: ProjectMember; name
       <AddToProjectButton
         member={member}
         name={name}
-        className="size-8 rounded-lg bg-[rgb(22_27_39/0.92)] shadow-[0_4px_12px_-4px_rgb(0_0_0/0.6)]"
+        className="size-8 rounded-lg bg-popover/92 shadow-[0_4px_12px_-4px] shadow-shade/60"
       />
     </div>
   );

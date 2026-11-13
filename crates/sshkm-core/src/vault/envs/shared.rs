@@ -85,7 +85,7 @@ pub(super) fn reference(id: Uuid) -> String {
 
 /// The entry whose password `value` refers to, if it is a reference and
 /// nothing else (KeePass reads placeholders without case).
-pub(super) fn referenced(value: &str) -> Option<Uuid> {
+pub(in crate::vault) fn referenced(value: &str) -> Option<Uuid> {
     const PREFIX: &str = "{REF:P@I:";
     if value.len() != PREFIX.len() + 33 || !value.is_char_boundary(PREFIX.len()) {
         return None;

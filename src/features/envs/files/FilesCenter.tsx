@@ -192,7 +192,7 @@ export function FilesCenter({ project, onProject }: FilesCenterProps) {
               <span className="ml-1.5 font-normal text-subtle tabular-nums">{shown.length}</span>
             </h2>
             {shown.length === 0 ? (
-              <p className="rounded-xl border border-dashed border-white/[0.14] px-3 py-3 text-[12.5px] text-muted">
+              <p className="rounded-xl border border-dashed border-ink/[0.14] px-3 py-3 text-[12.5px] text-muted">
                 {files.length === 0 ? t('envs.center.emptyText') : t('envs.center.nothing')}
               </p>
             ) : (
@@ -309,7 +309,7 @@ function FileReportRow({ report, onCompare, onIgnore }: FileReportRowProps) {
       <div className="flex min-w-[260px] flex-1 flex-col gap-1">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-mono text-[13px] font-semibold">{report.file.path}</span>
-          <span className="inline-flex h-5 items-center rounded-md border border-white/10 bg-white/[0.06] px-[7px] text-[11.5px] text-fg-2">
+          <span className="inline-flex h-5 items-center rounded-md border border-line-strong bg-fill px-[7px] text-[11.5px] text-fg-2">
             {whereLabel(report.label || null, report.envName)}
           </span>
           <span className={cn('text-[11.5px] font-semibold', tone.text)}>
@@ -373,7 +373,7 @@ function FileReportRow({ report, onCompare, onIgnore }: FileReportRowProps) {
                   {missing.map((variable) => (
                     <li
                       key={variable}
-                      className="selectable rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 font-mono text-[11.5px] text-fg-2"
+                      className="selectable rounded-md border border-line-strong bg-ink/[0.04] px-2 py-0.5 font-mono text-[11.5px] text-fg-2"
                     >
                       {variable}
                     </li>
@@ -449,10 +449,10 @@ function UnmanagedRow({ found, projectName, onAdopt }: UnmanagedRowProps) {
   const { t } = useTranslation();
   const name = bindingPath(found.file);
   return (
-    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-2">
+    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-ink/[0.07] bg-ink/[0.025] px-3 py-2">
       <span
         aria-hidden="true"
-        className="grid size-7 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/[0.05] text-muted"
+        className="grid size-7 shrink-0 place-items-center rounded-lg border border-line-strong bg-ink/[0.05] text-muted"
       >
         <FileSearch className="size-[14px]" strokeWidth={2} />
       </span>

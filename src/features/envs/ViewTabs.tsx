@@ -48,7 +48,7 @@ export function ViewTabs({ view, onChange, attention = 0 }: ViewTabsProps) {
       role="tablist"
       aria-label={t('envs.views.label')}
       onKeyDown={onKeyDown}
-      className="flex h-[30px] items-center rounded-[10px] border border-white/[0.08] bg-white/[0.04] p-[3px]"
+      className="flex h-[30px] items-center rounded-[10px] border border-line bg-ink/[0.04] p-[3px]"
     >
       {VIEWS.map((item, index) => {
         const selected = item === view;
@@ -66,7 +66,7 @@ export function ViewTabs({ view, onChange, attention = 0 }: ViewTabsProps) {
             onClick={() => onChange(item)}
             className={cn(
               'pressable inline-flex h-6 items-center gap-1.5 rounded-[7px] px-2.5 text-[12.5px] font-medium',
-              selected ? 'bg-white/[0.11] text-fg shadow-sm' : 'text-muted hover:text-fg-2',
+              selected ? 'bg-ink/[0.11] text-fg shadow-sm' : 'text-muted hover:text-fg-2',
             )}
           >
             {t(`envs.views.${item}`)}

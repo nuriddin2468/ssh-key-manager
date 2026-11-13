@@ -83,6 +83,17 @@ const KEY_FIELD: &str = "sshkm.fingerprint";
 /// additional attributes.
 const UNREADABLE_OTP_FIELD: &str = "Unrecognized 2FA secret";
 
+/// Whether a text field holds a 2FA secret, as this app, KeePassXC or
+/// KeePass's plugins write it (`otp`, `TOTP Seed`, `TimeOtp-Secret-…`,
+/// `HmacOtp-Secret-…`): never shown.
+pub fn is_otp_field(name: &str) -> bool {
+    name == fields::OTP
+        || name == UNREADABLE_OTP_FIELD
+        || name == "TOTP Seed"
+        || name.starts_with("TimeOtp-Secret")
+        || name.starts_with("HmacOtp-Secret")
+}
+
 /// What Windows Hello signs to unlock the vault `vault_id` on a computer; see
 /// [`bound_device_key`].
 pub fn device_challenge(vault_id: &str) -> Vec<u8> {

@@ -179,7 +179,7 @@ function PingResult({ ping, host, port }: { ping: SshPing; host: string; port: n
               'rounded-md border px-1.5 py-0.5 tabular-nums',
               sample === null
                 ? 'border-warning-solid/30 bg-warning-solid/10 text-warning'
-                : 'border-white/[0.08] bg-white/[0.03] text-fg-2',
+                : 'border-line bg-fill-subtle text-fg-2',
             )}
           >
             {sample === null ? t('toolNetwork.sshPing.lost') : ms(sample)}
@@ -193,7 +193,7 @@ function PingResult({ ping, host, port }: { ping: SshPing; host: string; port: n
       ) : null}
 
       {banner ? (
-        <section className="flex flex-col gap-2 border-t border-white/[0.06] pt-3">
+        <section className="flex flex-col gap-2 border-t border-line-soft pt-3">
           <h3 className="text-[12px] font-semibold tracking-[0.02em] text-subtle">
             {t('toolNetwork.sshPing.server')}
           </h3>
@@ -211,7 +211,7 @@ function PingResult({ ping, host, port }: { ping: SshPing; host: string; port: n
 
 function Stat({ label, value, warn = false }: { label: string; value: string; warn?: boolean }) {
   return (
-    <div className="flex flex-col gap-0.5 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2">
+    <div className="flex flex-col gap-0.5 rounded-xl border border-line bg-fill-subtle px-3 py-2">
       <span className="text-[11.5px] text-subtle">{label}</span>
       <span
         className={cn(

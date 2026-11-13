@@ -57,9 +57,14 @@ const MAX_PIPES: usize = 4096;
 
 /// Which pipe: its device, inode and time of birth, so a pipe put in its
 /// place by someone else is told apart, even one that got the same inode
-/// number once the app's pipe was gone (ext4 and tmpfs hand freed numbers
-/// out again at once). The time of birth is left out where the file system
-/// doesn't keep one; then device and inode tell, as before.
+/// number once the app's pipe was gone (ext4 and tmpfs hand a freed number
+/// out again at once; macOS doesn't soon). While the app serves a pipe its
+/// server holds it, so on Linux its number isn't freed even when it is
+/// removed or replaced ([`PipeServer`]). Before that and after a crash the
+/// time of birth tells them apart: it moves in steps of a few milliseconds
+/// on Linux, so only a pipe made within one step of the app's could pass
+/// for it. The time of birth is left out where the file system doesn't
+/// keep one; then device and inode tell, as before.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PipeId {
     dev: u64,
@@ -633,6 +638,10 @@ mod imp {
     pub struct PipeServer {
         shared: Arc<Shared>,
         thread: std::thread::JoinHandle<()>,
+        /// The pipe, held for as long as the server lasts ([`hold`]): a
+        /// pipe found at the path with its id is it, never another that got
+        /// its inode number.
+        _held: Option<File>,
     }
 
     struct Shared {
@@ -653,7 +662,7 @@ mod imp {
     impl PipeServer {
         /// Starts serving the pipe `id` at `path` with `answer`.
         pub fn start(path: &Path, id: PipeId, answer: Answer) -> Result<Self> {
-            let meta = std::fs::symlink_metadata(path).map_err(|e| Error::io(e, path))?;
+            let (held, meta) = hold(path)?;
             if PipeId::of_meta(&meta) != Some(id) {
                 return Err(Error::invalid(format!("{} isn't the pipe", path.display())));
             }
@@ -677,7 +686,11 @@ mod imp {
                     serving.gone_signal.notify_all();
                 })
                 .map_err(|e| Error::io(e, path))?;
-            Ok(Self { shared, thread })
+            Ok(Self {
+                shared,
+                thread,
+                _held: held,
+            })
         }
 
         pub fn id(&self) -> PipeId {
@@ -761,6 +774,30 @@ mod imp {
             } else if let Some(reader) = open_reader(&self.shared.path, self.shared.id) {
                 drop(reader);
             }
+        }
+    }
+
+    /// What is at `path` now, not following a link: its metadata, and on
+    /// Linux the file itself, held open as a path only (`O_PATH`: neither a
+    /// reader nor a writer, so a pipe's readers see no one). While it is
+    /// held its inode isn't freed, even once it is removed or replaced, so
+    /// no other file gets its number. Elsewhere nothing is held: macOS's
+    /// file systems hand inode numbers out in increasing order.
+    fn hold(path: &Path) -> Result<(Option<File>, std::fs::Metadata)> {
+        #[cfg(target_os = "linux")]
+        {
+            let file = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_PATH | libc::O_NOFOLLOW)
+                .open(path)
+                .map_err(|e| Error::io(e, path))?;
+            let meta = file.metadata().map_err(|e| Error::io(e, path))?;
+            Ok((Some(file), meta))
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let meta = std::fs::symlink_metadata(path).map_err(|e| Error::io(e, path))?;
+            Ok((None, meta))
         }
     }
 
@@ -1171,35 +1208,35 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "the thread stayed");
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(!server.finish(&Answer::Stopped));
+        assert!(!remove(&path, id, &Answer::Stopped));
         assert_eq!(fs::read_to_string(&path).unwrap(), "A=2\n");
-        // A pipe of someone else's in its place is left too, though it may
-        // have the old one's inode number.
+        // A pipe of someone else's made in its place before the server is
+        // done never gets the old one's inode number (ext4 and tmpfs would
+        // hand it out again at once): the server holds it. So it is left.
         fs::remove_file(&path).unwrap();
         let (path, other) = pipe(dir.path());
-        if other == id {
-            // Neither time of birth nor inode tells them apart here.
-            assert!(id.born.is_none());
-        } else {
-            assert!(!remove(&path, id, &Answer::Stopped));
-            assert!(PipeId::of(&path).is_some());
-        }
+        assert_ne!((other.dev, other.ino), (id.dev, id.ino));
+        assert!(!server.finish(&Answer::Stopped));
+        assert_eq!(PipeId::of(&path), Some(other));
     }
 
     #[test]
-    fn a_pipe_on_a_reused_inode_is_someone_elses() {
+    fn after_a_crash_a_pipe_on_a_reused_inode_is_someone_elses() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".env");
         // File systems that hand out a freed inode number again (ext4,
         // tmpfs) do so at once; APFS never does.
-        for _ in 0..64 {
+        for _ in 0..8 {
             let old = make(&path).unwrap();
+            if old.born.is_none() {
+                return;
+            }
+            // The app made its pipe a while before: a time of birth moves
+            // in steps of a few milliseconds on Linux.
+            std::thread::sleep(Duration::from_millis(50));
             fs::remove_file(&path).unwrap();
             let new = make(&path).unwrap();
             if (new.dev, new.ino) == (old.dev, old.ino) {
-                if old.born.is_none() {
-                    return;
-                }
                 assert_ne!(new, old);
                 assert!(!remove(&path, old, &Answer::Stopped));
                 assert_eq!(PipeId::of(&path), Some(new));
@@ -1213,6 +1250,7 @@ mod tests {
                 .unwrap();
                 assert_eq!(PipeList::sweep_at(&list_path), 0);
                 assert_eq!(PipeId::of(&path), Some(new));
+                return;
             }
             fs::remove_file(&path).unwrap();
         }

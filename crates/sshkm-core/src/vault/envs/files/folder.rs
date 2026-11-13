@@ -211,6 +211,13 @@ mod imp {
 
         /// Where a new file or pipe that is to take the place of `name` in
         /// this folder is made first ([`Making`]).
+        #[cfg_attr(
+            not(target_os = "macos"),
+            allow(
+                clippy::unnecessary_wraps,
+                reason = "making the private folder can fail on macOS"
+            )
+        )]
         pub fn making(&self, name: &str) -> io::Result<Making<'_>> {
             #[cfg(target_os = "macos")]
             let private = PrivateFolder::make_in(self.fd(), OsStr::new(name))?;

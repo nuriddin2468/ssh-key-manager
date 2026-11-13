@@ -50,6 +50,7 @@
 pub mod agents;
 mod cloud;
 mod disk;
+mod folder;
 pub mod pipes;
 #[cfg(test)]
 mod tests;
@@ -640,6 +641,9 @@ pub struct FilesContext {
     /// The app's list of its pipes ([`pipes::PipeList`]), where a pipe a
     /// round makes is listed at once.
     pub pipe_list: Option<PathBuf>,
+    /// The app's list of its level-2 files ([`Leftovers`]), where a write
+    /// a round makes is listed before it is made.
+    pub unlocked_list: Option<PathBuf>,
 }
 
 /// A file binding with its environment.
@@ -1247,7 +1251,7 @@ impl Vault {
             .ok_or_else(|| Error::NotFound(file.path.clone()))?;
         let target = disk::locate(&bound.file, ctx, &self.paths)
             .map_err(|_| Error::invalid("the file can't be reached"))?;
-        let text = match disk::read(&target.real) {
+        let text = match disk::read_checked(&target) {
             Disk::Missing => return Ok(false),
             Disk::Text(text) => text,
             Disk::Refused(_) | Disk::Failed(_) => {
@@ -1289,7 +1293,7 @@ impl Vault {
                         let base = state
                             .base(&id, &state_key, &target.dir_token())
                             .filter(|_| !state.was_piped(&id, &state_key));
-                        self.settle(&key, &planned.bound, target, base, None, false)
+                        self.settle(&key, &planned.bound, target, base, None, Settle::Look)
                             .0
                     }
                 };
@@ -1323,7 +1327,7 @@ impl Vault {
             let (Ok(target), bound) = (planned.located, planned.bound) else {
                 continue;
             };
-            let Disk::Text(text) = disk::read(&target.real) else {
+            let Disk::Text(text) = disk::read_checked(&target) else {
                 continue;
             };
             let parsed = dotenv::parse(&text);
@@ -1427,14 +1431,8 @@ impl Vault {
                 }
                 Err(file_state) => file_state.clone(),
                 Ok(target) if planned.bound.level == FileLevel::Virtual => {
-                    let (file_state, made) = self.push_virtual(
-                        &key,
-                        &planned.bound,
-                        target,
-                        files,
-                        prefer,
-                        ctx.pipe_list.as_deref(),
-                    );
+                    let (file_state, made) =
+                        self.push_virtual(&key, &planned.bound, target, files, prefer, ctx);
                     synced.virtual_files.extend(made.served);
                     written = made.written;
                     file_state
@@ -1449,8 +1447,14 @@ impl Vault {
                         .filter(|agreed| agreed.dir == dir && !agreed.piped)
                         .map(|agreed| agreed.rev.clone());
                     let was_out = files.get(&state_key).is_some_and(|agreed| agreed.out);
-                    let (file_state, agreed) =
-                        self.settle(&key, &planned.bound, target, base.as_deref(), prefer, true);
+                    let (file_state, agreed) = self.settle(
+                        &key,
+                        &planned.bound,
+                        target,
+                        base.as_deref(),
+                        prefer,
+                        Settle::Act { ctx },
+                    );
                     let in_sync = file_state == FileState::InSync;
                     let mut out = was_out;
                     match planned.bound.level {
@@ -1506,7 +1510,7 @@ impl Vault {
         target: &Target,
         files: &mut BTreeMap<String, Agreement>,
         prefer: Option<Preference<'_>>,
-        list: Option<&Path>,
+        ctx: &FilesContext,
     ) -> (FileState, PushedVirtual) {
         disk::sweep(target);
         let state_key = bound.state_key();
@@ -1521,7 +1525,7 @@ impl Vault {
             target,
             base.as_deref(),
             prefer,
-            Settle::Act { list },
+            Settle::Act { ctx },
         );
         let mut made = PushedVirtual {
             served,
@@ -1658,7 +1662,7 @@ impl Vault {
         let target = planned
             .located
             .map_err(|_| Error::invalid("the file can't be reached"))?;
-        let text = match disk::read(&target.real) {
+        let text = match disk::read_checked(&target) {
             Disk::Text(text) => Some(text),
             Disk::Missing => None,
             Disk::Refused(_) | Disk::Failed(_) => {
@@ -1674,10 +1678,11 @@ impl Vault {
         })
     }
 
-    /// Where `bound`'s file and the vault stand, and, when `act`, what is
-    /// done about it: the file rewritten from the vault when only the vault
-    /// changed or `prefer` says so, and written when it was never written
-    /// here. Returns the state and, when the two agree now, their revision.
+    /// Where `bound`'s file and the vault stand, and, when `how` acts, what
+    /// is done about it: the file rewritten from the vault when only the
+    /// vault changed or `prefer` says so, and written when it was never
+    /// written here, listed first as [`disk::write`] says. Returns the
+    /// state and, when the two agree now, their revision.
     fn settle(
         &self,
         key: &[u8; 32],
@@ -1685,8 +1690,12 @@ impl Vault {
         target: &Target,
         base: Option<&str>,
         prefer: Option<Preference<'_>>,
-        act: bool,
+        how: Settle<'_>,
     ) -> (FileState, Option<Agreed>) {
+        let (act, list) = match how {
+            Settle::Look => (false, None),
+            Settle::Act { ctx } => (true, ctx.unlocked_list.as_deref()),
+        };
         let failed = |error: &Error| FileState::Failed {
             message: error.to_string(),
         };
@@ -1702,7 +1711,7 @@ impl Vault {
         if target.pipe.is_some() {
             return (FileState::VaultChanged, None);
         }
-        let text = match disk::read(&target.real) {
+        let text = match disk::read_checked(target) {
             Disk::Text(text) => Some(text),
             Disk::Missing => None,
             Disk::Refused(reason) => return (FileState::Refused { reason }, None),
@@ -1732,6 +1741,7 @@ impl Vault {
                 current.map(str::as_bytes),
                 doc.text().as_bytes(),
                 keep_out,
+                list,
             ) {
                 Ok(true) => (
                     FileState::InSync,
@@ -1797,7 +1807,7 @@ impl Vault {
     ) -> (FileState, Option<Agreed>, Option<VirtualFile>) {
         let (act, list) = match how {
             Settle::Look => (false, None),
-            Settle::Act { list } => (true, list),
+            Settle::Act { ctx } => (true, ctx.pipe_list.as_deref()),
         };
         let vault = self.env_variables(&bound.env_id);
         let (answer, vault_rev) = match &vault {
@@ -1833,7 +1843,7 @@ impl Vault {
         if let Some(id) = target.pipe {
             return (served_state(&vault), agreed(false), Some(serve(id, answer)));
         }
-        let text = match disk::read(&target.real) {
+        let text = match disk::read_checked(target) {
             Disk::Text(text) => Some(text),
             Disk::Missing => None,
             Disk::Refused(reason) => return (FileState::Refused { reason }, None, None),
@@ -1948,7 +1958,7 @@ impl Vault {
     /// meanwhile isn't taken for the app's own write.
     fn leftover(&self, key: &[u8; 32], bound: &Bound, target: &Target) -> Option<Leftover> {
         let left = Leftover::of(&target.real)?;
-        let Disk::Text(text) = disk::read(&target.real) else {
+        let Disk::Text(text) = disk::read_checked(target) else {
             return None;
         };
         let vault = self.env_variables(&bound.env_id).ok()?;
@@ -1977,9 +1987,10 @@ impl Vault {
         if kept_in_step.contains(&target.identity) {
             return;
         }
-        let (Disk::Text(text), Ok(vault)) =
-            (disk::read(&target.real), self.env_variables(&bound.env_id))
-        else {
+        let (Disk::Text(text), Ok(vault)) = (
+            disk::read_checked(&target),
+            self.env_variables(&bound.env_id),
+        ) else {
             return;
         };
         let parsed = dotenv::parse(&text);
@@ -2150,7 +2161,7 @@ impl Vault {
         }
         let target = disk::locate(&file, ctx, &self.paths)
             .map_err(|_| Error::invalid("the file can't be reached"))?;
-        match disk::read(&target.real) {
+        match disk::read_checked(&target) {
             Disk::Text(text) => Ok((target.display, dotenv::parse(&text))),
             Disk::Missing => Err(Error::NotFound(target.display.display().to_string())),
             Disk::Refused(_) | Disk::Failed(_) => Err(Error::invalid("the file can't be read")),
@@ -2237,12 +2248,12 @@ impl Vault {
     }
 }
 
-/// Whether [`Vault::settle_virtual`] only looks, or acts: makes the pipe,
-/// listing it in `list`.
+/// Whether [`Vault::settle`] and [`Vault::settle_virtual`] only look, or act:
+/// write the file or make the pipe, listing it in the lists of `ctx`.
 #[derive(Clone, Copy)]
 enum Settle<'a> {
     Look,
-    Act { list: Option<&'a Path> },
+    Act { ctx: &'a FilesContext },
 }
 
 /// What [`Vault::push_virtual`] did: the pipe to serve, and whether one
@@ -2261,14 +2272,15 @@ struct Agreed {
 
 /// What a level-3 file's pipe answers with the variables `vars`: a line
 /// saying where they come from, then the variables, as the app writes them
-/// to a new file.
+/// to a new file. The names in that line can't end it
+/// ([`super::format::one_line`]).
 fn virtual_answer(bound: &Bound, vars: &[(&str, &str)]) -> Result<Zeroizing<String>> {
     let place = if bound.label.is_empty() {
         bound.env_name.clone()
     } else {
         format!("{} · {}", bound.label, bound.env_name)
     };
-    let place: String = place.chars().filter(|c| !c.is_control()).collect();
+    let place = super::format::one_line(&place);
     let mut doc = EnvDocument::new(&format!(
         "# Read-only: SSH Key Manager serves this file from the vault ({place}).\n"
     ));

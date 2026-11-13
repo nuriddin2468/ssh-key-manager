@@ -66,6 +66,7 @@ impl Fixture {
                 ssh_dir: dir.path().join(".ssh"),
                 pipes: Vec::new(),
                 pipe_list: None,
+                unlocked_list: None,
             },
             dir,
             vault,
@@ -1166,6 +1167,170 @@ fn only_the_environments_own_files_are_compared() {
     }
 }
 
+/// "Written only if its folder is still the one it was found in", however
+/// fast the folder is swapped for a link to another and back: the file is
+/// written through the folder that was checked, held open, so it never
+/// lands in the other one.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn a_folder_swapped_while_its_file_is_written_gets_nothing() {
+    let mut f = Fixture::new();
+    let outside = f.dir.path().join("outside");
+    fs::create_dir_all(f.path("sub")).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    // Level 2: a missing file is written again by every round.
+    f.bind_at("sub/.env", FileLevel::WhileUnlocked);
+    let swapper = Swapper::start(&f.path("sub"), &outside, &f.path("swap"));
+    let mut leaked = Vec::new();
+    let rounds = swapper.rounds(|hold| {
+        f.sync();
+        // Held with `sub` the folder again: look, and start over.
+        hold();
+        leaked = fs::read_dir(&outside)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        let _ = fs::remove_file(f.path("sub/.env"));
+        leaked.is_empty()
+    });
+    assert!(
+        leaked.is_empty(),
+        "after {rounds} rounds, written outside the project: {leaked:?}"
+    );
+}
+
+/// Read only through the folder that was checked, however fast the folder
+/// is swapped for a link to another and back: a file in the other folder
+/// is never taken for an edit of the bound one, so nothing of it reaches
+/// the vault (or, from there, other files and computers).
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn a_folder_swapped_while_its_file_is_read_gives_the_vault_nothing() {
+    let mut f = Fixture::new();
+    let outside = f.dir.path().join("outside");
+    fs::create_dir_all(f.path("sub")).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    f.bind("sub/.env");
+    f.sync();
+    // What a round would take for a small edit of the bound file.
+    fs::write(outside.join(".env"), "PORT=3000\nAPI_TOKEN=elsewhere\n").unwrap();
+    let swapper = Swapper::start(&f.path("sub"), &outside, &f.path("swap"));
+    let mut taken = false;
+    let rounds = swapper.rounds(|hold| {
+        f.sync();
+        hold();
+        taken = f.values().iter().any(|(_, value, _)| value == "elsewhere");
+        !taken
+    });
+    assert!(
+        !taken,
+        "after {rounds} rounds, the vault took the other file"
+    );
+    assert_eq!(read(&f.path("sub/.env")), "PORT=3000\nAPI_TOKEN=tok-1\n");
+}
+
+/// Swaps a folder with a link to another, again and again, from a thread
+/// of its own, as fast as the system lets it (`RENAME_SWAP` on macOS,
+/// `RENAME_EXCHANGE` on Linux, each atomic).
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+struct Swapper {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pause: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Counts holds; the thread answers with the one it saw while it waits
+    /// with the folder itself again.
+    holds: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    held: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+impl Swapper {
+    /// Swaps `folder` with `link`, made as a link to `other`.
+    fn start(folder: &Path, other: &Path, link: &Path) -> Self {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        use rustix::fs::{CWD, RenameFlags, renameat_with};
+
+        std::os::unix::fs::symlink(other, link).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let pause = Arc::new(AtomicBool::new(false));
+
+        let holds = Arc::new(AtomicUsize::new(0));
+        let held = Arc::new(AtomicUsize::new(0));
+        let thread = {
+            let (stop, pause) = (Arc::clone(&stop), Arc::clone(&pause));
+            let (holds, held) = (Arc::clone(&holds), Arc::clone(&held));
+            let (a, b) = (folder.to_path_buf(), link.to_path_buf());
+            std::thread::spawn(move || {
+                // Swaps made; even when the folder is itself again.
+                let mut swaps = 0_usize;
+                while !stop.load(Ordering::SeqCst) {
+                    if pause.load(Ordering::SeqCst) && swaps.is_multiple_of(2) {
+                        held.store(holds.load(Ordering::SeqCst), Ordering::SeqCst);
+                        std::thread::yield_now();
+                        continue;
+                    }
+                    if renameat_with(CWD, &a, CWD, &b, RenameFlags::EXCHANGE).is_ok() {
+                        swaps += 1;
+                    }
+                }
+            })
+        };
+        Self {
+            stop,
+            pause,
+            holds,
+            held,
+            thread: Some(thread),
+        }
+    }
+
+    /// Runs `round` while the folder is being swapped, until it returns
+    /// `false`, for at most 400 rounds or six seconds; `round` is given a
+    /// call that holds the swapping with the folder itself again, to look
+    /// at what the round did. Returns how many rounds ran.
+    fn rounds(mut self, mut round: impl FnMut(&dyn Fn()) -> bool) -> usize {
+        use std::sync::atomic::Ordering;
+        use std::time::{Duration, Instant};
+
+        let started = Instant::now();
+        let mut rounds = 0;
+        while rounds < 400 && started.elapsed() < Duration::from_secs(6) {
+            rounds += 1;
+            self.pause.store(false, Ordering::SeqCst);
+            // Waits until the thread is seen waiting, with the folder
+            // itself again, after this hold began: no swap is under way.
+            let hold = || {
+                self.pause.store(true, Ordering::SeqCst);
+                let this = self.holds.fetch_add(1, Ordering::SeqCst) + 1;
+                while self.held.load(Ordering::SeqCst) != this {
+                    std::thread::yield_now();
+                }
+            };
+            if !round(&hold) {
+                break;
+            }
+        }
+        self.finish();
+        rounds
+    }
+
+    fn finish(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            thread.join().unwrap();
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+impl Drop for Swapper {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn a_folder_swapped_for_a_link_is_no_edit() {
@@ -1516,6 +1681,39 @@ fn an_edit_reaches_the_vault_before_its_file_goes() {
     );
     assert_eq!(put_away(&synced).removed, 1);
     assert!(!path.exists());
+}
+
+#[test]
+fn writes_are_listed_before_they_are_made_so_a_crash_leaves_nothing() {
+    let mut f = Fixture::new();
+    let list = f.dir.path().join("env-files-unlocked.json");
+    f.ctx.unlocked_list = Some(list.clone());
+    f.bind_at(".env", FileLevel::WhileUnlocked);
+    f.bind(".env.local");
+    // The app goes right after the round's writes, before it keeps the
+    // round's own list: what the round listed as it wrote is enough.
+    f.sync();
+    let (unlocked, always) = (f.path(".env"), f.path(".env.local"));
+    assert!(unlocked.exists() && always.exists());
+    // As if it went in the middle of a write: a temporary file is left.
+    let temp = f.path(".env.local.sshkm-Ab12Cd.tmp");
+    fs::write(&temp, "API_TOKEN=tok-1\n").unwrap();
+    assert!(Leftovers::sweep_at(&list) >= 1);
+    assert!(!unlocked.exists());
+    assert!(!temp.exists());
+    // A level-1 file stays: only its temporary files were listed.
+    assert!(always.exists());
+
+    // Rewritten, the file as it was and as it is now are both listed until
+    // the round ends: either goes.
+    let synced = f.sync();
+    Leftovers::new(synced.unlocked.clone()).save(&list).unwrap();
+    f.set("PORT", "4000", false);
+    f.sync();
+    assert_eq!(read(&unlocked), "PORT=4000\nAPI_TOKEN=tok-1\n");
+    assert!(Leftovers::sweep_at(&list) >= 1);
+    assert!(!unlocked.exists());
+    assert!(always.exists());
 }
 
 #[test]
@@ -2190,6 +2388,34 @@ fn undo_takes_a_shared_value_out_of_the_recycle_bin() {
             .iter()
             .any(|value| value.id == shared)
     );
+}
+
+#[test]
+fn a_virtual_files_first_line_is_one_comment_line() {
+    // Names as another computer or a contact may send them: with
+    // characters that some readers of a `.env` file end a line at.
+    let bound = Bound {
+        env_id: "id".into(),
+        project: None,
+        label: "Shop\u{2029}B=2".into(),
+        env_name: "dev\u{2028}A=1\u{85}C=3\nD=4 #".into(),
+        kind: EnvKind::Local,
+        in_trash: false,
+        file: EnvFile {
+            folder: "~/shop".into(),
+            path: ".env".into(),
+        },
+        level: FileLevel::Virtual,
+        valid: true,
+    };
+    let text = virtual_answer(&bound, &[("PORT", "3000")]).unwrap();
+    assert_eq!(
+        text.as_str(),
+        "# Read-only: SSH Key Manager serves this file from the vault \
+         (Shop B=2 · dev A=1 C=3 D=4 #).\nPORT=3000\n"
+    );
+    let parsed = dotenv::parse(&text);
+    assert_eq!(parsed.vars.len(), 1);
 }
 
 /// The answer a round gives a level-3 file, as text.

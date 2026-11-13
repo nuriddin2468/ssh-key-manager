@@ -13,6 +13,8 @@ import type { BreachStatus } from '@/bindings/BreachStatus';
 import type { BrowserImport } from '@/bindings/BrowserImport';
 import type { BrowserProfile } from '@/bindings/BrowserProfile';
 import type { BrowserStatus } from '@/bindings/BrowserStatus';
+import type { ChatEntry } from '@/bindings/ChatEntry';
+import type { ChatList } from '@/bindings/ChatList';
 import type { CloudService } from '@/bindings/CloudService';
 import type { ConfigFile } from '@/bindings/ConfigFile';
 import type { ConnectionEvent } from '@/bindings/ConnectionEvent';
@@ -114,6 +116,8 @@ import type { TerminalInfo } from '@/bindings/TerminalInfo';
 import type { TlsReport } from '@/bindings/TlsReport';
 import type { Tunnel } from '@/bindings/Tunnel';
 import type { TunnelView } from '@/bindings/TunnelView';
+import type { VarReview } from '@/bindings/VarReview';
+import type { VarTarget } from '@/bindings/VarTarget';
 import type { VaultAudit } from '@/bindings/VaultAudit';
 import type { VaultLocation } from '@/bindings/VaultLocation';
 import type { VaultSettings } from '@/bindings/VaultSettings';
@@ -383,7 +387,9 @@ export const api = {
   /** The hosts file group that came with pairing `id`, waiting to be saved. */
   nearbyReceivedGroup: (id: number) => call<ReceivedGroup | null>('nearby_received_group', { id }),
   nearbyContacts: () => call<Contact[]>('nearby_contacts'),
-  nearbyRemoveContact: (key: string) => call<void>('nearby_remove_contact', { key }),
+  /** Removes a contact; with `deleteChat`, its chat goes from this computer too. */
+  nearbyRemoveContact: (key: string, deleteChat = false) =>
+    call<void>('nearby_remove_contact', { key, deleteChat }),
   /** A computer without a vault: visible for ten minutes to be given one, or hidden. */
   nearbyJoin: (on: boolean) => call<NearbyStatus>('nearby_join', { on }),
   /** Makes a device found nearby one of the user's devices, giving it the vault if it has none. */
@@ -395,7 +401,8 @@ export const api = {
   nearbyFinishJoin: (id: number, master: string) =>
     call<void>('nearby_finish_join', { id, master }),
   nearbyDevices: () => call<MyDevice[]>('nearby_devices'),
-  nearbyRemoveDevice: (key: string) => call<void>('nearby_remove_device', { key }),
+  nearbyRemoveDevice: (key: string, deleteChat = false) =>
+    call<void>('nearby_remove_device', { key, deleteChat }),
   /** Whether the user's devices can find this computer while the vault is unlocked. */
   nearbySetReachable: (reachable: boolean) =>
     call<NearbyStatus>('nearby_set_reachable', { reachable }),
@@ -409,6 +416,41 @@ export const api = {
     call<string>('nearby_sync_value', { id, item, field, theirs }),
   /** The cloud service whose folder holds the vault, if one does: its entries then sync through it. */
   nearbyVaultCloud: () => call<CloudService | null>('nearby_vault_cloud'),
+
+  /** Nearby is open or not: while it is, with the vault unlocked, this computer is online for chats. */
+  chatSetOpen: (open: boolean) => call<void>('chat_set_open', { open }),
+  chatList: () => call<ChatList>('chat_list'),
+  chatHistory: (key: string) => call<ChatEntry[]>('chat_history', { key }),
+  chatMarkRead: (key: string) => call<void>('chat_mark_read', { key }),
+  chatSendText: (key: string, text: string) => call<void>('chat_send_text', { key, text }),
+  /** Sends a secret the user typed; `ttl` is an hour, a day or a week, in seconds. */
+  chatSendSecret: (key: string, label: string, value: string, ttl: number) =>
+    call<void>('chat_send_secret', { key, label, value, ttl }),
+  /** Sends variables of an environment; the backend reads their values. */
+  chatSendVariables: (key: string, envId: string, names: string[], ttl: number) =>
+    call<void>('chat_send_variables', { key, envId, names, ttl }),
+  /** Offers what `request` names, as Nearby sends it. */
+  chatSendItem: (key: string, request: SendRequest) =>
+    call<void>('chat_send_item', { key, request }),
+  chatAnswer: (key: string, id: string, accept: boolean) =>
+    call<void>('chat_answer', { key, id, accept }),
+  /** A secret's value, or a variable's (`name`), when the user asks to see it. */
+  chatReveal: (key: string, id: string, name: string | null = null) =>
+    call<string>('chat_reveal', { key, id, name }),
+  /** Copies a secret's value, or a variable's, without it passing through the page. */
+  chatCopy: (key: string, id: string, name: string | null = null) =>
+    call<CopyResult>('chat_copy', { key, id, name }),
+  /** Wipes a secret or variables this user sent: `everywhere`, on the other computer too (it must be online); else only here. */
+  chatRevoke: (key: string, id: string, everywhere: boolean) =>
+    call<void>('chat_revoke', { key, id, everywhere }),
+  chatRetry: (key: string, id: string) => call<void>('chat_retry', { key, id }),
+  /** What adding received variables to an environment (`null`: a new one) would do. */
+  chatReviewVariables: (key: string, id: string, envId: string | null) =>
+    call<VarReview[]>('chat_review_variables', { key, id, envId }),
+  /** Adds the received variables picked; returns the environment's id. */
+  chatAddVariables: (key: string, id: string, target: VarTarget, names: string[]) =>
+    call<string>('chat_add_variables', { key, id, target, names }),
+  chatDelete: (key: string) => call<void>('chat_delete', { key }),
 
   /** Opens the system terminal with `ssh <alias>`. */
   terminalOpenExternal: (alias: string) => call<void>('terminal_open_external', { alias }),

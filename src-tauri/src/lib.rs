@@ -85,6 +85,7 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(setup)
         .on_window_event(|window, event| {
@@ -154,6 +155,22 @@ pub fn run() {
             commands::nearby::nearby_received_group,
             commands::nearby::nearby_contacts,
             commands::nearby::nearby_remove_contact,
+            commands::chat::chat_set_open,
+            commands::chat::chat_list,
+            commands::chat::chat_history,
+            commands::chat::chat_mark_read,
+            commands::chat::chat_send_text,
+            commands::chat::chat_send_secret,
+            commands::chat::chat_send_variables,
+            commands::chat::chat_send_item,
+            commands::chat::chat_answer,
+            commands::chat::chat_reveal,
+            commands::chat::chat_copy,
+            commands::chat::chat_revoke,
+            commands::chat::chat_retry,
+            commands::chat::chat_review_variables,
+            commands::chat::chat_add_variables,
+            commands::chat::chat_delete,
             commands::nearby::nearby_join,
             commands::nearby::nearby_add_device,
             commands::nearby::nearby_authorize,
@@ -441,6 +458,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     }
     watcher::start(app.handle(), &paths.dir, &hosts_file);
     commands::agent::check_agent_pipes();
+    askpass::fill::attach(app.handle().clone());
     let bridge = Arc::new(browser::Bridge::new(&data_dir));
     let nearby = Arc::new(nearby::Nearby::new(data_dir.clone()));
     nearby.attach(app.handle().clone());

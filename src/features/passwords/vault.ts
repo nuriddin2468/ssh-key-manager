@@ -57,6 +57,8 @@ export function markLocked(): void {
     queryKey: ['vault'],
     predicate: (query) => query.queryKey[1] !== 'status',
   });
+  // Chats are sealed with the vault: their texts and plain values go too.
+  queryClient.removeQueries({ queryKey: ['chats'] });
   queryClient.getMutationCache().clear();
   void queryClient.invalidateQueries({ queryKey: keys.vaultStatus });
 }

@@ -872,6 +872,10 @@ fn what_never_syncs_is_not_in_the_copy_and_not_taken() {
         );
     }
     a.save();
+    // The chat's key for a device, as the chat makes it.
+    let device = crate::p2p::Identity::generate().unwrap().public();
+    assert!(a.vault.make_chat_key(&device, &a.backups).unwrap());
+    assert!(a.vault.chat_key(&device).is_some());
     let copy = a.vault.sync_copy().unwrap();
     let parsed = crate::vault::parse_database(&copy, &a.vault.secret).unwrap();
     assert_eq!(
@@ -883,6 +887,11 @@ fn what_never_syncs_is_not_in_the_copy_and_not_taken() {
     let before = b.vault.db.meta.custom_data.clone();
     sync(&mut a, &mut b);
     assert_eq!(b.vault.db.meta.custom_data, before);
+    assert!(b.vault.chat_key(&device).is_none());
+    assert!(
+        a.vault.chat_key(&device).is_some(),
+        "kept where it was made"
+    );
 }
 
 #[test]

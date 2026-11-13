@@ -253,6 +253,7 @@ impl Side for Script {
             Item::HostsGroup { name, .. }
             | Item::PublicKey { name, .. }
             | Item::Environment { name, .. } => name.clone(),
+            Item::Unknown => return Err(PairingFailure::Unsupported),
         };
         Ok((name, false))
     }

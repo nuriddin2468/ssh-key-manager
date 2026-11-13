@@ -38,10 +38,12 @@ pub(super) struct Found {
 }
 
 /// `-o` options a suggestion keeps. Others are left out: they change which
-/// server or config is used (`HostName`, `Include`), run commands
-/// (`ProxyCommand`, `LocalCommand`), weaken host key checks
-/// (`StrictHostKeyChecking`, `UserKnownHostsFile`), send the environment, or
-/// are one-off (forwardings).
+/// server or config is used (`HostName`, `Include`), run commands or choose
+/// who signs with the user's keys (`ProxyCommand`, `LocalCommand`,
+/// `IdentityAgent`), weaken host key checks (`StrictHostKeyChecking`,
+/// `UserKnownHostsFile`), let the server control the display
+/// (`ForwardX11Trusted`), put the connection's socket where others may reach
+/// it (`ControlPath`), send the environment, or are one-off (forwardings).
 const CARRIED: &[&str] = &[
     "AddKeysToAgent",
     "AddressFamily",
@@ -51,14 +53,11 @@ const CARRIED: &[&str] = &[
     "ConnectTimeout",
     "ConnectionAttempts",
     "ControlMaster",
-    "ControlPath",
     "ControlPersist",
     "ForwardX11",
-    "ForwardX11Trusted",
     "HostKeyAlgorithms",
     "HostKeyAlias",
     "IdentitiesOnly",
-    "IdentityAgent",
     "KexAlgorithms",
     "MACs",
     "PasswordAuthentication",

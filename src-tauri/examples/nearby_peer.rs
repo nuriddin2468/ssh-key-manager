@@ -211,6 +211,7 @@ impl Side for Terminal {
                 }
                 Ok((format!("{project} / {name}"), false))
             }
+            Item::Unknown => Err(PairingFailure::Unsupported),
         }
     }
 
@@ -462,6 +463,7 @@ fn describe(item: &ItemSummary) -> String {
             variables,
             ..
         } => format!("the environment {project} / {name} ({variables} variables)"),
+        ItemSummary::Unknown => "something this version doesn't know".to_owned(),
     }
 }
 

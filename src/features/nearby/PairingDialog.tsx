@@ -33,6 +33,8 @@ export const FAILURES = {
   timedOut: 'nearby.pairing.timedOut',
   vaultLocked: 'nearby.pairing.vaultLocked',
   version: 'nearby.pairing.version',
+  unsupported: 'nearby.pairing.unsupported',
+  peerUnsupported: 'nearby.pairing.peerUnsupported',
   broken: 'nearby.pairing.broken',
   refused: 'nearby.pairing.refused',
   turned: 'nearby.pairing.turned',
@@ -48,6 +50,8 @@ const OFFERED = {
   hostsGroup: 'nearby.send.offeredGroup',
   publicKey: 'nearby.send.offeredKey',
   environment: 'envs.share.offered',
+  // Never asked about: declined as unsupported at once.
+  unknown: 'nearby.item.update',
 } as const satisfies Record<ItemSummary['type'], string>;
 
 /**

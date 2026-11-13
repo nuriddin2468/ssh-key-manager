@@ -301,6 +301,7 @@ pub fn store(
             .map_err(not_saved)?;
             Ok((name, false))
         }
+        Item::Unknown => Err(PairingFailure::Unsupported),
     }
 }
 

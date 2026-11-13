@@ -16,7 +16,7 @@
 use std::net::TcpStream;
 use std::time::Duration;
 
-use sshkm_core::p2p::protocol::Item;
+use sshkm_core::p2p::protocol::{Item, ItemSummary};
 use sshkm_core::p2p::{Message, Session};
 
 use super::pairing::{ANSWER_TIMEOUT, PairingFailure, PairingPhase, Side, broken, wait_for_answer};
@@ -32,13 +32,23 @@ pub(super) const STEP_TIMEOUT: Duration = Duration::from_secs(30);
 /// name this vault keeps for the other side, if it knew it before, and
 /// `to` the name the user picked it under; when the two differ, this user
 /// first says whether to send it all the same, and on a no nothing goes.
+/// An item that needs a feature the other side didn't name (`features`) is
+/// not even offered.
 pub fn send(
     session: &mut Session<TcpStream>,
     side: &impl Side,
     item: &Item,
     known: Option<&str>,
     to: Option<&str>,
+    features: &[String],
 ) -> PairingPhase {
+    if let Some(needed) = item.requires()
+        && !features.iter().any(|feature| feature == needed)
+    {
+        return PairingPhase::Failed {
+            reason: PairingFailure::PeerUnsupported,
+        };
+    }
     if let (Some(known), Some(to)) = (known, to)
         && known != to
     {
@@ -73,8 +83,15 @@ pub fn send(
             .map_err(|_| PairingFailure::Broken)?;
         let _ = session.stream().set_read_timeout(Some(ANSWER_TIMEOUT));
         match session.recv().map_err(broken)? {
-            Message::Reply { accepted: true } => {}
-            Message::Reply { accepted: false } => return Err(PairingFailure::Refused),
+            Message::Reply { accepted: true, .. } => {}
+            Message::Reply {
+                accepted: false,
+                unsupported: true,
+            } => return Err(PairingFailure::PeerUnsupported),
+            Message::Reply {
+                accepted: false, ..
+            } => return Err(PairingFailure::Refused),
+            Message::Unknown => return Err(PairingFailure::Unsupported),
             _ => return Err(PairingFailure::Broken),
         }
         let _ = session.stream().set_read_timeout(Some(STEP_TIMEOUT));
@@ -97,7 +114,24 @@ pub fn send(
 pub fn receive(session: &mut Session<TcpStream>, side: &impl Side) -> Option<PairingPhase> {
     let _ = session.stream().set_read_timeout(Some(OFFER_WAIT));
     let summary = match session.recv() {
+        // A kind this version doesn't know: said so, never asked about.
+        Ok(Message::Offer {
+            item: ItemSummary::Unknown,
+        }) => {
+            let _ = session.send(&Message::Reply {
+                accepted: false,
+                unsupported: true,
+            });
+            return Some(PairingPhase::Failed {
+                reason: PairingFailure::Unsupported,
+            });
+        }
         Ok(Message::Offer { item }) => item,
+        Ok(Message::Unknown) => {
+            return Some(PairingPhase::Failed {
+                reason: PairingFailure::Unsupported,
+            });
+        }
         Ok(_) => {
             return Some(PairingPhase::Failed {
                 reason: PairingFailure::Broken,
@@ -114,7 +148,10 @@ pub fn receive(session: &mut Session<TcpStream>, side: &impl Side) -> Option<Pai
     let result = (|| {
         let (accepted, _) = wait_for_answer(session, side)?;
         session
-            .send(&Message::Reply { accepted })
+            .send(&Message::Reply {
+                accepted,
+                unsupported: false,
+            })
             .map_err(|_| PairingFailure::Broken)?;
         if !accepted {
             return Err(PairingFailure::Turned);
@@ -450,6 +487,7 @@ mod tests {
             name: "mallory".into(),
             known: true,
             own: None,
+            features: Vec::new(),
         };
         session.send(&hello).unwrap();
         assert!(matches!(session.recv().unwrap(), Message::Hello { .. }));
@@ -458,7 +496,13 @@ mod tests {
                 item: password().summary(),
             })
             .unwrap();
-        assert_eq!(session.recv().unwrap(), Message::Reply { accepted: true });
+        assert_eq!(
+            session.recv().unwrap(),
+            Message::Reply {
+                accepted: true,
+                unsupported: false
+            }
+        );
         session.send(&Message::Payload { item: host() }).unwrap();
         assert_eq!(session.recv().unwrap(), Message::Received { saved: false });
         let (end, side) = receiver.join().unwrap();
@@ -485,6 +529,7 @@ mod tests {
                 name: "mallory".into(),
                 known: true,
                 own: None,
+                features: Vec::new(),
             })
             .unwrap();
         assert!(matches!(session.recv().unwrap(), Message::Hello { .. }));
@@ -493,7 +538,13 @@ mod tests {
                 item: public_key().summary(),
             })
             .unwrap();
-        assert_eq!(session.recv().unwrap(), Message::Reply { accepted: true });
+        assert_eq!(
+            session.recv().unwrap(),
+            Message::Reply {
+                accepted: true,
+                unsupported: false
+            }
+        );
         // Same name and comment, another key.
         let other = Item::PublicKey {
             name: "id_ed25519".into(),
@@ -504,5 +555,98 @@ mod tests {
         let (end, side) = receiver.join().unwrap();
         assert_eq!(end, failed(PairingFailure::Broken));
         assert_eq!(*side.stored.lock().unwrap(), Vec::<Item>::new());
+    }
+
+    #[test]
+    fn an_item_of_an_unknown_kind_is_answered_cleanly() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let receiver = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut session = accept(stream, &Identity::generate().unwrap()).unwrap();
+            let mut side = Script::new("bob", Some(true));
+            side.knows = true;
+            (conversation(&mut session, &side, None), side)
+        });
+        // A later version offers a kind this one doesn't know.
+        let stream = TcpStream::connect(address).unwrap();
+        let mut session = connect(stream, &Identity::generate().unwrap()).unwrap();
+        session
+            .send(&Message::Hello {
+                version: VERSION,
+                name: "later".into(),
+                known: true,
+                own: None,
+                features: vec!["chat/1".into(), "project/1".into()],
+            })
+            .unwrap();
+        assert!(matches!(session.recv().unwrap(), Message::Hello { .. }));
+        session
+            .send(&Message::Offer {
+                item: ItemSummary::Unknown,
+            })
+            .unwrap();
+        assert_eq!(
+            session.recv().unwrap(),
+            Message::Reply {
+                accepted: false,
+                unsupported: true
+            }
+        );
+        let (end, side) = receiver.join().unwrap();
+        assert_eq!(end, failed(PairingFailure::Unsupported));
+        assert!(
+            side.shown
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(_, phase)| !matches!(phase, PairingPhase::Offered { .. })),
+            "the user is never asked about it"
+        );
+    }
+
+    #[test]
+    fn an_item_the_peer_cant_take_is_never_offered() {
+        let personal = Item::Environment {
+            project: String::new(),
+            name: "dev".into(),
+            notes: String::new(),
+            variables: Vec::new(),
+        };
+        assert!(personal.requires().is_some());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        // A receiver of a version before features.
+        let receiver = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut session = accept(stream, &Identity::generate().unwrap()).unwrap();
+            session
+                .send(&Message::Hello {
+                    version: VERSION,
+                    name: "older".into(),
+                    known: true,
+                    own: None,
+                    features: Vec::new(),
+                })
+                .unwrap();
+            assert!(matches!(session.recv().unwrap(), Message::Hello { .. }));
+            // The sender hangs up without offering anything.
+            session.recv().is_err()
+        });
+        let stream = TcpStream::connect(address).unwrap();
+        let mut session = connect(stream, &Identity::generate().unwrap()).unwrap();
+        let mut side = Script::new("alice", Some(true));
+        side.knows = true;
+        let end = conversation(
+            &mut session,
+            &side,
+            Some(Purpose::Send {
+                item: &personal,
+                to: None,
+            }),
+        );
+        drop(session);
+        assert_eq!(end, failed(PairingFailure::PeerUnsupported));
+        assert!(receiver.join().unwrap());
     }
 }

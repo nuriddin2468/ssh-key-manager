@@ -3,4 +3,4 @@
 /**
  * Why a conversation ended without what it was for.
  */
-export type PairingFailure = "unreachable" | "declined" | "peerDeclined" | "cancelled" | "peerLeft" | "timedOut" | "vaultLocked" | "version" | "broken" | "refused" | "turned" | "notSaved" | "otherVault" | "notOwn";
+export type PairingFailure = "unreachable" | "declined" | "peerDeclined" | "cancelled" | "peerLeft" | "timedOut" | "vaultLocked" | "version" | "unsupported" | "peerUnsupported" | "broken" | "refused" | "turned" | "notSaved" | "otherVault" | "notOwn";

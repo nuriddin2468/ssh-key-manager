@@ -8,6 +8,7 @@ pub mod autostart;
 pub mod background;
 pub mod browser;
 pub mod browser_import;
+pub mod chat;
 pub mod config;
 pub mod diagnose;
 pub mod env_agents;

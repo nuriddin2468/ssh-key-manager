@@ -332,8 +332,11 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     The dialog names the host, its user and `HostName`, and the program's line, shown
     as text and shortened; "Don't fill in" is the default, and Escape is the same.
     It asks for every prompt and remembers nothing, and at most three times a host a
-    minute; past that nothing is filled in until the minute is over. On "Don't fill
-    in" the terminal and tunnels show the prompt as described above, and a test or key
+    minute; past that nothing is filled in until the minute is over, and a test or key
+    install says so. While the main window is hidden (a tunnel reconnecting from the
+    tray) the dialog stands on its own rather than on the window. The time it stays
+    open doesn't count against a test's or install's timeout. On "Don't fill in" the
+    terminal and tunnels show the prompt as described above, and a test or key
     install stops and says so. A prompt for another account, a host-key or yes/no
     question, or one the app can't tell apart is never filled in and never asked
     about.

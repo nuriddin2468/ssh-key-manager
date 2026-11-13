@@ -187,10 +187,10 @@ impl Vault {
     }
 }
 
-/// The UUIDs each side leaves out of a sync, besides what it keeps local
-/// itself: this side, what the other keeps on its computer (sent as ids
-/// only, so it isn't taken for deleted); both, an id that is an entry on
-/// one side and a group on the other, which is never merged.
+/// The UUIDs each side leaves out of a sync: what either keeps on its
+/// computer (the other's sent as ids only, so it isn't taken for deleted,
+/// and left out of its side too, should its copy carry it); and an id that
+/// is an entry on one side and a group on the other, which is never merged.
 pub(super) fn skips(mine: &Database, peer: &PeerVault) -> (HashSet<Uuid>, HashSet<Uuid>) {
     let ids = |db: &Database| -> (HashSet<Uuid>, HashSet<Uuid>) {
         (
@@ -210,7 +210,13 @@ pub(super) fn skips(mine: &Database, peer: &PeerVault) -> (HashSet<Uuid>, HashSe
         .copied()
         .chain(crossed.iter().copied())
         .collect();
-    let their_skip = local_set(mine).into_iter().chain(crossed).collect();
+    // What the other side keeps on its computer is left out on its side
+    // too, should its copy carry it all the same.
+    let their_skip = local_set(mine)
+        .into_iter()
+        .chain(peer.local.iter().copied())
+        .chain(crossed)
+        .collect();
     (mine_skip, their_skip)
 }
 

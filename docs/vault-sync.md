@@ -107,11 +107,13 @@ conflict shows are read from the copy in memory, one at a time, when the user as
 
 **Checks on the copy before anything is planned** (`Vault::open_sync_copy`, failure = `Broken`,
 nothing applied):
-- it is KDBX 4 without compression (the sender writes it so), so nothing inflates beyond
-  the file's size; its XML is decrypted and scanned before it is parsed: at most 96 levels
-  deep and 8,388,608 elements, no document type, no attachment stored compressed in it
-  (the `keepass` crate inflates and recurses without limits; this is the guard in front of
-  it). A vault moved to a new computer goes the same way (`moved_copy`, `check_moved`);
+- it is KDBX 4 without compression (the sender writes it so), so its payload is no larger
+  than the file; the payload is decrypted here (`vault::sync::payload`, not by the
+  `keepass` crate) and checked before the crate parses anything: at most 65,536
+  attachments in its inner header, and its XML at most 96 levels deep and 8,388,608
+  elements, no document type, no attachment stored compressed in it (the crate allocates,
+  inflates and recurses without limits; this is the guard in front of it). Its list of
+  what the sender keeps local is refused past what any copy needs, before it is parsed. A vault moved to a new computer goes the same way (`moved_copy`, `check_moved`);
 - it parses with this vault's secret; a different secret → `OtherVault`;
 - its root group has this vault's root UUID (two vaults are never merged; the keepass
   crate's own `_merge` panics on different roots, which is one of the reasons we don't use

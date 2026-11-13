@@ -19,6 +19,7 @@
 mod apply;
 pub(crate) mod copy;
 mod model;
+mod payload;
 mod plan;
 #[cfg(test)]
 mod tests;
@@ -47,6 +48,9 @@ pub const MAX_DEPTH: usize = 64;
 pub const MAX_DELETED: usize = 262_144;
 /// Most earlier versions of an entry taken from a copy: the newest.
 pub const MAX_VERSIONS: usize = 64;
+/// Most attachments a copy's inner header may hold, counted before the
+/// `keepass` crate reads it.
+pub const MAX_ATTACHMENTS: usize = MAX_ENTRIES;
 
 /// What this computer keeps about the vault after its last sync with
 /// another device: hashes, never values.

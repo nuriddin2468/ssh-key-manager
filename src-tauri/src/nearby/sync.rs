@@ -11,8 +11,9 @@
 //!    - changes nobody needs to look at;
 //!    - changes that add a directive running a program or reaching beyond
 //!      the host, or a variable that makes programs load code;
-//!    - more than [`MASS_DELETE`] deletions, hosts and the vault's items
-//!      counted together;
+//!    - deletions past [`MASS_DELETE`] from that device in a day, hosts
+//!      and the vault's items counted together, those made without asking
+//!      before included;
 //!    - conflicts.
 //! 3. The user of the side that connected decides on all but the first
 //!    kind; its choices on conflicts go to the other side
@@ -59,8 +60,11 @@ use super::pairing::{
 use super::transfer::STEP_TIMEOUT;
 use crate::confirm::Localized;
 
-/// More incoming deletions than this need the user's yes.
+/// More deletions than this from one device within [`DELETION_WINDOW`]
+/// need the user's yes.
 pub const MASS_DELETE: usize = 5;
+/// Over how long deletions from one device are counted, in seconds.
+const DELETION_WINDOW: i64 = 24 * 60 * 60;
 /// Most directives the system dialog lists.
 const SHOWN_LINES: usize = 8;
 /// Longest value the system dialog shows in full.
@@ -96,6 +100,34 @@ pub struct SyncState {
     /// version turned down.
     #[serde(default)]
     pub vault_declined: BTreeMap<String, String>,
+    /// Deletions this computer made from that device without asking: when
+    /// (seconds since 1970) and how many. Those of the last
+    /// [`DELETION_WINDOW`] count with a sync's own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unasked: Vec<(i64, u32)>,
+}
+
+impl SyncState {
+    /// Deletions made from the device without asking in the
+    /// [`DELETION_WINDOW`] before `now`; one dated after `now` (a clock set
+    /// back) counts too.
+    fn recent_unasked(&self, now: i64) -> usize {
+        self.unasked
+            .iter()
+            .filter(|(when, _)| now - when < DELETION_WINDOW)
+            .map(|(_, count)| usize::try_from(*count).unwrap_or(usize::MAX))
+            .fold(0, usize::saturating_add)
+    }
+
+    /// Remembers `made` deletions made now without asking, and forgets
+    /// those older than [`DELETION_WINDOW`].
+    fn note_unasked(&mut self, now: i64, made: usize) {
+        self.unasked
+            .retain(|(when, _)| now - when < DELETION_WINDOW);
+        if made > 0 {
+            self.unasked.push((now, count(made)));
+        }
+    }
 }
 
 /// What a sync writes: the files that changed, checked against the
@@ -109,6 +141,8 @@ pub struct SyncWrite {
     pub devices: Vec<DeviceRecord>,
     pub projects: Vec<ProjectRecord>,
     pub contacts: Vec<ContactRecord>,
+    /// The config loses hosts: a kept backup goes first.
+    pub deletes: bool,
 }
 
 /// What the user of the side that connected decides on.
@@ -121,8 +155,8 @@ pub struct Review {
     /// Changes that add a directive running a program or reaching beyond
     /// the host.
     pub risky: Vec<RiskyChange>,
-    /// Hosts the other computer deleted, when there are more than
-    /// [`MASS_DELETE`] deletions in all.
+    /// Hosts the other computer deleted, when the deletions from it pass
+    /// [`MASS_DELETE`] in a day.
     pub deletions: Vec<String>,
     /// The same for the vault's entries and groups.
     pub vault: VaultReview,
@@ -138,8 +172,8 @@ pub struct VaultReview {
     pub conflicts: Vec<VaultConflict>,
     /// Changes that add or change a variable that makes programs load code.
     pub risky: Vec<VaultChange>,
-    /// What leaves the vault or goes to the recycle bin, when more than
-    /// [`MASS_DELETE`] deletions come in all.
+    /// What leaves the vault or goes to the recycle bin, when the deletions
+    /// from the other computer pass [`MASS_DELETE`] in a day.
     pub deletions: Vec<VaultChange>,
 }
 
@@ -285,6 +319,8 @@ struct Sorted {
     deletions: Vec<Change>,
     conflicts: Vec<Conflict>,
     vault: VaultSorted,
+    /// Deletions that go without asking: few enough today.
+    unasked: usize,
 }
 
 /// The vault's part of [`Sorted`].
@@ -329,6 +365,7 @@ fn talk(
         &mut state,
         &mut summary,
     );
+    state.note_unasked(OffsetDateTime::now_utc().unix_timestamp(), sorted.unasked);
     let changes = choose(
         initiator,
         &local.config,
@@ -348,6 +385,7 @@ fn talk(
             devices: theirs.devices.clone(),
             projects: theirs.projects.clone(),
             contacts: theirs.contacts.clone(),
+            deletes: changes.iter().any(|c| matches!(c, Change::Delete(_))),
         },
     );
     let vault_written = vault.as_ref().map(|plan| {
@@ -898,7 +936,9 @@ fn swap(session: &mut Session<TcpStream>, message: &Message) -> Result<Message, 
 
 /// Sorts a plan's changes by who has to look at them; a risky change the
 /// user turned down before, in the same version, is left out. Deletions
-/// need a look when more than [`MASS_DELETE`] come, hosts and the vault's
+/// from a device are limited over time, not per sync: they need a look
+/// when, with those made from it without asking in the last
+/// [`DELETION_WINDOW`], they pass [`MASS_DELETE`], hosts and the vault's
 /// items counted together.
 fn sort(local: &SyncLocal, plan: &sshkm_core::sync::Plan, vault: Option<&VaultPlan>) -> Sorted {
     let mut sorted = Sorted {
@@ -932,7 +972,10 @@ fn sort(local: &SyncLocal, plan: &sshkm_core::sync::Plan, vault: Option<&VaultPl
             }
         }
     }
-    if sorted.deletions.len() + sorted.vault.removals.len() <= MASS_DELETE {
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let incoming = sorted.deletions.len() + sorted.vault.removals.len();
+    if local.state.recent_unasked(now) + incoming <= MASS_DELETE {
+        sorted.unasked = incoming;
         sorted.safe.append(&mut sorted.deletions);
         sorted.vault.safe.append(&mut sorted.vault.removals);
     }
@@ -1218,6 +1261,63 @@ mod tests {
         let ((left_sum, left), _) = sync(left, right);
         assert_eq!(left_sum.removed, 6);
         assert_eq!(left.config_text().matches("Host h").count(), 0);
+    }
+
+    #[test]
+    fn deletions_from_a_device_count_over_the_day() {
+        let hosts = |numbers: std::ops::RangeInclusive<u32>| {
+            numbers
+                .map(|n| format!("Host h{n}\n    HostName 10.0.1.{n}\n\n"))
+                .collect::<Vec<_>>()
+                .concat()
+        };
+        let ((_, left), (_, right)) = sync(
+            Script::own("alice", "s", &hosts(1..=6)),
+            Script::own("bob", "s", ""),
+        );
+        // Three deletions go without asking, and are remembered.
+        set(&right, &hosts(4..=6));
+        let ((left_sum, mut left), (_, right)) = sync(left, right);
+        assert_eq!((left_sum.removed, left_sum.deferred), (3, 0));
+        let unasked: u32 = left
+            .sync_state
+            .lock()
+            .unwrap()
+            .unasked
+            .iter()
+            .map(|(_, n)| n)
+            .sum();
+        assert_eq!(unasked, 3);
+        // Three more the same day: past the limit with the first three,
+        // so the user decides on them; left alone, they wait.
+        set(&right, "");
+        let ((left_sum, mut left_after), (_, right)) = sync(left, right);
+        assert_eq!((left_sum.removed, left_sum.deferred), (0, 3));
+        assert_eq!(left_after.config_text().matches("Host h").count(), 3);
+        assert!(
+            left_after
+                .shown
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(_, phase)| matches!(
+                    phase,
+                    PairingPhase::Decide { review } if review.deletions.len() == 3
+                ))
+        );
+        left_after.decisions.delete = true;
+        let ((left_sum, left_after), _) = sync(left_after, right);
+        assert_eq!(left_sum.removed, 3);
+        assert_eq!(left_after.config_text().matches("Host h").count(), 0);
+
+        // A day later the count starts again.
+        left = left_after;
+        left.sync_state.lock().unwrap().unasked = vec![(
+            OffsetDateTime::now_utc().unix_timestamp() - DELETION_WINDOW - 1,
+            5,
+        )];
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        assert_eq!(left.sync_state.lock().unwrap().recent_unasked(now), 0);
     }
 
     #[test]

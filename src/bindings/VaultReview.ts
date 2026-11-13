@@ -16,7 +16,7 @@ conflicts: Array<VaultConflict>,
  */
 risky: Array<VaultChange>, 
 /**
- * What leaves the vault or goes to the recycle bin, when more than
- * [`MASS_DELETE`] deletions come in all.
+ * What leaves the vault or goes to the recycle bin, when the deletions
+ * from the other computer pass [`MASS_DELETE`] in a day.
  */
 deletions: Array<VaultChange>, };

@@ -17,8 +17,8 @@ conflicts: Array<Conflict>,
  */
 risky: Array<RiskyChange>, 
 /**
- * Hosts the other computer deleted, when there are more than
- * [`MASS_DELETE`] deletions in all.
+ * Hosts the other computer deleted, when the deletions from it pass
+ * [`MASS_DELETE`] in a day.
  */
 deletions: Array<string>, 
 /**

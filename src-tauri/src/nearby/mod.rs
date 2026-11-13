@@ -50,7 +50,7 @@ use sshkm_core::paths::home_dir;
 use sshkm_core::sync::Hasher;
 use sshkm_core::vault::envs::files::{CloudRoots, CloudService};
 use sshkm_core::vault::sync::{
-    ENTRY_SYNC_VERSION, PeerVault, VaultApplied, VaultBase, VaultPlan, digests,
+    ENTRY_SYNC_VERSION, Party, PeerVault, VaultApplied, VaultBase, VaultPlan, digests,
 };
 use sshkm_core::vault::{self, Vault};
 use sshkm_core::{ErrorCode, ExposeSecret, SecretString, fsutil};
@@ -1588,6 +1588,21 @@ impl Side for AppSide<'_> {
             .as_mut()
             .and_then(|slot| slot.peer_vault.clone())
             .ok_or(PairingFailure::Broken)?;
+        // The vault as it was before the day's first sync deletions
+        // outlives the rotation of backups.
+        let deletes =
+            plan.changes
+                .iter()
+                .any(|change| change.removal && make.contains(&change.id))
+                || plan.conflicts.iter().any(|conflict| {
+                    conflict.there == Party::Deleted && theirs.contains(&conflict.id)
+                });
+        if deletes {
+            let (state, _) = self.context()?;
+            let database = self.read(|vault| vault.paths().database.clone())?;
+            fsutil::keep_backup(&database, &state.backup_dir)
+                .map_err(|_| PairingFailure::NotSaved)?;
+        }
         let mut applied = VaultApplied::default();
         let changed = self.write(|vault| {
             applied = vault.apply_sync(&peer, plan, &hasher, make, theirs)?;
@@ -1650,6 +1665,11 @@ fn write_files(state: &AppState, write: &SyncWrite) -> AppResult<()> {
             &SshConfig::load(path)?.revision(),
             &write.config_revision,
         )?;
+        // The config as it was before the day's first sync deletions
+        // outlives the rotation of backups.
+        if write.deletes {
+            fsutil::keep_backup(path, &state.backup_dir)?;
+        }
         config.save(path, &state.backup_dir)?;
     }
     if let Some(known) = &write.known {

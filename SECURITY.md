@@ -826,14 +826,18 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   before `Host *`. What changed is told by a snapshot of each other device's last
   sync, kept as HMACs (keyed with a key derived from the device key) of each field,
   never the values. A change that would add a directive on the list under "Standard
-  files only" above and more than five deletions at once are never made unasked: the
-  user of the computer that started the sync decides there, and the other computer
-  puts them off until its own user syncs from it. A change that adds such a directive,
+  files only" above is never made unasked, and neither are deletions past five from
+  one device in a day: those made without asking in the last 24 hours, kept with that
+  device's snapshot, count with a sync's own, so the limit holds over time, not per
+  sync. The user of the computer that started the sync decides there, and the other
+  computer puts them off until its own user syncs from it. A change that adds such a directive,
   a conflict settled for the other computer's version included, is written only after
   that user allows it in a system dialog that lists the hosts and directives; on a no
   it waits for the next sync. A change turned down is not asked about again until it
   changes. A conflict is the user's choice too. Both files are backed up before a sync
-  writes them, and a file changed meanwhile is not written.
+  writes them, and a file changed meanwhile is not written. Before a day's first sync
+  deletions, the file is also kept as it was in a backup the rotation of the last 20
+  never removes, for 30 days.
 - **Syncing server keys.** `known_hosts` only grows: a computer adds the other's keys
   for a host it has no key for, counting a matching `@cert-authority` line as one, and
   never adds a key it marked `@revoked`; such keys are shown as a difference. For a
@@ -860,8 +864,9 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   values. Adding or changing a variable that makes programs load code (`LD_*`,
   `DYLD_*`, `NODE_OPTIONS`, `PATH`, `BASH_ENV`, `GIT_SSH_COMMAND`, …) is a risky
   change: the user who started the sync decides on it and allows it in a system
-  dialog; the other computer puts it off. More than five deletions or moves to the
-  recycle bin, hosts counted with them, need a yes on each computer. Everything is
+  dialog; the other computer puts it off. Deletions and moves to the recycle bin
+  count with hosts' toward the same limit of five from one device a day, and the vault
+  is kept as it was before a day's first of them, as the config is. Everything is
   applied in memory as one change and saved once, after a backup of the file; an
   entry the user changed while deciding is left for the next sync. A binding of a
   `.env` file comes with its environment's kind and level as one value, so a sync

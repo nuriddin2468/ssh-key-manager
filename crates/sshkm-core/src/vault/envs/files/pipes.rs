@@ -55,16 +55,17 @@ pub const SERVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2)
 /// Most pipes a list keeps.
 const MAX_PIPES: usize = 4096;
 
-/// Which pipe: its device, inode and time of birth, so a pipe put in its
-/// place by someone else is told apart, even one that got the same inode
-/// number once the app's pipe was gone (ext4 and tmpfs hand a freed number
-/// out again at once; macOS doesn't soon). While the app serves a pipe its
-/// server holds it, so on Linux its number isn't freed even when it is
-/// removed or replaced ([`PipeServer`]). Before that and after a crash the
-/// time of birth tells them apart: it moves in steps of a few milliseconds
-/// on Linux, so only a pipe made within one step of the app's could pass
-/// for it. The time of birth is left out where the file system doesn't
-/// keep one; then device and inode tell, as before.
+/// Which pipe: its device, inode and, on Linux, time of birth, so a pipe
+/// put in its place by someone else is told apart, even one that got the
+/// same inode number once the app's pipe was gone (ext4 hands a freed
+/// number out again at once). While the app serves a pipe its server holds
+/// it, so on Linux its number isn't freed even when it is removed or
+/// replaced ([`PipeServer`]). Before that and after a crash the time of
+/// birth tells them apart: it moves in steps of a few milliseconds, so
+/// only a pipe made within one step of the app's could pass for it. It is
+/// left out where the file system doesn't keep one, and on macOS, which
+/// doesn't hand inode numbers out again soon; then device and inode tell,
+/// as before.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PipeId {
     dev: u64,
@@ -107,9 +108,11 @@ impl PipeId {
     }
 }
 
-/// When the file was made (`statx` on Linux, `st_birthtime` on macOS), where
-/// the file system says.
-#[cfg(unix)]
+/// When the file was made (`statx`), where the file system says: on Linux,
+/// where nothing changes it. macOS moves it back when a file's time of
+/// change is set before it (`touch -t`), and a pipe whose id changed would
+/// be left with no server.
+#[cfg(target_os = "linux")]
 fn born(meta: &fs::Metadata) -> Option<(i64, u32)> {
     let since = meta
         .created()
@@ -117,6 +120,11 @@ fn born(meta: &fs::Metadata) -> Option<(i64, u32)> {
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?;
     Some((i64::try_from(since.as_secs()).ok()?, since.subsec_nanos()))
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn born(_: &fs::Metadata) -> Option<(i64, u32)> {
+    None
 }
 
 /// Whether this system has pipes in folders: macOS and Linux do, Windows
@@ -781,24 +789,21 @@ mod imp {
     /// Linux the file itself, held open as a path only (`O_PATH`: neither a
     /// reader nor a writer, so a pipe's readers see no one). While it is
     /// held its inode isn't freed, even once it is removed or replaced, so
-    /// no other file gets its number. Elsewhere nothing is held: macOS's
-    /// file systems hand inode numbers out in increasing order.
+    /// no other file gets its number. Nothing is held where it can't be
+    /// opened (too many files open), and on macOS, whose file systems hand
+    /// inode numbers out in increasing order.
     fn hold(path: &Path) -> Result<(Option<File>, std::fs::Metadata)> {
         #[cfg(target_os = "linux")]
+        if let Ok(file) = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_PATH | libc::O_NOFOLLOW)
+            .open(path)
         {
-            let file = OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_PATH | libc::O_NOFOLLOW)
-                .open(path)
-                .map_err(|e| Error::io(e, path))?;
             let meta = file.metadata().map_err(|e| Error::io(e, path))?;
-            Ok((Some(file), meta))
+            return Ok((Some(file), meta));
         }
-        #[cfg(not(target_os = "linux"))]
-        {
-            let meta = std::fs::symlink_metadata(path).map_err(|e| Error::io(e, path))?;
-            Ok((None, meta))
-        }
+        let meta = std::fs::symlink_metadata(path).map_err(|e| Error::io(e, path))?;
+        Ok((None, meta))
     }
 
     /// A time as `futimens` takes it.
@@ -1211,8 +1216,8 @@ mod tests {
         assert!(!remove(&path, id, &Answer::Stopped));
         assert_eq!(fs::read_to_string(&path).unwrap(), "A=2\n");
         // A pipe of someone else's made in its place before the server is
-        // done never gets the old one's inode number (ext4 and tmpfs would
-        // hand it out again at once): the server holds it. So it is left.
+        // done never gets the old one's inode number (ext4 would hand it
+        // out again at once): the server holds it. So it is left.
         fs::remove_file(&path).unwrap();
         let (path, other) = pipe(dir.path());
         assert_ne!((other.dev, other.ino), (id.dev, id.ino));
@@ -1224,8 +1229,9 @@ mod tests {
     fn after_a_crash_a_pipe_on_a_reused_inode_is_someone_elses() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".env");
-        // File systems that hand out a freed inode number again (ext4,
-        // tmpfs) do so at once; APFS never does.
+        // ext4 hands a freed inode number out again at once; tmpfs and
+        // APFS count up. Without times of birth (macOS) there is nothing
+        // to check.
         for _ in 0..8 {
             let old = make(&path).unwrap();
             if old.born.is_none() {

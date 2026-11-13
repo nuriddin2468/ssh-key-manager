@@ -332,6 +332,7 @@ impl Session<TcpStream> {
     /// each message is sealed or opened under a short lock.
     pub fn split(self) -> Result<(Reader, Writer)> {
         let write = self.stream.try_clone().map_err(io_error)?;
+        let closer = self.stream.try_clone().map_err(io_error)?;
         let noise = Arc::new(Mutex::new(self.noise));
         Ok((
             Reader {
@@ -341,6 +342,7 @@ impl Session<TcpStream> {
             },
             Writer {
                 stream: Mutex::new(write),
+                closer,
                 noise,
             },
         ))
@@ -380,6 +382,8 @@ impl Reader {
 /// The half of a split session that sends; shared between threads.
 pub struct Writer {
     stream: Mutex<TcpStream>,
+    /// The same socket, to hang up without waiting for a send.
+    closer: TcpStream,
     noise: Arc<Mutex<snow::TransportState>>,
 }
 
@@ -399,18 +403,10 @@ impl Writer {
         })
     }
 
-    /// Hangs up: the [`Reader`] stops with an error.
+    /// Hangs up: the [`Reader`] stops with an error, and so does a send
+    /// blocked on a full socket. Never waits for a send.
     pub fn shutdown(&self) {
-        // Not under the lock: a send blocked on a full socket must not keep
-        // the hang-up waiting.
-        if let Ok(stream) = self
-            .stream
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .try_clone()
-        {
-            let _ = stream.shutdown(Shutdown::Both);
-        }
+        let _ = self.closer.shutdown(Shutdown::Both);
     }
 }
 

@@ -88,8 +88,8 @@ mod tests {
         assert_ne!(*vault.chat_key(&desktop).unwrap(), *key);
         // Nothing a version before chats would list.
         assert_eq!(vault.entries().len(), entries);
-        assert!(vault.contacts().is_empty());
-        assert!(vault.own_devices().is_empty());
+        assert_eq!(vault.contacts().len(), 0);
+        assert_eq!(vault.own_devices().len(), 0);
 
         drop(vault);
         let vault = Vault::unlock(&paths, &master).unwrap();

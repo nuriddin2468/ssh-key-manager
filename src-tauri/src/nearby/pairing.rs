@@ -325,14 +325,11 @@ pub fn conversation(
         Err(reason) => return PairingPhase::Failed { reason },
     };
     match (met, purpose) {
-        (
-            Met::Contacts {
-                known, features, ..
-            },
-            Some(Purpose::Send { item, to }),
-        ) => transfer::send(session, side, item, known.as_deref(), to, &features),
-        (Met::Contacts { end, .. }, Some(_)) => end,
-        (Met::Contacts { end, .. }, None) => transfer::receive(session, side).unwrap_or(end),
+        (Met::Contacts(_, known, features), Some(Purpose::Send { item, to })) => {
+            transfer::send(session, side, item, known.as_deref(), to, &features)
+        }
+        (Met::Contacts(end, ..), Some(_)) => end,
+        (Met::Contacts(end, ..), None) => transfer::receive(session, side).unwrap_or(end),
         (Met::AddDevice { peer, name, joins }, _) => own::add(session, side, peer, &name, joins),
         (Met::Sync { peer }, _) => sync::run(session, side, peer),
     }
@@ -342,11 +339,7 @@ pub fn conversation(
 enum Met {
     /// As contacts: `Paired` or `Known`, with the name this side kept for
     /// the other before, if it knew it, and what the other can do.
-    Contacts {
-        end: PairingPhase,
-        known: Option<String>,
-        features: Vec<String>,
-    },
+    Contacts(PairingPhase, Option<String>, Vec<String>),
     /// To make one the other's device; with `joins`, the side that
     /// answered gets the vault.
     AddDevice {
@@ -379,20 +372,12 @@ fn meet(
             features: features(),
         })
         .map_err(|_| PairingFailure::Broken)?;
-    let (version, name, they_know, theirs, their_features) = match session.recv().map_err(broken)? {
-        Message::Hello {
-            version,
-            name,
-            known,
-            own,
-            features,
-        } => (version, name, known, own, features),
-        Message::Unknown => return Err(PairingFailure::Unsupported),
-        _ => return Err(PairingFailure::Broken),
-    };
-    if version != VERSION {
-        return Err(PairingFailure::Version);
-    }
+    let Hello {
+        name,
+        known: they_know,
+        own: theirs,
+        features: their_features,
+    } = their_hello(session)?;
     let announced = Some(clean_name(&name)).filter(|name| !name.is_empty());
     let peer_name = announced.clone().unwrap_or_else(|| "?".to_owned());
     // A device this side knows goes by the name it keeps for it, since any
@@ -408,22 +393,14 @@ fn meet(
 
     let Some(intent) = intent else {
         if known.is_some() && they_know {
-            return Ok(Met::Contacts {
-                end: PairingPhase::Known,
-                known,
-                features: their_features,
-            });
+            return Ok(Met::Contacts(PairingPhase::Known, known, their_features));
         }
         compare_codes(session, side, peer.as_deref())?;
         // A device known here already stays as it is, name and all.
         if known.is_none() {
             side.save(peer_key, &peer_name)?;
         }
-        return Ok(Met::Contacts {
-            end: PairingPhase::Paired,
-            known,
-            features: their_features,
-        });
+        return Ok(Met::Contacts(PairingPhase::Paired, known, their_features));
     };
     let (Some(mine), Some(theirs)) = (mine, theirs) else {
         return Err(PairingFailure::Version);
@@ -476,6 +453,35 @@ fn meet(
             }
         }
         Intent::Other => Err(PairingFailure::Version),
+    }
+}
+
+/// The other side's `Hello`.
+struct Hello {
+    name: String,
+    known: bool,
+    own: Option<Own>,
+    features: Vec<String>,
+}
+
+/// Reads the other side's `Hello`, of this version.
+fn their_hello(session: &mut Session<TcpStream>) -> Result<Hello, PairingFailure> {
+    match session.recv().map_err(broken)? {
+        Message::Hello {
+            version,
+            name,
+            known,
+            own,
+            features,
+        } if version == VERSION => Ok(Hello {
+            name,
+            known,
+            own,
+            features,
+        }),
+        Message::Hello { .. } => Err(PairingFailure::Version),
+        Message::Unknown => Err(PairingFailure::Unsupported),
+        _ => Err(PairingFailure::Broken),
     }
 }
 

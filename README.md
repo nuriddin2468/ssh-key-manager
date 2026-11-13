@@ -45,7 +45,7 @@ SSH Key Manager is a desktop app for the SSH setup you already have.
 
 **[Get the latest release →](https://github.com/nuriddin2468/ssh-key-manager/releases/latest)**
 
-The browser extension for autofill is in the [Chrome Web Store](https://chromewebstore.google.com/detail/ssh-key-manager/lkmgdcanagjeajepncgokapkbihahddb) (Chrome, Edge, Brave and other Chromium browsers); turn it on in **Settings → Browser autofill**.
+The browser extension for autofill is in the [Chrome Web Store](https://chromewebstore.google.com/detail/ssh-key-manager/lkmgdcanagjeajepncgokapkbihahddb) (Chrome, Edge, Brave and other Chromium browsers) and on [Firefox Add-ons](https://addons.mozilla.org/firefox/addon/ssh-key-manager/); turn it on in **Settings → Browser autofill**.
 
 Want the newest version before a release? Every change to the `main` branch is built automatically.
 
@@ -140,7 +140,7 @@ Builds are not code-signed yet (it's on the [roadmap](#roadmap)), so your system
 - Import from Bitwarden, 1Password, Chrome, Edge, Firefox, Apple Passwords or KeePassXC; export as a KeePass copy or CSV. The Audit points out weak, reused and old passwords.
 
 **Browser autofill** (optional)
-- The SSH Key Manager extension for Chrome, Edge and Firefox fills a site's saved logins on that site only, and offers to save new ones. Get it from the [Chrome Web Store](https://chromewebstore.google.com/detail/ssh-key-manager/lkmgdcanagjeajepncgokapkbihahddb) and turn it on in **Settings → Browser autofill**.
+- The SSH Key Manager extension for Chrome, Edge and Firefox fills a site's saved logins on that site only, and offers to save new ones. Get it from the [Chrome Web Store](https://chromewebstore.google.com/detail/ssh-key-manager/lkmgdcanagjeajepncgokapkbihahddb) or [Firefox Add-ons](https://addons.mozilla.org/firefox/addon/ssh-key-manager/) and turn it on in **Settings → Browser autofill**.
 - Each browser is connected once, with a code you compare in the app.
 - Before a login fills a page for the first time, the app asks you with Touch ID, Windows Hello or a system dialog, so a web page can't say yes for you. Your yes lasts until you lock the vault, the screen locks or the computer sleeps, and 12 hours at most.
 - Vault locked? Unlock it from the browser: the app asks with Touch ID or Windows Hello, or in a small window of its own. You never type the master password in the browser.

@@ -4509,7 +4509,7 @@ const ru = {
     enableHint:
       'Расширение SSH Key Manager для Chrome, Edge и Firefox подставляет логины из хранилища и предлагает сохранять новые.',
     extension: 'Расширение',
-    extensionHint: 'Для Chrome, Edge, Brave и других браузеров на Chromium.',
+    extensionHint: 'Для Chrome, Edge, Brave и других браузеров на Chromium, а также для Firefox.',
     browsers: 'Браузеры',
     notSetUp: '{{name}} · не настроен',
     noBrowsers: 'Поддерживаемые браузеры не найдены',

@@ -282,36 +282,6 @@ fn show_default_no(
     )
 }
 
-/// `text` as a dialog shows it: control characters and invisible or
-/// direction-changing ones as `<U+…>`, so what is shown is what is there,
-/// and at most `max` characters, with how many more there are.
-pub fn shown(text: &str, max: usize) -> String {
-    let mut out = String::with_capacity(text.len().min(max * 4));
-    for (i, c) in text.chars().enumerate() {
-        if i == max {
-            let rest = text.chars().count() - max;
-            let _ = write!(out, "… (+{rest})");
-            break;
-        }
-        let invisible = matches!(
-            c,
-            '\u{00AD}'
-                | '\u{061C}'
-                | '\u{180E}'
-                | '\u{200B}'..='\u{200F}'
-                | '\u{202A}'..='\u{202E}'
-                | '\u{2060}'..='\u{2069}'
-                | '\u{FEFF}'
-        );
-        if c.is_control() || invisible {
-            let _ = write!(out, "<U+{:04X}>", u32::from(c));
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

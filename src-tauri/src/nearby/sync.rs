@@ -49,13 +49,14 @@ use sshkm_core::sync::{
 use sshkm_core::vault::envs::files::CloudService;
 use sshkm_core::vault::projects::ProjectRecord;
 use sshkm_core::vault::sync::{
-    VaultBase, VaultChange, VaultChoices, VaultConflict, VaultCounts, VaultPlan,
+    Party, VaultBase, VaultChange, VaultChoices, VaultConflict, VaultCounts, VaultPlan,
 };
 use sshkm_core::vault::{ContactRecord, DeviceRecord, MAX_DATABASE_SIZE};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use zeroize::Zeroizing;
 
+use super::IO_TIMEOUT;
 use super::pairing::{
     ANSWER_TIMEOUT, Entries, POLL, PairingFailure, PairingPhase, Side, VaultItems, broken, waiting,
 };
@@ -104,8 +105,10 @@ pub struct SyncState {
     pub vault_declined: BTreeMap<String, String>,
     /// Deletions this computer made from that device without asking: when
     /// (seconds since 1970) and how many. Those of the last
-    /// [`DELETION_WINDOW`] count with a sync's own.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// [`DELETION_WINDOW`] count with a sync's own. Kept in a small file of
+    /// their own ([`Side::sync_unasked`]), written before a sync changes
+    /// anything.
+    #[serde(skip)]
     pub unasked: Vec<(i64, u32)>,
 }
 
@@ -122,13 +125,20 @@ impl SyncState {
     }
 
     /// Remembers `made` deletions made now without asking, and forgets
-    /// those older than [`DELETION_WINDOW`].
-    fn note_unasked(&mut self, now: i64, made: usize) {
+    /// those older than [`DELETION_WINDOW`]; whether there were any.
+    fn note_unasked(&mut self, now: i64, made: usize) -> bool {
         self.unasked
             .retain(|(when, _)| now - when < DELETION_WINDOW);
         if made > 0 {
             self.unasked.push((now, count(made)));
         }
+        made > 0
+    }
+
+    /// What [`Self::unasked`] is when it can't be read: at the limit for a
+    /// day, so that deletions wait for the user rather than go unasked.
+    pub fn at_the_limit(now: i64) -> Vec<(i64, u32)> {
+        vec![(now, count(MASS_DELETE))]
     }
 }
 
@@ -180,6 +190,21 @@ pub struct VaultReview {
 }
 
 impl Review {
+    /// Whether the user may see `field` of `item` while this review is
+    /// open: a text field that differs in a conflict both computers
+    /// changed, never a 2FA secret.
+    pub fn may_show(&self, item: &str, field: &str) -> bool {
+        field
+            .strip_prefix("s:")
+            .is_some_and(|name| !sshkm_core::vault::is_otp_field(name))
+            && self.vault.conflicts.iter().any(|conflict| {
+                conflict.id == item
+                    && conflict.here == Party::Changed
+                    && conflict.there == Party::Changed
+                    && conflict.fields.iter().any(|f| f == field)
+            })
+    }
+
     fn is_empty(&self) -> bool {
         self.conflicts.is_empty()
             && self.risky.is_empty()
@@ -360,22 +385,27 @@ fn talk(
         ..SyncSummary::default()
     };
     let mut state = local.state.clone();
-    let vault_choices = choose_vault(
+    // On the side that didn't connect, what the other user's choices on
+    // conflicts delete counts with the sync's other deletions too.
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let decided = if initiator {
+        0
+    } else {
+        decided_deletions(&sorted, &decisions)
+    };
+    let within = local.state.recent_unasked(now) + sorted.unasked + decided <= MASS_DELETE;
+    let unasked = sorted.unasked + if within { decided } else { 0 };
+    let choice = Choice {
         initiator,
-        &sorted.vault,
-        &decisions,
-        &mut state,
-        &mut summary,
-    );
-    state.note_unasked(OffsetDateTime::now_utc().unix_timestamp(), sorted.unasked);
-    let changes = choose(
-        initiator,
-        &local.config,
-        sorted,
-        &decisions,
-        &mut state,
-        &mut summary,
-    );
+        within,
+        decisions: &decisions,
+    };
+    let vault_choices = choose_vault(&choice, &sorted.vault, &mut state, &mut summary);
+    if state.note_unasked(now, unasked) {
+        // Kept before anything changes: a sync that ends early counts too.
+        side.sync_unasked(peer, &state.unasked)?;
+    }
+    let changes = choose(&choice, &local.config, sorted, &mut state, &mut summary);
     let (config, known) = apply_hosts(&local, &changes, &theirs, &mut summary);
     let written = side.sync_write(
         peer,
@@ -511,14 +541,17 @@ fn remember_vault(
 }
 
 /// Sends this side's copy of the vault and reads the other's (the side
-/// that connected first), then works out what to take from it.
+/// that connected first), then works out what to take from it. The side
+/// that didn't connect reads before it makes its own copy, so the other
+/// isn't left writing while it does; writes may take as long as a step.
 fn swap_vault(
     session: &mut Session<TcpStream>,
     side: &impl Side,
     base: &VaultBase,
 ) -> Result<VaultPlan, PairingFailure> {
-    let copy = side.vault_copy()?;
+    let _ = session.stream().set_write_timeout(Some(STEP_TIMEOUT));
     let theirs = if session.is_initiator() {
+        let copy = side.vault_copy()?;
         session.send_bytes(&copy, &mut |_, _| {}).map_err(broken)?;
         session
             .recv_bytes(MAX_DATABASE_SIZE, &mut |_, _| {})
@@ -527,9 +560,11 @@ fn swap_vault(
         let theirs = session
             .recv_bytes(MAX_DATABASE_SIZE, &mut |_, _| {})
             .map_err(broken)?;
+        let copy = side.vault_copy()?;
         session.send_bytes(&copy, &mut |_, _| {}).map_err(broken)?;
         theirs
     };
+    let _ = session.stream().set_write_timeout(Some(IO_TIMEOUT));
     side.vault_plan(&Zeroizing::new(theirs.to_vec()), base)
 }
 
@@ -741,17 +776,28 @@ fn risky_list(changes: &[RiskyChange], more: impl Fn(usize) -> String) -> String
 }
 
 /// The system dialog that asks to allow `changes` to environments from a
-/// sync with `peer`: its title, text and button.
+/// sync with `peer`: its title, text and button. One line per variable,
+/// with the value `value` gives for it (`NODE_OPTIONS=--require …`), so
+/// what is allowed is what programs will load.
 pub fn variables_prompt(
     peer: &str,
     changes: &[RiskyVariables],
+    value: &dyn Fn(&RiskyVariables, &str) -> Option<String>,
 ) -> (Localized, Localized, Localized) {
     let list = |more: &dyn Fn(usize) -> String| {
         let all: Vec<String> = changes
             .iter()
-            .map(|change| {
-                let names: Vec<String> = change.names.iter().map(|n| shown(n)).collect();
-                format!("• {}: {}", shown(&change.environment), names.join(", "))
+            .flat_map(|change| {
+                change.names.iter().map(move |name| {
+                    let shown_value = value(change, name)
+                        .map(|value| format!("={}", shown(&value)))
+                        .unwrap_or_default();
+                    format!(
+                        "• {}: {}{shown_value}",
+                        shown(&change.environment),
+                        shown(name)
+                    )
+                })
             })
             .collect();
         let mut lines: Vec<String> = all.iter().take(SHOWN_LINES).cloned().collect();
@@ -830,16 +876,48 @@ fn shown(text: &str) -> String {
     out
 }
 
+/// What the changes to make here follow: which side this is, the
+/// decisions, and whether the deletions the other user decided through
+/// conflicts fit within the limit ([`decided_deletions`]).
+struct Choice<'a> {
+    initiator: bool,
+    within: bool,
+    decisions: &'a SyncDecisions,
+}
+
+/// Deletions the other user decided through conflicts, on the side that
+/// didn't connect: the conflicts settled for a version that deletes.
+fn decided_deletions(sorted: &Sorted, decisions: &SyncDecisions) -> usize {
+    let hosts = sorted
+        .conflicts
+        .iter()
+        .filter(|c| {
+            decisions.theirs.contains(&c.id) && matches!(c.take_theirs(), Change::Delete(_))
+        })
+        .count();
+    let vault = sorted
+        .vault
+        .conflicts
+        .iter()
+        .filter(|c| decisions.vault_theirs.contains(&c.id) && c.there == Party::Deleted)
+        .count();
+    hosts + vault
+}
+
 /// The changes to make here after the decisions, counting what waits in
 /// `summary` and remembering what the user turned down in `state`.
 fn choose(
-    initiator: bool,
+    choice: &Choice<'_>,
     config: &SshConfig,
     sorted: Sorted,
-    decisions: &SyncDecisions,
     state: &mut SyncState,
     summary: &mut SyncSummary,
 ) -> Vec<Change> {
+    let Choice {
+        initiator,
+        within,
+        decisions,
+    } = *choice;
     let mut changes = sorted.safe;
     if initiator {
         for (change, _) in sorted.risky {
@@ -866,7 +944,8 @@ fn choose(
         if decisions.theirs.contains(&conflict.id) {
             let change = conflict.take_theirs();
             let risky = !hosts::risky(config, &change).unwrap_or_default().is_empty();
-            if !initiator && risky {
+            let past_limit = !within && matches!(change, Change::Delete(_));
+            if !initiator && (risky || past_limit) {
                 summary.deferred += 1;
             } else {
                 changes.push(change);
@@ -881,12 +960,16 @@ fn choose(
 /// The vault's changes to make here and how its conflicts are settled, as
 /// [`choose`] does for hosts.
 fn choose_vault(
-    initiator: bool,
+    choice: &Choice<'_>,
     sorted: &VaultSorted,
-    decisions: &SyncDecisions,
     state: &mut SyncState,
     summary: &mut SyncSummary,
 ) -> VaultChoices {
+    let Choice {
+        initiator,
+        within,
+        decisions,
+    } = *choice;
     let mut make: BTreeSet<String> = sorted.safe.iter().map(|c| c.id.clone()).collect();
     if initiator {
         for change in &sorted.risky {
@@ -911,7 +994,8 @@ fn choose_vault(
     let (mut theirs, mut kept) = (BTreeSet::new(), BTreeSet::new());
     for conflict in &sorted.conflicts {
         if decisions.vault_theirs.contains(&conflict.id) {
-            if !initiator && !conflict.risky.is_empty() {
+            let past_limit = !within && conflict.there == Party::Deleted;
+            if !initiator && (!conflict.risky.is_empty() || past_limit) {
                 summary.deferred += 1;
             } else {
                 theirs.insert(conflict.id.clone());
@@ -1594,7 +1678,10 @@ mod tests {
     }
 
     #[test]
-    fn the_variables_dialog_names_the_environment() {
+    fn the_variables_dialog_names_the_environment_and_shows_the_values() {
+        let value = |_: &RiskyVariables, name: &str| {
+            (name == "NODE_OPTIONS").then(|| "--require /tmp/x.js\u{202E}".to_owned())
+        };
         let (_, body, _) = variables_prompt(
             "MacBook",
             &[RiskyVariables {
@@ -1602,8 +1689,142 @@ mod tests {
                 environment: "Shop · dev".into(),
                 names: vec!["NODE_OPTIONS".into(), "PATH".into()],
             }],
+            &value,
         );
-        assert!(body.en.contains("• Shop · dev: NODE_OPTIONS, PATH"));
+        assert!(
+            body.en.contains(
+                "• Shop · dev: NODE_OPTIONS=--require /tmp/x.js<U+202E>\n• Shop · dev: PATH\n"
+            ),
+            "{}",
+            body.en
+        );
         assert!(body.ru.contains("MacBook"));
+    }
+
+    fn unasked(side: &Script) -> u32 {
+        side.sync_state
+            .lock()
+            .unwrap()
+            .unasked
+            .iter()
+            .map(|(_, n)| n)
+            .sum()
+    }
+
+    #[test]
+    fn deletions_count_even_when_the_other_side_hangs_up() {
+        let (_dir, left, right, _) = vault_pair();
+        let doomed: Vec<String> = (0..6)
+            .map(|n| add_login(&right, &format!("Old {n}")))
+            .collect();
+        let ((_, left), (_, mut right)) = sync(left, right);
+        for id in &doomed[..3] {
+            right.real_vault().trash_entry(id).unwrap();
+        }
+        // This side makes the three without asking, then the other hangs
+        // up instead of saying what it has: they still count.
+        right.hangs_up = true;
+        let ((left_end, mut left), (_, mut right)) = talk(left, right, Purpose::Sync);
+        assert!(
+            matches!(left_end, PairingPhase::Failed { .. }),
+            "{left_end:?}"
+        );
+        assert!(
+            doomed[..3]
+                .iter()
+                .all(|id| left.real_vault().entry(id).unwrap().summary.in_trash)
+        );
+        assert_eq!(unasked(&left), 3);
+        // Three more the same day wait for the user.
+        right.hangs_up = false;
+        for id in &doomed[3..] {
+            right.real_vault().trash_entry(id).unwrap();
+        }
+        left.decisions.delete = false;
+        let ((left_sum, left), _) = sync(left, right);
+        assert_eq!((left_sum.vault.logins.removed, left_sum.deferred), (0, 3));
+        assert!(
+            doomed[3..]
+                .iter()
+                .all(|id| !left.real_vault().entry(id).unwrap().summary.in_trash)
+        );
+    }
+
+    #[test]
+    fn deletions_the_other_user_decides_on_conflicts_count_too() {
+        let hosts = |numbers: std::ops::RangeInclusive<u32>, net: u32| {
+            numbers
+                .map(|n| format!("Host h{n}\n    HostName 10.0.{net}.{n}\n\n"))
+                .collect::<Vec<_>>()
+                .concat()
+        };
+        let ((_, mut left), (_, right)) = sync(
+            Script::own("alice", "s", &hosts(1..=6, 1)),
+            Script::own("bob", "s", ""),
+        );
+        assert_eq!(right.config_text().matches("Host h").count(), 6);
+        // Deleted on the side that connects, changed on the other; its user
+        // keeps the deletions. Two fit within the limit: they go, counted.
+        set(&left, &hosts(3..=6, 1));
+        set(&right, &(hosts(1..=2, 2) + &hosts(3..=6, 1)));
+        left.decisions.mine = vec!["h1".into(), "h2".into()];
+        let ((_, mut left), (right_sum, right)) = sync(left, right);
+        assert_eq!(right_sum.removed, 2);
+        assert_eq!(unasked(&right), 2);
+        // Four more the same day pass it with the first two: put off.
+        set(&left, "");
+        set(&right, &hosts(3..=6, 2));
+        left.decisions.mine = (3..=6).map(|n| format!("h{n}")).collect();
+        let ((left_sum, _), (right_sum, right)) = sync(left, right);
+        assert_eq!((right_sum.removed, right_sum.deferred), (0, 4));
+        assert_eq!(left_sum.deferred_there, 4);
+        assert_eq!(right.config_text().matches("Host h").count(), 4);
+        assert_eq!(unasked(&right), 2);
+    }
+
+    #[test]
+    fn only_a_text_field_of_a_conflict_both_changed_is_shown() {
+        use sshkm_core::vault::sync::ItemKind;
+        let conflict = |id: &str, there: Party| VaultConflict {
+            id: id.into(),
+            kind: ItemKind::Login,
+            label: "Mail".into(),
+            here: Party::Changed,
+            there,
+            fields: [
+                "s:Password",
+                "s:otp",
+                "s:TOTP Seed",
+                "s:TimeOtp-Secret-Base32",
+                "s:HmacOtp-Secret",
+                "a:key.pem",
+            ]
+            .map(String::from)
+            .to_vec(),
+            risky: Vec::new(),
+        };
+        let review = Review {
+            vault: VaultReview {
+                conflicts: vec![
+                    conflict("both", Party::Changed),
+                    conflict("gone", Party::Deleted),
+                ],
+                ..VaultReview::default()
+            },
+            ..Review::default()
+        };
+        assert!(review.may_show("both", "s:Password"));
+        for field in [
+            "s:otp",
+            "s:TOTP Seed",
+            "s:TimeOtp-Secret-Base32",
+            "s:HmacOtp-Secret",
+            "a:key.pem",
+            "s:UserName",
+        ] {
+            assert!(!review.may_show("both", field), "{field}");
+        }
+        assert!(!review.may_show("gone", "s:Password"), "deleted there");
+        assert!(!review.may_show("elsewhere", "s:Password"), "no conflict");
     }
 }

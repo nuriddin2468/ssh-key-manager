@@ -5,6 +5,7 @@ import type { TFunction } from 'i18next';
 import type { Conflict } from '@/bindings/Conflict';
 import type { Pairing } from '@/bindings/Pairing';
 import type { PairingFailure } from '@/bindings/PairingFailure';
+import type { Review } from '@/bindings/Review';
 import type { SyncItemKind } from '@/bindings/SyncItemKind';
 import type { SyncSummary } from '@/bindings/SyncSummary';
 import type { VaultChange } from '@/bindings/VaultChange';
@@ -211,9 +212,39 @@ export function fieldLabels(t: TFunction, fields: string[], kind: SyncItemKind):
   return [...new Set(fields.map((field) => fieldLabel(t, field, kind)))];
 }
 
+/**
+ * Whether a field holds a 2FA secret, as this app, KeePassXC or KeePass's plugins write it
+ * (`otp`, `TOTP Seed`, `TimeOtp-Secret-…`, `HmacOtp-Secret-…`): never shown.
+ */
+function isOtpField(field: string): boolean {
+  const name = field.slice(2);
+  return (
+    ['otp', 'Unrecognized 2FA secret', 'TOTP Seed'].includes(name) ||
+    name.startsWith('TimeOtp-Secret') ||
+    name.startsWith('HmacOtp-Secret')
+  );
+}
+
 /** Whether the user may see a field's two values: a text field, never a 2FA secret. */
 export function canShow(field: string): boolean {
-  return field.startsWith('s:') && !['s:otp', 's:Unrecognized 2FA secret'].includes(field);
+  return field.startsWith('s:') && !isOtpField(field);
+}
+
+/**
+ * Whether the app shows `field` of `item` while `review` is open, as it decides: a field
+ * {@link canShow} allows that differs in a conflict both computers changed.
+ */
+export function mayShow(review: Review, item: string, field: string): boolean {
+  return (
+    canShow(field) &&
+    review.vault.conflicts.some(
+      (conflict) =>
+        conflict.id === item &&
+        conflict.here === 'changed' &&
+        conflict.there === 'changed' &&
+        conflict.fields.includes(field),
+    )
+  );
 }
 
 /** The vault's deletions, by kind in the dialogs' order: each kind's label and names. */

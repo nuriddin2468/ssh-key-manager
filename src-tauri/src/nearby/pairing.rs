@@ -280,6 +280,11 @@ pub trait Side {
     fn sync_keep(&self, _peer: PeerKey, _state: &SyncState) -> Result<(), PairingFailure> {
         Err(PairingFailure::NotSaved)
     }
+    /// Keeps the deletions made from `peer` without asking
+    /// ([`SyncState::unasked`]): before a sync writes anything.
+    fn sync_unasked(&self, _peer: PeerKey, _unasked: &[(i64, u32)]) -> Result<(), PairingFailure> {
+        Err(PairingFailure::NotSaved)
+    }
     /// The user's decisions on a review, if they come within `wait`.
     fn decisions(&self, _wait: Duration) -> Result<Option<SyncDecisions>, PairingFailure> {
         Err(PairingFailure::Cancelled)

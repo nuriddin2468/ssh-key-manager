@@ -1,7 +1,9 @@
 import type { TFunction } from 'i18next';
 import { describe, expect, it } from 'vitest';
 import type { Pairing } from '@/bindings/Pairing';
+import type { Review } from '@/bindings/Review';
 import type { SyncSummary } from '@/bindings/SyncSummary';
+import type { VaultConflict } from '@/bindings/VaultConflict';
 import {
   canRetry,
   canShow,
@@ -11,6 +13,7 @@ import {
   fieldLabels,
   isActive,
   isAddress,
+  mayShow,
   percent,
   secondsLeft,
   summaryLine,
@@ -137,8 +140,41 @@ describe('fieldLabel', () => {
     expect(canShow('s:Password')).toBe(true);
     expect(canShow('s:otp')).toBe(false);
     expect(canShow('s:Unrecognized 2FA secret')).toBe(false);
+    expect(canShow('s:TOTP Seed')).toBe(false);
+    expect(canShow('s:TimeOtp-Secret-Base32')).toBe(false);
+    expect(canShow('s:HmacOtp-Secret')).toBe(false);
     expect(canShow('a:key.pem')).toBe(false);
     expect(canShow('group')).toBe(false);
+  });
+});
+
+describe('mayShow', () => {
+  const conflict = (id: string, there: 'changed' | 'deleted'): VaultConflict => ({
+    id,
+    kind: 'login',
+    label: 'Mail',
+    here: 'changed',
+    there,
+    fields: ['s:Password', 's:TOTP Seed'],
+    risky: [],
+  });
+  const review: Review = {
+    conflicts: [],
+    risky: [],
+    deletions: [],
+    vault: {
+      conflicts: [conflict('both', 'changed'), conflict('gone', 'deleted')],
+      risky: [],
+      deletions: [],
+    },
+  };
+
+  it('shows only a text field of a conflict both computers changed', () => {
+    expect(mayShow(review, 'both', 's:Password')).toBe(true);
+    expect(mayShow(review, 'both', 's:TOTP Seed')).toBe(false);
+    expect(mayShow(review, 'both', 's:Notes')).toBe(false);
+    expect(mayShow(review, 'gone', 's:Password')).toBe(false);
+    expect(mayShow(review, 'elsewhere', 's:Password')).toBe(false);
   });
 });
 

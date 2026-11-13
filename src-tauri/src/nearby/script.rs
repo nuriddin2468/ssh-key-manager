@@ -105,6 +105,8 @@ pub struct Script {
     pub allows_variables: bool,
     /// The variables the system dialog asked about.
     pub asked_variables: Mutex<Vec<RiskyVariables>>,
+    /// Hangs up after applying a sync, before saying what it has.
+    pub hangs_up: bool,
 }
 
 impl Script {
@@ -147,6 +149,7 @@ impl Script {
             peer_vault: Mutex::default(),
             allows_variables: true,
             asked_variables: Mutex::default(),
+            hangs_up: false,
         }
     }
 
@@ -336,6 +339,10 @@ impl Side for Script {
         *self.sync_state.lock().unwrap() = state.clone();
         Ok(())
     }
+    fn sync_unasked(&self, _: PeerKey, unasked: &[(i64, u32)]) -> Result<(), PairingFailure> {
+        self.sync_state.lock().unwrap().unasked = unasked.to_vec();
+        Ok(())
+    }
     fn decisions(&self, _: Duration) -> Result<Option<SyncDecisions>, PairingFailure> {
         Ok(Some(self.decisions.clone()))
     }
@@ -383,6 +390,9 @@ impl Side for Script {
         Ok(applied)
     }
     fn vault_items(&self, pairs: &Pairs) -> Result<VaultItems, PairingFailure> {
+        if self.hangs_up {
+            return Err(PairingFailure::Broken);
+        }
         let vault = self.real_vault();
         let shared = Hasher::new(vault.own_key().ok_or(PairingFailure::NotOwn)?.digest_key());
         Ok(VaultItems {

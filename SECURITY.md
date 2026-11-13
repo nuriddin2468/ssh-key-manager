@@ -885,17 +885,20 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   sync, kept as HMACs (keyed with a key derived from the device key) of each field,
   never the values. A change that would add a directive on the list under "Standard
   files only" above is never made unasked, and neither are deletions past five from
-  one device in a day: those made without asking in the last 24 hours, kept with that
-  device's snapshot, count with a sync's own, so the limit holds over time, not per
-  sync. The user of the computer that started the sync decides there, and the other
-  computer puts them off until its own user syncs from it. A change that adds such a directive,
+  one device in a day: those made without asking in the last 24 hours count with a
+  sync's own, so the limit holds over time, not per sync. They are kept in a small file
+  of their own, written before the sync changes anything, so a sync that ends early
+  counts too; a file that can't be read counts as at the limit. On the computer that
+  didn't start the sync, the deletions the other user's choices on conflicts would make
+  count as well. The user of the computer that started the sync decides there, and the
+  other computer puts them off until its own user syncs from it. A change that adds such a directive,
   a conflict settled for the other computer's version included, is written only after
   that user allows it in a system dialog that lists the hosts and directives; on a no
   it waits for the next sync. A change turned down is not asked about again until it
   changes. A conflict is the user's choice too. Both files are backed up before a sync
-  writes them, and a file changed meanwhile is not written. Before a day's first sync
-  deletions, the file is also kept as it was in a backup the rotation of the last 20
-  never removes, for 30 days.
+  writes them, and a file changed meanwhile is not written. Before each sync that
+  makes such deletions, the file is also kept as it was in a backup the rotation of
+  the last 20 never removes: the first of each day for 30 days, and the 16 newest.
 - **Syncing server keys.** `known_hosts` only grows: a computer adds the other's keys
   for a host it has no key for, counting a matching `@cert-authority` line as one, and
   never adds a key it marked `@revoked`; such keys are shown as a difference. For a
@@ -920,19 +923,25 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   custom data. Changes are found against a snapshot of keyed HMACs per field, never
   values, as for hosts. An entry or group only one side changed takes that side's
   fields; one both changed differently, or one deleted and the other changed, is the
-  user's choice, which shows the names of the fields that differ and a field's two
-  values only when the user asks, never a 2FA secret. The version not kept stays among
+  user's choice, which shows the names of the fields that differ. A text field's two
+  values come only when the user asks, only for an item both computers changed while
+  its review is open, at most 200 in a sync, and never a 2FA secret (`otp`,
+  `TOTP Seed`, `TimeOtp-Secret-…`, `HmacOtp-Secret-…`). The other computer's copy is
+  kept in memory only during the sync, and goes when the vault locks. The version not kept stays among
   the entry's earlier versions on both computers, whatever the history limit. A shared
   value goes only after the environments here
   that still use it got their own copies, and references still resolve only to shared
   values. Adding or changing a variable that makes programs load code (`LD_*`,
   `DYLD_*`, `NODE_OPTIONS`, `PATH`, `BASH_ENV`, `GIT_SSH_COMMAND`, …), or the value of a
-  shared value such a variable uses, is a risky change: the user who started the sync decides on it and allows it in a system
-  dialog; the other computer puts it off. Deletions and moves to the recycle bin
+  shared value such a variable uses, is a risky change: the user who started the sync
+  decides on it and allows it in a system dialog that lists each variable with the
+  value it would take; the other computer puts it off. Deletions and moves to the recycle bin
   count with hosts' toward the same limit of five from one device a day, and the vault
-  is kept as it was before a day's first of them, as the config is. Everything is
-  applied in memory as one change and saved once, after a backup of the file; an
-  entry the user changed while deciding is left for the next sync. A binding of a
+  is kept as it was before each sync that makes them, as the config is. The other
+  device's records (devices, projects, contacts) are saved as one change, then its
+  entries and groups are applied in memory as another and saved once, each after a
+  backup of the file; an entry the user changed while deciding is left for the next
+  sync. A binding of a
   `.env` file comes with its environment's kind and level as one value, so a sync
   never lowers its protection: a level-3 file on a system without pipes, or a level-1
   file of a remote environment, is never written. What a computer keeps to itself

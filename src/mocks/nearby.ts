@@ -33,6 +33,7 @@ import type { SendRequest } from '@/bindings/SendRequest';
 import type { SyncDecisions } from '@/bindings/SyncDecisions';
 import type { SyncSummary } from '@/bindings/SyncSummary';
 import type { VaultStatus } from '@/bindings/VaultStatus';
+import { mayShow } from '@/features/nearby/model';
 import {
   MOCK_CHANGED_EVENT,
   MOCK_CONTACTS_EVENT,
@@ -377,6 +378,10 @@ const REVIEW: Review = {
   },
 };
 
+/** Most values shown in one sync's review, as in the app. */
+const MAX_VALUES_SHOWN = 200;
+let valuesShown = 0;
+
 /** The two values of a conflict's field, as each computer has it. */
 const CONFLICT_VALUES: Record<string, [string, string]> = {
   's:Password': ['correct-horse-1', 'correct-horse-2'],
@@ -577,6 +582,7 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
     if (active()) return fail('conflict', 'another pairing is going on');
     if (status().ownFound.length === 0) return fail('not_found', 'no device of yours is reachable');
     const id = nextId++;
+    valuesShown = 0;
     pairing = { id, peer: null, outgoing: true, kind: 'sync', phase: { type: 'connecting' } };
     changed();
     later(600, () => update(id, { peer: 'iMac at home', phase: { type: 'syncing' } }));
@@ -586,11 +592,18 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
     });
     return undefined;
   },
-  nearby_sync_value: ({ id: raw, field, theirs }) => {
+  nearby_sync_value: ({ id: raw, item, field, theirs }) => {
     const id = Number(raw);
     if (pairing?.id !== id || pairing.phase.type !== 'decide') {
       return fail('invalid_input', 'no sync under review');
     }
+    // As the app: a field of a conflict under review, a limited number of times.
+    if (!mayShow(pairing.phase.review, String(item), String(field))) {
+      return fail('invalid_input', 'not a field of a conflict under review');
+    }
+    if (valuesShown >= MAX_VALUES_SHOWN)
+      return fail('invalid_input', 'no more values in this sync');
+    valuesShown += 1;
     const values = CONFLICT_VALUES[String(field)];
     if (!values) return fail('not_found', 'field');
     return values[theirs ? 1 : 0];

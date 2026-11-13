@@ -55,7 +55,7 @@ use sshkm_core::vault::sync::{
 };
 use sshkm_core::vault::{self, Vault};
 use sshkm_core::{ErrorCode, ExposeSecret, SecretString, fsutil};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Listener, Manager};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use zeroize::Zeroizing;
@@ -83,6 +83,8 @@ const VISIBLE_FOR: Duration = Duration::from_secs(10 * 60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// For the handshake and `Hello`; comparing codes waits longer.
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
+/// Most values the user may see in one sync's review, both sides' counted.
+const MAX_VALUES_SHOWN: u32 = 200;
 const KEY_SERVICE: &str = "SSH Key Manager nearby";
 const KEY_ACCOUNT: &str = "device";
 const SETTINGS_FILE: &str = "nearby.json";
@@ -291,8 +293,11 @@ struct Slot {
     cancelled: Arc<AtomicBool>,
     pending: Option<PendingVault>,
     /// The other device's copy of the vault during a sync, for the values
-    /// of a conflict the user asks to see.
+    /// of a conflict the user asks to see; dropped when the sync ends or
+    /// the vault locks.
     peer_vault: Option<Arc<PeerVault>>,
+    /// How many values the user asked to see in this sync's review.
+    values_shown: u32,
 }
 
 impl Slot {
@@ -328,8 +333,23 @@ impl Nearby {
     /// Hands over the app, for events and the vault, and starts keeping
     /// this computer announced to the user's devices. Called once at start.
     pub fn attach(self: &Arc<Self>, app: AppHandle) {
+        // The other device's copy of the vault goes when the vault locks,
+        // as the vault itself does.
+        let nearby = Arc::downgrade(self);
+        app.listen_any(crate::vault::LOCKED_EVENT, move |_| {
+            if let Some(nearby) = nearby.upgrade() {
+                nearby.forget_peer_vault();
+            }
+        });
         let _ = self.app.set(app);
         Arc::clone(self).watch_presence();
+    }
+
+    /// Drops the other device's copy of the vault, if a sync holds one.
+    fn forget_peer_vault(&self) {
+        if let Some(slot) = self.lock().pairing.as_mut() {
+            slot.peer_vault = None;
+        }
     }
 
     pub fn status(&self) -> NearbyStatus {
@@ -957,6 +977,7 @@ impl Nearby {
             cancelled: Arc::clone(&cancelled),
             pending: None,
             peer_vault: None,
+            values_shown: 0,
         });
         drop(inner);
         self.changed();
@@ -1055,17 +1076,35 @@ impl Nearby {
         field: &str,
         theirs: bool,
     ) -> AppResult<SecretString> {
-        let peer = self
-            .slot(id)
-            .as_mut()
-            .filter(|slot| matches!(slot.view.phase, PairingPhase::Decide { .. }))
-            .and_then(|slot| slot.peer_vault.clone())
-            .ok_or_else(|| AppError::invalid("no sync under review"))?;
+        let peer = self.shown_from(id, item, field)?;
         let state = self.state()?;
         let app = self.app()?;
         state.vault.with(app, |vault| {
             Ok(vault.sync_value(&peer, item, field, theirs)?)
         })
+    }
+
+    /// The other device's copy, to show `field` of `item` from: only a
+    /// field [`sync::Review::may_show`] allows in the review open in the
+    /// sync `id`, and at most [`MAX_VALUES_SHOWN`] in one sync.
+    fn shown_from(&self, id: u32, item: &str, field: &str) -> AppResult<Arc<PeerVault>> {
+        let mut slot = self.slot(id);
+        let slot = slot
+            .as_mut()
+            .ok_or_else(|| AppError::invalid("no sync under review"))?;
+        let PairingPhase::Decide { review } = &slot.view.phase else {
+            return Err(AppError::invalid("no sync under review"));
+        };
+        if !review.may_show(item, field) {
+            return Err(AppError::invalid("not a field of a conflict under review"));
+        }
+        if slot.values_shown >= MAX_VALUES_SHOWN {
+            return Err(AppError::invalid("no more values in this sync"));
+        }
+        slot.values_shown += 1;
+        slot.peer_vault
+            .clone()
+            .ok_or_else(|| AppError::invalid("no sync under review"))
     }
 
     /// The cloud service whose folder holds the unlocked vault, if one does:
@@ -1510,17 +1549,22 @@ impl Side for AppSide<'_> {
             log::warn!("nearby: a sync was not saved: {error}");
             PairingFailure::NotSaved
         })?;
-        if self.write(|vault| vault.merge_own_devices(&write.devices))?
-            && let Some(app) = self.nearby.app.get()
-        {
-            let _ = app.emit(DEVICES_EVENT, ());
+        // The other device's records, saved as one change.
+        let (mut devices, mut projects) = (false, false);
+        self.write(|vault| {
+            devices = vault.merge_own_devices(&write.devices)?;
+            projects = vault.merge_projects(&write.projects)?;
+            let contacts = vault.merge_contacts(&write.contacts)?;
+            Ok(devices || projects || contacts)
+        })?;
+        if let Some(app) = self.nearby.app.get() {
+            if devices {
+                let _ = app.emit(DEVICES_EVENT, ());
+            }
+            if projects {
+                let _ = app.emit(crate::commands::projects::CHANGED_EVENT, ());
+            }
         }
-        if self.write(|vault| vault.merge_projects(&write.projects))?
-            && let Some(app) = self.nearby.app.get()
-        {
-            let _ = app.emit(crate::commands::projects::CHANGED_EVENT, ());
-        }
-        self.write(|vault| vault.merge_contacts(&write.contacts))?;
         Ok(())
     }
 
@@ -1528,17 +1572,29 @@ impl Side for AppSide<'_> {
         store::save(&self.nearby.data_dir, &peer, state).map_err(|_| PairingFailure::NotSaved)
     }
 
+    fn sync_unasked(&self, peer: PeerKey, unasked: &[(i64, u32)]) -> Result<(), PairingFailure> {
+        store::save_unasked(&self.nearby.data_dir, &peer, unasked)
+            .map_err(|_| PairingFailure::NotSaved)
+    }
+
     fn allow_risky_variables(&self, changes: &[RiskyVariables]) -> bool {
         let Ok((_, app)) = self.context() else {
             return false;
         };
-        let peer = self
+        let (peer, copy) = self
             .nearby
             .slot(self.id)
             .as_mut()
-            .and_then(|slot| slot.view.peer.clone())
+            .map(|slot| (slot.view.peer.clone(), slot.peer_vault.clone()))
             .unwrap_or_default();
-        let (title, body, approve) = sync::variables_prompt(&peer, changes);
+        // The values as the other device's copy has them.
+        let value = |change: &RiskyVariables, name: &str| {
+            copy.as_ref()?
+                .variable(&change.id, name)
+                .map(|value| value.expose_secret().to_owned())
+        };
+        let (title, body, approve) =
+            sync::variables_prompt(&peer.unwrap_or_default(), changes, &value);
         crate::confirm::require(app, &title, &body, &approve).is_ok()
     }
 
@@ -1933,6 +1989,53 @@ mod tests {
         };
         nearby.decide(id, decisions.clone()).unwrap();
         assert_eq!(side.decisions(WAIT), Ok(Some(decisions)));
+    }
+
+    #[test]
+    fn a_value_is_shown_only_from_the_review_and_not_without_end() {
+        use sshkm_core::vault::VaultPaths;
+        use sshkm_core::vault::sync::{ItemKind, Party, VaultConflict};
+        let dir = tempfile::tempdir().unwrap();
+        let (vault, _) = Vault::create(
+            &VaultPaths::new(dir.path().join("vault.kdbx")),
+            &SecretString::from("master"),
+        )
+        .unwrap();
+        let copy = vault.open_sync_copy(&vault.sync_copy().unwrap()).unwrap();
+        let nearby = Nearby::new(std::env::temp_dir().join("sshkm-no-nearby"));
+        let (id, _answers, _cancelled) = nearby.claim(true, ConversationKind::Sync).unwrap();
+        nearby.slot(id).as_mut().unwrap().peer_vault = Some(Arc::new(copy));
+        // While nothing is under review, nothing is shown.
+        assert!(nearby.shown_from(id, "mail", "s:Password").is_err());
+        let review = sync::Review {
+            vault: sync::VaultReview {
+                conflicts: vec![VaultConflict {
+                    id: "mail".into(),
+                    kind: ItemKind::Login,
+                    label: "Mail".into(),
+                    here: Party::Changed,
+                    there: Party::Changed,
+                    fields: vec!["s:Password".into(), "s:TOTP Seed".into()],
+                    risky: Vec::new(),
+                }],
+                ..sync::VaultReview::default()
+            },
+            ..sync::Review::default()
+        };
+        at(&nearby, id, PairingPhase::Decide { review });
+        assert!(nearby.shown_from(id, "other", "s:Password").is_err());
+        assert!(nearby.shown_from(id, "mail", "s:Notes").is_err());
+        assert!(nearby.shown_from(id, "mail", "s:TOTP Seed").is_err());
+        for _ in 0..MAX_VALUES_SHOWN {
+            assert!(nearby.shown_from(id, "mail", "s:Password").is_ok());
+        }
+        assert!(
+            nearby.shown_from(id, "mail", "s:Password").is_err(),
+            "no more in this sync"
+        );
+        // The copy goes when the vault locks.
+        nearby.forget_peer_vault();
+        assert!(nearby.slot(id).as_mut().unwrap().peer_vault.is_none());
     }
 
     #[test]

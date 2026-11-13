@@ -250,15 +250,19 @@ those this computer made from one device without asking in the last 24 hours cou
 with the ones a sync brings, and past 5 (`MASS_DELETE`, hosts and vault counted together)
 all of that sync's need the user's yes: on the side that connected, in the review; the
 other side puts them off, its snapshot untouched for them, until its user syncs from it.
-The count is kept with that device's snapshot. Before a day's first sync deletions, the
+There, the deletions the other user's choices on conflicts would make count too, and wait
+past the limit. The count is kept in a small file per device (`sync/<device>.unasked.json`),
+written before the sync changes anything, so a sync that ends early counts; a file that
+can't be read counts as at the limit. Before each sync that makes such deletions, the
 file (`~/.ssh/config`, the vault) is kept as it was in a backup the rotation of 20
-never removes, for 30 days (`fsutil::keep_backup`); a new recovery key re-encrypts it
-like the others.
+never removes (`fsutil::keep_backup`): the first of each day for 30 days and the 16
+newest; a new recovery key re-encrypts them like the others.
 
 **Risky variables (new).** A variable whose value goes into a shell's environment
 (`envs_run`) or a `.env` file can make programs load code. Adding or changing one of these
 names in any environment is a risky change, decided like a risky host directive (the
-review, then a system dialog the page can't answer; the other side puts it off): `PATH`,
+review, then a system dialog the page can't answer, which lists each variable with the
+value it would take, `NODE_OPTIONS=--require …`; the other side puts it off): `PATH`,
 `LD_*`, `DYLD_*`, `NODE_OPTIONS`, `NODE_PATH`, `PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONHOME`,
 `PERL5OPT`, `PERL5LIB`, `RUBYOPT`, `RUBYLIB`, `BASH_ENV`, `ENV`, `ZDOTDIR`, `PROMPT_COMMAND`,
 `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_EXEC_PATH`, `GIT_CONFIG_*`, `SSH_ASKPASS`,
@@ -303,7 +307,7 @@ has; the risk is damage and code running on this computer.
 | A stranger, or a former own device, syncs                           | PR 1: Noise XX, the own-vault proof, both in each other's registry; a removed device stays a tombstone                            |
 | A different vault gets merged                                       | proof, then the copy must open with this secret and have this root                                                                |
 | A copy built to exhaust memory or CPU                               | 256 MiB, KDF bounds, no compression, XML depth and size scanned before parsing, item limits, history cap                          |
-| Mass deletion                                                       | more than 5 a day from one device need a yes on each device; a kept backup before a day's first deletions                         |
+| Mass deletion                                                       | more than 5 a day from one device need a yes on each device; a kept backup before each sync's deletions                           |
 | Values overwritten or emptied                                       | the previous version stays in each entry's history; backup before the save; step 2 adds undo                                      |
 | Code run through a variable (`NODE_OPTIONS`, `LD_PRELOAD`, `PATH`…) | risky variables need the review and the system dialog                                                                             |
 | Code run through a host directive                                   | PR 1's risky directives, unchanged                                                                                                |
@@ -357,7 +361,8 @@ ways. Sign-in keys stay where they are."
   prod`), what happened ("Changed here and on {{peer}}" / "Deleted here, changed on
   {{peer}}" / "Changed here, deleted on {{peer}}"), "Differs:" and the fields' names as
   badges, "Show values" (a text field's two values, one field at a time, when asked;
-  never a 2FA secret; focus stays on the field's row) and "Keep this computer's" / "Take
+  only for an item both changed, at most 200 in a sync, never a 2FA secret; focus stays
+  on the field's row) and "Keep this computer's" / "Take
   {{peer}}'s". Under them: "The version you don't keep stays among the entry's earlier
   versions."
 - _Runs a program or opens access_ — host directives as before, and an environment's

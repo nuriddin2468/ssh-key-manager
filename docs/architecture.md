@@ -37,9 +37,9 @@ real `~/.ssh`. Its modules:
   - Connects through a Unix socket (`SSH_AUTH_SOCK`), or on Windows a named pipe:
     `SSH_AUTH_SOCK` if it names one, else the OpenSSH agent's pipe.
 - `perms`
-  - Unix: checks and fixes file modes. On macOS it also empties the access list of a
-    file meant for this user alone, which a folder may have handed entries down to
-    (`perms/extended_acl.rs`, through the system library).
+  - Unix: checks and fixes file modes. On macOS it also empties a folder's access list
+    (`perms/extended_acl.rs`, through the system library), for the private folders
+    `fsutil` makes files in.
   - Windows: checks and fixes ACLs, using locale-independent SIDs through PowerShell and
     `icacls`. It also creates files meant for plain-text secrets (exports, converted
     keys) with a protected access list already in place, through Win32
@@ -49,7 +49,9 @@ real `~/.ssh`. Its modules:
 - `fsutil`: atomic writes. Files in `~/.ssh` and the app's data folder are written
   through links (`atomic_write`; `atomic_write_private` for a private key, which keeps
   only its owner's permissions); secrets written where the user picks are never written
-  through a link and are private from their first byte (`write_private`).
+  through a link and are private from their first byte (`write_private`). On macOS a
+  file for the user alone is made in a new folder of its own whose access list hands
+  nothing down, then renamed into place (`fsutil/private_folder.rs`, through `rustix`).
 - `audit`: pure rules over the data above. Findings carry machine-readable kinds and
   parameters, so the UI can localise them.
   - `audit/config_risks.rs` reads `ssh_config` settings (host key checking, agent
@@ -174,9 +176,10 @@ translates.
   written, made a pipe or removed through its folder, opened once and checked as it
   was opened (`vault/envs/files/folder.rs`: `openat`/`renameat` relative to that
   folder on macOS and Linux; on Windows the folder is held open, not to be renamed
-  or deleted, and checked by its handle's path). On macOS and Linux a new file or
-  pipe is made in a staging folder of the app's own inside it (0700, its access list
-  emptied on macOS before anything is made in it) and renamed into place.
+  or deleted, and checked by its handle's path). A new file or pipe is made where
+  it waits and then renamed into place: on macOS in a private folder of its own
+  inside that folder (`fsutil/private_folder.rs`), on Linux under a temporary name
+  in it.
   - A file kept only while the vault is unlocked (level 2) is written by the round
     after an unlock and removed before the vault locks (`VaultHooks::before_lock`
     runs one last round first) and when the app quits. Each round lists those files,

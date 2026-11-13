@@ -1236,8 +1236,10 @@ fn a_folder_swapped_while_its_file_is_read_gives_the_vault_nothing() {
 struct Swapper {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pause: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// Swaps made; even when the folder is itself again.
-    swaps: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Counts holds; the thread answers with the one it saw while it waits
+    /// with the folder itself again.
+    holds: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    held: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -1253,20 +1255,24 @@ impl Swapper {
         std::os::unix::fs::symlink(other, link).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let pause = Arc::new(AtomicBool::new(false));
-        let swaps = Arc::new(AtomicUsize::new(0));
+
+        let holds = Arc::new(AtomicUsize::new(0));
+        let held = Arc::new(AtomicUsize::new(0));
         let thread = {
-            let (stop, pause, swaps) = (Arc::clone(&stop), Arc::clone(&pause), Arc::clone(&swaps));
+            let (stop, pause) = (Arc::clone(&stop), Arc::clone(&pause));
+            let (holds, held) = (Arc::clone(&holds), Arc::clone(&held));
             let (a, b) = (folder.to_path_buf(), link.to_path_buf());
             std::thread::spawn(move || {
+                // Swaps made; even when the folder is itself again.
+                let mut swaps = 0_usize;
                 while !stop.load(Ordering::SeqCst) {
-                    if pause.load(Ordering::SeqCst)
-                        && swaps.load(Ordering::SeqCst).is_multiple_of(2)
-                    {
+                    if pause.load(Ordering::SeqCst) && swaps.is_multiple_of(2) {
+                        held.store(holds.load(Ordering::SeqCst), Ordering::SeqCst);
                         std::thread::yield_now();
                         continue;
                     }
                     if renameat_with(CWD, &a, CWD, &b, RenameFlags::EXCHANGE).is_ok() {
-                        swaps.fetch_add(1, Ordering::SeqCst);
+                        swaps += 1;
                     }
                 }
             })
@@ -1274,7 +1280,8 @@ impl Swapper {
         Self {
             stop,
             pause,
-            swaps,
+            holds,
+            held,
             thread: Some(thread),
         }
     }
@@ -1292,9 +1299,12 @@ impl Swapper {
         while rounds < 400 && started.elapsed() < Duration::from_secs(6) {
             rounds += 1;
             self.pause.store(false, Ordering::SeqCst);
+            // Waits until the thread is seen waiting, with the folder
+            // itself again, after this hold began: no swap is under way.
             let hold = || {
                 self.pause.store(true, Ordering::SeqCst);
-                while !self.swaps.load(Ordering::SeqCst).is_multiple_of(2) {
+                let this = self.holds.fetch_add(1, Ordering::SeqCst) + 1;
+                while self.held.load(Ordering::SeqCst) != this {
                     std::thread::yield_now();
                 }
             };

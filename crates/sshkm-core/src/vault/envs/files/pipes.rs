@@ -92,7 +92,12 @@ impl PipeId {
     /// pipe is there.
     #[cfg(unix)]
     pub(super) fn in_folder(folder: &Folder, name: &str) -> Option<Self> {
-        let entry = folder.entry(name).ok()??;
+        Self::of_entry(&folder.entry(name).ok()??)
+    }
+
+    /// The pipe `entry` describes, if it is one.
+    #[cfg(unix)]
+    pub(super) fn of_entry(entry: &folder::Entry) -> Option<Self> {
         (entry.kind == folder::Kind::Pipe).then_some(Self {
             dev: entry.dev,
             ino: entry.ino,
@@ -316,39 +321,51 @@ impl PipeList {
 /// Makes a pipe at `path`, readable and writable by this user only, where
 /// nothing is. Fails if something is there by then.
 pub fn make(path: &Path) -> Result<PipeId> {
-    let (folder, name) = open_parent(path)?;
-    make_in(&folder, name)
+    fsutil::make_private(path, imp::mkfifo)?;
+    PipeId::of(path).ok_or_else(|| Error::invalid(format!("{} isn't a pipe", path.display())))
 }
 
-/// Makes a pipe named `name` in `folder`, held, as [`make`] does: made
-/// and looked at through the folder, so it is in that folder whatever its
-/// path leads to meanwhile ([`staged_pipe`]).
+/// Makes a pipe named `name` in `folder`, held, as [`make`] does, where
+/// nothing is: made and looked at through the folder, so it is in that
+/// folder whatever its path leads to meanwhile ([`made_pipe`]).
 #[cfg(unix)]
 pub(super) fn make_in(folder: &Folder, name: &str) -> Result<PipeId> {
-    let (staging, made) = staged_pipe(folder, name)?;
-    staging
-        .place(name, name, false)
+    let (making, made) = made_pipe(folder, name)?;
+    making
+        .place(false)
         .map_err(|e| Error::io(e, &folder.path().join(name)))?;
     Ok(made)
 }
 
-/// A pipe for the place of `name` in `folder`, made in a staging folder of
-/// its own inside it ([`folder::Staging`]), where nothing is handed down to
-/// it, and made this user's alone there (mode 0600, and on macOS no entry
-/// in its access list, which macOS checks before the mode) before anyone
-/// can reach it. It is renamed into place by the caller; the staging
-/// folder goes, with the pipe if it is still there, when dropped.
+/// A pipe for the place of `name` in `folder`, made where it is made
+/// before it takes its place ([`folder::Making`]): on macOS in a private
+/// folder of its own, where nothing a folder's access list hands down is
+/// on it, by path there, since `mkfifoat` needs macOS 13; elsewhere under
+/// a temporary name in the folder. It is this user's alone (mode 0600)
+/// before it is renamed into place by the caller; it goes with `Making`
+/// if it isn't.
 #[cfg(unix)]
-fn staged_pipe<'a>(folder: &'a Folder, name: &str) -> Result<(folder::Staging<'a>, PipeId)> {
+fn made_pipe<'a>(folder: &'a Folder, name: &str) -> Result<(folder::Making<'a>, PipeId)> {
     let path = folder.path().join(name);
-    let staging = folder
-        .staging(name)
+    let making = folder
+        .making(name)
         .map_err(|e| Error::io(e, folder.path()))?;
-    imp::mkfifo_in(&staging.folder, name).map_err(|e| Error::io(e, &path))?;
-    let made = PipeId::in_folder(&staging.folder, name)
+    #[cfg(target_os = "macos")]
+    imp::mkfifo(&making.path().map_err(|e| Error::io(e, &path))?)?;
+    #[cfg(not(target_os = "macos"))]
+    {
+        let (dir, made) = making.at();
+        rustix::fs::mkfifoat(dir, made, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR)
+            .map_err(|e| Error::io(e.into(), &path))?;
+    }
+    making.owner_only().map_err(|e| Error::io(e, &path))?;
+    let made = making
+        .entry()
+        .ok()
+        .flatten()
+        .and_then(|entry| PipeId::of_entry(&entry))
         .ok_or_else(|| Error::invalid(format!("{} isn't a pipe", path.display())))?;
-    imp::owner_only(&staging.folder, name, made).map_err(|e| Error::io(e, &path))?;
-    Ok((staging, made))
+    Ok((making, made))
 }
 
 #[cfg(not(unix))]
@@ -371,7 +388,7 @@ pub fn make_over(path: &Path, expected: &[u8]) -> Result<Option<PipeId>> {
 /// [`make_over`] does.
 #[cfg(unix)]
 pub(super) fn make_over_in(folder: &Folder, name: &str, expected: &[u8]) -> Result<Option<PipeId>> {
-    let (staging, made) = staged_pipe(folder, name)?;
+    let (making, made) = made_pipe(folder, name)?;
     // Read as a binding's file is: no link followed, no pipe waited on.
     let path = folder.path().join(name);
     let same = matches!(
@@ -381,9 +398,7 @@ pub(super) fn make_over_in(folder: &Folder, name: &str, expected: &[u8]) -> Resu
     if !same {
         return Ok(None);
     }
-    staging
-        .place(name, name, true)
-        .map_err(|e| Error::io(e, &path))?;
+    making.place(true).map_err(|e| Error::io(e, &path))?;
     Ok(Some(made))
 }
 
@@ -476,55 +491,21 @@ mod imp {
     /// reader slower than this may still get one.)
     const REST: Duration = Duration::from_millis(25);
 
-    /// Makes the pipe `name` in `folder`, readable and writable by this
-    /// user only, where nothing is (`mkfifoat`, which `rustix` lacks on
-    /// macOS).
-    pub(super) fn mkfifo_in(folder: &super::Folder, name: &str) -> io::Result<()> {
-        use rustix::fs::{AtFlags, Mode};
-        let c_name =
-            std::ffi::CString::new(name).map_err(|_| io::Error::other("a name with a NUL byte"))?;
-        // SAFETY: the folder's descriptor is open for the call and the
-        // name a valid C string; mkfifoat reads them and keeps nothing.
-        let made = unsafe { libc::mkfifoat(folder.fd().as_raw_fd(), c_name.as_ptr(), 0o600) };
-        if made != 0 {
-            return Err(io::Error::last_os_error());
+    /// Makes a pipe at `path`, readable and writable by this user only,
+    /// where nothing is. By path: `mkfifoat` needs macOS 13, and the app
+    /// runs on 12, so a pipe in a held folder is made in a private folder
+    /// of its own and looked at through it (`folder::Making`).
+    pub(super) fn mkfifo(path: &Path) -> Result<()> {
+        use std::os::unix::ffi::OsStrExt;
+        let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| Error::invalid("a path with a NUL byte"))?;
+        // SAFETY: a valid C string; mkfifo reads it and keeps nothing.
+        let made = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+        if made == 0 {
+            Ok(())
+        } else {
+            Err(Error::io(io::Error::last_os_error(), path))
         }
-        // In case a umask took more.
-        Ok(rustix::fs::chmodat(
-            folder.fd(),
-            name,
-            Mode::from_raw_mode(0o600),
-            AtFlags::empty(),
-        )?)
-    }
-
-    /// Empties the access list of the pipe `id` just made as `name` in
-    /// `folder`, a staging folder where nothing is handed down, so there is
-    /// nothing to drop: once more all the same (macOS checks such entries
-    /// before the mode). The pipe is opened through the folder, without
-    /// following a link and without waiting: no server answers it yet, so
-    /// opening it to read hands nothing out. Elsewhere there is nothing to
-    /// drop: Linux masks a POSIX access list's entries with the mode's
-    /// group bits.
-    #[cfg(target_os = "macos")]
-    pub(super) fn owner_only(folder: &super::Folder, name: &str, id: PipeId) -> io::Result<()> {
-        use rustix::fs::{Mode, OFlags};
-        let pipe = File::from(rustix::fs::openat(
-            folder.fd(),
-            name,
-            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        )?);
-        if id_of(&pipe) != Some(id) {
-            return Err(io::Error::other("not the pipe just made"));
-        }
-        crate::perms::extended_acl::clear(&pipe)
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    #[allow(clippy::unnecessary_wraps, reason = "the same as on macOS")]
-    pub(super) fn owner_only(_: &super::Folder, _: &str, _: PipeId) -> io::Result<()> {
-        Ok(())
     }
 
     /// The pipe `id` at `path`, opened to write to, if a reader has it
@@ -1070,6 +1051,10 @@ mod imp {
 
     fn unsupported() -> Error {
         Error::Unsupported("virtual files work on macOS and Linux".into())
+    }
+
+    pub(super) fn mkfifo(_: &Path) -> Result<()> {
+        Err(unsupported())
     }
 
     pub(super) fn open_if_read(_: &Path, _: PipeId) -> Option<File> {

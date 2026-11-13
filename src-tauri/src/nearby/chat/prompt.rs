@@ -32,7 +32,8 @@ pub fn shown(text: &str) -> String {
 
 /// A received secret or variable, as the reveal and copy budget names it
 /// ([`crate::secret_gate::take_secret`]): `name` is the variable's, else
-/// `label` the secret's; `peer` the computer it came from.
+/// `label` the secret's (empty for one without); `peer` the computer it came
+/// from.
 pub fn chat_value(peer: &str, label: &str, name: Option<&str>) -> Localized {
     let peer = shown(peer);
     if let Some(name) = name {
@@ -40,15 +41,61 @@ pub fn chat_value(peer: &str, label: &str, name: Option<&str>) -> Localized {
         return Localized::new(
             format!("{name} from “{peer}”"),
             format!("{name} от «{peer}»"),
-            format!("«{peer}» dan {name}"),
+            format!("«{peer}» kompyuteridan {name}"),
+        );
+    }
+    if label.is_empty() {
+        return Localized::new(
+            format!("a secret from “{peer}”"),
+            format!("секрет от «{peer}»"),
+            format!("«{peer}» kompyuteridan maxfiy qiymat"),
         );
     }
     let label = shown(label);
     Localized::new(
         format!("the secret “{label}” from “{peer}”"),
         format!("секрет «{label}» от «{peer}»"),
-        format!("«{peer}» dan «{label}» maxfiy qiymati"),
+        format!("«{peer}» kompyuteridan «{label}» maxfiy qiymati"),
     )
+}
+
+/// `n` and the English word for one or more: "1 variable", "3 variables".
+fn en(n: usize, one: &str, other: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { other })
+}
+
+/// `n` and the Russian word that agrees with it: `one` for 1, 21…, `few`
+/// for 2–4, 22…, `many` for the rest (5–20, 25…).
+fn ru(n: usize, one: &str, few: &str, many: &str) -> String {
+    let (last, two) = (n % 10, n % 100);
+    let word = if last == 1 && two != 11 {
+        one
+    } else if (2..=4).contains(&last) && !(12..=14).contains(&two) {
+        few
+    } else {
+        many
+    };
+    format!("{n} {word}")
+}
+
+/// An environment as the page names it: its project or part, and its name.
+fn env_label(project: &str, name: &str) -> String {
+    let label = [project, name]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    shown(&label)
+}
+
+/// A login's name and, if it has one, its user: `“prod DB” (deploy)`.
+fn login(title: &str, user: &str, open: char, close: char) -> String {
+    let title = shown(title);
+    if user.is_empty() {
+        format!("{open}{title}{close}")
+    } else {
+        format!("{open}{title}{close} ({})", shown(user))
+    }
 }
 
 /// Variable names as a dialog lists them: the first few, and how many more.
@@ -69,30 +116,56 @@ fn names(list: &[String]) -> String {
 /// (the name this vault keeps for it).
 pub fn send_variables(peer: &str, label: &str, vars: &[String]) -> Prompt {
     let (peer, label, list, count) = (shown(peer), shown(label), names(vars), vars.len());
+    let one = count == 1;
     Prompt {
         title: Localized::new(
-            "Send these values?",
-            "Отправить эти значения?",
-            "Bu qiymatlar yuborilsinmi?",
+            if one {
+                "Send this value?"
+            } else {
+                "Send these values?"
+            },
+            if one {
+                "Отправить это значение?"
+            } else {
+                "Отправить эти значения?"
+            },
+            if one {
+                "Bu qiymat yuborilsinmi?"
+            } else {
+                "Bu qiymatlar yuborilsinmi?"
+            },
         ),
         body: Localized::new(
             format!(
-                "Send the values of {count} variables of “{label}” to “{peer}”: {list}. They \
-                 are hidden there and wiped when their term ends, but whoever uses “{peer}” can \
-                 copy them before then."
+                "Send the values of {} of “{label}” to “{peer}”: {list}. They are hidden there \
+                 and wiped when their term ends, but whoever uses “{peer}” can copy them before \
+                 then.",
+                en(count, "variable", "variables")
             ),
             format!(
-                "Отправить на «{peer}» значения переменных «{label}» ({count}): {list}? Там они \
-                 скрыты и стираются, когда истечёт срок, но на «{peer}» их могут скопировать \
-                 раньше."
+                "Отправить на «{peer}» значения {} из «{label}»: {list}? Там они скрыты и \
+                 стираются, когда истечёт срок, но на «{peer}» их могут скопировать раньше.",
+                ru(count, "переменной", "переменных", "переменных")
             ),
             format!(
-                "«{label}»dagi {count} ta oʻzgaruvchi qiymatlari «{peer}» ga yuborilsinmi: \
-                 {list}? U yerda ular yashirin turadi va muddati tugagach oʻchiriladi, lekin \
-                 «{peer}» da ulardan oldinroq nusxa olish mumkin."
+                "«{label}» muhitidagi {count} ta oʻzgaruvchi qiymati «{peer}» kompyuteriga \
+                 yuborilsinmi: {list}? U yerda ular yashirin turadi va muddati tugagach \
+                 oʻchiriladi, lekin «{peer}» kompyuterida ulardan oldinroq nusxa olish mumkin."
             ),
         ),
-        approve: Localized::new("Send values", "Отправить значения", "Qiymatlarni yuborish"),
+        approve: Localized::new(
+            if one { "Send value" } else { "Send values" },
+            if one {
+                "Отправить значение"
+            } else {
+                "Отправить значения"
+            },
+            if one {
+                "Qiymatni yuborish"
+            } else {
+                "Qiymatlarni yuborish"
+            },
+        ),
     }
 }
 
@@ -107,37 +180,38 @@ pub fn send_item(peer: &str, item: &ItemSummary) -> Option<Prompt> {
             otp,
             ..
         } => {
-            let (title, user) = (shown(title), shown(username));
-            let (otp_en, otp_ru, otp_uz) = if *otp {
+            let (en_login, ru_login) = (
+                login(title, username, '“', '”'),
+                login(title, username, '«', '»'),
+            );
+            let (en_goes, ru_goes, uz_goes) = if *otp {
                 (
-                    " and its 2FA secret",
-                    " и его секрет 2FA",
-                    " va uning 2FA siri",
+                    format!("its password and 2FA secret go to “{peer}” and stay there"),
+                    format!("пароль и секрет 2FA уйдут на «{peer}» и останутся там"),
+                    "paroli va 2FA siri",
                 )
             } else {
-                ("", "", "")
+                (
+                    format!("its password goes to “{peer}” and stays there"),
+                    format!("пароль уйдёт на «{peer}» и останется там"),
+                    "paroli",
+                )
             };
             Some(Prompt {
                 title: Localized::new(
-                    "Send this password?",
-                    "Отправить этот пароль?",
-                    "Bu parol yuborilsinmi?",
+                    "Offer this login?",
+                    "Предложить этот логин?",
+                    "Bu login taklif qilinsinmi?",
                 ),
                 body: Localized::new(
+                    format!("Offer “{peer}” the login {en_login}. If they accept, {en_goes}."),
+                    format!("Предложить «{peer}» логин {ru_login}? Если там примут, {ru_goes}."),
                     format!(
-                        "Offer “{peer}” the login “{title}” ({user}). If they accept, its \
-                         password{otp_en} goes to “{peer}” and stays there."
-                    ),
-                    format!(
-                        "Предложить «{peer}» логин «{title}» ({user})? Если там примут, \
-                         пароль{otp_ru} уйдёт на «{peer}» и останется там."
-                    ),
-                    format!(
-                        "«{peer}» ga «{title}» ({user}) login taklif qilinsinmi? Qabul qilinsa, \
-                         parol{otp_uz} «{peer}» ga boradi va oʻsha yerda qoladi."
+                        "«{peer}» kompyuteriga {ru_login} logini taklif qilinsinmi? Qabul \
+                         qilinsa, {uz_goes} «{peer}» kompyuteriga boradi va oʻsha yerda qoladi."
                     ),
                 ),
-                approve: Localized::new("Offer", "Предложить", "Taklif qilish"),
+                approve: Localized::new("Offer login", "Предложить логин", "Loginni taklif qilish"),
             })
         }
         ItemSummary::Environment {
@@ -146,30 +220,36 @@ pub fn send_item(peer: &str, item: &ItemSummary) -> Option<Prompt> {
             variables,
             ..
         } => {
-            let label = shown(&[project.as_str(), name.as_str()].join(" / "));
-            let label = label.trim_start_matches(" / ").to_owned();
+            let label = env_label(project, name);
+            let n = usize::try_from(*variables).unwrap_or(usize::MAX);
             Some(Prompt {
                 title: Localized::new(
-                    "Send this environment?",
-                    "Отправить это окружение?",
-                    "Bu muhit yuborilsinmi?",
+                    "Offer this environment?",
+                    "Предложить это окружение?",
+                    "Bu muhit taklif qilinsinmi?",
                 ),
                 body: Localized::new(
                     format!(
-                        "Offer “{peer}” the environment “{label}”. If they accept, the values \
-                         of its {variables} variables go to “{peer}” and stay there."
+                        "Offer “{peer}” the environment “{label}”. If they accept, the values of \
+                         its {} go to “{peer}” and stay there.",
+                        en(n, "variable", "variables")
                     ),
                     format!(
                         "Предложить «{peer}» окружение «{label}»? Если там примут, значения его \
-                         переменных ({variables}) уйдут на «{peer}» и останутся там."
+                         {} уйдут на «{peer}» и останутся там.",
+                        ru(n, "переменной", "переменных", "переменных")
                     ),
                     format!(
-                        "«{peer}» ga «{label}» muhiti taklif qilinsinmi? Qabul qilinsa, uning \
-                         {variables} ta oʻzgaruvchisi qiymatlari «{peer}» ga boradi va oʻsha \
-                         yerda qoladi."
+                        "«{peer}» kompyuteriga «{label}» muhiti taklif qilinsinmi? Qabul \
+                         qilinsa, uning {n} ta oʻzgaruvchisi qiymatlari «{peer}» kompyuteriga \
+                         boradi va oʻsha yerda qoladi."
                     ),
                 ),
-                approve: Localized::new("Offer", "Предложить", "Taklif qilish"),
+                approve: Localized::new(
+                    "Offer environment",
+                    "Предложить окружение",
+                    "Muhitni taklif qilish",
+                ),
             })
         }
         _ => None,
@@ -185,7 +265,10 @@ pub fn accept_item(peer: &str, item: &ItemSummary) -> Option<Prompt> {
         ItemSummary::Password {
             title, username, ..
         } => {
-            let (title, user) = (shown(title), shown(username));
+            let (en_login, ru_login) = (
+                login(title, username, '“', '”'),
+                login(title, username, '«', '»'),
+            );
             Some(Prompt {
                 title: Localized::new(
                     "Save this login?",
@@ -193,10 +276,11 @@ pub fn accept_item(peer: &str, item: &ItemSummary) -> Option<Prompt> {
                     "Bu login saqlansinmi?",
                 ),
                 body: Localized::new(
-                    format!("Save the login “{title}” ({user}) from “{peer}” in Passwords?"),
-                    format!("Сохранить логин «{title}» ({user}) от «{peer}» в «Паролях»?"),
+                    format!("Save the login {en_login} from “{peer}” in Passwords?"),
+                    format!("Сохранить логин {ru_login} от «{peer}» в «Паролях»?"),
                     format!(
-                        "«{peer}» dan «{title}» ({user}) loginini «Parollar»da saqlash kerakmi?"
+                        "«{peer}» kompyuteridan kelgan {ru_login} logini «Parollar»da \
+                         saqlansinmi?"
                     ),
                 ),
                 approve,
@@ -208,8 +292,8 @@ pub fn accept_item(peer: &str, item: &ItemSummary) -> Option<Prompt> {
             variables,
             ..
         } => {
-            let label = shown(&[project.as_str(), name.as_str()].join(" / "));
-            let label = label.trim_start_matches(" / ").to_owned();
+            let label = env_label(project, name);
+            let n = usize::try_from(*variables).unwrap_or(usize::MAX);
             Some(Prompt {
                 title: Localized::new(
                     "Save this environment?",
@@ -218,16 +302,17 @@ pub fn accept_item(peer: &str, item: &ItemSummary) -> Option<Prompt> {
                 ),
                 body: Localized::new(
                     format!(
-                        "Save the environment “{label}” with {variables} variables from \
-                         “{peer}”, as a new environment?"
+                        "Save the environment “{label}” from “{peer}”, with {}, as a new \
+                         environment?",
+                        en(n, "variable", "variables")
                     ),
                     format!(
-                        "Сохранить окружение «{label}» с переменными ({variables}) от «{peer}» \
-                         как новое окружение?"
+                        "Сохранить окружение «{label}» от «{peer}» ({}) как новое окружение?",
+                        ru(n, "переменная", "переменные", "переменных")
                     ),
                     format!(
-                        "«{peer}» dan {variables} ta oʻzgaruvchili «{label}» muhiti yangi muhit \
-                         sifatida saqlansinmi?"
+                        "«{peer}» kompyuteridan kelgan, {n} ta oʻzgaruvchili «{label}» muhiti \
+                         yangi muhit sifatida saqlansinmi?"
                     ),
                 ),
                 approve,
@@ -247,23 +332,17 @@ pub fn add_variables(
     risky: &[String],
 ) -> Prompt {
     let (peer, env, list, count) = (shown(peer), shown(env), names(vars), vars.len());
-    let replace = |en: &str, ru: &str, uz: &str| {
-        if replaced.is_empty() {
-            (String::new(), String::new(), String::new())
-        } else {
-            let list = names(replaced);
-            (
-                format!(" {en}: {list}."),
-                format!(" {ru}: {list}."),
-                format!(" {uz}: {list}."),
-            )
-        }
+    let one = count == 1;
+    let (replace_en, replace_ru, replace_uz) = if replaced.is_empty() {
+        (String::new(), String::new(), String::new())
+    } else {
+        let list = names(replaced);
+        (
+            format!(" These replace your values: {list}."),
+            format!(" Эти заменят ваши значения: {list}."),
+            format!(" Bular qiymatlaringizni almashtiradi: {list}."),
+        )
     };
-    let (replace_en, replace_ru, replace_uz) = replace(
-        "These replace your values",
-        "Эти заменят ваши значения",
-        "Bular qiymatlaringizni almashtiradi",
-    );
     let (risky_en, risky_ru, risky_uz) = if risky.is_empty() {
         (String::new(), String::new(), String::new())
     } else {
@@ -276,26 +355,48 @@ pub fn add_variables(
     };
     Prompt {
         title: Localized::new(
-            "Add these variables?",
-            "Добавить эти переменные?",
-            "Bu oʻzgaruvchilar qoʻshilsinmi?",
+            if one {
+                "Add this variable?"
+            } else {
+                "Add these variables?"
+            },
+            if one {
+                "Добавить эту переменную?"
+            } else {
+                "Добавить эти переменные?"
+            },
+            if one {
+                "Bu oʻzgaruvchi qoʻshilsinmi?"
+            } else {
+                "Bu oʻzgaruvchilar qoʻshilsinmi?"
+            },
         ),
         body: Localized::new(
             format!(
-                "Add {count} variables from “{peer}” to “{env}”: {list}.{replace_en}{risky_en}"
+                "Add {} from “{peer}” to “{env}”: {list}.{replace_en}{risky_en}",
+                en(count, "variable", "variables")
             ),
             format!(
-                "Добавить в «{env}» переменные от «{peer}» ({count}): {list}.{replace_ru}{risky_ru}"
+                "Добавить в «{env}» {} от «{peer}»: {list}?{replace_ru}{risky_ru}",
+                ru(count, "переменную", "переменные", "переменных")
             ),
             format!(
-                "«{peer}» dan {count} ta oʻzgaruvchi «{env}» ga qoʻshilsinmi: \
-                 {list}.{replace_uz}{risky_uz}"
+                "«{peer}» kompyuteridan {count} ta oʻzgaruvchi «{env}» muhitiga qoʻshilsinmi: \
+                 {list}?{replace_uz}{risky_uz}"
             ),
         ),
         approve: Localized::new(
-            "Add variables",
-            "Добавить переменные",
-            "Oʻzgaruvchilarni qoʻshish",
+            if one { "Add variable" } else { "Add variables" },
+            if one {
+                "Добавить переменную"
+            } else {
+                "Добавить переменные"
+            },
+            if one {
+                "Oʻzgaruvchini qoʻshish"
+            } else {
+                "Oʻzgaruvchilarni qoʻshish"
+            },
         ),
     }
 }
@@ -375,5 +476,98 @@ mod tests {
         assert!(text.contains("change how programs start: PATH"));
         let plain = all(&add_variables("Bob", "dev", &["A".into()], &[], &[]));
         assert!(!plain.contains("replace") && !plain.contains("programs start"));
+    }
+
+    #[test]
+    fn counts_agree_with_their_words() {
+        assert_eq!(en(1, "variable", "variables"), "1 variable");
+        assert_eq!(en(3, "variable", "variables"), "3 variables");
+        let forms = |n| ru(n, "переменная", "переменные", "переменных");
+        assert_eq!(forms(1), "1 переменная");
+        assert_eq!(forms(2), "2 переменные");
+        assert_eq!(forms(5), "5 переменных");
+        assert_eq!(forms(11), "11 переменных");
+        assert_eq!(forms(12), "12 переменных");
+        assert_eq!(forms(21), "21 переменная");
+        assert_eq!(forms(24), "24 переменные");
+        let one = all(&send_variables("Bob", "shop · prod", &["API_KEY".into()]));
+        assert!(
+            one.contains("1 variable of") && one.contains("Send this value?"),
+            "{one}"
+        );
+        assert!(!one.contains("1 variables"));
+        let added = all(&add_variables("Bob", "dev", &["A".into()], &[], &[]));
+        assert!(
+            added.contains("Add 1 variable from") && added.contains("Add variable"),
+            "{added}"
+        );
+    }
+
+    #[test]
+    fn environments_are_named_as_the_page_names_them() {
+        let env = ItemSummary::Environment {
+            project: "shop".into(),
+            name: "prod".into(),
+            variables: 1,
+            secrets: 1,
+            names: vec![],
+        };
+        let offer = all(&send_item("Bob", &env).unwrap());
+        assert!(
+            offer.contains("“shop · prod”") && offer.contains("its 1 variable go"),
+            "{offer}"
+        );
+        assert!(!offer.contains(" / "));
+        let saved = all(&accept_item("Bob", &env).unwrap());
+        assert!(
+            saved.contains("“shop · prod”") && saved.contains("with 1 variable,"),
+            "{saved}"
+        );
+    }
+
+    #[test]
+    fn a_secret_without_a_label_is_named_by_what_it_is() {
+        let named = chat_value("Bob", "", None);
+        assert_eq!(named.en, "a secret from “Bob”");
+        assert!(!named.en.contains("“”") && !named.ru.contains("«»") && !named.uz.contains("«»"));
+        assert_eq!(
+            chat_value("Bob", "db", None).en,
+            "the secret “db” from “Bob”"
+        );
+        // As the page says it in Uzbek: a secret value, never "sir".
+        assert!(chat_value("Bob", "db", None).uz.contains("maxfiy qiymat"));
+        assert!(!chat_value("Bob", "", None).uz.contains(" sir"));
+    }
+
+    #[test]
+    fn uzbek_suffixes_go_on_a_word_not_on_a_quoted_name() {
+        let texts = [
+            send_variables("Bob", "shop · prod", &["A".into()]).body.uz,
+            add_variables("Bob", "dev", &["A".into()], &[], &[]).body.uz,
+            chat_value("Bob", "db", Some("A")).uz,
+        ];
+        for text in texts {
+            // A suffix right after a closing quote, or after a space, is never there.
+            assert!(
+                !text.contains("»dagi") && !text.contains("» ga ") && !text.contains("» dan "),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_login_without_a_user_has_no_empty_brackets() {
+        let login = ItemSummary::Password {
+            title: "router".into(),
+            username: String::new(),
+            url: String::new(),
+            otp: false,
+        };
+        let text = all(&send_item("Bob", &login).unwrap());
+        assert!(text.contains("“router”.") && !text.contains("()"), "{text}");
+        assert!(
+            text.contains("its password goes to “Bob” and stays there"),
+            "{text}"
+        );
     }
 }

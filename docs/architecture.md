@@ -264,8 +264,14 @@ translates.
     terminal's prompt bridge through an interactive askpass session.
   - `LogLevel=VERBOSE`'s `Authenticated to …` line, read from `ssh`'s own log (a
     private `-E` file, which servers' banners don't reach), tells when signing in is
-    done; `failure` reads why `ssh` stopped from that log and its stderr. With auto-reconnect a tunnel starts again
+    done; `failure` reads why `ssh` stopped from that log and its stderr. On Windows,
+    where Win32-OpenSSH keeps others from reading that file, there is no log: stderr
+    tells, and nothing is offered for saving. With auto-reconnect a tunnel starts again
     after a growing wait, unless what stopped it needs the user.
+  - Through a program that may run another `ssh` (a `ProxyCommand` of the host or a
+    `ProxyJump` hop, a `LocalCommand`, a `KnownHostsCommand`), `askpass::fill` asks in
+    a native dialog before each secret is filled in, for tunnels, the terminal and
+    `run_ssh` alike.
   - Every change goes to the page as `tunnels-changed`, and to the tray menu. Tunnels
     stop when the app quits.
 - **Quick search.** `src-tauri/src/quick/`: a system-wide shortcut

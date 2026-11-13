@@ -13,7 +13,9 @@
 //!   jump host's banner and a `ProxyCommand`'s output go to its stderr, so
 //!   they can't make answers count as accepted. Only the server signing in
 //!   could write such a line there, and it could just as well let the user
-//!   in.
+//!   in. On Windows, where Win32-OpenSSH lets no one read that file while it
+//!   writes it, there is no log: the line is read from stderr, and a tunnel
+//!   never offers to save an answer, as the terminal there doesn't.
 //! - A tunnel that lets others reach something through this computer (one
 //!   listening on more than loopback, or any remote tunnel) is saved only
 //!   after the user's yes in a native dialog, unless it forwards as it did
@@ -52,7 +54,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use self::failure::{TunnelFailReason, TunnelFailure, classify, shown_output};
-use crate::askpass::{Connection, Session};
+use crate::askpass::{Connection, Session, fill};
 use crate::commands::Shared;
 use crate::commands::remote::check_alias;
 use crate::error::{AppError, AppResult};
@@ -414,19 +416,23 @@ impl Tunnels {
         };
 
         // `ssh`'s own messages, apart from what servers print.
-        let opened = LogFile::create().and_then(|log| Ok((LogTail::open(log.path())?, log)));
-        let (mut tail, log) = match opened {
-            Ok(opened) => opened,
-            Err(e) => return other(format!("could not make a log file for ssh: {e}")),
+        let log = if READS_OWN_LOG {
+            match LogFile::create().and_then(|log| Ok((LogTail::open(log.path())?, log))) {
+                Ok(opened) => Some(opened),
+                Err(e) => return other(format!("could not make a log file for ssh: {e}")),
+            }
+        } else {
+            None
         };
         let mut command = process::command("ssh");
         askpass.configure(&mut command);
         command
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
-            .arg("-E")
-            .arg(log.path())
-            .args(run.tunnel.ssh_args())
+            .args(ssh_args(
+                &run.tunnel,
+                log.as_ref().map(|(_, file)| file.path()),
+            ))
             .current_dir(&state.paths.home);
         let mut child = match command.spawn() {
             Ok(child) => child,
@@ -451,7 +457,8 @@ impl Tunnels {
         *lock(&run.child) = Some(child);
         *lock(&run.bridge) = Some(Arc::clone(&bridge));
 
-        let watched = self.watch(run, &bridge, &received, &mut tail);
+        let (mut tail, log) = log.unzip();
+        let watched = self.watch(run, &bridge, &received, tail.as_mut());
         lock(&run.child).take();
         lock(&run.bridge).take();
         bridge.close();
@@ -513,8 +520,8 @@ impl Tunnels {
                 key_offered,
                 ask_password: false,
                 // `Authenticated to …` in `ssh`'s own log tells for sure when
-                // signing in is done.
-                can_save: true,
+                // signing in is done; without the log nothing does.
+                can_save: READS_OWN_LOG,
                 timeout: bridge::ANSWER_TIMEOUT,
             },
         ));
@@ -523,26 +530,31 @@ impl Tunnels {
             askpass.expect_account(account);
         }
         // Without `ssh -G` nothing is known about the way: assume the worst.
-        askpass.expect_connection(
+        fill::expect_way(
+            &askpass,
+            &run.tunnel.alias,
             Connection::new(
                 state.openssh_version().as_deref(),
                 resolved.as_ref().is_none_or(|r| r.keyboard_interactive),
                 resolved.as_ref().is_none_or(Resolved::proxied),
-            )
-            .through_command(resolved.as_ref().is_none_or(|r| r.proxy_command.is_some())),
+            ),
+            resolved.as_ref().and_then(|r| r.user.as_deref()),
+            resolved.as_ref().and_then(|r| r.host_name.as_deref()),
         );
         Ok((bridge, askpass))
     }
 
     /// Follows a running `ssh` until it exits (or is stopped): its stderr
     /// (`received`) and its log (`log`), signing in, and the forward coming
-    /// up. Only the log tells that it signed in.
+    /// up. With a log, only the log tells that it signed in. Without one
+    /// (Windows) stderr does, which a server's banner can fake, so nothing
+    /// is saved there ([`READS_OWN_LOG`]).
     fn watch(
         &self,
         run: &Run,
         bridge: &Bridge,
         received: &mpsc::Receiver<String>,
-        log: &mut LogTail,
+        mut log: Option<&mut LogTail>,
     ) -> Watched {
         let settle = if run.tunnel.kind == TunnelKind::Remote {
             SETTLE_REMOTE
@@ -553,17 +565,30 @@ impl Tunnels {
         let mut signed_in: Option<Instant> = None;
         let mut up: Option<Instant> = None;
         let status = loop {
+            let mut telling = Vec::new();
             match received.recv_timeout(POLL) {
-                Ok(line) => keep(&mut output, &line),
+                Ok(line) => {
+                    keep(&mut output, &line);
+                    if log.is_none() {
+                        telling.push(line);
+                    }
+                }
                 Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {}
             }
-            for line in log.lines(false) {
-                if signed_in.is_none() && line.starts_with("Authenticated to ") {
-                    signed_in = Some(Instant::now());
-                    bridge.signed_in();
-                    bridge.save_answers();
+            if let Some(log) = log.as_deref_mut() {
+                for line in log.lines(false) {
+                    keep(&mut output, &line);
+                    telling.push(line);
                 }
-                keep(&mut output, &line);
+            }
+            if signed_in.is_none()
+                && telling
+                    .iter()
+                    .any(|line| line.starts_with("Authenticated to "))
+            {
+                signed_in = Some(Instant::now());
+                bridge.signed_in();
+                bridge.save_answers();
             }
             if up.is_none() && signed_in.is_some_and(|at| at.elapsed() >= settle) {
                 up = Some(Instant::now());
@@ -590,8 +615,10 @@ impl Tunnels {
         {
             keep(&mut output, &line);
         }
-        for line in log.lines(true) {
-            keep(&mut output, &line);
+        if let Some(log) = log {
+            for line in log.lines(true) {
+                keep(&mut output, &line);
+            }
         }
         Watched {
             status,
@@ -623,6 +650,23 @@ fn keep(output: &mut String, line: &str) {
             .unwrap_or(cut);
         output.drain(..cut);
     }
+}
+
+/// `ssh` logs to a private file (`-E`) that the tunnel reads as `ssh` writes
+/// it. Not on Windows, where Win32-OpenSSH opens the file so that no one
+/// else may read it meanwhile: tunnels there tell signing in from stderr,
+/// and so never save answers.
+const READS_OWN_LOG: bool = cfg!(unix);
+
+/// `ssh`'s arguments for `tunnel`, logging to `log` if given.
+fn ssh_args(tunnel: &Tunnel, log: Option<&Path>) -> Vec<std::ffi::OsString> {
+    let mut args = Vec::new();
+    if let Some(log) = log {
+        args.push("-E".into());
+        args.push(log.as_os_str().to_owned());
+    }
+    args.extend(tunnel.ssh_args().into_iter().map(Into::into));
+    args
 }
 
 /// Past this size the log file is emptied (Unix, where `ssh` writes at the
@@ -862,6 +906,7 @@ mod tests {
                 foreign: false,
                 unverified: false,
                 given: 0,
+                confirm_fill: None,
             };
             matches!(asking.respond(&ask), Reply::Secret(_))
         });
@@ -892,7 +937,7 @@ mod tests {
         std::fs::write(&log, logged).unwrap();
         let mut tail = LogTail::open(&log).unwrap();
         let tunnels = Tunnels::new(dir.path());
-        let watched = tunnels.watch(&Run::new(local("h")), &bridge, &received, &mut tail);
+        let watched = tunnels.watch(&Run::new(local("h")), &bridge, &received, Some(&mut tail));
         let saved = lock(&saved.0).clone();
         (watched.signed_in, saved, watched.output)
     }
@@ -910,6 +955,70 @@ mod tests {
         assert!(signed_in);
         assert_eq!(saved, ["typed"]);
         assert!(output.contains(line), "{output}");
+    }
+
+    /// Without a log (Windows), stderr tells that the tunnel is up, and the
+    /// tunnel's bridge offers no saving at all.
+    #[test]
+    fn without_a_log_stderr_tells_and_nothing_is_offered_for_saving() {
+        let saved = Saved::default();
+        let bridge = answered(&saved);
+        let (lines, received) = mpsc::channel();
+        lines
+            .send("Authenticated to h ([10.0.0.5]:22) using \"password\".".into())
+            .unwrap();
+        drop(lines);
+        let dir = tempfile::tempdir().unwrap();
+        let watched =
+            Tunnels::new(dir.path()).watch(&Run::new(local("h")), &bridge, &received, None);
+        assert!(watched.signed_in);
+
+        let tunnel = local("h");
+        let log = dir.path().join("ssh.log");
+        let with_log = ssh_args(&tunnel, Some(&log));
+        assert_eq!(with_log[0], "-E");
+        assert_eq!(with_log[1], log.as_os_str());
+        let without = ssh_args(&tunnel, None);
+        assert!(!without.iter().any(|arg| arg == "-E"));
+        assert_eq!(
+            without
+                .last()
+                .map(|a| a.to_string_lossy().into_owned())
+                .as_deref(),
+            Some("h")
+        );
+        // Windows never logs to a file, so never saves.
+        assert_eq!(READS_OWN_LOG, cfg!(unix));
+    }
+
+    /// The real `ssh` writes its `-E` log while the tunnel holds it open to
+    /// read, and the tunnel reads it.
+    #[cfg(unix)]
+    #[test]
+    fn ssh_logs_to_the_file_the_tunnel_reads() {
+        let log = LogFile::create().unwrap();
+        let mut tail = LogTail::open(log.path()).unwrap();
+        let mut args = vec!["-v".into(), "-F".into(), "none".into()];
+        args.extend(ssh_args(&local("example.invalid"), Some(log.path())));
+        // `-G` reads the configuration, logs, and exits without connecting.
+        args.insert(1, "-G".into());
+        let output = std::process::Command::new("ssh")
+            .args(&args)
+            .stdin(Stdio::null())
+            .output();
+        let Ok(output) = output else {
+            return; // No ssh here.
+        };
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let lines = tail.lines(true);
+        assert!(
+            lines.iter().any(|line| line.starts_with("OpenSSH")),
+            "{lines:?}"
+        );
     }
 
     #[test]

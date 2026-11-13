@@ -60,6 +60,18 @@ describe('explain', () => {
     );
   });
 
+  it('says when the user chose not to fill in a saved secret', () => {
+    const withheld = run(false, [password('withheld')], DENIED);
+    expect(explain(withheld)).toEqual({ kind: 'notFilled' });
+    expect(loginMessage(withheld, 'install')).toEqual({
+      tone: 'error',
+      title: 'notFilled',
+      detail: 'notFilledHint',
+    });
+    const passphrase = prompt({ type: 'passphrase', key: '/home/u/.ssh/id' }, 'withheld');
+    expect(explain(run(false, [passphrase], DENIED))).toEqual({ kind: 'notFilled' });
+  });
+
   it('sees an untrusted host key from the prompt or from what ssh printed', () => {
     expect(explain(run(false, [prompt({ type: 'hostKeyConfirm' }, 'declined')]))).toEqual({
       kind: 'hostKeyUnknown',

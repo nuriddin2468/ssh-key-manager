@@ -181,9 +181,22 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     `ProxyJump` or `ProxyCommand`, and saved key passphrases are not filled in while
     keyboard-interactive is on. The terminal then shows those prompts, and with
     keyboard-interactive on any prompt that names another account, as the sender's
-    quoted text, never as the app's password or passphrase dialog. A `ProxyCommand`
-    may run another, older `ssh` than the one the app checks the version of, so
-    through a `ProxyCommand` this holds with any version.
+    quoted text, never as the app's password or passphrase dialog.
+  - A program `ssh` runs on the way may run another, older `ssh` than the one the app
+    checks the version of, whose prompts look like `ssh`'s own: a `ProxyCommand` of the
+    host or of any `ProxyJump` hop (each hop read with its own `ssh -G`; one that
+    can't be read counts), a `LocalCommand` that may run, or a `KnownHostsCommand`.
+    Through one, the app asks in a system dialog before each password, 2FA code or
+    passphrase it would fill in (saved, or typed into a form such as Install key), and
+    only for a prompt `ssh`'s version lets it tell apart as the host's or `ssh`'s own.
+    The dialog names the host, its user and `HostName`, and the program's line, shown
+    as text and shortened; "Don't fill in" is the default, and Escape is the same.
+    It asks for every prompt and remembers nothing, and at most three times a host a
+    minute; past that nothing is filled in until the minute is over. On "Don't fill
+    in" the terminal and tunnels show the prompt as described above, and a test or key
+    install stops and says so. A prompt for another account, a host-key or yes/no
+    question, or one the app can't tell apart is never filled in and never asked
+    about.
   - The in-app terminal uses the same channel with an interactive session. A saved
     secret is given once and only to prompts for the host's own account; everything else
     (a secret not saved, a rejected one, a jump host's password) is asked of you in a
@@ -198,15 +211,17 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     connection, and so does a new key of another type for a host whose key is already
     known. Anything else `ssh` adds to the question is shown as a warning.
   - An answer you choose to save goes into the vault only after the session has signed
-    in. On Windows, where the app can't tell when that happens, the terminal never saves
-    answers. Terminal output and answers are never logged.
+    in. On Windows, where the app can't tell when that happens, the terminal and
+    tunnels never save answers. Terminal output and answers are never logged.
   - Tunnels (Tools → Tunnels) use the same interactive channel: a saved secret is
     given once, a new host key is trusted only after your "Trust", and anything else is
     asked of you on the Tunnels page. A tunnel that reconnects by itself gets saved
     secrets again but never trusts a host key without you. A tunnel counts as signed
     in only when `ssh` logs so in its own log, a new file only you can read in the
     temporary folder (`ssh -E`, removed when `ssh` ends): a server's banner or what a
-    jump host or `ProxyCommand` prints never reaches it.
+    jump host or `ProxyCommand` prints never reaches it. Windows' OpenSSH lets no one
+    read that file while it writes it, so there tunnels read `ssh`'s output instead and
+    never offer to save an answer.
 - **SSH tools.** The Tools page's SSH tools change nothing behind your back.
   - A tunnel is one `ssh -N` per forward, with `ExitOnForwardFailure` (no half-working
     tunnel) and no connection sharing (`ControlPath none`), so it neither rides on nor

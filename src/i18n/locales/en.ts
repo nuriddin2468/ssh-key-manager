@@ -1267,6 +1267,9 @@ const en = {
         passphraseMissing: 'ssh couldn’t use {{key}}: it has a passphrase.',
         passphraseMissingHint:
           'Unlock the key in ssh-agent or save its passphrase in the vault, then try again.',
+        notFilled: 'You chose “Don’t fill in”, so nothing was sent.',
+        notFilledHint:
+          'This host is reached through a program that may run another ssh, so the app asks before each saved password, 2FA code or passphrase goes out. Try again and choose Fill in if you are signing in to this host.',
         otherAccount: '{{account}} asked for its own password.',
         otherAccountHint:
           'Saved passwords go only to this host, never to a jump host. Sign in to the jump host with a key.',

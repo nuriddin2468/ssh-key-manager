@@ -12,6 +12,7 @@ use sshkm_core::authorized_keys::{self, AuthorizedKeys};
 
 use super::keys::find_key;
 use super::{Shared, blocking};
+use crate::askpass::fill::{self, FillDialog, Program};
 use crate::askpass::{AskedPrompt, Connection, PromptAccount, Secrets};
 use crate::error::{AppError, AppResult};
 use crate::process::{self, Output};
@@ -265,8 +266,8 @@ pub fn run_ssh(
     timeout: Duration,
 ) -> AppResult<SshRun> {
     check_alias(alias)?;
-    let target = match ssh_target(alias)? {
-        Ok(target) => target,
+    let (target, program) = match ssh_target(alias)? {
+        Ok(found) => found,
         // `ssh` cannot read its configuration for this host: report what it
         // said, as a failed run would.
         Err(output) => {
@@ -281,15 +282,23 @@ pub fn run_ssh(
         && !askpass.contains(&"KbdInteractiveAuthentication=no")
         && !options.contains(&"KbdInteractiveAuthentication=no");
     let session = state.askpass_session(secrets)?;
-    session.expect_account(target.account);
     session.expect_connection(
         Connection::new(
             state.openssh_version().as_deref(),
             keyboard_interactive,
             target.proxied,
         )
-        .through_command(target.proxy_command),
+        .through_command(program.is_some()),
     );
+    if let Some(program) = program {
+        session.confirm_fills(FillDialog::new(
+            alias,
+            Some(&target.account.user),
+            Some(&target.account.host),
+            program,
+        ));
+    }
+    session.expect_account(target.account);
     let mut command = process::command("ssh");
     session.configure(&mut command);
     command
@@ -332,27 +341,29 @@ struct Target {
     account: PromptAccount,
     /// Through a `ProxyJump` or `ProxyCommand`.
     proxied: bool,
-    /// Through a `ProxyCommand`, which may run another `ssh`.
-    proxy_command: bool,
     /// `KbdInteractiveAuthentication` is not off.
     keyboard_interactive: bool,
 }
 
-/// What `ssh -G` says about `alias`. `Err` holds the output of a failed
-/// `ssh -G`.
-fn ssh_target(alias: &str) -> AppResult<Result<Target, Output>> {
+/// What `ssh -G` says about `alias`, and a program on the way that may run
+/// another `ssh` (see [`fill::program_on_the_way`]). `Err` holds the output
+/// of a failed `ssh -G`.
+fn ssh_target(alias: &str) -> AppResult<Result<(Target, Option<Program>), Output>> {
     let output = process::run("ssh", &["-G", "--", alias], Duration::from_secs(10))?;
     if !output.success {
         return Ok(Err(output));
     }
-    parse_ssh_g(&output.stdout)
-        .map(Ok)
-        .ok_or_else(|| AppError::invalid("ssh -G printed no user or host name"))
+    let target = parse_ssh_g(&output.stdout)
+        .ok_or_else(|| AppError::invalid("ssh -G printed no user or host name"))?;
+    Ok(Ok((
+        target,
+        fill::program_on_the_way(alias, Some(&output.stdout)),
+    )))
 }
 
 fn parse_ssh_g(text: &str) -> Option<Target> {
     let (mut user, mut host_name, mut host_key_alias) = (None, None, None);
-    let (mut proxied, mut proxy_command, mut keyboard_interactive) = (false, false, true);
+    let (mut proxied, mut keyboard_interactive) = (false, true);
     for line in text.lines() {
         let Some((key, value)) = line.split_once(' ') else {
             continue;
@@ -364,7 +375,6 @@ fn parse_ssh_g(text: &str) -> Option<Target> {
             "hostkeyalias" => &mut host_key_alias,
             "proxyjump" | "proxycommand" => {
                 proxied |= value != "none";
-                proxy_command |= key == "proxycommand" && value != "none";
                 continue;
             }
             "kbdinteractiveauthentication" => {
@@ -378,7 +388,6 @@ fn parse_ssh_g(text: &str) -> Option<Target> {
     Some(Target {
         account: PromptAccount::new(user?, host_key_alias.or(host_name)?),
         proxied,
-        proxy_command,
         keyboard_interactive,
     })
 }
@@ -602,7 +611,6 @@ mod tests {
             Some(Target {
                 account: PromptAccount::new("alice", "10.0.0.5"),
                 proxied: false,
-                proxy_command: false,
                 keyboard_interactive: true,
             })
         );
@@ -616,11 +624,11 @@ mod tests {
         let jumped = "user alice\nhostname 10.0.0.5\nproxyjump bastion\n\
                       kbdinteractiveauthentication no\n";
         let target = parse_ssh_g(jumped).unwrap();
-        assert!(target.proxied && !target.proxy_command && !target.keyboard_interactive);
+        assert!(target.proxied && !target.keyboard_interactive);
         let command = parse_ssh_g("user a\nhostname h\nproxycommand nc %h %p\n").unwrap();
-        assert!(command.proxied && command.proxy_command);
-        let none = parse_ssh_g("user a\nhostname h\nproxyjump none\nproxycommand none\n").unwrap();
-        assert!(!none.proxied && !none.proxy_command);
+        assert!(command.proxied);
+        let none = parse_ssh_g("user a\nhostname h\nproxyjump none\nproxycommand none\n");
+        assert!(!none.unwrap().proxied);
     }
 
     #[test]
@@ -650,7 +658,6 @@ mod tests {
             Some(Target {
                 account: PromptAccount::new("alice", "10.0.0.5"),
                 proxied: false,
-                proxy_command: false,
                 keyboard_interactive: true,
             })
         );

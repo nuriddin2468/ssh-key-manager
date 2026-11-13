@@ -4,12 +4,16 @@
 //! needs no crypto code of its own:
 //!
 //! - **Pairing.** The extension makes a P-256 key pair and a random client
-//!   id, and sends the public key. Both sides show a six-digit
-//!   [`pairing_code`] computed from the id and the key; the user approves in
-//!   the app after checking that the browser shows the same code. The app
-//!   then makes its own P-256 key pair and replies with its public key. From
-//!   the ECDH secret both sides derive two AES-256-GCM keys with HKDF-SHA-256:
-//!   one for requests, one for responses ([`ChannelKeys`]).
+//!   id, and first sends only a hash of its public key
+//!   ([`pairing_commitment`]). The app makes a P-256 key pair for this
+//!   pairing ([`AppPairing`]) and replies with its public key; only then does
+//!   the extension send its own. Both sides show a six-digit [`pairing_code`]
+//!   computed from the id and both keys; the user approves in the app after
+//!   checking that the browser shows the same code. Something between the two
+//!   must choose the key it gives each side before it learns the other's, so
+//!   it can't make the two codes agree but by chance. From the ECDH secret
+//!   both sides derive two AES-256-GCM keys with HKDF-SHA-256: one for
+//!   requests, one for responses ([`ChannelKeys`]).
 //! - **Messages.** A request is sealed with the request key, a random 96-bit
 //!   nonce and the client id as associated data. Its response is sealed with
 //!   the response key and a fresh nonce, with the client id and the request's
@@ -31,19 +35,24 @@ use zeroize::Zeroizing;
 
 use crate::{Error, Result};
 
-/// Version of the protocol; changes with any of the labels.
-pub const PROTOCOL: u32 = 1;
+/// Version of the protocol; changes with any of the labels, and with the way
+/// pairing goes. 2: the extension commits to its key first, and the code
+/// covers both keys.
+pub const PROTOCOL: u32 = 2;
 
 const LABEL: &[u8] = b"sshkm-browser-v1";
 const KEYS_INFO: &[u8] = b" keys ";
 const CODE_INFO: &[u8] = b" code ";
+const COMMIT_INFO: &[u8] = b" commit ";
 const REQUEST_AAD: &[u8] = b" request ";
 const RESPONSE_AAD: &[u8] = b" response ";
 
 /// Bytes in a nonce.
 pub const NONCE_LEN: usize = 12;
 /// Bytes in an uncompressed P-256 public key.
-const PUBLIC_KEY_LEN: usize = 65;
+pub const PUBLIC_KEY_LEN: usize = 65;
+/// Bytes in a [`pairing_commitment`].
+pub const COMMITMENT_LEN: usize = 32;
 
 pub type MessageNonce = [u8; NONCE_LEN];
 
@@ -81,22 +90,81 @@ pub fn check_client_id(client_id: &str) -> Result<()> {
     }
 }
 
-/// The six digits both sides show while pairing.
-pub fn pairing_code(client_id: &str, client_public: &[u8]) -> String {
+/// What the extension sends first while pairing: a hash of the public key it
+/// sends only once it has the app's.
+pub fn pairing_commitment(client_id: &str, client_public: &[u8]) -> [u8; COMMITMENT_LEN] {
+    Sha256::new()
+        .chain_update(LABEL)
+        .chain_update(COMMIT_INFO)
+        .chain_update(client_id.as_bytes())
+        .chain_update(client_public)
+        .finalize()
+        .into()
+}
+
+/// The six digits both sides show while pairing, from the client id and both
+/// public keys.
+pub fn pairing_code(client_id: &str, client_public: &[u8], app_public: &[u8]) -> String {
     let digest = Sha256::new()
         .chain_update(LABEL)
         .chain_update(CODE_INFO)
         .chain_update(client_id.as_bytes())
         .chain_update(client_public)
+        .chain_update(app_public)
         .finalize();
     let number = u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]);
     format!("{:06}", number % 1_000_000)
 }
 
-/// Completes a pairing the user approved: a new key pair for the app, and the
-/// channel keys.
+/// The app's key pair for one pairing: made once the extension committed to
+/// its key, and sent to it before it reveals that key.
+pub struct AppPairing {
+    secret: SecretKey,
+    public: Vec<u8>,
+}
+
+impl std::fmt::Debug for AppPairing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AppPairing(..)")
+    }
+}
+
+impl AppPairing {
+    pub fn new() -> Self {
+        Self::with(SecretKey::random(&mut OsRng))
+    }
+
+    fn with(secret: SecretKey) -> Self {
+        let public = secret
+            .public_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec();
+        Self { secret, public }
+    }
+
+    /// Uncompressed SEC1, as sent to the extension.
+    pub fn public_key(&self) -> &[u8] {
+        &self.public
+    }
+
+    /// Completes a pairing with the key the extension revealed: the channel
+    /// keys.
+    pub fn accept(&self, client_id: &str, client_public: &[u8]) -> Result<Pairing> {
+        accept_pairing_with(&self.secret, client_id, client_public)
+    }
+}
+
+impl Default for AppPairing {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A new key pair for the app, and the channel keys with `client_public`, at
+/// once: for a key change over the sealed channel, where no code is shown.
 pub fn accept_pairing(client_id: &str, client_public: &[u8]) -> Result<Pairing> {
-    accept_pairing_with(&SecretKey::random(&mut OsRng), client_id, client_public)
+    AppPairing::new().accept(client_id, client_public)
 }
 
 fn accept_pairing_with(
@@ -139,9 +207,14 @@ impl ClientPairing {
         Self { secret, public }
     }
 
-    /// Uncompressed SEC1, as sent in the pairing request.
+    /// Uncompressed SEC1, as sent once the app sent its own.
     pub fn public_key(&self) -> &[u8] {
         &self.public
+    }
+
+    /// What is sent first: a hash of the public key.
+    pub fn commitment(&self, client_id: &str) -> [u8; COMMITMENT_LEN] {
+        pairing_commitment(client_id, &self.public)
     }
 
     /// The channel keys, once the app replied with its public key.
@@ -340,6 +413,8 @@ mod tests {
         /// Base64, uncompressed SEC1.
         client_public: String,
         app_public: String,
+        /// Base64.
+        commitment: String,
         code: String,
         request_key: String,
         response_key: String,
@@ -368,11 +443,18 @@ mod tests {
         let client_secret = SecretKey::from_slice(&hex(&v.client_secret)).unwrap();
         let client_public = client_secret.public_key().to_encoded_point(false);
         assert_eq!(encode(client_public.as_bytes()), v.client_public);
-        assert_eq!(pairing_code(&v.client_id, client_public.as_bytes()), v.code);
+        assert_eq!(
+            encode(&pairing_commitment(&v.client_id, client_public.as_bytes())),
+            v.commitment
+        );
 
-        let app_secret = SecretKey::from_slice(&hex(&v.app_secret)).unwrap();
-        let pairing =
-            accept_pairing_with(&app_secret, &v.client_id, client_public.as_bytes()).unwrap();
+        let app = AppPairing::with(SecretKey::from_slice(&hex(&v.app_secret)).unwrap());
+        assert_eq!(encode(app.public_key()), v.app_public);
+        assert_eq!(
+            pairing_code(&v.client_id, client_public.as_bytes(), app.public_key()),
+            v.code
+        );
+        let pairing = app.accept(&v.client_id, client_public.as_bytes()).unwrap();
         assert_eq!(encode(&pairing.app_public), v.app_public);
         let (request_key, response_key) = pairing.keys.to_base64();
         assert_eq!(*request_key, v.request_key);
@@ -497,12 +579,35 @@ mod tests {
     }
 
     #[test]
-    fn codes_are_six_digits() {
-        let public = [4_u8; 65];
-        let code = pairing_code("client-id-0123456789", &public);
+    fn codes_are_six_digits_from_the_id_and_both_keys() {
+        let client = [4_u8; 65];
+        let app = [5_u8; 65];
+        let code = pairing_code("client-id-0123456789", &client, &app);
         assert_eq!(code.len(), 6);
         assert!(code.bytes().all(|b| b.is_ascii_digit()));
-        assert_ne!(code, pairing_code("client-id-0123456780", &public));
+        assert_ne!(code, pairing_code("client-id-0123456780", &client, &app));
+        let mut other_app = app;
+        other_app[64] ^= 1;
+        assert_ne!(
+            code,
+            pairing_code("client-id-0123456789", &client, &other_app),
+            "another key for the app gives another code"
+        );
+    }
+
+    #[test]
+    fn the_commitment_binds_the_key_and_the_id() {
+        let client = ClientPairing::new();
+        let commitment = client.commitment("client-id-0123456789");
+        assert_eq!(
+            commitment,
+            pairing_commitment("client-id-0123456789", client.public_key())
+        );
+        assert_ne!(
+            commitment,
+            pairing_commitment("client-id-0123456789", ClientPairing::new().public_key())
+        );
+        assert_ne!(commitment, client.commitment("client-id-0123456780"));
     }
 
     #[test]

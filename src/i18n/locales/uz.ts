@@ -4254,6 +4254,8 @@ const uz = {
     pairDecline: 'Rad etish',
     pairConnect: 'Ulash',
     pairExpired: 'Ulanish soʻrovining vaqti tugadi',
+    extensionOutdated:
+      '{{browser}} brauzeridagi SSH Key Manager kengaytmasi eskirgan. Uni yangilang va qayta ulang.',
     paired: '{{browser}} ulandi',
     unlockRequest: 'Brauzerda parollarni toʻldirish uchun omborni oching',
   },

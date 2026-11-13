@@ -4188,6 +4188,8 @@ const en = {
     pairDecline: 'Decline',
     pairConnect: 'Connect',
     pairExpired: 'The connection request timed out',
+    extensionOutdated:
+      'The SSH Key Manager extension in {{browser}} is out of date. Update it, then connect again.',
     paired: '{{browser}} connected',
     unlockRequest: 'Unlock the vault to fill passwords in your browser',
   },

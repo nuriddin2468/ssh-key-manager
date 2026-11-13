@@ -17,7 +17,9 @@ import {
   newClientId,
   newKeyPair,
   openResponse,
+  PUBLIC_KEY_LEN,
   pairingCode,
+  pairingCommitment,
   randomBytes,
   sealRequest,
   toBase64,
@@ -272,22 +274,45 @@ async function send<T>(pairing: Pairing, action: Action): Promise<Result<T>> {
 /**
  * Pairs with the app: shows `onCode`'s code, then waits until the user
  * decides in the app (up to two minutes).
+ *
+ * Two messages: the first sends only a hash of this browser's key and gets
+ * the app's key for this pairing; the second sends the key itself. The code
+ * covers both keys, and neither side's key can be chosen once the other's
+ * is known, so a program between the browser and the app can't make the
+ * codes agree. An app from before this answers the first message `invalid`:
+ * that is `outdatedApp`, to say the app needs an update.
  */
 export async function pair(onCode: (code: string) => void): Promise<Result<void>> {
   const clientId = newClientId();
   const { privateKey, publicKey } = await newKeyPair();
-  onCode(await pairingCode(clientId, publicKey));
+  const started = await native({
+    type: 'pairStart',
+    clientId,
+    commitment: toBase64(await pairingCommitment(clientId, publicKey)),
+    browser: browserName(),
+  });
+  if (started.type !== 'pairStarted') {
+    const { problem } = failure(started);
+    return { ok: false, problem: problem === 'invalid' ? 'outdatedApp' : problem };
+  }
+  let appPublic: Uint8Array<ArrayBuffer>;
+  try {
+    appPublic = fromBase64(String(started.publicKey));
+  } catch {
+    return { ok: false, problem: 'invalid' };
+  }
+  if (appPublic.length !== PUBLIC_KEY_LEN) return { ok: false, problem: 'invalid' };
+  onCode(await pairingCode(clientId, publicKey, appPublic));
   const nonce = randomBytes(12);
   const reply = await native({
-    type: 'pair',
+    type: 'pairFinish',
     clientId,
     publicKey: toBase64(publicKey),
     nonce: toBase64(nonce),
-    browser: browserName(),
   });
   if (reply.type !== 'paired') return failure(reply);
   try {
-    const appPublic = fromBase64(String(reply.publicKey));
+    // The key the code was made from, whatever the reply says.
     const keys = await importKeys(await deriveKeyBytes(privateKey, clientId, publicKey, appPublic));
     const info = await openResponse(
       keys,

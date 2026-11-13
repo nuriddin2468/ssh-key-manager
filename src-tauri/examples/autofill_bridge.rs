@@ -18,8 +18,9 @@
 //! bridge takes over the app's endpoint file while it runs and puts the old
 //! one back when it exits, so quit the app first.
 //!
-//! It prints JSON lines (`ready`, `pairing`, `fill`, `keys`, `copied`,
-//! `changed`) and reads commands on stdin: `entries` prints the vault's
+//! It prints JSON lines (`ready`, `pairing`, `fill`, `keys` for a write
+//! without a backup, `copied`, `changed`, `outdated`) and reads commands on
+//! stdin: `entries` prints the vault's
 //! logins, `lock` and `unlock` lock and unlock it (locking ends the session,
 //! so fills are asked about again), `quit` (or end of input) exits.
 
@@ -87,13 +88,20 @@ impl Env for Harness {
         Ok(result)
     }
 
-    fn write_keys<T>(&self, work: impl FnOnce(&mut Vault) -> AppResult<T>) -> AppResult<T> {
+    fn write_without_backup<T>(
+        &self,
+        work: impl FnOnce(&mut Vault) -> AppResult<T>,
+    ) -> AppResult<T> {
         let mut guard = self.vault.lock().unwrap_or_else(PoisonError::into_inner);
         let vault = guard.as_mut().ok_or_else(locked)?;
         let result = work(vault)?;
         vault.save_without_backup(&self.backups)?;
         say(&json!({ "event": "keys" }));
         Ok(result)
+    }
+
+    fn outdated_extension(&self, browser: &str) {
+        say(&json!({ "event": "outdated", "browser": browser }));
     }
 
     fn ask(&self, request: Option<&PairingRequest>) {

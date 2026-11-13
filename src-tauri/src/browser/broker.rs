@@ -7,7 +7,12 @@
 //! Rules:
 //!
 //! - A pairing needs an unlocked vault and the user's yes in the app; one
-//!   pairing waits at a time, for at most [`PAIRING_WAIT`].
+//!   pairing waits at a time, for at most [`PAIRING_WAIT`]. It takes two
+//!   messages: the extension commits to its key ([`Message::PairStart`]),
+//!   learns the app's, then reveals its own ([`Message::PairFinish`]); the
+//!   code both show covers both keys. At most [`MAX_PAIRINGS`] start a
+//!   minute, so something between the two can't start over and over until
+//!   the codes agree. An older extension's one-message pairing is refused.
 //! - A sealed request is answered only if it opens with the keys of a browser
 //!   paired with the open vault, was sent in the last two minutes and was not
 //!   seen before ([`Seen`]).
@@ -25,15 +30,20 @@
 //! - A browser may check [`MAX_CHECKS`] typed logins a minute and ask the
 //!   user [`MAX_PROMPTS`] times, so whoever holds its keys can neither guess
 //!   saved passwords by checking nor wear the user down with prompts.
-//! - Editing or removing a login asks nothing in the app: no secret leaves,
-//!   the old password stays in the entry's history and a removed login goes
-//!   to the recycle bin, where the app restores it. The extension asks the
-//!   user first. A browser may change [`MAX_CHANGES`] logins a minute, so
-//!   whoever holds its keys can't clear out a site's logins at once.
-//! - A browser changes its keys now and then ([`Action::Rekey`]). Its old
-//!   keys are kept, retired; a request sealed with one after that shows that
-//!   someone else holds a copy, and the pairing is revoked at once
-//!   ([`Env::copied`]).
+//! - Saving, updating, editing or removing a login asks nothing in the app:
+//!   no secret leaves, the old password stays in the entry's history and a
+//!   removed login goes to the recycle bin, where the app restores it. The
+//!   extension asks the user first. A browser may change [`MAX_CHANGES`]
+//!   logins a minute, so whoever holds its keys can't clear out a site's
+//!   logins at once, and the browsers' changes back the vault up at most once
+//!   per [`BACKUP_EVERY`], so they can't push the older backups out.
+//! - A browser changes its keys now and then ([`Action::Rekey`]), at most
+//!   [`MAX_REKEYS`] times a minute. Its old keys are kept, retired; a
+//!   request sealed with one after that shows that someone else holds a
+//!   copy, and the pairing is revoked at once ([`Env::copied`]). Keys it
+//!   asked for and replaced before using them count as given up too.
+//! - Without a pairing, the browsers may bring up the app's window or ask to
+//!   unlock the vault [`MAX_UNLOCKS`] times a minute, all together.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -43,12 +53,13 @@ use rand_core::{OsRng, RngCore};
 use serde::Serialize;
 use sshkm_core::browser::Origin;
 use sshkm_core::browser::channel::{
-    self, ChannelKeys, MessageNonce, PROTOCOL, accept_pairing, check_client_id, pairing_code,
+    self, AppPairing, COMMITMENT_LEN, ChannelKeys, MessageNonce, PROTOCOL, PUBLIC_KEY_LEN,
+    accept_pairing, check_client_id, pairing_code, pairing_commitment,
 };
 use sshkm_core::browser::protocol::{
-    Action, CheckReply, Envelope, LoginsReply, MAX_MESSAGE, Message, Opened, PairRequest,
-    PairedInfo, RekeyReply, Reply, ReplyError, SameSite, SavedReply, SealedRequest, StatusReply,
-    VaultLock,
+    Action, CheckReply, Envelope, LoginsReply, MAX_MESSAGE, Message, OldPair, Opened, PairFinish,
+    PairStart, PairedInfo, RekeyReply, Reply, ReplyError, SameSite, SavedReply, SealedRequest,
+    StatusReply, VaultLock,
 };
 use sshkm_core::vault::{KeysUsed, PairedBrowser, Vault};
 use sshkm_core::{ErrorCode, ExposeSecret};
@@ -58,6 +69,11 @@ use crate::error::{AppError, AppResult};
 
 /// How long a pairing waits for the user.
 pub const PAIRING_WAIT: Duration = Duration::from_secs(120);
+/// How long a started pairing waits for the extension to reveal its key; it
+/// does so as soon as it shows the code.
+pub const PAIRING_START_WAIT: Duration = Duration::from_secs(30);
+/// Pairings the browsers may start in [`LIMIT_WINDOW`], all together.
+pub const MAX_PAIRINGS: usize = 5;
 /// How long a fill waits for the user before the browser hears it expired.
 /// The prompt stays: a yes given later lets the next try fill at once.
 pub const FILL_WAIT: Duration = Duration::from_secs(60);
@@ -68,12 +84,18 @@ const LIMIT_WINDOW: Duration = Duration::from_secs(60);
 /// Typed logins a browser may check in [`LIMIT_WINDOW`]: a person signs in
 /// a few times a minute at most.
 pub const MAX_CHECKS: usize = 10;
-/// Logins a browser may edit or remove in [`LIMIT_WINDOW`].
+/// Logins a browser may save, update, edit or remove in [`LIMIT_WINDOW`].
 pub const MAX_CHANGES: usize = 10;
+/// How often the browsers' changes to logins back the vault up, at most.
+pub const BACKUP_EVERY: Duration = Duration::from_secs(60 * 60);
+/// Key changes a browser may ask for in [`LIMIT_WINDOW`]: it asks once a
+/// day, and again only if it never got the answer.
+pub const MAX_REKEYS: usize = 2;
 /// Times a browser may ask the user about fills in [`LIMIT_WINDOW`].
 pub const MAX_PROMPTS: usize = 5;
-/// Times the browsers may ask the user to unlock the vault in
-/// [`LIMIT_WINDOW`], all together: each may bring up a prompt or a window.
+/// Times the browsers may bring up the app's window or ask the user to
+/// unlock the vault in [`LIMIT_WINDOW`], all together: each may bring up a
+/// prompt or a window.
 pub const MAX_UNLOCKS: usize = 5;
 /// Most characters of a login's title or username shown in a prompt.
 const SHOWN_CHARS: usize = 60;
@@ -133,10 +155,16 @@ pub trait Env {
     /// Runs `work` on the unlocked vault and saves it.
     fn write<T>(&self, work: impl FnOnce(&mut Vault) -> AppResult<T>) -> AppResult<T>;
     /// Like [`Self::write`], without a backup of the previous file: for a
-    /// browser's new keys.
-    fn write_keys<T>(&self, work: impl FnOnce(&mut Vault) -> AppResult<T>) -> AppResult<T>;
+    /// browser's new keys, and its changes to logins between backups.
+    fn write_without_backup<T>(
+        &self,
+        work: impl FnOnce(&mut Vault) -> AppResult<T>,
+    ) -> AppResult<T>;
     /// Shows the pairing dialog, or closes it with `None`.
     fn ask(&self, request: Option<&PairingRequest>);
+    /// Tells the user that `browser`'s extension needs an update before it
+    /// can pair.
+    fn outdated_extension(&self, browser: &str);
     /// Brings the app forward on the vault, to unlock it.
     fn show(&self);
     /// Asks the user to unlock the vault outside the browser, without the
@@ -170,11 +198,17 @@ impl<E: Env> Env for Arc<E> {
     fn write<T>(&self, work: impl FnOnce(&mut Vault) -> AppResult<T>) -> AppResult<T> {
         (**self).write(work)
     }
-    fn write_keys<T>(&self, work: impl FnOnce(&mut Vault) -> AppResult<T>) -> AppResult<T> {
-        (**self).write_keys(work)
+    fn write_without_backup<T>(
+        &self,
+        work: impl FnOnce(&mut Vault) -> AppResult<T>,
+    ) -> AppResult<T> {
+        (**self).write_without_backup(work)
     }
     fn ask(&self, request: Option<&PairingRequest>) {
         (**self).ask(request);
+    }
+    fn outdated_extension(&self, browser: &str) {
+        (**self).outdated_extension(browser);
     }
     fn show(&self) {
         (**self).show();
@@ -202,8 +236,21 @@ impl<E: Env> Env for Arc<E> {
     }
 }
 
+/// A pairing under way: started, then shown to the user once the extension
+/// revealed its key.
 struct Pending {
-    request: PairingRequest,
+    client_id: String,
+    /// The extension that started it, as the native host named it.
+    caller: String,
+    browser: String,
+    /// What the extension committed to: a hash of the key it reveals next.
+    commitment: [u8; COMMITMENT_LEN],
+    /// The app's key pair for this pairing, until the extension reveals its
+    /// key.
+    app: Option<AppPairing>,
+    started: Instant,
+    /// What the user is asked, once the extension revealed its key.
+    request: Option<PairingRequest>,
     decision: Option<bool>,
 }
 
@@ -212,11 +259,16 @@ pub struct Broker {
     decided: Condvar,
     seen: Mutex<Seen>,
     pairing_wait: Duration,
+    start_wait: Duration,
     fills: Arc<Fills>,
     fill_wait: Duration,
     checks: Mutex<Limiter>,
     changes: Mutex<Limiter>,
+    rekeys: Mutex<Limiter>,
     unlocks: Mutex<Limiter>,
+    pairings: Mutex<Limiter>,
+    /// When a browser's change to logins last backed the vault up.
+    backed_up: Mutex<Option<Instant>>,
 }
 
 impl Default for Broker {
@@ -235,11 +287,15 @@ impl Broker {
             decided: Condvar::new(),
             seen: Mutex::new(Seen::default()),
             pairing_wait,
+            start_wait: PAIRING_START_WAIT,
             fills: Arc::default(),
             fill_wait: FILL_WAIT,
             checks: Mutex::default(),
             changes: Mutex::default(),
+            rekeys: Mutex::default(),
             unlocks: Mutex::default(),
+            pairings: Mutex::default(),
+            backed_up: Mutex::default(),
         }
     }
 
@@ -247,6 +303,13 @@ impl Broker {
     #[must_use]
     pub fn with_fill_wait(self, fill_wait: Duration) -> Self {
         Self { fill_wait, ..self }
+    }
+
+    /// The same, with started pairings waiting `start_wait` for the
+    /// extension's key.
+    #[must_use]
+    pub fn with_start_wait(self, start_wait: Duration) -> Self {
+        Self { start_wait, ..self }
     }
 
     /// Answers one message from the native host with the JSON reply.
@@ -268,6 +331,9 @@ impl Broker {
                 vault: env.vault_lock(),
             }),
             Message::Show => {
+                if !self.take_window() {
+                    return Err(ReplyError::TooMany);
+                }
                 env.show();
                 Ok(Reply::Shown)
             }
@@ -275,32 +341,40 @@ impl Broker {
             Message::SameSite(sites) => Ok(Reply::SameSite {
                 same: same_site(&sites),
             }),
-            Message::Pair(request) => self.pair(env, &envelope.caller, &request),
+            Message::PairStart(start) => self.pair_start(env, &envelope.caller, &start),
+            Message::PairFinish(finish) => self.pair_finish(env, &envelope.caller, &finish),
+            Message::Pair(old) => Err(self.outdated(env, &old)),
             Message::Request(request) => self.request(env, &request),
         }
     }
 
-    /// Asks the user to unlock the vault, at most [`MAX_UNLOCKS`] times a
-    /// minute. Without a vault the app comes forward instead: it is made
-    /// there.
+    /// Asks the user to unlock the vault. Without a vault the app comes
+    /// forward instead: it is made there.
     fn unlock(&self, env: &impl Env) -> Answer {
         match env.vault_lock() {
             VaultLock::Unlocked => {}
-            VaultLock::Missing => env.show(),
-            VaultLock::Locked => {
-                if !lock(&self.unlocks).take("", MAX_UNLOCKS, Instant::now()) {
-                    log::warn!("browser: asked to unlock too often; refusing");
-                    return Err(ReplyError::TooMany);
-                }
-                env.unlock();
+            VaultLock::Missing | VaultLock::Locked if !self.take_window() => {
+                return Err(ReplyError::TooMany);
             }
+            VaultLock::Missing => env.show(),
+            VaultLock::Locked => env.unlock(),
         }
         Ok(Reply::Shown)
     }
 
+    /// Counts one more window or prompt the browsers bring up: false past
+    /// [`MAX_UNLOCKS`] a minute.
+    fn take_window(&self) -> bool {
+        let taken = lock(&self.unlocks).take("", MAX_UNLOCKS, Instant::now());
+        if !taken {
+            log::warn!("browser: asked to bring up the app too often; refusing");
+        }
+        taken
+    }
+
     /// The pairing waiting for the user, if any.
     pub fn pending(&self) -> Option<PairingRequest> {
-        lock(&self.pending).as_ref().map(|p| p.request.clone())
+        lock(&self.pending).as_ref().and_then(|p| p.request.clone())
     }
 
     /// The user's answer to the pairing `id`. Returns false if it no longer
@@ -308,7 +382,7 @@ impl Broker {
     pub fn decide(&self, id: &str, approve: bool) -> bool {
         let mut pending = lock(&self.pending);
         match pending.as_mut() {
-            Some(p) if p.request.id == id && p.decision.is_none() => {
+            Some(p) if p.request.as_ref().is_some_and(|r| r.id == id) && p.decision.is_none() => {
                 p.decision = Some(approve);
                 self.decided.notify_all();
                 true
@@ -317,35 +391,116 @@ impl Broker {
         }
     }
 
-    fn pair(&self, env: &impl Env, caller: &str, request: &PairRequest) -> Answer {
-        check_client_id(&request.client_id).map_err(|_| ReplyError::Invalid)?;
-        let client_public =
-            channel::decode(&request.public_key, 65).map_err(|_| ReplyError::Invalid)?;
-        let nonce = channel::decode_nonce(&request.nonce).map_err(|_| ReplyError::Invalid)?;
+    /// An extension from before protocol 2 asks to pair: refused, and the
+    /// user is told to update it.
+    fn outdated(&self, env: &impl Env, old: &OldPair) -> ReplyError {
+        log::warn!("browser: an outdated extension asked to pair; refusing");
+        if self.take_window() {
+            env.outdated_extension(&browser_name(&old.browser));
+        }
+        ReplyError::OutdatedExtension
+    }
+
+    /// Whether `pending` was started and never finished in time: it no
+    /// longer holds up other pairings.
+    fn abandoned(&self, pending: &Pending, now: Instant) -> bool {
+        pending.request.is_none() && now.duration_since(pending.started) >= self.start_wait
+    }
+
+    /// Starts a pairing: keeps what the extension committed to, and answers
+    /// with the app's public key for this pairing.
+    fn pair_start(&self, env: &impl Env, caller: &str, start: &PairStart) -> Answer {
+        check_client_id(&start.client_id).map_err(|_| ReplyError::Invalid)?;
+        let commitment: [u8; COMMITMENT_LEN] = channel::decode(&start.commitment, COMMITMENT_LEN)
+            .ok()
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or(ReplyError::Invalid)?;
         match env.vault_lock() {
             VaultLock::Missing => return Err(ReplyError::NoVault),
             VaultLock::Locked => {
-                env.show();
+                if self.take_window() {
+                    env.show();
+                }
                 return Err(ReplyError::Locked);
             }
             VaultLock::Unlocked => {}
         }
+        let now = Instant::now();
+        let mut pending = lock(&self.pending);
+        if pending.as_ref().is_some_and(|p| !self.abandoned(p, now)) {
+            return Err(ReplyError::Busy);
+        }
+        if !lock(&self.pairings).take("", MAX_PAIRINGS, now) {
+            log::warn!("browser: too many pairings started; refusing");
+            return Err(ReplyError::TooMany);
+        }
+        let app = AppPairing::new();
+        let public_key = channel::encode(app.public_key());
+        *pending = Some(Pending {
+            client_id: start.client_id.clone(),
+            caller: caller.to_owned(),
+            browser: browser_name(&start.browser),
+            commitment,
+            app: Some(app),
+            started: now,
+            request: None,
+            decision: None,
+        });
+        Ok(Reply::PairStarted { public_key })
+    }
 
-        let asked = PairingRequest {
-            id: random_id(),
-            browser: browser_name(&request.browser),
-            code: pairing_code(&request.client_id, &client_public),
-        };
-        {
+    /// Finishes a started pairing with the key the extension revealed: shows
+    /// the code to the user and waits for their answer.
+    fn pair_finish(&self, env: &impl Env, caller: &str, finish: &PairFinish) -> Answer {
+        let client_id = finish.client_id.as_str();
+        check_client_id(client_id).map_err(|_| ReplyError::Invalid)?;
+        let client_public =
+            channel::decode(&finish.public_key, PUBLIC_KEY_LEN).map_err(|_| ReplyError::Invalid)?;
+        let nonce = channel::decode_nonce(&finish.nonce).map_err(|_| ReplyError::Invalid)?;
+        match env.vault_lock() {
+            VaultLock::Missing => return Err(ReplyError::NoVault),
+            VaultLock::Locked => return Err(ReplyError::Locked),
+            VaultLock::Unlocked => {}
+        }
+
+        let (asked, pairing) = {
             let mut pending = lock(&self.pending);
-            if pending.is_some() {
+            let now = Instant::now();
+            // Taken out: whatever goes wrong below ends this pairing.
+            let Some(mut started) = pending.take() else {
+                return Err(ReplyError::Expired);
+            };
+            if started.client_id != client_id || started.request.is_some() {
+                if self.abandoned(&started, now) {
+                    return Err(ReplyError::Expired);
+                }
+                *pending = Some(started);
                 return Err(ReplyError::Busy);
             }
-            *pending = Some(Pending {
-                request: asked.clone(),
-                decision: None,
-            });
-        }
+            if self.abandoned(&started, now) {
+                return Err(ReplyError::Expired);
+            }
+            if started.caller != caller
+                || pairing_commitment(client_id, &client_public) != started.commitment
+            {
+                log::warn!(
+                    "browser: a pairing finished with another key than it started; ending it"
+                );
+                return Err(ReplyError::Invalid);
+            }
+            let app = started.app.take().ok_or(ReplyError::Invalid)?;
+            let pairing = app
+                .accept(client_id, &client_public)
+                .map_err(|_| ReplyError::Invalid)?;
+            let asked = PairingRequest {
+                id: random_id(),
+                browser: started.browser.clone(),
+                code: pairing_code(client_id, &client_public, app.public_key()),
+            };
+            started.request = Some(asked.clone());
+            *pending = Some(started);
+            (asked, pairing)
+        };
         env.ask(Some(&asked));
         let decision = self.wait_for(&asked.id, self.pairing_wait);
         env.ask(None);
@@ -355,10 +510,8 @@ impl Broker {
             Some(false) => return Err(ReplyError::Denied),
             Some(true) => {}
         }
-        let pairing =
-            accept_pairing(&request.client_id, &client_public).map_err(|_| ReplyError::Invalid)?;
         let browser = PairedBrowser {
-            id: request.client_id.clone(),
+            id: client_id.to_owned(),
             browser: asked.browser,
             computer: env.computer(),
             paired: String::new(),
@@ -369,7 +522,7 @@ impl Broker {
         let info = serde_json::to_vec(&PairedInfo { paired: true }).unwrap_or_default();
         let (reply_nonce, sealed) = pairing
             .keys
-            .seal_response(&request.client_id, &nonce, &info)
+            .seal_response(client_id, &nonce, &info)
             .map_err(|_| ReplyError::Failed)?;
         Ok(Reply::Paired {
             public_key: channel::encode(&pairing.app_public),
@@ -383,7 +536,9 @@ impl Broker {
         let deadline = Instant::now() + wait;
         let mut pending = lock(&self.pending);
         loop {
-            let ours = pending.as_ref().filter(|p| p.request.id == id)?;
+            let ours = pending
+                .as_ref()
+                .filter(|p| p.request.as_ref().is_some_and(|r| r.id == id))?;
             if let Some(decision) = ours.decision {
                 *pending = None;
                 return Some(decision);
@@ -429,7 +584,8 @@ impl Broker {
         }
         match used {
             // Sealed before the browser changed its keys: a late request of
-            // its own, which gets no answer.
+            // its own, which gets no answer. Keys that were replaced before
+            // their first use are retired as of 0, so they never get here.
             KeysUsed::Retired { retired_at } if opened.sent_at <= retired_at => {
                 return Err(ReplyError::Invalid);
             }
@@ -438,8 +594,10 @@ impl Broker {
                 return Err(ReplyError::Revoked);
             }
             KeysUsed::Next => {
-                env.write_keys(|vault| Ok(vault.promote_browser_keys(client_id, now_millis())?))
-                    .map_err(|e| reply_error(&e))?;
+                env.write_without_backup(|vault| {
+                    Ok(vault.promote_browser_keys(client_id, now_millis())?)
+                })
+                .map_err(|e| reply_error(&e))?;
             }
             KeysUsed::Current => {}
         }
@@ -525,8 +683,11 @@ impl Broker {
                 password,
             } => {
                 let page = page(&origin)?;
-                let entry_id = env
-                    .write(|vault| Ok(vault.save_login(&page, &username, &password)?))
+                self.take_change(client_id)?;
+                let entry_id = self
+                    .write_logins(env, |vault| {
+                        Ok(vault.save_login(&page, &username, &password)?)
+                    })
                     .map_err(|e| reply_error(&e))?;
                 env.changed(Changed::Entries);
                 Ok(to_json(&SavedReply { entry_id }))
@@ -537,19 +698,28 @@ impl Broker {
                 password,
             } => {
                 let page = page(&origin)?;
-                env.write(|vault| Ok(vault.update_login(&page, &entry_id, &password)?))
-                    .map_err(|e| reply_error(&e))?;
+                self.take_change(client_id)?;
+                self.write_logins(env, |vault| {
+                    Ok(vault.update_login(&page, &entry_id, &password)?)
+                })
+                .map_err(|e| reply_error(&e))?;
                 env.changed(Changed::Entries);
                 Ok(to_json(&SavedReply { entry_id }))
             }
             Action::Edit { .. } | Action::Remove { .. } => self.change(env, client_id, &action),
             Action::Rekey { public_key } => {
-                let client_public =
-                    channel::decode(&public_key, 65).map_err(|_| ReplyError::Invalid)?;
+                let client_public = channel::decode(&public_key, PUBLIC_KEY_LEN)
+                    .map_err(|_| ReplyError::Invalid)?;
+                if !lock(&self.rekeys).take(client_id, MAX_REKEYS, Instant::now()) {
+                    log::warn!("browser: too many key changes asked for; refusing");
+                    return Err(ReplyError::TooMany);
+                }
                 let pairing =
                     accept_pairing(client_id, &client_public).map_err(|_| ReplyError::Invalid)?;
-                env.write_keys(|vault| Ok(vault.set_next_browser_keys(client_id, &pairing.keys)?))
-                    .map_err(|e| reply_error(&e))?;
+                env.write_without_backup(|vault| {
+                    Ok(vault.set_next_browser_keys(client_id, &pairing.keys)?)
+                })
+                .map_err(|e| reply_error(&e))?;
                 Ok(to_json(&RekeyReply {
                     public_key: channel::encode(&pairing.app_public),
                 }))
@@ -574,7 +744,7 @@ impl Broker {
         };
         let page = page(origin)?;
         self.take_change(client_id)?;
-        env.write(|vault| {
+        self.write_logins(env, |vault| {
             match action {
                 Action::Edit {
                     username, password, ..
@@ -588,15 +758,35 @@ impl Broker {
         Ok(to_json(&SavedReply { entry_id }))
     }
 
-    /// Counts one more login edited or removed by `client_id`: `TooMany`
-    /// past [`MAX_CHANGES`] a minute.
+    /// Counts one more login saved, updated, edited or removed by
+    /// `client_id`: `TooMany` past [`MAX_CHANGES`] a minute.
     fn take_change(&self, client_id: &str) -> Result<(), ReplyError> {
         if lock(&self.changes).take(client_id, MAX_CHANGES, Instant::now()) {
             Ok(())
         } else {
-            log::warn!("browser: too many logins edited or removed; refusing");
+            log::warn!("browser: too many logins changed; refusing");
             Err(ReplyError::TooMany)
         }
+    }
+
+    /// Writes a browser's change to logins. The first such change in
+    /// [`BACKUP_EVERY`] backs the vault up first, later ones don't, so that
+    /// a burst of changes from a browser can't push the older backups out.
+    /// What a browser changes stays in the entry's history or the recycle bin
+    /// anyway.
+    fn write_logins<T>(
+        &self,
+        env: &impl Env,
+        work: impl FnOnce(&mut Vault) -> AppResult<T>,
+    ) -> AppResult<T> {
+        let now = Instant::now();
+        let due = lock(&self.backed_up).is_none_or(|at| now.duration_since(at) >= BACKUP_EVERY);
+        if !due {
+            return env.write_without_backup(work);
+        }
+        let result = env.write(work)?;
+        *lock(&self.backed_up) = Some(now);
+        Ok(result)
     }
 
     /// Returns once the user allowed `client_id` to fill `entry_id` on

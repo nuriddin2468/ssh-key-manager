@@ -4537,6 +4537,8 @@ const ru = {
     pairDecline: 'Отклонить',
     pairConnect: 'Подключить',
     pairExpired: 'Время на подключение истекло',
+    extensionOutdated:
+      'Расширение SSH Key Manager в {{browser}} устарело. Обновите его и подключите браузер снова.',
     paired: '{{browser}} подключён',
     unlockRequest: 'Разблокируйте хранилище, чтобы заполнять пароли в браузере',
   },

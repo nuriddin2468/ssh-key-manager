@@ -1140,7 +1140,13 @@ impl Nearby {
     /// value goes here, so a "wiped on both" is never a "wiped here only".
     /// Without, only here.
     pub fn chat_revoke(self: &Arc<Self>, key: &str, id: &str, everywhere: bool) -> AppResult<()> {
-        let peer = self.known_peer(key)?;
+        // Here only, a chat kept of a computer removed since may be wiped
+        // too; on both computers, only a contact's.
+        let peer = if everywhere {
+            self.known_peer(key)?
+        } else {
+            self.kept_peer(key)?
+        };
         let wipeable = self.read(&peer, |chat| {
             chat.get(id)
                 .is_some_and(|entry| entry.mine && entry.body.expires().is_some())

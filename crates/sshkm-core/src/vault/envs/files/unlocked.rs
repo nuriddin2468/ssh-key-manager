@@ -9,12 +9,20 @@
 //! kept. Removing goes by that list: a file still as it was is removed; one
 //! that changed since (an edit the vault hasn't taken yet) stays, so nothing
 //! the user typed is lost, and the next unlock settles it.
+//!
+//! A round also lists each write as it makes it, before anything is written
+//! (`disk::write`): the file's temporary files, which hold its values while
+//! it is written ([`Leftover::temps_of`]), and a level-2 file as it will be,
+//! before it takes its place, next to what was listed for it before. So a
+//! crash in the middle of a round leaves nothing the guard and the next
+//! start don't remove. The round's own list replaces all that at its end.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use super::folder::{self, Folder};
 use super::{EnvFileStatus, EnvFilesSynced, FileLevel, FileState};
 use crate::{Error, Result, fsutil};
 
@@ -45,9 +53,40 @@ struct Stamp {
 }
 
 impl Stamp {
+    /// What no file is: listed, it stands for a file's temporary files
+    /// only ([`Leftover::temps_of`]). Every file has an id; this has none.
+    fn none() -> Self {
+        Self {
+            id: String::new(),
+            len: 0,
+            modified: (0, 0),
+        }
+    }
+
     /// The stamp of the regular file at `path`, not following a link.
     fn of(path: &Path) -> Option<Self> {
-        let meta = fs::symlink_metadata(path).ok()?;
+        Self::of_meta(&fs::symlink_metadata(path).ok()?)
+    }
+
+    /// The stamp of the regular file named `name` in `folder`, held, not
+    /// following a link.
+    #[cfg(unix)]
+    fn in_folder(folder: &Folder, name: &str) -> Option<Self> {
+        let entry = folder.entry(name).ok()??;
+        (entry.kind == folder::Kind::File).then_some(Self {
+            id: format!("{}:{}", entry.dev, entry.ino),
+            len: entry.len,
+            modified: entry.modified?,
+        })
+    }
+
+    /// By path, which leads nowhere else while the folder is held.
+    #[cfg(not(unix))]
+    fn in_folder(folder: &Folder, name: &str) -> Option<Self> {
+        Self::of(&folder.path().join(name))
+    }
+
+    fn of_meta(meta: &fs::Metadata) -> Option<Self> {
         if !meta.is_file() {
             return None;
         }
@@ -57,7 +96,7 @@ impl Stamp {
             .duration_since(std::time::UNIX_EPOCH)
             .ok()?;
         Some(Self {
-            id: file_id(&meta),
+            id: file_id(meta),
             len: meta.len(),
             modified: (
                 i64::try_from(modified.as_secs()).ok()?,
@@ -93,13 +132,33 @@ impl Leftover {
         })
     }
 
+    /// The file at `path` as `meta` describes it (a file about to take its
+    /// place), if it is a regular file.
+    pub fn of_meta(path: &Path, meta: &fs::Metadata) -> Option<Self> {
+        Some(Self {
+            stamp: Stamp::of_meta(meta)?,
+            path: path.to_path_buf(),
+        })
+    }
+
+    /// The temporary files of writes to `path`, and never the file itself:
+    /// listed before a write, so what a crash in the middle leaves is
+    /// swept.
+    pub fn temps_of(path: &Path) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            stamp: Stamp::none(),
+        }
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
 
     /// Removes the file if it is still as it was, with the temporary files
-    /// of its writes a crash left next to it. Returns whether it removed
-    /// the file.
+    /// of its writes a crash left next to it. The file is looked at and
+    /// removed through its folder, held, so what is removed is what was
+    /// looked at. Returns whether it removed the file.
     pub fn remove(&self) -> bool {
         // Only ever a `.env` file: a list someone else wrote names nothing
         // else that goes.
@@ -112,10 +171,13 @@ impl Leftover {
             return false;
         }
         fsutil::sweep_private_temps(&self.path);
-        if Stamp::of(&self.path).as_ref() != Some(&self.stamp) {
+        if self.stamp.id.is_empty() {
             return false;
         }
-        fs::remove_file(&self.path).is_ok()
+        let Ok((folder, name)) = folder::open_parent(&self.path) else {
+            return false;
+        };
+        Stamp::in_folder(&folder, name).as_ref() == Some(&self.stamp) && folder.remove(name).is_ok()
     }
 }
 
@@ -161,6 +223,20 @@ impl Leftovers {
 
     pub fn is_empty(&self) -> bool {
         self.files.is_empty()
+    }
+
+    /// Adds `file` to the list kept at `path`, keeping everything listed
+    /// there, the same file as it was before included: until a round ends
+    /// either may be on disk.
+    pub fn add_at(path: &Path, file: Leftover) -> Result<()> {
+        let mut list = Self::load(path);
+        if !list.files.contains(&file) {
+            if list.files.len() >= MAX_LEFTOVERS {
+                return Err(Error::invalid("too many files to list"));
+            }
+            list.files.push(file);
+        }
+        list.save(path)
     }
 
     /// Removes every file still as it was, and forgets them all: one that
@@ -298,6 +374,41 @@ mod tests {
             assert!(!kept.remove());
             assert!(path.exists());
         }
+    }
+
+    #[test]
+    fn a_write_listed_before_it_is_made_leaves_nothing_after_a_crash() {
+        let dir = tempfile::tempdir().unwrap();
+        let list_path = dir.path().join("list.json");
+        let path = dir.path().join(".env");
+        fs::write(&path, "A=1\n").unwrap();
+        let before = Leftover::of(&path).unwrap();
+        Leftovers::add_at(&list_path, before.clone()).unwrap();
+        Leftovers::add_at(&list_path, Leftover::temps_of(&path)).unwrap();
+        Leftovers::add_at(&list_path, before).unwrap();
+        // The new file, about to take its place.
+        let new = dir.path().join(".env.sshkm-Ab12Cd.tmp");
+        fs::write(&new, "A=2, longer\n").unwrap();
+        let meta = fs::metadata(&new).unwrap();
+        Leftovers::add_at(&list_path, Leftover::of_meta(&path, &meta).unwrap()).unwrap();
+        assert_eq!(Leftovers::load(&list_path).files.len(), 3);
+        // The app went before it was renamed: the old file and the
+        // temporary one go.
+        let mut list = Leftovers::load(&list_path);
+        assert_eq!(list.clone().sweep(), 1);
+        assert!(!path.exists() && !new.exists());
+        // Or after: the new one goes.
+        fs::write(&new, "A=2, longer\n").unwrap();
+        let meta = fs::metadata(&new).unwrap();
+        list.files.push(Leftover::of_meta(&path, &meta).unwrap());
+        fs::rename(&new, &path).unwrap();
+        assert_eq!(list.sweep(), 1);
+        assert!(!path.exists());
+        // Temporary files only: the file itself always stays.
+        fs::write(&path, "A=3\n").unwrap();
+        fs::write(&new, "A=3\n").unwrap();
+        assert!(!Leftover::temps_of(&path).remove());
+        assert!(path.exists() && !new.exists());
     }
 
     #[test]

@@ -69,6 +69,10 @@ zxcvbn = { version = "3.1.1", default-features = false }
 # Opening a managed `.env` file without following a link or waiting on a
 # pipe (vault/envs/files/disk.rs). Already in the build.
 libc = "0.2.191"
+# Writing a managed `.env` file through its folder, held open
+# (vault/envs/files/folder.rs: `openat`, `renameat`, …) without unsafe
+# code. The version `tempfile` already builds.
+rustix = { version = "1.1.6", features = ["fs"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 # Keeping a level-2 `.env` file out of Time Machine and cloud folders
@@ -82,9 +86,11 @@ windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security"
 windows-registry = "0.6.1"
 
 # The workspace lints, except that `unsafe_code` is `deny` instead of `forbid`:
-# two modules opt in with `#![allow(unsafe_code)]`: `perms/private_file.rs`
-# (Windows) creates files with their access list through Win32, and the Unix
-# part of `vault/envs/files/pipes.rs` makes and serves named pipes through libc.
+# three modules opt in with `#![allow(unsafe_code)]`: `perms/private_file.rs`
+# (Windows) creates files with their access list through Win32, the Unix
+# part of `vault/envs/files/pipes.rs` makes and serves named pipes through
+# libc, and the Windows part of `vault/envs/files/folder.rs` asks Win32 for
+# the path of a folder it holds open.
 [lints.rust]
 unsafe_code = "deny"
 unused_qualifications = "warn"

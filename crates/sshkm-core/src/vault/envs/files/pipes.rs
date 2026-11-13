@@ -12,12 +12,17 @@
 //! [`SERVE_TIMEOUT`] without progress; then what is left is taken back out,
 //! so the next reader doesn't start in the middle of it (the reader that
 //! stalled has only part of it). While an answer waits unread in the pipe
-//! nothing is added to it, and once the answer changes (the vault locked)
-//! the unread one is taken out first, so a reader never gets values after a
-//! lock. Readers that open the pipe at the very same moment share one
-//! answer: a pipe is one stream, and the first to read takes it. Readers one
-//! after another each get a whole one; one that comes back right after its
-//! answer, before it closed the pipe, may get it twice.
+//! nothing is added to it. Once the answer changes (the vault locked) the
+//! unread one is taken out as it changes, and no more of it is written, so
+//! no reader gets a value after a lock. Readers that open the pipe at the
+//! very same moment share one answer: a pipe is one stream, and the first
+//! to read takes it. Readers one after another each get a whole one; one
+//! that comes back right after its answer, before it closed the pipe, may
+//! get it twice.
+//!
+//! A pipe is made, looked at and removed through its folder, held open
+//! ([`super::folder`]), so it is made in the folder that was checked, and
+//! what is removed is the pipe that was looked at.
 //!
 //! Writing into a pipe changes its time of change, and tools that watch a
 //! `.env` file (Next.js, Vite, editors) would take each answer for an edit
@@ -47,6 +52,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
+use super::folder::{self, Folder};
 use crate::{Error, Result, fsutil};
 
 /// How long an answer waits for its reader to take more of it.
@@ -80,6 +86,23 @@ impl PipeId {
     /// The pipe at `path`, not following a link, if a pipe is there.
     pub fn of(path: &Path) -> Option<Self> {
         Self::of_meta(&fs::symlink_metadata(path).ok()?)
+    }
+
+    /// The pipe named `name` in `folder`, held, not following a link, if a
+    /// pipe is there.
+    #[cfg(unix)]
+    pub(super) fn in_folder(folder: &Folder, name: &str) -> Option<Self> {
+        let entry = folder.entry(name).ok()??;
+        (entry.kind == folder::Kind::Pipe).then_some(Self {
+            dev: entry.dev,
+            ino: entry.ino,
+            born: entry.born,
+        })
+    }
+
+    #[cfg(not(unix))]
+    pub(super) fn in_folder(_: &Folder, _: &str) -> Option<Self> {
+        None
     }
 
     /// Whether this pipe, found on disk now, is the one `listed` names on
@@ -293,9 +316,18 @@ impl PipeList {
 /// Makes a pipe at `path`, readable and writable by this user only, where
 /// nothing is. Fails if something is there by then.
 pub fn make(path: &Path) -> Result<PipeId> {
-    imp::mkfifo(path)?;
-    fsutil::set_mode(path, 0o600)?;
-    PipeId::of(path).ok_or_else(|| Error::invalid(format!("{} isn't a pipe", path.display())))
+    let (folder, name) = open_parent(path)?;
+    make_in(&folder, name)
+}
+
+/// Makes a pipe named `name` in `folder`, held, as [`make`] does: made
+/// and looked at through the folder, so it is in that folder whatever its
+/// path leads to meanwhile.
+pub(super) fn make_in(folder: &Folder, name: &str) -> Result<PipeId> {
+    let path = folder.path().join(name);
+    imp::mkfifo_in(folder, name).map_err(|e| Error::io(e, &path))?;
+    PipeId::in_folder(folder, name)
+        .ok_or_else(|| Error::invalid(format!("{} isn't a pipe", path.display())))
 }
 
 /// Puts a pipe in place of the regular file at `path`, only if it still
@@ -303,53 +335,53 @@ pub fn make(path: &Path) -> Result<PipeId> {
 /// reader never finds no file. Returns the pipe, or `None` when the file
 /// changed meanwhile and nothing was done.
 pub fn make_over(path: &Path, expected: &[u8]) -> Result<Option<PipeId>> {
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .ok_or_else(|| Error::invalid("not a file in a folder"))?;
-    let dir = path
-        .parent()
-        .ok_or_else(|| Error::invalid("not a file in a folder"))?;
-    // Named as the app's own writes are, so a crash's leftover is swept
-    // with theirs (`fsutil::sweep_private_temps`).
-    let temp = dir.join(format!(
-        "{name}{}{}.tmp",
-        fsutil::PRIVATE_TEMP.0,
-        random_tag()
-    ));
-    make(&temp)?;
-    // Read as a binding's file is: no link followed, no pipe waited on.
-    let same = matches!(super::disk::read(path), super::disk::Disk::Text(text) if text.as_bytes() == expected);
-    if !same {
-        let _ = fs::remove_file(&temp);
-        return Ok(None);
-    }
-    if let Err(e) = fs::rename(&temp, path) {
-        let _ = fs::remove_file(&temp);
-        return Err(Error::io(e, path));
-    }
-    Ok(PipeId::of(path))
+    let (folder, name) = open_parent(path)?;
+    make_over_in(&folder, name, expected)
 }
 
-fn random_tag() -> String {
-    use rand_core::{OsRng, RngCore};
-    const LETTERS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    let mut bytes = [0u8; 6];
-    OsRng.fill_bytes(&mut bytes);
-    bytes
-        .iter()
-        .map(|b| char::from(LETTERS[usize::from(*b) % LETTERS.len()]))
-        .collect()
+/// Puts a pipe in place of the regular file `name` in `folder`, held, as
+/// [`make_over`] does.
+pub(super) fn make_over_in(folder: &Folder, name: &str, expected: &[u8]) -> Result<Option<PipeId>> {
+    // Named as the app's own writes are, so a crash's leftover is swept
+    // with theirs (`fsutil::sweep_private_temps`).
+    let temp = folder::temp_name(name);
+    let id = make_in(folder, &temp)?;
+    // Read as a binding's file is: no link followed, no pipe waited on.
+    let path = folder.path().join(name);
+    let same = matches!(
+        super::disk::read_in(folder, name, &path),
+        super::disk::Disk::Text(text) if text.as_bytes() == expected
+    );
+    if !same {
+        let _ = folder.remove(&temp);
+        return Ok(None);
+    }
+    if let Err(e) = folder.rename(&temp, name, true) {
+        let _ = folder.remove(&temp);
+        return Err(Error::io(e, &path));
+    }
+    Ok(Some(id))
+}
+
+/// The folder of `path`, opened, and the name of `path` in it.
+fn open_parent(path: &Path) -> Result<(Folder, &str)> {
+    folder::open_parent(path).map_err(|e| Error::io(e, path))
 }
 
 /// Answers the readers waiting on the pipe `id` at `path` with `answer`,
-/// then removes it if it is still that pipe. Returns whether it removed it.
+/// then removes it if it is still that pipe: looked at and removed through
+/// its folder, held, so what is removed is what was looked at. Returns
+/// whether it removed it.
 pub fn remove(path: &Path, id: PipeId, answer: &Answer) -> bool {
-    if PipeId::of(path) != Some(id) {
+    let Ok((folder, name)) = open_parent(path) else {
+        return false;
+    };
+    let still = || PipeId::in_folder(&folder, name) == Some(id);
+    if !still() {
         return false;
     }
     answer_waiting(path, id, answer);
-    PipeId::of(path) == Some(id) && fs::remove_file(path).is_ok()
+    still() && folder.remove(name).is_ok()
 }
 
 /// Answers the readers waiting on the pipe `id` at `path` right now, if
@@ -372,6 +404,7 @@ pub fn answer_waiting(path: &Path, id: PipeId, answer: &Answer) {
             None,
             std::time::Duration::from_millis(50),
             true,
+            None,
         );
         if served != imp::Served::Answered {
             return;
@@ -412,17 +445,26 @@ mod imp {
     /// reader slower than this may still get one.)
     const REST: Duration = Duration::from_millis(25);
 
-    pub(super) fn mkfifo(path: &Path) -> Result<()> {
-        use std::os::unix::ffi::OsStrExt;
-        let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())
-            .map_err(|_| Error::invalid("a path with a NUL byte"))?;
-        // SAFETY: a valid C string; mkfifo reads it and keeps nothing.
-        let made = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
-        if made == 0 {
-            Ok(())
-        } else {
-            Err(Error::io(io::Error::last_os_error(), path))
+    /// Makes the pipe `name` in `folder`, readable and writable by this
+    /// user only, where nothing is (`mkfifoat`, which `rustix` lacks on
+    /// macOS).
+    pub(super) fn mkfifo_in(folder: &super::Folder, name: &str) -> io::Result<()> {
+        use rustix::fs::{AtFlags, Mode};
+        let c_name =
+            std::ffi::CString::new(name).map_err(|_| io::Error::other("a name with a NUL byte"))?;
+        // SAFETY: the folder's descriptor is open for the call and the
+        // name a valid C string; mkfifoat reads them and keeps nothing.
+        let made = unsafe { libc::mkfifoat(folder.fd().as_raw_fd(), c_name.as_ptr(), 0o600) };
+        if made != 0 {
+            return Err(io::Error::last_os_error());
         }
+        // In case a umask took more.
+        Ok(rustix::fs::chmodat(
+            folder.fd(),
+            name,
+            Mode::from_raw_mode(0o600),
+            AtFlags::empty(),
+        )?)
     }
 
     /// The pipe `id` at `path`, opened to write to, if a reader has it
@@ -457,9 +499,11 @@ mod imp {
     /// answer still there unread is left for the next reader, or, with
     /// `replace` (the answer changed since), taken out first. An answer
     /// whose reader stops taking it for `stall` is taken back out, so the
-    /// next reader doesn't start in the middle of it. Then the pipe's time
-    /// of change is put back to `mtime`, if given (its last access becomes
-    /// now).
+    /// next reader doesn't start in the middle of it; so is one that is no
+    /// longer `taken`, the server's answer, as it changes. Then the pipe's
+    /// time of change is put back to `mtime`, if given (its last access
+    /// becomes now).
+    #[allow(clippy::too_many_arguments, reason = "one answer, as it is served")]
     pub(super) fn answer(
         path: &Path,
         id: PipeId,
@@ -468,6 +512,7 @@ mod imp {
         mtime: Option<libc::timespec>,
         stall: Duration,
         replace: bool,
+        taken: Option<Taken<'_>>,
     ) -> Served {
         // A reader of its own, to see what the pipe holds; read from only
         // to take an answer back.
@@ -480,7 +525,7 @@ mod imp {
             }
             drain(&own);
         }
-        if !write_whole(pipe, bytes, stall) {
+        if !write_whole(pipe, bytes, stall, taken) {
             drain(&own);
         }
         if let Some(mtime) = mtime {
@@ -547,10 +592,21 @@ mod imp {
         }
     }
 
+    /// A server's answer as it was taken to be written, by the count of its
+    /// changes: each part of it goes into the pipe only while the answer is
+    /// still that one, and with the answer held, so none of it is written
+    /// once [`PipeServer::set_answer`] changed it.
+    #[derive(Clone, Copy)]
+    pub(super) struct Taken<'a> {
+        shared: &'a Shared,
+        generation: u64,
+    }
+
     /// Writes `bytes` to the pipe, while its reader keeps taking them: no
-    /// longer than `stall` without progress, nor than [`LONGEST`] in all.
+    /// longer than `stall` without progress, nor than [`LONGEST`] in all,
+    /// and, if `taken`, only while that is still the server's answer.
     /// Returns whether it wrote them all.
-    fn write_whole(pipe: &File, bytes: &[u8], stall: Duration) -> bool {
+    fn write_whole(pipe: &File, bytes: &[u8], stall: Duration, taken: Option<Taken<'_>>) -> bool {
         let fd = pipe.as_raw_fd();
         // SAFETY: plain fcntl calls on a descriptor this function borrows.
         unsafe {
@@ -574,7 +630,16 @@ mod imp {
         let mut rest = bytes;
         let mut writer = pipe;
         while !rest.is_empty() {
-            match writer.write(rest) {
+            let wrote = {
+                let _held = taken.map(|taken| lock(&taken.shared.answer));
+                if taken.is_some_and(|taken| {
+                    taken.shared.generation.load(Ordering::SeqCst) != taken.generation
+                }) {
+                    break;
+                }
+                writer.write(rest)
+            };
+            match wrote {
                 Ok(0) => break,
                 Ok(n) => {
                     rest = &rest[n..];
@@ -709,13 +774,16 @@ mod imp {
             &self.shared.path
         }
 
-        /// What the next reader gets. An answer left unread in the pipe is
-        /// taken out before it, if it is another.
+        /// What the next reader gets. If it is another answer, the one left
+        /// unread in the pipe is taken out before this returns, and no more
+        /// of it is written ([`write_whole`] writes while it holds the
+        /// answer): once the vault locks, no reader gets a value.
         pub fn set_answer(&self, answer: Answer) {
             let mut current = lock(&self.shared.answer);
             if *current != answer {
                 *current = answer;
                 self.shared.generation.fetch_add(1, Ordering::SeqCst);
+                take_back(&self.shared.path, self.shared.id);
             }
         }
 
@@ -887,6 +955,7 @@ mod imp {
                 Some(shared.mtime),
                 SERVE_TIMEOUT,
                 written != Some(generation),
+                Some(Taken { shared, generation }),
             );
             drop(pipe);
             match served {
@@ -909,10 +978,14 @@ mod imp {
         pause
     }
 
-    /// Sleeps for `time`, or until asked to stop.
+    /// Sleeps for `time`, or until asked to stop or the answer changes:
+    /// the new one is served at once.
     fn rest(shared: &Shared, time: Duration) {
         let until = Instant::now() + time;
-        while !shared.stop.load(Ordering::SeqCst) {
+        let generation = shared.generation.load(Ordering::SeqCst);
+        while !shared.stop.load(Ordering::SeqCst)
+            && shared.generation.load(Ordering::SeqCst) == generation
+        {
             let left = until.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 return;
@@ -939,8 +1012,11 @@ mod imp {
         Error::Unsupported("virtual files work on macOS and Linux".into())
     }
 
-    pub(super) fn mkfifo(_: &Path) -> Result<()> {
-        Err(unsupported())
+    pub(super) fn mkfifo_in(_: &super::Folder, _: &str) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            unsupported().to_string(),
+        ))
     }
 
     pub(super) fn open_if_read(_: &Path, _: PipeId) -> Option<File> {
@@ -954,6 +1030,10 @@ mod imp {
         Gone,
     }
 
+    /// Never made here.
+    pub(super) enum Taken {}
+
+    #[allow(clippy::too_many_arguments, reason = "the same as on Unix")]
     pub(super) fn answer(
         _: &Path,
         _: PipeId,
@@ -962,6 +1042,7 @@ mod imp {
         _: Option<()>,
         _: Duration,
         _: bool,
+        _: Option<Taken>,
     ) -> Served {
         Served::Gone
     }
@@ -1172,6 +1253,36 @@ mod tests {
         let text = answered(&path, id, &waiting, &Answer::NotRunning);
         assert!(!text.contains("SECRET"), "{text:?}");
         server.finish(&Answer::NotRunning);
+    }
+
+    #[test]
+    fn no_value_is_left_in_the_pipe_once_the_answer_changes() {
+        use std::io::Read as _;
+        let dir = tempfile::tempdir().unwrap();
+        let (path, id) = pipe(dir.path());
+        let server = PipeServer::start(&path, id, values("SECRET=1\n")).unwrap();
+        let open = || {
+            OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&path)
+                .unwrap()
+        };
+        // A tool holds the pipe open and doesn't read: the answer waits
+        // in it, while the server looks at the pipe less and less often.
+        let idle = open();
+        std::thread::sleep(Duration::from_millis(400));
+        // The vault locks; right after, a reader that doesn't wait.
+        server.set_answer(Answer::Locked);
+        let mut late = open();
+        let mut got = Vec::new();
+        let _ = late.read_to_end(&mut got);
+        let got = String::from_utf8_lossy(&got);
+        assert!(!got.contains("SECRET"), "{got:?}");
+        drop((idle, late));
+        let text = within(&reader(&path));
+        assert!(whole(&text, &[&Answer::Locked.text()]), "{text:?}");
+        server.stop(&Answer::Stopped);
     }
 
     #[test]

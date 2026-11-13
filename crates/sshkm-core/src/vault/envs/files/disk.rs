@@ -12,6 +12,11 @@
 //! vault's own files or into the SSH folder ([`checked_target`]). A folder
 //! that isn't there is never made. The only pipe a binding's place may be is
 //! one the app serves ([`FilesContext::pipes`]).
+//!
+//! A file is written, made a pipe or removed only through its folder held
+//! open and checked as it was opened: still the folder it was found in,
+//! inside the project's folder ([`Folder::checked`]), so a folder swapped
+//! for another or for a link after the check gets nothing.
 
 use std::fs;
 use std::io::{self, Read as _};
@@ -19,7 +24,9 @@ use std::path::{Component, Path, PathBuf};
 
 use zeroize::Zeroizing;
 
+use super::folder::{Folder, Kind};
 use super::pipes::{self, PipeId};
+use super::unlocked::{Leftover, Leftovers};
 use super::{EnvFile, FileState, FilesContext, RefusedReason, check_env_file, is_env_file_name};
 use crate::leaks::sources::SKIP_DIRS;
 use crate::vault::VaultPaths;
@@ -47,6 +54,8 @@ pub(super) struct Target {
     /// The file as the project's folder names it, to show.
     pub display: PathBuf,
     pub identity: Identity,
+    /// The project's folder it was found in.
+    pub root: FileId,
     /// The pipe the app serves there, if that is what is there.
     pub pipe: Option<PipeId>,
 }
@@ -123,7 +132,7 @@ pub(super) fn locate(
         && dir
             .ancestors()
             .any(|ancestor| FileId::of(ancestor) == root_id);
-    let (true, Some(dir_id)) = (inside, dir_id) else {
+    let (true, Some(dir_id), Some(root_id)) = (inside, dir_id, root_id) else {
         return Err(FileState::Refused {
             reason: RefusedReason::Outside,
         });
@@ -166,6 +175,7 @@ pub(super) fn locate(
         real,
         display,
         identity: (dir_id, name.to_lowercase()),
+        root: root_id,
         pipe,
     })
 }
@@ -178,7 +188,39 @@ pub(super) fn read(path: &Path) -> Disk {
     if PipeId::of(path).is_some() {
         return Disk::Refused(RefusedReason::NotAFile);
     }
-    let file = match open_no_follow(path) {
+    read_opened(open_no_follow(path), path)
+}
+
+/// Reads the file `name` in `folder` as [`read`] does, through the folder
+/// held; `path` names it in messages.
+pub(super) fn read_in(folder: &Folder, name: &str, path: &Path) -> Disk {
+    #[cfg(unix)]
+    {
+        match folder.entry(name) {
+            Ok(None) => return Disk::Missing,
+            Ok(Some(entry)) if entry.kind == Kind::Link => {
+                return Disk::Refused(RefusedReason::Link);
+            }
+            // Never opened, not even without waiting: see `read`.
+            Ok(Some(entry)) if entry.kind != Kind::File => {
+                return Disk::Refused(RefusedReason::NotAFile);
+            }
+            Ok(Some(_)) => {}
+            Err(e) => return Disk::Failed(Error::io(e, path).to_string()),
+        }
+        read_opened(folder.open_read(name), path)
+    }
+    #[cfg(not(unix))]
+    {
+        // By path, which leads nowhere else while the folder is held.
+        let _ = path;
+        read(&folder.path().join(name))
+    }
+}
+
+/// Reads a file just opened (or what opening it gave), as [`read`] does.
+fn read_opened(opened: io::Result<fs::File>, path: &Path) -> Disk {
+    let file = match opened {
         Ok(file) => file,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Disk::Missing,
         Err(e) if is_link_error(&e) => return Disk::Refused(RefusedReason::Link),
@@ -212,26 +254,56 @@ pub(super) fn read(path: &Path) -> Disk {
 
 /// Writes `bytes` to the target, readable by its owner only, by renaming a
 /// new file over it, unless it no longer holds `expected` (`None`: unless
-/// it exists now) or its folder is no longer the one it was found in. With
-/// `keep_out`, the new file is kept out of backups and cloud folders from
-/// before it holds anything ([`fsutil::keep_out_of_copies`]). Returns
-/// whether it wrote.
+/// it exists now) or its folder is no longer the one it was found in
+/// ([`Folder::checked`]). With `keep_out` (a level-2 file), the new file is
+/// kept out of backups and cloud folders from before it holds anything
+/// ([`fsutil::keep_out_of_copies`]). Returns whether it wrote.
+///
+/// With `list`, the app's list of level-2 files ([`Leftovers`]), the write
+/// is listed before anything is written: the target's temporary files, so
+/// the guard and the next start sweep what a crash in the middle leaves,
+/// and, for a level-2 file, the new file as it will be, before it takes
+/// the target's place, so they remove it too. A level-2 file that can't be
+/// listed isn't written.
 pub(super) fn write(
     target: &Target,
     expected: Option<&[u8]>,
     bytes: &[u8],
     keep_out: bool,
+    list: Option<&Path>,
 ) -> Result<bool> {
-    let current = match read(&target.real) {
+    let (Some(folder), Some(name)) = (folder_of(target), name_of(target)) else {
+        return Ok(false);
+    };
+    let current = match read_in(&folder, name, &target.display) {
         Disk::Missing => None,
         Disk::Text(text) => Some(text),
         Disk::Refused(reason) => return Err(refused(reason, &target.display)),
         Disk::Failed(message) => return Err(Error::invalid(message)),
     };
-    if current.as_ref().map(|text| text.as_bytes()) != expected || !same_folder(target) {
+    if current.as_ref().map(|text| text.as_bytes()) != expected {
         return Ok(false);
     }
-    fsutil::replace_private(&target.real, bytes, expected.is_some(), keep_out)
+    if let Some(list) = list {
+        let listed = Leftovers::add_at(list, Leftover::temps_of(&target.real));
+        if keep_out {
+            listed?;
+        }
+    }
+    folder.write_private(
+        name,
+        bytes,
+        expected.is_some(),
+        keep_out,
+        |new| match list {
+            Some(list) if keep_out => {
+                let new = Leftover::of_meta(&target.real, new)
+                    .ok_or_else(|| Error::invalid("the new file can't be listed"))?;
+                Leftovers::add_at(list, new)
+            }
+            _ => Ok(()),
+        },
+    )
 }
 
 /// Makes the pipe of a level-3 file where nothing is, if its folder is
@@ -239,10 +311,10 @@ pub(super) fn write(
 /// app's, [`FilesContext::pipe_list`]), so a crash right after leaves no
 /// pipe the guard doesn't know of.
 pub(super) fn make_pipe(target: &Target, list: Option<&Path>) -> Result<PipeId> {
-    if !same_folder(target) {
+    let (Some(folder), Some(name)) = (folder_of(target), name_of(target)) else {
         return Err(Error::invalid("the folder changed"));
-    }
-    let id = pipes::make(&target.real)?;
+    };
+    let id = pipes::make_in(&folder, name)?;
     remember(list, &target.real, id);
     Ok(id)
 }
@@ -256,14 +328,39 @@ pub(super) fn make_pipe_over(
     expected: &[u8],
     list: Option<&Path>,
 ) -> Result<Option<PipeId>> {
-    if !same_folder(target) {
+    let (Some(folder), Some(name)) = (folder_of(target), name_of(target)) else {
         return Ok(None);
-    }
-    let made = pipes::make_over(&target.real, expected)?;
+    };
+    let made = pipes::make_over_in(&folder, name, expected)?;
     if let Some(id) = made {
         remember(list, &target.real, id);
     }
     Ok(made)
+}
+
+/// The target's folder, held, if it is still the folder the target was
+/// found in, and inside the project's folder it was found in.
+fn folder_of(target: &Target) -> Option<Folder> {
+    Folder::checked(
+        target.real.parent()?,
+        &target.identity.0.token(),
+        &target.root.token(),
+    )
+}
+
+/// The target's name in its folder.
+fn name_of(target: &Target) -> Option<&str> {
+    target.real.file_name()?.to_str()
+}
+
+/// Reads the target as [`read`] does, through its folder held and checked
+/// as [`write`] does; `Failed` when the folder is no longer the one it was
+/// found in.
+pub(super) fn read_checked(target: &Target) -> Disk {
+    match (folder_of(target), name_of(target)) {
+        (Some(folder), Some(name)) => read_in(&folder, name, &target.display),
+        _ => Disk::Failed(format!("{}: the folder changed", target.display.display())),
+    }
 }
 
 /// Adds a pipe just made to the app's list of pipes, if it keeps one.
@@ -285,29 +382,24 @@ pub(super) fn keep_out(target: &Target) {
     fsutil::keep_out_of_copies_at(&target.real);
 }
 
-/// The target's folder is still the folder it was found in, and no link
-/// leads to it.
-fn same_folder(target: &Target) -> bool {
-    target.real.parent().is_some_and(|dir| {
-        FileId::of(dir).as_ref() == Some(&target.identity.0)
-            && fs::canonicalize(dir).is_ok_and(|real| real == dir)
-    })
-}
-
 /// Removes the temporary files of the target's writes that a crash left
 /// next to it: they hold its values in plain text.
 pub(super) fn sweep(target: &Target) {
     fsutil::sweep_private_temps(&target.real);
 }
 
-/// Deletes the target, a regular file.
+/// Deletes the target, a regular file, through its folder held and checked
+/// as [`write`] does.
 pub(super) fn remove(target: &Target) -> Result<()> {
-    match fs::symlink_metadata(&target.real) {
-        Ok(meta) if meta.is_file() => {
-            fs::remove_file(&target.real).map_err(|e| Error::io(e, &target.display))
-        }
-        Ok(_) => Err(Error::invalid("not a regular file")),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+    let (Some(folder), Some(name)) = (folder_of(target), name_of(target)) else {
+        return Err(Error::invalid("the folder changed"));
+    };
+    match folder.entry(name) {
+        Ok(Some(entry)) if entry.kind == Kind::File => folder
+            .remove(name)
+            .map_err(|e| Error::io(e, &target.display)),
+        Ok(Some(_)) => Err(Error::invalid("not a regular file")),
+        Ok(None) => Ok(()),
         Err(e) => Err(Error::io(e, &target.display)),
     }
 }

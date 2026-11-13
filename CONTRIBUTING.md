@@ -57,6 +57,10 @@ cargo test --workspace --all-features
   `cargo test --workspace --all-features` and commit the regenerated `src/bindings/`.
 - **New strings.** Add every UI string to `src/i18n/locales/en.ts`, `ru.ts` and `uz.ts`.
   The locale test fails if one is missing.
+- **Colours.** The app has a light and a dark theme. Use the colour tokens listed at the top
+  of `src/styles/app.css` (`border-line`, `bg-fill`, `text-subtle`, `text-critical`…), never
+  `white/…`, `black/…`, Tailwind's palette or hex values; `src/styles/tokens.test.ts` fails on
+  those. A new token needs a light value too.
 - **Secrets.** Never log or serialise key material or passphrases.
 - **Commits and pull requests.** Keep them small and focused, and describe the user-visible
   change.

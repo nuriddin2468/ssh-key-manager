@@ -135,14 +135,14 @@ export function FilesSection({ env, files, whileUnlocked, virtualFiles }: FilesS
       </div>
 
       {env.kind === 'remote' && files.length === 0 ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.025] px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-ink/[0.025] px-3 py-2">
           <p className="min-w-0 flex-1 text-[12.5px] text-muted">{t('envs.files.remoteNote')}</p>
           <Button variant="ghost" size="sm" loading={makeLocal.pending} onClick={makeLocal.start}>
             {t('envs.kind.makeLocal')}
           </Button>
         </div>
       ) : files.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-white/[0.14] px-3 py-3 text-[12.5px] leading-[19px] text-muted">
+        <p className="rounded-xl border border-dashed border-ink/[0.14] px-3 py-3 text-[12.5px] leading-[19px] text-muted">
           {t('envs.files.emptyText')}
         </p>
       ) : (
@@ -294,7 +294,7 @@ function FileRow({
   const missing = report ? missingNames(report) : [];
   const Icon = look?.icon;
   return (
-    <li className="flex items-center gap-2.5 rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-2">
+    <li className="flex items-center gap-2.5 rounded-xl border border-ink/[0.07] bg-ink/[0.025] px-3 py-2">
       <span
         aria-hidden="true"
         className={cn('grid size-7 shrink-0 place-items-center rounded-lg border', tone.tile)}
@@ -556,10 +556,15 @@ function AgentPrompt({ project, folder, onChoose }: AgentPromptProps) {
   return (
     <div
       role="note"
-      className="flex flex-col gap-2 rounded-xl border border-violet-400/25 bg-violet-400/[0.07] px-3 py-2.5"
+      data-hue="agent"
+      className="flex flex-col gap-2 rounded-xl border border-[rgb(var(--accent-rgb)/0.25)] bg-[rgb(var(--accent-rgb)/0.07)] px-3 py-2.5"
     >
       <p className="flex items-start gap-2 text-[12.5px] leading-[18px] text-fg-2">
-        <Bot aria-hidden="true" className="mt-px size-4 shrink-0 text-violet-200" strokeWidth={2} />
+        <Bot
+          aria-hidden="true"
+          className="mt-px size-4 shrink-0 text-[var(--accent-text)]"
+          strokeWidth={2}
+        />
         <span className="min-w-0">
           {t('envs.agents.prompt', {
             count: tools.length,

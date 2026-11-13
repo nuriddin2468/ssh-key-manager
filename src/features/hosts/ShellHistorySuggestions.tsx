@@ -274,7 +274,7 @@ function Found({ scan, refreshing, onRefresh, onAdd }: FoundProps) {
         <ul
           id={listId}
           ref={listRef}
-          className="flex flex-col divide-y divide-white/[0.06] border-t border-white/[0.06]"
+          className="flex flex-col divide-y divide-line-soft border-t border-line-soft"
         >
           {shown.map((suggestion, index) => (
             <SuggestionRow
@@ -293,7 +293,7 @@ function Found({ scan, refreshing, onRefresh, onAdd }: FoundProps) {
       ) : null}
 
       {(more > 0 || expanded) && !collapsed ? (
-        <div className="border-t border-white/[0.06] px-2 py-1.5">
+        <div className="border-t border-line-soft px-2 py-1.5">
           <Button
             size="sm"
             variant="ghost"

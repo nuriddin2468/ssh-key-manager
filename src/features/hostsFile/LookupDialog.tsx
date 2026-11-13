@@ -79,7 +79,7 @@ export function LookupDialog({ entries, initialName, onShowLine, onDone }: Looku
                     {matches.map(({ entry, used }) => (
                       <li
                         key={entry.line}
-                        className="flex items-center gap-2.5 rounded-lg border border-white/[0.08] bg-white/[0.03] px-2.5 py-1.5"
+                        className="flex items-center gap-2.5 rounded-lg border border-line bg-fill-subtle px-2.5 py-1.5"
                       >
                         <span className="selectable min-w-0 flex-1 truncate font-mono text-[12.5px]">
                           {entry.address}

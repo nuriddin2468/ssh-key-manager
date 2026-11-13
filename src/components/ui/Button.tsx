@@ -4,8 +4,8 @@ import { Spinner } from './Spinner';
 
 const variants = {
   primary: 'accent-fill font-semibold hover:brightness-110 active:brightness-95',
-  secondary: 'field text-fg-2 font-medium hover:bg-white/[0.09] hover:text-fg',
-  ghost: 'text-fg-2 font-medium hover:bg-white/[0.06] hover:text-fg',
+  secondary: 'field text-fg-2 font-medium hover:bg-fill-hover hover:text-fg',
+  ghost: 'text-fg-2 font-medium hover:bg-fill hover:text-fg',
   soft: 'accent-soft font-medium hover:brightness-110',
   danger: 'text-critical font-medium hover:bg-critical-solid/10',
 } as const;

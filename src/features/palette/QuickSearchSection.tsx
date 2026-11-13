@@ -71,7 +71,7 @@ export function QuickSearchSection() {
       <h2 id={titleId} className="px-1 text-[12px] font-semibold tracking-[0.02em] text-subtle">
         {t('palette.settings.title')}
       </h2>
-      <div className="glass flex flex-col divide-y divide-white/[0.06] overflow-hidden rounded-2xl">
+      <div className="glass flex flex-col divide-y divide-line-soft overflow-hidden rounded-2xl">
         <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">
           <span className="flex min-w-0 flex-col">
             <span id={`${switchId}-label`} className="font-medium">

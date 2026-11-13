@@ -143,7 +143,7 @@ export function EntryPane({ entry, onEdit, onGone }: EntryPaneProps) {
         action: { label: t('passwords.restore'), onClick: () => void undo() },
         classNames: {
           actionButton:
-            '!h-7 !rounded-lg !border !border-white/15 !bg-white/10 !px-2.5 !text-[12.5px] !font-medium !text-fg hover:!bg-white/15',
+            '!h-7 !rounded-lg !border !border-ink/15 !bg-ink/10 !px-2.5 !text-[12.5px] !font-medium !text-fg hover:!bg-ink/15',
         },
       });
     },
@@ -197,7 +197,7 @@ export function EntryPane({ entry, onEdit, onGone }: EntryPaneProps) {
         className="pointer-events-none absolute -top-[90px] -left-10 h-[220px] w-[300px] rounded-full opacity-45 blur-[50px]"
         style={{ background: TONES[mark.tone][1] }}
       />
-      <div className="relative flex flex-col gap-3.5 border-b border-white/[0.07] px-5 pt-5 pb-4">
+      <div className="relative flex flex-col gap-3.5 border-b border-ink/[0.07] px-5 pt-5 pb-4">
         <div className="flex items-start gap-3">
           <Tile tone={mark.tone} size={48}>
             <span className="text-[20px] font-semibold">{mark.letter}</span>
@@ -314,7 +314,7 @@ export function EntryPane({ entry, onEdit, onGone }: EntryPaneProps) {
       </div>
 
       <div className="relative flex min-h-0 flex-1 flex-col gap-[18px] overflow-y-auto px-5 pt-4 pb-[18px]">
-        <div className="glass flex flex-col divide-y divide-white/[0.06] rounded-xl">
+        <div className="glass flex flex-col divide-y divide-line-soft rounded-xl">
           {entry.username ? (
             <Field label={t('passwords.username')}>
               <span className="selectable min-w-0 flex-1 truncate">{entry.username}</span>
@@ -441,7 +441,7 @@ export function EntryPane({ entry, onEdit, onGone }: EntryPaneProps) {
             <h3 className="text-[11.5px] leading-4 font-semibold tracking-[0.02em] text-subtle">
               {t('passwords.notes')}
             </h3>
-            <p className="selectable rounded-[10px] border border-white/[0.06] bg-black/25 px-3 py-2.5 text-[12.5px] leading-[18px] whitespace-pre-wrap text-fg-2 [overflow-wrap:anywhere]">
+            <p className="selectable rounded-[10px] border border-line-soft bg-shade/25 px-3 py-2.5 text-[12.5px] leading-[18px] whitespace-pre-wrap text-fg-2 [overflow-wrap:anywhere]">
               {data.notes}
             </p>
           </section>
@@ -473,7 +473,7 @@ export function EntryPane({ entry, onEdit, onGone }: EntryPaneProps) {
         </dl>
       </div>
 
-      <div className="relative flex flex-wrap items-center gap-2 border-t border-white/[0.07] px-3.5 py-2.5">
+      <div className="relative flex flex-wrap items-center gap-2 border-t border-ink/[0.07] px-3.5 py-2.5">
         {entry.inTrash ? (
           <Button
             variant="danger"
@@ -545,11 +545,11 @@ function LinkChip({ tone, icon, children, className, ...rest }: LinkChipProps) {
     <button
       type="button"
       {...rest}
+      // Hosts' colour or keys', from their sections.
+      data-hue={tone === 'blue' ? 'hosts' : 'keys'}
       className={cn(
         'pressable inline-flex h-[24px] max-w-full items-center gap-1.5 rounded-md border px-2 font-mono text-[12px]',
-        tone === 'blue'
-          ? 'border-blue-400/30 bg-blue-400/12 text-blue-200 hover:bg-blue-400/20 data-[state=open]:bg-blue-400/20'
-          : 'border-teal-400/30 bg-teal-400/12 text-teal-200 hover:bg-teal-400/20 data-[state=open]:bg-teal-400/20',
+        'border-[rgb(var(--accent-rgb)/0.3)] bg-[rgb(var(--accent-rgb)/0.12)] text-[var(--accent-text)] hover:bg-[rgb(var(--accent-rgb)/0.2)] data-[state=open]:bg-[rgb(var(--accent-rgb)/0.2)]',
         className,
       )}
     >

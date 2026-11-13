@@ -37,11 +37,19 @@ real `~/.ssh`. Its modules:
   - Connects through a Unix socket (`SSH_AUTH_SOCK`), or on Windows a named pipe:
     `SSH_AUTH_SOCK` if it names one, else the OpenSSH agent's pipe.
 - `perms`
-  - Unix: checks and fixes file modes.
+  - Unix: checks and fixes file modes. On macOS it also empties the access list of a
+    file meant for this user alone, which a folder may have handed entries down to
+    (`perms/extended_acl.rs`, through the system library).
   - Windows: checks and fixes ACLs, using locale-independent SIDs through PowerShell and
-    `icacls`. It also creates files meant for plain-text secrets (the CSV export) with a
-    protected access list already in place, through Win32 (`perms/private_file.rs`, the
-    crate's only `unsafe` code).
+    `icacls`. It also creates files meant for plain-text secrets (exports, converted
+    keys) with a protected access list already in place, through Win32
+    (`perms/private_file.rs`). These two modules, the Unix part of
+    `vault/envs/files/pipes.rs` and the Windows part of `vault/envs/files/folder.rs`
+    are the crate's only `unsafe` code.
+- `fsutil`: atomic writes. Files in `~/.ssh` and the app's data folder are written
+  through links (`atomic_write`; `atomic_write_private` for a private key, which keeps
+  only its owner's permissions); secrets written where the user picks are never written
+  through a link and are private from their first byte (`write_private`).
 - `audit`: pure rules over the data above. Findings carry machine-readable kinds and
   parameters, so the UI can localise them.
   - `audit/config_risks.rs` reads `ssh_config` settings (host key checking, agent

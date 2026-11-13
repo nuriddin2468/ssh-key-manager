@@ -322,12 +322,22 @@ pub fn make(path: &Path) -> Result<PipeId> {
 
 /// Makes a pipe named `name` in `folder`, held, as [`make`] does: made
 /// and looked at through the folder, so it is in that folder whatever its
-/// path leads to meanwhile.
+/// path leads to meanwhile, and this user's alone: mode 0600, and on macOS
+/// without the entries a folder's access list hands down, which macOS
+/// checks before the mode.
 pub(super) fn make_in(folder: &Folder, name: &str) -> Result<PipeId> {
     let path = folder.path().join(name);
     imp::mkfifo_in(folder, name).map_err(|e| Error::io(e, &path))?;
-    PipeId::in_folder(folder, name)
-        .ok_or_else(|| Error::invalid(format!("{} isn't a pipe", path.display())))
+    let made = PipeId::in_folder(folder, name)
+        .ok_or_else(|| Error::invalid(format!("{} isn't a pipe", path.display())))?;
+    if let Err(error) = imp::owner_only(folder, name, made) {
+        // Not served, nor left for anyone to open.
+        if PipeId::in_folder(folder, name) == Some(made) {
+            let _ = folder.remove(name);
+        }
+        return Err(Error::io(error, &path));
+    }
+    Ok(made)
 }
 
 /// Puts a pipe in place of the regular file at `path`, only if it still
@@ -465,6 +475,33 @@ mod imp {
             Mode::from_raw_mode(0o600),
             AtFlags::empty(),
         )?)
+    }
+
+    /// Drops the entries the folder's access list handed down to the pipe
+    /// `id` just made as `name` in `folder` (macOS checks them before the
+    /// mode). The pipe is opened through the folder, without following a
+    /// link and without waiting: no server answers it yet, so opening it
+    /// to read hands nothing out. Elsewhere there is nothing to drop: Linux
+    /// masks a POSIX access list's entries with the mode's group bits.
+    #[cfg(target_os = "macos")]
+    pub(super) fn owner_only(folder: &super::Folder, name: &str, id: PipeId) -> io::Result<()> {
+        use rustix::fs::{Mode, OFlags};
+        let pipe = File::from(rustix::fs::openat(
+            folder.fd(),
+            name,
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?);
+        if id_of(&pipe) != Some(id) {
+            return Err(io::Error::other("not the pipe just made"));
+        }
+        crate::perms::extended_acl::clear(&pipe)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[allow(clippy::unnecessary_wraps, reason = "the same as on macOS")]
+    pub(super) fn owner_only(_: &super::Folder, _: &str, _: PipeId) -> io::Result<()> {
+        Ok(())
     }
 
     /// The pipe `id` at `path`, opened to write to, if a reader has it
@@ -1017,6 +1054,11 @@ mod imp {
             std::io::ErrorKind::Unsupported,
             unsupported().to_string(),
         ))
+    }
+
+    #[allow(clippy::unnecessary_wraps, reason = "the same as on macOS")]
+    pub(super) fn owner_only(_: &super::Folder, _: &str, _: PipeId) -> std::io::Result<()> {
+        Ok(())
     }
 
     pub(super) fn open_if_read(_: &Path, _: PipeId) -> Option<File> {

@@ -69,16 +69,17 @@ impl Folder {
     }
 
     /// Writes `bytes` to the file `name` in the folder by renaming a new
-    /// file over it, readable by its owner only (mode 0600 on Unix; on
-    /// Windows an access list for nobody but the user, `SYSTEM` and
-    /// `Administrators`, [`fsutil::replace_private`]). Whatever is at
-    /// `name`, a link included, is replaced, never written through; without
-    /// `overwrite`, nothing is written if something is there by then, and
-    /// the call returns `false`. With `keep_out`, the new file is kept out
-    /// of backups and cloud folders before it holds anything (Unix) or
-    /// before it takes its place (Windows). `placing` is told what the new
-    /// file is on disk before it takes its place on Unix, right after on
-    /// Windows; an error from it stops the write.
+    /// file over it, readable by its owner only (mode 0600 on Unix, and on
+    /// macOS no entries handed down by the folder's access list, dropped
+    /// before it holds anything; on Windows an access list for nobody but
+    /// the user, `SYSTEM` and `Administrators`, [`fsutil::replace_private`]).
+    /// Whatever is at `name`, a link included, is replaced, never written
+    /// through; without `overwrite`, nothing is written if something is
+    /// there by then, and the call returns `false`. With `keep_out`, the new
+    /// file is kept out of backups and cloud folders before it holds
+    /// anything (Unix) or before it takes its place (Windows). `placing` is
+    /// told what the new file is on disk before it takes its place on Unix,
+    /// right after on Windows; an error from it stops the write.
     pub(super) fn write_private(
         &self,
         name: &str,
@@ -371,6 +372,11 @@ mod imp {
             // Made 0600; set again in case a umask took more.
             file.set_permissions(fs::Permissions::from_mode(0o600))
                 .map_err(|e| Error::io(e, &temp_path))?;
+            // Without the entries a folder's access list handed down, which
+            // macOS checks before the mode, before it holds anything (Linux
+            // masks a POSIX list's entries with the mode's group bits).
+            #[cfg(target_os = "macos")]
+            crate::perms::extended_acl::clear(&file).map_err(|e| Error::io(e, &temp_path))?;
             if keep_out {
                 fsutil::keep_out_of_copies(&file);
             }
@@ -648,6 +654,54 @@ mod tests {
             assert_eq!(fs::read(root.join("moved").join(".env")).unwrap(), b"A=1\n");
             assert!(!other.join(".env").exists());
         }
+    }
+
+    /// A folder whose access list lets everyone read what is made in it
+    /// hands nothing down to a file written through it, nor to a pipe
+    /// made in it (macOS checks those entries before the mode).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn files_and_pipes_made_in_a_folder_drop_what_it_hands_down() {
+        use crate::perms::extended_acl::testing::{entries, sharing_folder};
+        let dir = sharing_folder();
+        let folder = Folder::open(dir.path()).unwrap();
+        let mut seen = None;
+        assert!(
+            folder
+                .write_private(".env", b"A=1\n", false, true, |_| {
+                    // The temporary file, before it takes its place.
+                    seen = fs::read_dir(dir.path())
+                        .unwrap()
+                        .map(|entry| entry.unwrap().path())
+                        .find(|path| path.to_string_lossy().ends_with(".tmp"))
+                        .map(|temp| entries(&temp));
+                    Ok(())
+                })
+                .unwrap()
+        );
+        assert_eq!(seen, Some(0));
+        assert_eq!(entries(&dir.path().join(".env")), 0);
+        // Rewritten, too.
+        assert!(
+            folder
+                .write_private(".env", b"A=2\n", true, false, |_| Ok(()))
+                .unwrap()
+        );
+        assert_eq!(entries(&dir.path().join(".env")), 0);
+        // A pipe, made where nothing is, or in a file's place.
+        super::super::pipes::make_in(&folder, ".env.local").unwrap();
+        assert_eq!(entries(&dir.path().join(".env.local")), 0);
+        let made = super::super::pipes::make_over_in(&folder, ".env", b"A=2\n")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            super::super::pipes::PipeId::of(&dir.path().join(".env")),
+            Some(made)
+        );
+        assert_eq!(entries(&dir.path().join(".env")), 0);
+        // A file made the ordinary way there still gets the entry.
+        fs::write(dir.path().join("other"), "").unwrap();
+        assert_eq!(entries(&dir.path().join("other")), 1);
     }
 
     #[cfg(unix)]

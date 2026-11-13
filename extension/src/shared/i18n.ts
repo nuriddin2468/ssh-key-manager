@@ -54,7 +54,7 @@ const en = {
   connectBusy: 'Another browser is connecting right now. Finish that first, then try again.',
   connectLocked: 'The vault is locked. Unlock it in SSH Key Manager, then try again.',
   connectNotRunning: 'SSH Key Manager isn’t running. Open it, then try again.',
-  connectOutdatedApp: 'SSH Key Manager is out of date. Update it, then try again.',
+  connectOutdatedApp: 'The SSH Key Manager app is out of date. Update the app, then try again.',
   connectFailed: 'Couldn’t connect. Try again.',
 
   menuLabel: 'Saved logins',
@@ -167,7 +167,8 @@ const ru: Strings = {
   connectBusy: 'Сейчас подключается другой браузер. Завершите это и попробуйте снова.',
   connectLocked: 'Хранилище заблокировано. Разблокируйте его в SSH Key Manager и попробуйте снова.',
   connectNotRunning: 'SSH Key Manager не запущен. Откройте его и попробуйте снова.',
-  connectOutdatedApp: 'SSH Key Manager устарел. Обновите его и попробуйте снова.',
+  connectOutdatedApp:
+    'Приложение SSH Key Manager устарело. Обновите приложение и попробуйте снова.',
   connectFailed: 'Не удалось подключиться. Попробуйте ещё раз.',
 
   menuLabel: 'Сохранённые логины',
@@ -278,7 +279,8 @@ const uz: Strings = {
   connectBusy: 'Hozir boshqa brauzer ulanmoqda. Avval uni yakunlang, keyin qayta urinib koʻring.',
   connectLocked: 'Ombor qulflangan. Uni SSH Key Managerda oching va qayta urinib koʻring.',
   connectNotRunning: 'SSH Key Manager ishlamayapti. Uni oching va qayta urinib koʻring.',
-  connectOutdatedApp: 'SSH Key Manager eskirgan. Uni yangilang va qayta urinib koʻring.',
+  connectOutdatedApp:
+    'SSH Key Manager ilovasi eskirgan. Ilovani yangilang va qayta urinib koʻring.',
   connectFailed: 'Ulanib boʻlmadi. Qayta urinib koʻring.',
 
   menuLabel: 'Saqlangan loginlar',

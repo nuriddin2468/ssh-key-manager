@@ -665,6 +665,8 @@ const uz = {
       'Ombor bir vaqtning oʻzida boshqa kompyuterda oʻzgartirildi. Oʻsha versiya saqlab qolindi, sizning oʻzgarishingiz esa alohida nusxaga yozildi.',
     vault_locked: 'Ombor qulflangan. Uni oching va qayta urinib koʻring.',
     cancelled: 'Bekor qilindi.',
+    too_many_attempts:
+      'Muvaffaqiyatsiz urinishlar juda koʻp. Biroz kuting va qayta urinib koʻring.',
     unknown: 'Kutilmagan xato.',
   },
   keys: {

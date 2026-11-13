@@ -606,6 +606,31 @@ fn folders_of_keepass_files_show_as_groups() {
     assert_eq!(vault.entries()[0].group.as_deref(), Some("Work/Servers"));
 }
 
+#[test]
+fn wrong_master_passwords_in_a_row_make_the_next_attempt_wait() {
+    let fx = Fixture::new();
+    let (vault, _) = Vault::create(&fx.paths, &s("master")).unwrap();
+    for _ in 0..3 {
+        assert!(matches!(
+            Vault::unlock(&fx.paths, &s("guess")),
+            Err(Error::WrongPassphrase)
+        ));
+    }
+    // Right or wrong, nothing is tried until the wait is over, whichever
+    // check asks.
+    for attempt in [
+        Vault::unlock(&fx.paths, &s("master")).map(drop),
+        Vault::unlock(&fx.paths, &s("guess")).map(drop),
+        vault.verify_master_password(&s("master")),
+        Vault::recover(&fx.paths, &s("not the key"), &s("new")).map(drop),
+    ] {
+        assert!(
+            matches!(attempt, Err(Error::TooManyAttempts { .. })),
+            "{attempt:?}"
+        );
+    }
+}
+
 /// A KDBX 3 header with `fields` (id, value), then `payload`.
 fn kdbx3(fields: &[(u8, &[u8])], payload: &[u8]) -> Vec<u8> {
     let mut bytes = vec![0x03, 0xD9, 0xA2, 0x9A, 0x67, 0xFB, 0x4B, 0xB5, 1, 0, 3, 0];

@@ -20,6 +20,7 @@
 //! up, and a write that would overwrite it fails with [`Error::Conflict`]
 //! instead.
 
+mod attempts;
 mod audit;
 mod breach;
 mod browsers;
@@ -366,7 +367,7 @@ impl Vault {
     /// Unlocks with the master password.
     pub fn unlock(paths: &VaultPaths, master: &SecretString) -> Result<Self> {
         let (slots, keys_hash) = load_slots(paths)?;
-        let secret = slots.open_password(master)?;
+        let secret = attempts::attempt(|| slots.open_password(master))?;
         Self::open(paths, secret, slots, keys_hash)
     }
 
@@ -398,20 +399,18 @@ impl Vault {
             recovery::normalize(recovery_key),
             Some(duplicate(recovery_key)),
         ];
-        let mut opened = None;
-        for secret in candidates.into_iter().flatten() {
-            match Database::parse(&bytes, key(&secret)) {
-                Ok(db) => {
-                    opened = Some((db, secret));
-                    break;
+        let (db, secret) = attempts::attempt(|| {
+            for secret in candidates.into_iter().flatten() {
+                match Database::parse(&bytes, key(&secret)) {
+                    Ok(db) => return Ok((db, secret)),
+                    Err(e) => match open_error(e) {
+                        Error::WrongPassphrase => {}
+                        other => return Err(other),
+                    },
                 }
-                Err(e) => match open_error(e) {
-                    Error::WrongPassphrase => {}
-                    other => return Err(other),
-                },
             }
-        }
-        let (db, secret) = opened.ok_or(Error::WrongPassphrase)?;
+            Err(Error::WrongPassphrase)
+        })?;
         let (slots, keys_hash, damaged) = match KeySlots::read(&paths.keys) {
             Ok(Some((slots, hash))) => (slots, Some(hash), false),
             Ok(None) => (KeySlots::new(), None, false),
@@ -665,7 +664,7 @@ impl Vault {
 
     /// Checks the master password without changing anything.
     pub fn verify_master_password(&self, master: &SecretString) -> Result<()> {
-        self.slots.open_password(master).map(drop)
+        attempts::attempt(|| self.slots.open_password(master)).map(drop)
     }
 
     /// Replaces the master password.

@@ -655,6 +655,7 @@ const en = {
       'The vault was changed on another computer at the same time. Its version is kept, and your change was saved as a separate copy.',
     vault_locked: 'The vault is locked. Unlock it and try again.',
     cancelled: 'Cancelled.',
+    too_many_attempts: 'Too many failed attempts. Wait a moment and try again.',
     unknown: 'Unexpected error.',
   },
   keys: {

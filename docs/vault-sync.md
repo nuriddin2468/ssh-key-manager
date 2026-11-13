@@ -33,9 +33,10 @@ Status: design for review. Nothing here is built yet.
 | Paired browsers (`sshkm.browser.*`) and KeePassXC's browser keys (`KPXC_BROWSER_*`) | keys of a browser on one computer |
 | `sshkm.own.key` | the own-device secret: every copy already has it; renewing it is PR 6's job, never a merge's |
 | `sshkm.env.key` | the key this computer's `.env` file revisions are made with; each computer keeps its own (`SyncState` is kept per key, so nothing breaks) |
+| The chat's key (`sshkm.chat.<device key>`, `p2p-chat`); the chat history itself lives in files under `chats/` in the app data folder, not in the vault | one key per computer, opening that computer's files only |
 | Any other database-level custom data (KeePassXC's settings and the like) | settings of one file |
 | Database settings (name, description, history limits, KDF, cipher) | settings of one file |
-| Anything marked local: an entry or group with custom data `sshkm.local`, and everything inside such a group | generic rule for per-computer data; the chat history (`p2p-chat`) uses it |
+| Anything marked local: an entry or group with custom data `sshkm.local`, and everything inside such a group | generic rule for per-computer data kept as entries (nothing uses it yet) |
 | Where `.env` files stand on this computer (`SyncState` of `envs::files`), sync snapshots, `nearby.json` | app data outside the vault |
 | Private SSH keys, the vault secret, the master password and key slots (`vault.keys`) | never leave the computer, as in PR 1 |
 
@@ -48,12 +49,13 @@ through a link, and a binding naming a file the app never writes is refused
 (`RefusedReason::Name`). This is what happens today when two computers share the vault file
 through a cloud folder; P2P sync behaves the same.
 
-**The local marker.** Custom data `sshkm.local` (any value; the chat uses `chat`) on an
-entry or a group means: this computer's own. The vault copy never carries it, a sync never
+**The local marker.** Custom data `sshkm.local` (any value naming what it is) on an entry
+or a group means: this computer's own. The vault copy never carries it, a sync never
 changes, moves or deletes it, and an item from the other side that carries the marker, or
 has the UUID of a local item here, is ignored. Database-level custom data is per computer
-unless allowed by name (contacts, devices and projects travel as records), so a key such as
-`sshkm.chat.<peer>` needs no marker.
+unless allowed by name (contacts, devices and projects travel as records), so the chat's
+key `sshkm.chat.<device key>` needs no marker; the chat keeps no entries or groups in the
+vault (`docs/p2p-chat.md` §4 on the `p2p-chat` branch).
 
 ## How a sync goes
 
@@ -400,8 +402,8 @@ Core:
 - shared values: deleted there while used here → a copy here; a reference to a login stays
   unresolved;
 - attachments: added, changed, removed, large (several MiB), in history;
-- what never syncs: browser keys, `sshkm.own.key`, `sshkm.env.key`, KeePassXC keys and
-  local-marked items aren't in the copy, and planted in an incoming copy change nothing;
+- what never syncs: browser keys, `sshkm.own.key`, `sshkm.env.key`, `sshkm.chat.*`,
+  KeePassXC keys and local-marked items aren't in the copy, and planted in an incoming copy change nothing;
 - copy checks: other secret, other root, duplicate UUIDs, entry with a group's UUID, limits,
   future times;
 - a real two-vault sync: one vault copied to two files, both edited (adds, edits on both

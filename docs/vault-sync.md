@@ -13,35 +13,35 @@ Status: approved on 2026-11-13 with the five decisions at the end accepted as wr
 
 ## What syncs and what never does
 
-| Syncs | How |
-| --- | --- |
-| Logins (title, username, password, URL, notes, 2FA secret, custom fields, tags, icon, colours, expiry, auto-type) | as entries, field by field |
-| An entry's history (earlier versions) | merged as a union, never compared |
-| Host and key entries (`sshkm.kind`, `sshkm.host`, `sshkm.fingerprint`) | as entries: they are custom fields |
-| Environments: variables (custom fields, protected or not), `sshkm.env` (order, notes), `sshkm.env.part`, `sshkm.env.files` | as entries; custom data items are fields |
-| Shared values (`sshkm.shared`, `{REF:P@I:…}` in variables) | as entries; see [Shared values](#shared-values-and-ref) |
-| Attachments, of any size | as fields (name → content hash); the bytes travel inside the vault copy |
-| Groups (folders), the recycle bin, moves between them | groups by UUID; the bin by role, not by UUID |
-| Permanent deletions (KeePass `DeletedObjects`) | union, with the 400-day lifetime of removal records |
-| Custom icons used by synced entries and groups | with the entry or group |
-| Project records and their `project/<name>` tags | records as in PR 1; tags rewritten from records after the merge |
-| Device records | as in PR 1 |
-| Contacts (`sshkm.contact.*`) | new: records in the manifest, like devices, with a tombstone on removal |
+| Syncs                                                                                                                      | How                                                                     |
+| -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Logins (title, username, password, URL, notes, 2FA secret, custom fields, tags, icon, colours, expiry, auto-type)          | as entries, field by field                                              |
+| An entry's history (earlier versions)                                                                                      | merged as a union, never compared                                       |
+| Host and key entries (`sshkm.kind`, `sshkm.host`, `sshkm.fingerprint`)                                                     | as entries: they are custom fields                                      |
+| Environments: variables (custom fields, protected or not), `sshkm.env` (order, notes), `sshkm.env.part`, `sshkm.env.files` | as entries; custom data items are fields                                |
+| Shared values (`sshkm.shared`, `{REF:P@I:…}` in variables)                                                                 | as entries; see [Shared values](#shared-values-and-ref)                 |
+| Attachments, of any size                                                                                                   | as fields (name → content hash); the bytes travel inside the vault copy |
+| Groups (folders), the recycle bin, moves between them                                                                      | groups by UUID; the bin by role, not by UUID                            |
+| Permanent deletions (KeePass `DeletedObjects`)                                                                             | union, with the 400-day lifetime of removal records                     |
+| Custom icons used by synced entries and groups                                                                             | with the entry or group                                                 |
+| Project records and their `project/<name>` tags                                                                            | records as in PR 1; tags rewritten from records after the merge         |
+| Device records                                                                                                             | as in PR 1                                                              |
+| Contacts (`sshkm.contact.*`)                                                                                               | new: records in the manifest, like devices, with a tombstone on removal |
 
-| Never syncs | Why |
-| --- | --- |
-| Paired browsers (`sshkm.browser.*`) and KeePassXC's browser keys (`KPXC_BROWSER_*`) | keys of a browser on one computer |
-| `sshkm.own.key` | the own-device secret: every copy already has it; renewing it is PR 6's job, never a merge's |
-| `sshkm.env.key` | the key this computer's `.env` file revisions are made with; each computer keeps its own (`SyncState` is kept per key, so nothing breaks) |
-| The chat's key (`sshkm.chat.<device key>`, `p2p-chat`); the chat history itself lives in files under `chats/` in the app data folder, not in the vault | one key per computer, opening that computer's files only |
-| Any other database-level custom data (KeePassXC's settings and the like) | settings of one file |
-| Database settings (name, description, history limits, KDF, cipher) | settings of one file |
-| Anything marked local: an entry or group with custom data `sshkm.local`, and everything inside such a group | generic rule for per-computer data kept as entries (nothing uses it yet) |
-| Where `.env` files stand on this computer (`SyncState` of `envs::files`), sync snapshots, `nearby.json` | app data outside the vault |
-| Private SSH keys, the vault secret, the master password and key slots (`vault.keys`) | never leave the computer, as in PR 1 |
+| Never syncs                                                                                                                                            | Why                                                                                                                                       |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Paired browsers (`sshkm.browser.*`) and KeePassXC's browser keys (`KPXC_BROWSER_*`)                                                                    | keys of a browser on one computer                                                                                                         |
+| `sshkm.own.key`                                                                                                                                        | the own-device secret: every copy already has it; renewing it is PR 6's job, never a merge's                                              |
+| `sshkm.env.key`                                                                                                                                        | the key this computer's `.env` file revisions are made with; each computer keeps its own (`SyncState` is kept per key, so nothing breaks) |
+| The chat's key (`sshkm.chat.<device key>`, `p2p-chat`); the chat history itself lives in files under `chats/` in the app data folder, not in the vault | one key per computer, opening that computer's files only                                                                                  |
+| Any other database-level custom data (KeePassXC's settings and the like)                                                                               | settings of one file                                                                                                                      |
+| Database settings (name, description, history limits, KDF, cipher)                                                                                     | settings of one file                                                                                                                      |
+| Anything marked local: an entry or group with custom data `sshkm.local`, and everything inside such a group                                            | generic rule for per-computer data kept as entries (nothing uses it yet)                                                                  |
+| Where `.env` files stand on this computer (`SyncState` of `envs::files`), sync snapshots, `nearby.json`                                                | app data outside the vault                                                                                                                |
+| Private SSH keys, the vault secret, the master password and key slots (`vault.keys`)                                                                   | never leave the computer, as in PR 1                                                                                                      |
 
-**Env file bindings sync.** `sshkm.env.files` holds a project folder *as the project keeps
-it* (`~/code/shop`) and a path inside it, for all three levels; no path of one computer
+**Env file bindings sync.** `sshkm.env.files` holds a project folder _as the project keeps
+it_ (`~/code/shop`) and a path inside it, for all three levels; no path of one computer
 beyond the project folders, which project records already sync. `envs::files` already
 expects bindings from elsewhere: a folder that isn't on this computer is reported and never
 made, a file is written only inside a folder of a project that holds the environment, never
@@ -161,19 +161,19 @@ own key both share, so even the encrypted channel carries no unkeyed hash of a p
 Per item, against the snapshot (`b`), mine (`m`), theirs (`t`) — PR 1's rules
 (`sync::merge`), lifted from host fields to field hashes:
 
-| Case | Result |
-| --- | --- |
-| a field only they changed | taken |
-| a field only this side changed | stays; the other side takes it |
-| a field both changed alike | nothing |
-| a field both changed differently | the item is a **conflict** |
-| item only there, no snapshot, no removal record here newer than its last change | **added** here |
-| item only there, removal record here newer than its last change | stays deleted; they delete it on their side |
-| item only there, removal record here older than its last change (changed after this side deleted it) | **conflict**: deleted here, changed there |
-| item only here, unchanged since the snapshot, gone there | **deleted** here |
-| item only here, changed since the snapshot, gone there | **conflict**: deleted there, changed here |
-| item on both, no snapshot, different | **conflict** |
-| an entry's kind differs (login / environment / shared value) | **conflict**, never merged field by field |
+| Case                                                                                                 | Result                                      |
+| ---------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| a field only they changed                                                                            | taken                                       |
+| a field only this side changed                                                                       | stays; the other side takes it              |
+| a field both changed alike                                                                           | nothing                                     |
+| a field both changed differently                                                                     | the item is a **conflict**                  |
+| item only there, no snapshot, no removal record here newer than its last change                      | **added** here                              |
+| item only there, removal record here newer than its last change                                      | stays deleted; they delete it on their side |
+| item only there, removal record here older than its last change (changed after this side deleted it) | **conflict**: deleted here, changed there   |
+| item only here, unchanged since the snapshot, gone there                                             | **deleted** here                            |
+| item only here, changed since the snapshot, gone there                                               | **conflict**: deleted there, changed here   |
+| item on both, no snapshot, different                                                                 | **conflict**                                |
+| an entry's kind differs (login / environment / shared value)                                         | **conflict**, never merged field by field   |
 
 **History.** Whenever an entry changes here — a field taken, or a conflict settled either
 way — this side's version before the change goes into its history, and the two histories
@@ -277,20 +277,20 @@ What one own device could do to another, buggy or in someone else's hands, and w
 it. An own device already holds the vault and its secret, so a sync can't leak more than it
 has; the risk is damage and code running on this computer.
 
-| Threat | What stops it |
-| --- | --- |
-| A stranger, or a former own device, syncs | PR 1: Noise XX, the own-vault proof, both in each other's registry; a removed device stays a tombstone |
-| A different vault gets merged | proof, then the copy must open with this secret and have this root |
-| A copy built to exhaust memory or CPU | 256 MiB, KDF bounds (`kdf::check_kdbx`), item and depth limits, history cap |
-| Mass deletion | more than 5 need a yes on each device; backup before the save |
-| Values overwritten or emptied | the previous version stays in each entry's history; backup before the save; step 2 adds undo |
-| Code run through a variable (`NODE_OPTIONS`, `LD_PRELOAD`, `PATH`…) | risky variables need the review and the system dialog |
-| Code run through a host directive | PR 1's risky directives, unchanged |
-| A `.env` file written somewhere it shouldn't | bindings stay inside a project folder that exists here, no links, protected paths refused, owner-only permissions (`envs::files`) |
-| A variable made to carry a login's password out | references resolve only to shared values |
-| Browser keys, chat history, the own key planted or taken | never in the copy; database custom data from the other side is never read |
-| Clock games to win last-writer rules | times more than 5 minutes ahead count as now; field merges don't use times at all |
-| Guessing passwords from the snapshot on disk | keyed hashes, key derived from this device's key |
+| Threat                                                              | What stops it                                                                                                                     |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| A stranger, or a former own device, syncs                           | PR 1: Noise XX, the own-vault proof, both in each other's registry; a removed device stays a tombstone                            |
+| A different vault gets merged                                       | proof, then the copy must open with this secret and have this root                                                                |
+| A copy built to exhaust memory or CPU                               | 256 MiB, KDF bounds (`kdf::check_kdbx`), item and depth limits, history cap                                                       |
+| Mass deletion                                                       | more than 5 need a yes on each device; backup before the save                                                                     |
+| Values overwritten or emptied                                       | the previous version stays in each entry's history; backup before the save; step 2 adds undo                                      |
+| Code run through a variable (`NODE_OPTIONS`, `LD_PRELOAD`, `PATH`…) | risky variables need the review and the system dialog                                                                             |
+| Code run through a host directive                                   | PR 1's risky directives, unchanged                                                                                                |
+| A `.env` file written somewhere it shouldn't                        | bindings stay inside a project folder that exists here, no links, protected paths refused, owner-only permissions (`envs::files`) |
+| A variable made to carry a login's password out                     | references resolve only to shared values                                                                                          |
+| Browser keys, chat history, the own key planted or taken            | never in the copy; database custom data from the other side is never read                                                         |
+| Clock games to win last-writer rules                                | times more than 5 minutes ahead count as now; field merges don't use times at all                                                 |
+| Guessing passwords from the snapshot on disk                        | keyed hashes, key derived from this device's key                                                                                  |
 
 Not covered: a device that makes many plausible edits (changes, not deletions) gets them
 applied, recoverable from history and the backup. Removing a device and replacing the own
@@ -328,7 +328,7 @@ uz, `design:accessibility-review` and `design:design-critique` on the result.
 - ru: "Хосты, ключи серверов и хранилище идут в обе стороны. Ключи для входа остаются на месте."
 
 **Review** (`Decide`), one list in sections, each only when it has something:
-- *Changed on both computers* — hosts (as now), then Passwords, Environments, Shared values,
+- _Changed on both computers_ — hosts (as now), then Passwords, Environments, Shared values,
   Folders. A row: the item's name (an environment as `Shop · backend · prod`), what happened
   ("Changed here and on {{peer}}" / "Deleted on {{peer}}, changed here" / "Deleted here,
   changed on {{peer}}"), the fields that differ ("Differs: Password, URL"), "Show values"
@@ -336,10 +336,10 @@ uz, `design:accessibility-review` and `design:design-critique` on the result.
   the existing "Keep this computer's" / "Take {{peer}}'s". Under the section:
   - en: "The version you don't keep stays among the entry's earlier versions."
   - ru: "Версия, которую вы не оставите, сохранится среди прежних версий записи."
-- *Runs a program or opens access* — host directives (as now) and variables:
+- _Runs a program or opens access_ — host directives (as now) and variables:
   - en: "{{name}} makes programs load code" / ru: "{{name}} заставляет программы загружать код";
     buttons "Add" / "Don't add" as now.
-- *Deletions* — one checkbox for all, with the list grouped by kind:
+- _Deletions_ — one checkbox for all, with the list grouped by kind:
   - en: "{{peer}} deleted {{count}} items" + "Delete them here too"; items from the
     recycle bin marked "from the recycle bin";
   - ru: "{{peer}} удалил {{count}} записей" + "Удалить и здесь".
@@ -443,6 +443,6 @@ during the review is skipped. UI: `SyncDialog` tests for the new sections and su
    of a per-entry wire format.
 2. Moved to the bin on one side, edited on the other → merged into the bin, not a conflict.
 3. Risky variables are new and gated like risky host directives.
-4. Many *changes* (not deletions) aren't confirmed: history and the backup cover them, and
+4. Many _changes_ (not deletions) aren't confirmed: history and the backup cover them, and
    step 2 adds undo.
 5. One-time import is the next PR.

@@ -66,7 +66,7 @@ pub use self::import::{
     ImportComparison, ImportOutcome, ImportPreview, ImportRow, SafeStorage, browser_profiles,
 };
 pub use self::location::{check_database, cloud_service, copy_files, remove_files};
-pub use self::own_devices::{DeviceRecord, MAX_RECORDS, OwnDevice, check_records};
+pub use self::own_devices::{DeviceRecord, MAX_RECORDS, OwnDevice, check_records, learned_devices};
 use self::slots::KeySlots;
 use crate::{Error, Result, fsutil};
 

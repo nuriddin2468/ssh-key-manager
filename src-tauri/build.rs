@@ -89,6 +89,8 @@ const COMMANDS: &[&str] = &[
     "nearby_set_reachable",
     "nearby_sync",
     "nearby_decide",
+    "nearby_sync_value",
+    "nearby_vault_cloud",
     "read_known_hosts",
     "find_known_hosts",
     "remove_known_hosts",

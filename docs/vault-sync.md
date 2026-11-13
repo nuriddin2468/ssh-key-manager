@@ -249,20 +249,28 @@ skip a tombstone (it lacks `name`) and keep an extra field when they read a live
 ## Risky changes and deletions
 
 **Deletions.** An entry leaving the vault, an entry moved to the recycle bin, and a group
-deleted each count as one. Deletions from a device are limited over time, not per sync:
-those this computer made from one device without asking in the last 24 hours count
-with the ones a sync brings, and past 5 (`MASS_DELETE`, hosts and vault counted together)
+deleted each count as one. Deletions from the user's other devices are limited over time,
+not per sync, and for all of them together, so a device gets no more under other device
+keys or through another device: those this computer made without asking in the last 24
+hours count with the ones a sync brings, and past 5 (`MASS_DELETE`, hosts and vault counted together)
 all of that sync's need the user's yes: on the side that connected, in the review; the
 other side puts them off, its snapshot untouched for them, until its user syncs from it.
-The count is kept with that device's snapshot. Before a day's first sync deletions, the
+There, the deletions the other user's choices on conflicts would make count too, moves to
+the recycle bin included (`VaultConflict.to_bin`), and wait past the limit. The count is
+kept in one small file for this computer (`sync/unasked.json`), written before the sync
+changes anything, so a sync that ends early counts; a file that can't be read counts as
+at the limit and is written so, to end a day later. A device a sync makes one of the
+user's is named in its summary ("Added to your devices: …"), and My devices says which
+device the sync was with (`sync/learned.json`). Before each sync that makes such deletions, the
 file (`~/.ssh/config`, the vault) is kept as it was in a backup the rotation of 20
-never removes, for 30 days (`fsutil::keep_backup`); a new recovery key re-encrypts it
-like the others.
+never removes (`fsutil::keep_backup`): the first of each day for 30 days and the 16
+newest; a new recovery key re-encrypts them like the others.
 
 **Risky variables (new).** A variable whose value goes into a shell's environment
 (`envs_run`) or a `.env` file can make programs load code. Adding or changing one of these
 names in any environment is a risky change, decided like a risky host directive (the
-review, then a system dialog the page can't answer; the other side puts it off): `PATH`,
+review, then a system dialog the page can't answer, which lists each variable with the
+value it would take, `NODE_OPTIONS=--require …`; the other side puts it off): `PATH`,
 `LD_*`, `DYLD_*`, `NODE_OPTIONS`, `NODE_PATH`, `PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONHOME`,
 `PERL5OPT`, `PERL5LIB`, `RUBYOPT`, `RUBYLIB`, `BASH_ENV`, `ENV`, `ZDOTDIR`, `PROMPT_COMMAND`,
 `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_EXEC_PATH`, `GIT_CONFIG_*`, `SSH_ASKPASS`,
@@ -307,7 +315,7 @@ has; the risk is damage and code running on this computer.
 | A stranger, or a former own device, syncs                           | PR 1: Noise XX, the own-vault proof, both in each other's registry; a removed device stays a tombstone                            |
 | A different vault gets merged                                       | proof, then the copy must open with this secret and have this root                                                                |
 | A copy built to exhaust memory or CPU                               | 256 MiB, KDF bounds, no compression, XML depth and size scanned before parsing, item limits, history cap                          |
-| Mass deletion                                                       | more than 5 a day from one device need a yes on each device; a kept backup before a day's first deletions                         |
+| Mass deletion                                                       | more than 5 a day from all other devices need a yes on each device; a kept backup before each sync's deletions                    |
 | Values overwritten or emptied                                       | the previous version stays in each entry's history; backup before the save; step 2 adds undo                                      |
 | Code run through a variable (`NODE_OPTIONS`, `LD_PRELOAD`, `PATH`…) | risky variables need the review and the system dialog                                                                             |
 | Code run through a host directive                                   | PR 1's risky directives, unchanged                                                                                                |
@@ -345,55 +353,44 @@ keys, devices and projects still sync. Checked at each sync (the vault may move)
 
 ## UI
 
-`design:design-system` runs before building, `design:ux-copy` for the strings in en, ru and
-uz, `design:accessibility-review` and `design:design-critique` on the result.
+Built with `design:design-system` (the review and summary extend the dialog's existing
+cards, `ChoiceCards`, `Badge` and `Checkbox`, semantic tokens only), `design:ux-copy` for
+every string in en, ru and uz, then `design:accessibility-review` and
+`design:design-critique` on the result (`?nearby=sync` and `?nearby=cloud` in the
+browser preview).
 
-**Sync dialog** (`SyncDialog.tsx`), description line now:
-- en: "Hosts, server keys and the vault go both ways. Sign-in keys stay where they are."
-- ru: "Хосты, ключи серверов и хранилище идут в обе стороны. Ключи для входа остаются на месте."
+**Sync dialog** (`SyncDialog.tsx`), description: "Hosts, server keys and the vault go both
+ways. Sign-in keys stay where they are."
 
-**Review** (`Decide`), one list in sections, each only when it has something:
-- _Changed on both computers_ — hosts (as now), then Passwords, Environments, Shared values,
-  Folders. A row: the item's name (an environment as `Shop · backend · prod`), what happened
-  ("Changed here and on {{peer}}" / "Deleted on {{peer}}, changed here" / "Deleted here,
-  changed on {{peer}}"), the fields that differ ("Differs: Password, URL"), "Show values"
-  (one field at a time, a secret masked until shown; read from the copy in memory), and
-  the existing "Keep this computer's" / "Take {{peer}}'s". Under the section:
-  - en: "The version you don't keep stays among the entry's earlier versions."
-  - ru: "Версия, которую вы не оставите, сохранится среди прежних версий записи."
-- _Runs a program or opens access_ — host directives (as now) and variables:
-  - en: "{{name}} makes programs load code" / ru: "{{name}} заставляет программы загружать код";
-    buttons "Add" / "Don't add" as now.
-- _Deletions_ — one checkbox for all, with the list grouped by kind:
-  - en: "{{peer}} deleted {{count}} items" + "Delete them here too"; items from the
-    recycle bin marked "from the recycle bin";
-  - ru: "{{peer}} удалил {{count}} записей" + "Удалить и здесь".
+**Review** (`Decide`), sections only when they have something:
 
-**Summary** (`Synced`), one line per kind that changed, as now for hosts:
-"Passwords: 3 added, 2 changed, 1 deleted" / "Пароли: добавлено 3, изменено 2, удалена 1";
-the same for Environments, Shared values, Folders, Contacts, Hosts, Server keys; then what
-waits (here, on the other device, conflicts left). When passwords didn't go:
-- cloud — en: "Passwords weren't synced: the vault on {{peer}} is in {{service}}, which
-  keeps it in step. Open the same file on this computer instead."
-  ru: "Пароли не синхронизировались: хранилище на {{peer}} лежит в {{service}}, и оно
-  само его синхронизирует. Откройте этот же файл на этом компьютере."
-  (or "the vault on this computer is in {{service}}" when it is this side's);
-- older version — en: "Passwords weren't synced: {{peer}} needs the new version of the app."
-  ru: "Пароли не синхронизировались: на {{peer}} нужна новая версия приложения."
+- _Changed on both computers_ — hosts as before, then the vault's items: a kind icon (with
+  the kind for screen readers), the item's name (an environment as `Shop · backend ·
+  prod`), what happened ("Changed here and on {{peer}}" / "Deleted here, changed on
+  {{peer}}" / "Changed here, deleted on {{peer}}"), "Differs:" and the fields' names as
+  badges, "Show values" (a text field's two values, one field at a time, when asked;
+  only for an item both changed, at most 200 in a sync, never a 2FA secret; a secret
+  one counts with the app's free reveals and past them is asked for in a system dialog;
+  focus stays on the field's row) and "Keep this computer's" / "Take
+  {{peer}}'s". Under them: "The version you don't keep stays among the entry's earlier
+  versions."
+- _Runs a program or opens access_ — host directives as before, and an environment's
+  variables that "Make programs load code", with "Add" / "Don't add".
+- _Deletions_ — "Deleted on {{peer}}: {{count}}", the names by kind (hosts, then the
+  vault's), "(from the recycle bin)" where so, and one "Delete them here too".
 
-**My devices** (`MyDevices.tsx`): when this vault is in a cloud folder, one line under the
-section — en: "Your vault is in {{service}}, so it syncs through it. Here, only hosts and
-server keys sync." / ru: "Хранилище лежит в {{service}} и синхронизируется через него.
-Здесь синхронизируются только хосты и ключи серверов."
+**Summary** (`Synced`): hosts and server keys on one line, then one line per kind of the
+vault's items ("Passwords: 3 added, 1 changed, 2 deleted"), then what waits ("N items
+changed on both computers wait for your choice"). When the vault didn't sync, an info
+notice: "The vault wasn't synced: on {{peer}} it's in {{service}}, which keeps it in
+step. Open the same file on this computer." (or the same for this computer), or
+"{{peer}} needs the new version of the app".
 
-Localization notes: counts use the existing plural keys (`_one/_few/_many/_other` in ru);
-`{{service}}` is a product name, not translated; "earlier versions" matches
-`history_*` ("прежние версии", "oldingi versiyalar"). Uzbek strings are written with the
-same pass.
+**My devices** (`MyDevices.tsx`): when the vault is in a cloud folder, "Your vault is in
+{{service}}, so it syncs through it. Here, only hosts and server keys sync."
 
-New command: `nearby_sync_value(id, item, field, side) -> SecretString`, registered in
-`build.rs` and `lib.rs`, mocked in `src/mocks/nearby.ts` (a `?nearby=sync` review gets a
-vault conflict, a risky variable and seven deletions).
+Commands: `nearby_sync_value(id, item, field, theirs)` and `nearby_vault_cloud()`,
+registered in `build.rs` and `lib.rs`, mocked in `src/mocks/nearby.ts`.
 
 ## One-time import from another vault
 

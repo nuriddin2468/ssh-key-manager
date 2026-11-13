@@ -61,8 +61,8 @@ impl Localized {
 }
 
 /// `text` from outside the app (a path, a name a file or another program
-/// chose) as a dialog shows it: control characters and invisible or
-/// direction-changing ones as `<U+…>`, so it can neither add lines of its
+/// chose) as a dialog shows it: control characters and invisible,
+/// direction-changing or line-breaking ones ([`invisible`]) as `<U+…>`, so it can neither add lines of its
 /// own nor read differently from what is used, and at most `max` characters,
 /// with how many more there are.
 pub fn shown(text: &str, max: usize) -> String {
@@ -73,23 +73,42 @@ pub fn shown(text: &str, max: usize) -> String {
             let _ = write!(out, "… (+{rest})");
             break;
         }
-        let invisible = matches!(
-            c,
-            '\u{00AD}'
-                | '\u{061C}'
-                | '\u{180E}'
-                | '\u{200B}'..='\u{200F}'
-                | '\u{202A}'..='\u{202E}'
-                | '\u{2060}'..='\u{2069}'
-                | '\u{FEFF}'
-        );
-        if c.is_control() || invisible {
+        if c.is_control() || invisible(c) {
             let _ = write!(out, "<U+{:04X}>", u32::from(c));
         } else {
             out.push(c);
         }
     }
     out
+}
+
+/// Whether `c` is drawn as nothing, or as something else than a character:
+/// Unicode's format characters (invisible, direction-changing, tags) and
+/// the line and paragraph separators, which dialogs draw as line breaks.
+pub fn invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{0600}'..='\u{0605}'
+            | '\u{061C}'
+            | '\u{06DD}'
+            | '\u{070F}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08E2}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{2028}'..='\u{202E}'
+            | '\u{2060}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{110BD}'
+            | '\u{110CD}'
+            | '\u{13430}'..='\u{1343F}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0001}'
+            | '\u{E0020}'..='\u{E007F}'
+    )
 }
 
 /// Follows the interface's language (`en`, `ru` or `uz`; anything else is
@@ -375,6 +394,12 @@ mod tests {
             "/Users/me/Docs<U+202E>txt.kdbx<U+000A>Cancel"
         );
         assert_eq!(shown("a\u{200B}b\u{FEFF}", 100), "a<U+200B>b<U+FEFF>");
+        // Line and paragraph separators, and tags, are drawn as nothing or
+        // as a line break.
+        assert_eq!(
+            shown("a\u{2028}b\u{2029}c\u{E0041}", 100),
+            "a<U+2028>b<U+2029>c<U+E0041>"
+        );
         assert_eq!(shown("Профиль 1", 100), "Профиль 1");
         assert_eq!(shown("abcdef", 3), "abc… (+3)");
     }

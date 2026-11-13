@@ -80,6 +80,10 @@ pub struct VaultChange {
     pub from_bin: bool,
     /// Variables it adds or changes that make programs load code.
     pub risky: Vec<String>,
+    /// The other side's version of the item, as a hash of its fields'
+    /// keyed hashes (empty for a deletion): a change the user turned down
+    /// isn't asked about again until this changes.
+    pub version: String,
     /// The other side's version is taken whole.
     #[serde(skip)]
     pub(super) whole: bool,
@@ -275,6 +279,7 @@ impl VaultPlan {
         refs: &References,
     ) {
         let kind = m.or(t).map_or(ItemKind::Login, |item| item.kind);
+        let version = t.map(|t| version_of(&id, &t.hashes)).unwrap_or_default();
         let change = |op, fields: Vec<String>| VaultChange {
             id: id.clone(),
             kind,
@@ -284,6 +289,7 @@ impl VaultPlan {
             removal: false,
             from_bin: false,
             risky: Vec::new(),
+            version: version.clone(),
             whole: true,
         };
         match (outcome, m, t) {
@@ -387,6 +393,12 @@ fn removed(db: &Database, uuid: Uuid) -> Option<NaiveDateTime> {
         Some(when) => (when >= oldest).then_some(when),
         None => Some(Times::epoch()),
     }
+}
+
+/// A version's hash: of its id and its fields' keyed hashes.
+fn version_of(id: &str, hashes: &Hashes) -> String {
+    let one = BTreeMap::from([(id.to_owned(), hashes.clone())]);
+    super::digests(&one).remove(id).unwrap_or_default()
 }
 
 /// The fields two versions of an item don't have alike, but the kind.

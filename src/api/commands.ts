@@ -15,6 +15,7 @@ import type { BrowserProfile } from '@/bindings/BrowserProfile';
 import type { BrowserStatus } from '@/bindings/BrowserStatus';
 import type { ChatEntry } from '@/bindings/ChatEntry';
 import type { ChatList } from '@/bindings/ChatList';
+import type { CloudService } from '@/bindings/CloudService';
 import type { ConfigFile } from '@/bindings/ConfigFile';
 import type { ConnectionEvent } from '@/bindings/ConnectionEvent';
 import type { ConnectionTest } from '@/bindings/ConnectionTest';
@@ -410,6 +411,11 @@ export const api = {
   /** The user's decisions on what a sync brings. */
   nearbyDecide: (id: number, decisions: SyncDecisions) =>
     call<void>('nearby_decide', { id, decisions }),
+  /** One text field of a conflict in the sync under review, as this computer or the other one has it. */
+  nearbySyncValue: (id: number, item: string, field: string, theirs: boolean) =>
+    call<string>('nearby_sync_value', { id, item, field, theirs }),
+  /** The cloud service whose folder holds the vault, if one does: its entries then sync through it. */
+  nearbyVaultCloud: () => call<CloudService | null>('nearby_vault_cloud'),
 
   /** Nearby is open or not: while it is, with the vault unlocked, this computer is online for chats. */
   chatSetOpen: (open: boolean) => call<void>('chat_set_open', { open }),

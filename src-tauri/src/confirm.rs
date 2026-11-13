@@ -203,8 +203,10 @@ fn show(app: &AppHandle, title: &str, body: &str, approve: &str, cancel: &str) -
 /// safe answer is no. Blocks like [`require`].
 ///
 /// The dialog plugin reports Escape as the second button, so this one is
-/// drawn with `rfd` itself, which tells Escape apart: `keep` first, so it is
-/// the default, and anything but a click on `act` is no.
+/// drawn with `rfd` itself: `keep` first, so it is the default, and anything
+/// but a click on `act` is no. Where `rfd` names the buttons it reports
+/// (macOS, Windows, and on Linux only its blocking dialog: the other one
+/// reports a click on `act` and Escape alike), Escape is told apart.
 pub fn ask_default_no(
     app: &AppHandle,
     title: &Localized,
@@ -243,6 +245,36 @@ fn chose(result: &rfd::MessageDialogResult, act: &str) -> bool {
 
 /// Shows one [`ask_default_no`] dialog and waits for it to close: whether
 /// the user chose `act`, and how long the dialog had been open by then.
+///
+/// Linux: `rfd`'s blocking dialog, on its own GTK thread, as the plugin's
+/// dialogs are. Its asynchronous one reports both a click on the second
+/// button and Escape as `Cancel`, so "Fill in" could never be told apart.
+#[cfg(target_os = "linux")]
+fn show_default_no(
+    _app: &AppHandle,
+    title: &str,
+    body: &str,
+    act: &str,
+    keep: &str,
+) -> (bool, Duration) {
+    let opened = Instant::now();
+    let result = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title(title)
+        .set_description(body)
+        .set_buttons(default_no_buttons(act, keep))
+        .show();
+    (chose(&result, act), opened.elapsed())
+}
+
+/// Shows one [`ask_default_no`] dialog and waits for it to close: whether
+/// the user chose `act`, and how long the dialog had been open by then.
+///
+/// macOS and Windows: made on the main thread as the dialog plugin does,
+/// awaited elsewhere. It belongs to the main window only while that window
+/// is shown: a sheet on a window hidden in the tray would never be seen,
+/// and `ssh` would wait on it.
+#[cfg(not(target_os = "linux"))]
 fn show_default_no(
     app: &AppHandle,
     title: &str,
@@ -255,9 +287,10 @@ fn show_default_no(
         .set_title(title)
         .set_description(body)
         .set_buttons(default_no_buttons(act, keep));
-    let window = app.get_webview_window("main");
+    let window = app
+        .get_webview_window("main")
+        .filter(|window| window.is_visible().unwrap_or(false));
     let (send_answer, answer) = mpsc::channel();
-    // As the dialog plugin does: made on the main thread, awaited elsewhere.
     let shown = app.run_on_main_thread(move || {
         let dialog = match &window {
             Some(window) => dialog.set_parent(window),

@@ -57,7 +57,8 @@ sshkm-os = { path = "../crates/sshkm-os" }
 # The quick search window's system-wide shortcut.
 tauri-plugin-global-shortcut = "2"
 # A native question whose default and Escape mean no (confirm.rs): the dialog
-# plugin's own `rfd`, which tells Escape apart from the second button. Its
+# plugin's own `rfd`, whose dialogs name the button chosen (on Linux only its
+# blocking one), where the plugin reports Escape as the second button. Its
 # features come from the plugin, so this adds no crate to the build.
 rfd = { version = "0.17", default-features = false }
 # "Open at login" (src/autostart.rs): a launch agent on macOS, the Run key on

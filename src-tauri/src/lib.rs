@@ -19,6 +19,7 @@ mod menu;
 pub mod nearby;
 mod process;
 pub mod quick;
+mod secret_gate;
 mod state;
 pub mod terminal;
 mod tray;
@@ -136,6 +137,7 @@ pub fn run() {
             commands::ssh_tools::tunnel_stop_all,
             commands::ssh_tools::tunnel_export,
             commands::ssh_tools::set_proxy_jump,
+            commands::ssh_tools::key_convert_pick,
             commands::ssh_tools::key_convert_inspect,
             commands::ssh_tools::key_convert_import,
             commands::ssh_tools::key_convert_save,
@@ -244,6 +246,8 @@ pub fn run() {
             commands::vault_files::vault_export_csv,
             commands::vault_files::vault_export_kdbx,
             commands::vault_files::vault_location,
+            commands::vault_files::vault_pick_folder,
+            commands::vault_files::vault_pick_file,
             commands::vault_files::vault_move,
             commands::vault_files::vault_use_file,
             commands::vault_files::vault_use_default,
@@ -300,6 +304,7 @@ pub fn run() {
             commands::projects::projects_suggest_in_folder,
             commands::projects::projects_open_terminal,
             commands::projects::projects_reveal_folder,
+            commands::reveal::reveal_place,
             commands::projects::projects_missing_folders,
             commands::projects::projects_places,
             commands::projects::projects_set_part_folder,

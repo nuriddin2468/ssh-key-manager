@@ -353,6 +353,9 @@ export const vaultFilesHandlers: Record<string, Handler> = {
     return { path: `${DEV_DOCUMENTS}/vault.kdbx`, count };
   },
   vault_location: location,
+  // The backend's file dialogs: a cloud folder, and a KeePass file in iCloud Drive.
+  vault_pick_folder: () => '/Users/dev/Library/CloudStorage/Dropbox',
+  vault_pick_file: () => '/Users/dev/Library/Mobile Documents/com~apple~CloudDocs/vault.kdbx',
   vault_move: async ({ folder }) => {
     const before = await location();
     const name = before.paths.database.split('/').pop() ?? 'vault.kdbx';

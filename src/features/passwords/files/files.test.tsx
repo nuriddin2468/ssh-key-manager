@@ -686,11 +686,8 @@ describe('OpenExistingVaultButton', () => {
 
     await user.click(screen.getByRole('button', { name: 'Open an existing vault…' }));
     await waitFor(() => expect(onOpened).toHaveBeenCalledWith(location(file)));
-    expect(pickers.pickFile).toHaveBeenCalledWith(
-      'Choose a vault file',
-      { name: 'KeePass databases', extensions: ['kdbx'] },
-      expect.any(String),
-    );
+    // The backend opens the dialog; the page names no title, filter or folder.
+    expect(pickers.pickFile).toHaveBeenCalledWith();
   });
 
   it('does nothing when the file dialog is cancelled', async () => {

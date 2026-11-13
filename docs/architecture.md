@@ -310,7 +310,11 @@ translates.
   lets it run (`sshkm_os::login_item`).
 - **Permissions.** `build.rs` lists every command, so each gets a Tauri permission and a
   window calls only what its capability names: the main window all, the unlock window
-  three, the quick search window seven.
+  three, the quick search window seven. Of Tauri's own and the plugins' commands the main
+  window gets only what its page uses (listening to events, dragging and maximising the
+  window, opening http(s) links, writing the clipboard), not `core:default`; files are
+  picked in dialogs and shown in the file manager by app commands
+  (`commands/reveal.rs`), which find the path themselves.
 
 ## UI
 
@@ -322,6 +326,10 @@ translates.
 - The Terminal's sessions and their xterm.js instances live in a provider above the pages,
   so they keep running and keep their scrollback while other sections show. xterm uses
   its DOM renderer on Linux (WebKitGTK often renders on the CPU) and WebGL elsewhere.
+  Links open on ⌘-click (Ctrl-click) and show their target while pointed at; pasted
+  text loses its control characters before it reaches xterm (`features/terminal/screen.ts`).
+- Nothing in the page parses text as HTML; a test (`src/test/textOnly.test.ts`) refuses
+  HTML sinks in the app and the extension.
 - i18next with English, Russian and Uzbek. A test keeps the translations' keys and
   placeholders in sync.
 - The command palette (⌘K / Ctrl+K, `src/features/palette/`) searches hosts, keys,

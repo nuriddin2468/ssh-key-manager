@@ -325,8 +325,9 @@ fn risky<'a>(theirs: &Item, fields: impl Iterator<Item = &'a String>) -> Vec<Str
     let mut names: Vec<String> = fields
         .filter(|field| theirs.hashes.contains_key(*field))
         .filter_map(|field| field.strip_prefix("s:"))
+        .map(|name| name.strip_prefix("env.").unwrap_or(name))
         .filter(|name| risky_variable(name))
-        .map(|name| name.strip_prefix("env.").unwrap_or(name).to_owned())
+        .map(str::to_owned)
         .collect();
     names.sort();
     names.dedup();

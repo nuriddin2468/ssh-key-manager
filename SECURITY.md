@@ -54,9 +54,10 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     reaches the interface only when you choose to reveal it. A 2FA secret never does:
     only the current code, computed in the Rust process. Ten secrets (shown, or
     copied from the main window: passwords, secret variables, the vault's side of an
-    import's comparison) go without asking in a row, then one more every six minutes,
-    about ten an hour; each one past that is asked for in a system dialog that names
-    it, so the page can't read the vault out one secret after another.
+    import's comparison, a secret field of a sync's conflict) go without asking in a
+    row, then one more every six minutes, about ten an hour; each one past that is
+    asked for in a system dialog that names it, so the page can't read the vault out
+    one secret after another.
   - Copying a password, a 2FA code or the recovery key goes from Rust straight to the
     clipboard, marked so clipboard history (and Windows' cloud clipboard) skip it, and
     is cleared after 30 seconds by default if nothing else was copied. Locking the vault
@@ -1133,7 +1134,8 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   neither does the removed computer asking to be added; only adding it again from a
   computer that still is one of the user's devices does. Record times are checked as RFC 3339 UTC, and
   a record dated more than five minutes ahead of this computer's clock is not taken.
-  The "own device"
+  A device a sync makes one of the user's is named in that sync's summary, and My
+  devices says which device the sync was with. The "own device"
   part of a conversation goes only to a peer whose `Hello` says it knows about own
   devices; older versions see nothing new.
 - **Same vault, without telling it.** In its `Hello` each side sends an HMAC-SHA256
@@ -1159,7 +1161,10 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   conversation stops before the code. If the other computer has no vault yet (it
   waits for one, `join=1` in its announcement, and takes nothing but being added),
   it gets the vault file in parts (its size and SHA-256 first, at most 256 MiB) and
-  then the vault secret. It checks that the secret opens the file, keeps both in
+  then the vault secret. The file is written for it without compression, and it reads it
+  only within bounds, as a sync copy (below): KDBX 4 not compressed, its XML checked for
+  depth and size before it is parsed; a compressed file, from an older version, is
+  refused with "update the app". It checks that the secret opens the file, keeps both in
   memory only, and writes the file once its user has set a master password of its
   own. Someone else on the network who answers in place of that computer shows a
   code the user never sees on their own screen, and the real computer shows none.
@@ -1187,14 +1192,24 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   before `Host *`. What changed is told by a snapshot of each other device's last
   sync, kept as HMACs (keyed with a key derived from the device key) of each field,
   never the values. A change that would add a directive on the list under "Standard
-  files only" above and more than five deletions at once are never made unasked: the
-  user of the computer that started the sync decides there, and the other computer
-  puts them off until its own user syncs from it. A change that adds such a directive,
-  a conflict settled for the other computer's version included, is written only after
+  files only" above is never made unasked, and neither are deletions past five a day
+  from the user's other devices, all of them together: those this computer made
+  without asking in the last 24 hours count with a sync's own, so the limit holds over
+  time, not per sync, and a device gets no more by syncing under other device keys or
+  through another device. They are kept in a small file for this computer, written
+  before the sync changes anything, so a sync that ends early counts too; a file that
+  can't be read counts as at the limit, and is written so for a day. On the computer
+  that didn't start the sync, the deletions the other user's choices on conflicts
+  would make (moves to the recycle bin included) count as well. The user of the
+  computer that started the sync decides there, and the other computer puts them off
+  until its own user syncs from it. A change that adds such a directive, a conflict
+  settled for the other computer's version included, is written only after
   that user allows it in a system dialog that lists the hosts and directives; on a no
   it waits for the next sync. A change turned down is not asked about again until it
   changes. A conflict is the user's choice too. Both files are backed up before a sync
-  writes them, and a file changed meanwhile is not written.
+  writes them, and a file changed meanwhile is not written. Before each sync that
+  makes such deletions, the file is also kept as it was in a backup the rotation of
+  the last 20 never removes: the first of each day for 30 days, and the 16 newest.
 - **Chats.** Contacts and the user's own devices can chat: texts, secrets that
   expire, variables and the items above as cards ([design](docs/p2p-chat.md)).
   - _Only while both are online._ A computer is online while its vault is unlocked
@@ -1265,6 +1280,59 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   `GlobalKnownHostsFile` names) counts too: nothing is written next to it. For a
   host it trusts another key of the same type for, it keeps its own and shows both
   fingerprints: one of the two may have met a server pretending.
+- **Syncing the vault.** When both computers sync the vault's entries and neither keeps
+  its vault in a cloud folder (which keeps the file in step itself), each sends the
+  other a copy of its database as bytes over the session: a KDBX file encrypted with the
+  vault's secret, without the database's custom data (paired browsers, the key own
+  devices share, the key of `.env` revisions, the chat's key, other programs'
+  settings) and without entries or groups marked `sshkm.local`. The receiver opens it
+  only with its own secret and only if its root is this vault's: two vaults are never
+  merged. The copy is written without compression, and the receiver refuses one that
+  is compressed, decrypts it itself and checks it before the KeePass library parses
+  anything: an outer header of at most 64 KiB, key derivation parameters each of its
+  own type and within bounds as used, at most 65,536 attachments, its XML at most 96
+  levels and 8,388,608 elements, no document type, no attachment stored compressed,
+  and a list of local items no longer than any copy needs. So reading a copy never
+  inflates, allocates or recurses beyond bounds. It refuses a copy over 256 MiB, with key derivation settings
+  out of bounds, more than 65,536 entries, 8,192 groups, 64 levels or 262,144 removal
+  records, or an entry with a group's id; leaves out an id that is an entry on one side
+  and a group on the other; takes at most 64 earlier versions of an entry; counts a time
+  more than five minutes ahead of its clock as now; and never reads the copy's custom
+  data. Changes are found against a snapshot of keyed HMACs per field, never
+  values, as for hosts. An entry or group only one side changed takes that side's
+  fields; one both changed differently, or one deleted and the other changed, is the
+  user's choice, which shows the names of the fields that differ. A text field's two
+  values come only when the user asks, only for an item both computers changed while
+  its review is open, at most 200 in a sync, and never a 2FA secret (`otp`,
+  `TOTP Seed`, `TimeOtp-Secret-…`, `HmacOtp-Secret-…`). A secret one (a password, or a
+  field protected on either computer) counts with the ten secrets in a row above, and
+  past them is asked for in a system dialog. The other computer's copy is
+  kept in memory only during the sync, and goes when the vault locks. The version not kept stays among
+  the entry's earlier versions on both computers, whatever the history limit. A shared
+  value goes only after the environments here
+  that still use it got their own copies, and references still resolve only to shared
+  values. Adding or changing a variable that makes programs load code (`LD_*`,
+  `DYLD_*`, `NODE_OPTIONS`, `PATH`, `BASH_ENV`, `GIT_SSH_COMMAND`, …), or the value of a
+  shared value such a variable uses, is a risky change: the user who started the sync
+  decides on it and allows it in a system dialog that lists each variable with the
+  value it would take, in full up to a thousand characters (past that its start and its
+  end), runs of spaces as one, and invisible, direction-changing or line-breaking
+  characters escaped; the other computer puts it off. Deletions and moves to the
+  recycle bin count with hosts' toward the same limit of five a day, and the vault
+  is kept as it was before each sync that makes them, as the config is. The other
+  device's records (devices, projects, contacts) are saved as one change, then its
+  entries and groups are applied in memory as another and saved once, each after a
+  backup of the file, a conflict settled for this computer's version included; an
+  entry the user changed while deciding is left for the next sync. A binding of a
+  `.env` file comes with its environment's kind and level as one value, so a sync
+  never lowers its protection: a level-3 file on a system without pipes, or a level-1
+  file of a remote environment, is never written. What a computer keeps to itself
+  (`sshkm.local`) goes in its copy as UUIDs only, without the custom icons only it
+  uses, so the other side never takes it for deleted; one a copy carries all the same
+  is left out. Here it blocks the deletion of its group and of a shared value it uses.
+  After a merge, removal records stay within what a copy may carry, and entries and
+  groups within the limits. Contacts sync as records, the one changed last winning; a
+  removed one stays as a tombstone.
 
 ## Reporting a vulnerability
 

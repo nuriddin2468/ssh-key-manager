@@ -1,0 +1,6 @@
+{
+  "kind": "notice",
+  "en": "Nearby: syncing with your own devices now brings the vault too — passwords, environments, shared values, files and folders — not only hosts. Both computers need this version, also to move the vault to a new one. A vault in a cloud folder (iCloud Drive, Dropbox…) keeps syncing through it instead.",
+  "ru": "«Рядом»: синхронизация со своими устройствами теперь переносит и хранилище — пароли, окружения, общие значения, файлы и папки, а не только хосты. Нужна эта версия на обоих компьютерах, и для переноса хранилища на новый тоже. Хранилище в облачной папке (iCloud Drive, Dropbox…) по-прежнему синхронизируется через неё.",
+  "uz": "«Yaqin atrofda»: oʻz qurilmalaringiz bilan sinxronlash endi faqat xostlarni emas, omborni ham — parollar, muhitlar, umumiy qiymatlar, fayllar va papkalarni oʻtkazadi. Ikkala kompyuterda shu versiya kerak, omborni yangisiga koʻchirish uchun ham. Bulutli papkadagi ombor (iCloud Drive, Dropbox…) avvalgidek u orqali sinxronlanadi."
+}

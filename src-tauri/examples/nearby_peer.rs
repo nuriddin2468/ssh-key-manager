@@ -35,19 +35,23 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use sshkm_app_lib::nearby::pairing::{
-    PairingFailure, PairingPhase, Purpose, Side, Stored, conversation,
+    PairingFailure, PairingPhase, Purpose, Side, Stored, VaultItems, conversation,
 };
 use sshkm_app_lib::nearby::sync::{SyncLocal, SyncState, SyncWrite};
-use sshkm_app_lib::nearby::{BASE_LABEL, OWN_SERVICE_TYPE, SERVICE_TYPE};
+use sshkm_app_lib::nearby::{BASE_LABEL, OWN_SERVICE_TYPE, SERVICE_TYPE, VAULT_BASE_LABEL};
 use sshkm_core::config::SshConfig;
 use sshkm_core::known_hosts::KnownHosts;
 use sshkm_core::p2p::own::window;
 use sshkm_core::p2p::protocol::{
-    HostKey, HostsEntry, Intent, Item, ItemSummary, SecretText, VaultState,
+    EntrySync, HostKey, HostsEntry, Intent, Item, ItemSummary, SecretText, VaultState,
 };
 use sshkm_core::p2p::{self, Identity, PeerKey};
 use sshkm_core::sync::Hasher;
-use sshkm_core::vault::{Vault, VaultPaths, check_shared};
+use sshkm_core::vault::sync::{
+    ENTRY_SYNC_VERSION, Pairs, PeerVault, VaultApplied, VaultBase, VaultChoices, VaultPlan,
+    check_moved, digests,
+};
+use sshkm_core::vault::{Vault, VaultPaths};
 use sshkm_core::{ExposeSecret, SecretString};
 use zeroize::Zeroizing;
 
@@ -55,6 +59,8 @@ struct Terminal {
     name: String,
     identity: Identity,
     mode: Mode,
+    /// The other device's copy of the vault during a sync.
+    peer_vault: Mutex<Option<PeerVault>>,
 }
 
 enum Mode {
@@ -268,7 +274,7 @@ impl Side for Terminal {
             return Err(PairingFailure::NotSaved);
         };
         let secret = SecretString::from(secret.expose().to_owned());
-        check_shared(&file, &secret).map_err(|_| PairingFailure::NotSaved)?;
+        check_moved(&file, &secret).map_err(|_| PairingFailure::NotSaved)?;
         print!(
             "The vault came ({} bytes). Master password for this computer: ",
             file.len()
@@ -317,6 +323,9 @@ impl Side for Terminal {
             projects: self
                 .with_vault(|vault| vault.project_records())
                 .unwrap_or_default(),
+            contacts: self
+                .with_vault(|vault| vault.contact_records())
+                .unwrap_or_default(),
             state: std::fs::read(state_file)
                 .ok()
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok())
@@ -341,7 +350,8 @@ impl Side for Terminal {
         self.with_vault(|vault| {
             let devices = vault.merge_own_devices(&write.devices).unwrap_or(false);
             let projects = vault.merge_projects(&write.projects).unwrap_or(false);
-            if devices || projects {
+            let contacts = vault.merge_contacts(&write.contacts).unwrap_or(false);
+            if devices || projects || contacts {
                 let _ = vault.save(&backups);
             }
         });
@@ -357,9 +367,81 @@ impl Side for Terminal {
         let json = serde_json::to_vec_pretty(state).map_err(|_| PairingFailure::NotSaved)?;
         std::fs::write(file, json).map_err(|_| PairingFailure::NotSaved)
     }
+
+    fn entry_sync(&self) -> Option<EntrySync> {
+        self.with_vault(|_| EntrySync::On {
+            version: ENTRY_SYNC_VERSION,
+        })
+    }
+
+    fn vault_copy(&self) -> Result<Zeroizing<Vec<u8>>, PairingFailure> {
+        self.with_vault(|vault| vault.sync_copy())
+            .ok_or(PairingFailure::NotOwn)?
+            .map_err(|_| PairingFailure::NotSaved)
+    }
+
+    fn vault_plan(&self, copy: &[u8], base: &VaultBase) -> Result<VaultPlan, PairingFailure> {
+        let hasher = self.vault_hasher();
+        let (plan, peer) = self
+            .with_vault(|vault| {
+                let peer = vault.open_sync_copy(copy).ok()?;
+                Some((vault.plan_sync(&peer, base, &hasher), peer))
+            })
+            .flatten()
+            .ok_or(PairingFailure::Broken)?;
+        println!(
+            "Vault: {} changes, {} conflicts.",
+            plan.changes.len(),
+            plan.conflicts.len()
+        );
+        *self.peer_vault.lock().unwrap() = Some(peer);
+        Ok(plan)
+    }
+
+    fn vault_apply(
+        &self,
+        plan: &VaultPlan,
+        choices: &VaultChoices,
+    ) -> Result<VaultApplied, PairingFailure> {
+        let peer = self
+            .peer_vault
+            .lock()
+            .unwrap()
+            .take()
+            .ok_or(PairingFailure::Broken)?;
+        let backups = self.dir().ok_or(PairingFailure::NotOwn)?.join("backups");
+        let hasher = self.vault_hasher();
+        let applied = self
+            .with_vault(|vault| {
+                let applied = vault.apply_sync(&peer, plan, &hasher, choices).ok()?;
+                vault.save(&backups).ok()?;
+                Some(applied)
+            })
+            .flatten()
+            .ok_or(PairingFailure::NotSaved)?;
+        println!("Vault: {:?}", applied.counts);
+        Ok(applied)
+    }
+
+    fn vault_items(&self, pairs: &Pairs) -> Result<VaultItems, PairingFailure> {
+        let hasher = self.vault_hasher();
+        self.with_vault(|vault| {
+            let shared = Hasher::new(vault.own_key()?.digest_key());
+            Some(VaultItems {
+                snapshots: vault.sync_items(pairs, &hasher),
+                digests: digests(&vault.sync_items(pairs, &shared)),
+            })
+        })
+        .flatten()
+        .ok_or(PairingFailure::NotOwn)
+    }
 }
 
 impl Terminal {
+    fn vault_hasher(&self) -> Hasher {
+        Hasher::new(self.identity.derive_key(VAULT_BASE_LABEL))
+    }
+
     fn files(&self) -> Option<(PathBuf, PathBuf)> {
         let ssh = self.dir()?.join("ssh");
         Some((ssh.join("config"), ssh.join("known_hosts")))
@@ -583,6 +665,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         name: name.clone(),
         identity,
         mode,
+        peer_vault: Mutex::new(None),
     };
 
     let end = if let Some(kind) = send {

@@ -45,6 +45,7 @@ pub use self::files::{EnvFile, EnvKind, FileLevel};
 pub use self::format::{EnvFormat, render};
 pub(crate) use self::shared::is_shared;
 pub use self::shared::{SharedUse, SharedValue};
+pub(in crate::vault) use self::shared::{referenced, shared_references};
 pub use self::startup::runs_code;
 use super::export::{checked_target, write_private};
 use super::{Vault, check_field, duplicate, in_group, parse_id, rfc3339};
@@ -61,7 +62,7 @@ const MAX_NAME: usize = 255;
 /// The group under the root that holds the environments.
 pub const GROUP: &str = "Environments";
 /// Custom data that marks an entry as an environment.
-const MARKER: &str = "sshkm.env";
+pub(super) const MARKER: &str = "sshkm.env";
 /// Custom data with an environment's part of its project; without it, the
 /// part is its KeePass group's name.
 pub const PART: &str = "sshkm.env.part";
@@ -462,7 +463,7 @@ fn check_variables(vars: &[EnvVariable]) -> Result<()> {
 fn check_no_references(vars: &[EnvVariable]) -> Result<()> {
     match vars
         .iter()
-        .find(|var| shared::referenced(var.value.expose_secret()).is_some())
+        .find(|var| referenced(var.value.expose_secret()).is_some())
     {
         Some(var) => Err(Error::invalid(format!(
             "{} refers to a vault entry, which only the vault sets",
@@ -1275,40 +1276,45 @@ impl Vault {
     /// KeePass does on saving: an editor saving a managed file often would
     /// otherwise add a full copy each time.
     pub(super) fn settle_history(&mut self, entry_id: keepass::db::EntryId, added: bool) {
-        let max = match self.db.meta.history_max_items {
-            None => Some(10),
-            Some(max) if max < 0 => None,
-            Some(max) => Some(usize::try_from(max).unwrap_or(usize::MAX)),
-        };
-        let Some(mut entry) = self.db.entry_mut(entry_id) else {
-            return;
-        };
-        let Some(before) = entry.history.as_ref().map(|h| h.get_entries().clone()) else {
-            return;
-        };
-        let mut versions = before.clone();
-        if added && !versions.is_empty() {
-            let kept = versions.remove(0);
-            versions.push(kept);
-        }
-        // Stable: of two made the same second, the later in place stays
-        // later.
-        versions.sort_by_key(|version| version.times.last_modification);
-        if let Some(max) = max
-            && versions.len() > max
-        {
-            versions.drain(..versions.len() - max);
-        }
-        if versions == before {
-            return;
-        }
-        let mut settled = keepass::db::History::default();
-        // Each one added goes in front.
-        for version in versions.into_iter().rev() {
-            settled.add_entry(version);
-        }
-        entry.history = Some(settled);
+        settle_versions(&mut self.db, entry_id, added);
     }
+}
+
+/// [`Vault::settle_history`] on a database.
+pub(super) fn settle_versions(db: &mut Database, entry_id: keepass::db::EntryId, added: bool) {
+    let max = match db.meta.history_max_items {
+        None => Some(10),
+        Some(max) if max < 0 => None,
+        Some(max) => Some(usize::try_from(max).unwrap_or(usize::MAX)),
+    };
+    let Some(mut entry) = db.entry_mut(entry_id) else {
+        return;
+    };
+    let Some(before) = entry.history.as_ref().map(|h| h.get_entries().clone()) else {
+        return;
+    };
+    let mut versions = before.clone();
+    if added && !versions.is_empty() {
+        let kept = versions.remove(0);
+        versions.push(kept);
+    }
+    // Stable: of two made the same second, the later in place stays
+    // later.
+    versions.sort_by_key(|version| version.times.last_modification);
+    if let Some(max) = max
+        && versions.len() > max
+    {
+        versions.drain(..versions.len() - max);
+    }
+    if versions == before {
+        return;
+    }
+    let mut settled = keepass::db::History::default();
+    // Each one added goes in front.
+    for version in versions.into_iter().rev() {
+        settled.add_entry(version);
+    }
+    entry.history = Some(settled);
 }
 
 /// An entry's earlier versions, newest first by when each was made; of two

@@ -30,13 +30,14 @@ pub mod envs;
 mod export;
 mod generator;
 mod import;
-mod kdf;
+pub(crate) mod kdf;
 mod known;
 mod location;
 mod own_devices;
 pub mod projects;
 mod recovery;
 mod slots;
+pub mod sync;
 #[cfg(test)]
 mod tests;
 
@@ -55,7 +56,7 @@ pub use self::breach::{
     BreachCache, BreachQuery, MAX_RANGE_BYTES, PADDING_HEADER, RANGE_URL, RangePrefix,
 };
 pub use self::browsers::{BrowserKeys, KeysUsed, PairedBrowser};
-pub use self::contacts::Contact;
+pub use self::contacts::{Contact, ContactRecord, MAX_CONTACTS};
 pub use self::generator::{
     GenerateOptions, Generated, SecretPreset, Strength, TokenEncoding, UuidVersion, generate,
     generate_preset, strength,
@@ -64,8 +65,8 @@ pub use self::import::{
     BrowserFamily, BrowserKeyStore, BrowserLogins, BrowserProfile, BrowserReadError, CsvFormat,
     ImportComparison, ImportOutcome, ImportPreview, ImportRow, SafeStorage, browser_profiles,
 };
-pub use self::location::{check_database, copy_files, remove_files};
-pub use self::own_devices::{DeviceRecord, MAX_RECORDS, OwnDevice, check_records};
+pub use self::location::{check_database, cloud_service, copy_files, remove_files};
+pub use self::own_devices::{DeviceRecord, MAX_RECORDS, OwnDevice, check_records, learned_devices};
 use self::slots::KeySlots;
 use crate::{Error, Result, fsutil};
 
@@ -83,6 +84,19 @@ const KEY_FIELD: &str = "sshkm.fingerprint";
 /// like a password, never shown in the app, and visible in KeePassXC's
 /// additional attributes.
 const UNREADABLE_OTP_FIELD: &str = "Unrecognized 2FA secret";
+
+/// Whether a text field holds a 2FA secret, as this app, KeePassXC or
+/// KeePass's plugins write it (`otp`, `TOTP Seed`, `TimeOtp-Secret-…`,
+/// `HmacOtp-Secret-…`), in any letter case (some plugins let the user
+/// rename the field): never shown.
+pub fn is_otp_field(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    [fields::OTP, UNREADABLE_OTP_FIELD, "TOTP Seed"]
+        .iter()
+        .any(|otp| name == otp.to_ascii_lowercase())
+        || name.starts_with("timeotp-secret")
+        || name.starts_with("hmacotp-secret")
+}
 
 /// What Windows Hello signs to unlock the vault `vault_id` on a computer; see
 /// [`bound_device_key`].
@@ -1185,12 +1199,12 @@ fn load_slots(paths: &VaultPaths) -> Result<(KeySlots, [u8; 32])> {
     KeySlots::read(&paths.keys)?.ok_or_else(|| Error::NotFound(paths.keys.display().to_string()))
 }
 
-/// Re-encrypts with `new` the database's backups and conflict copies in
-/// `backup_dir` that `old` opens. A backup that can't be rewritten is
-/// deleted; a conflict copy is kept, since it may hold the only copy of
-/// changes made elsewhere. Files the old secret doesn't open (another
-/// vault's with the same name) stay as they are. Returns how many files were
-/// rewritten or deleted.
+/// Re-encrypts with `new` the database's backups (those a sync kept
+/// included) and conflict copies in `backup_dir` that `old` opens. A
+/// backup that can't be rewritten is deleted; a conflict copy is kept,
+/// since it may hold the only copy of changes made elsewhere. Files the old
+/// secret doesn't open (another vault's with the same name) stay as they
+/// are. Returns how many files were rewritten or deleted.
 fn reencrypt_copies(
     paths: &VaultPaths,
     backup_dir: &Path,
@@ -1208,6 +1222,7 @@ fn reencrypt_copies(
     let conflict_prefix = format!("{stem}-conflict-");
     let mut copies: Vec<(PathBuf, bool)> = fsutil::list_backups(backup_dir, name)
         .into_iter()
+        .chain(fsutil::list_kept_backups(backup_dir, name))
         .map(|path| (path, false))
         .collect();
     if let Ok(entries) = std::fs::read_dir(backup_dir) {

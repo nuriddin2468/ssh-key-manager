@@ -1,17 +1,25 @@
 import type { TFunction } from 'i18next';
 import { describe, expect, it } from 'vitest';
 import type { Pairing } from '@/bindings/Pairing';
+import type { Review } from '@/bindings/Review';
 import type { SyncSummary } from '@/bindings/SyncSummary';
+import type { VaultConflict } from '@/bindings/VaultConflict';
 import {
   canRetry,
+  canShow,
   clock,
   conflictRows,
+  conflictStory,
+  fieldLabel,
+  fieldLabels,
   isActive,
   isAddress,
+  mayShow,
   percent,
   secondsLeft,
   serverAddress,
   summaryLine,
+  summaryLines,
 } from './model';
 
 describe('secondsLeft', () => {
@@ -83,16 +91,128 @@ describe('summaryLine', () => {
     changed: 0,
     removed: 1,
     keysAdded: 0,
+    devicesAdded: [],
     keysDiffer: [],
     deferred: 0,
     deferredThere: 0,
     conflicts: 0,
     failed: 0,
+    vault: {
+      logins: { added: 0, changed: 0, removed: 0 },
+      environments: { added: 0, changed: 0, removed: 0 },
+      shared: { added: 0, changed: 0, removed: 0 },
+      folders: { added: 0, changed: 0, removed: 0 },
+    },
+    vaultOff: null,
   };
 
   it('names what changed, and says when nothing did', () => {
     expect(summaryLine(t, summary)).toBe('nearby.sync.added:2, nearby.sync.removed:1');
     expect(summaryLine(t, { ...summary, added: 0, removed: 0 })).toBe('nearby.sync.nothing');
+  });
+
+  it('adds a line per kind of the vault’s items', () => {
+    const vault = { ...summary.vault, environments: { added: 1, changed: 2, removed: 0 } };
+    expect(summaryLines(t, { ...summary, added: 0, removed: 0, vault })).toEqual([
+      'nearby.sync.vault.line',
+    ]);
+    expect(summaryLines(t, { ...summary, vault })).toHaveLength(2);
+  });
+
+  it('always names a device a sync made one of the user’s', () => {
+    const named = ((key: string, options?: { names?: string }) =>
+      options?.names ? `${key}:${options.names}` : key) as unknown as TFunction;
+    expect(
+      summaryLines(named, { ...summary, added: 0, removed: 0, devicesAdded: ['Phone', 'Tablet'] }),
+    ).toEqual(['nearby.sync.devicesAdded:Phone, Tablet']);
+  });
+});
+
+describe('conflictStory', () => {
+  const t = ((key: string) => key) as unknown as TFunction;
+  const conflict: VaultConflict = {
+    id: 'x',
+    kind: 'login',
+    label: 'Mail',
+    here: 'changed',
+    there: 'changed',
+    fields: ['s:Password'],
+    risky: [],
+    toBin: false,
+  };
+
+  it('says when taking the other version moves the item to the recycle bin', () => {
+    expect(conflictStory(t, conflict, 'iMac')).toBe('nearby.sync.vault.changedBoth');
+    expect(conflictStory(t, { ...conflict, toBin: true }, 'iMac')).toBe(
+      'nearby.sync.vault.binnedThere',
+    );
+    expect(conflictStory(t, { ...conflict, there: 'deleted' }, 'iMac')).toBe(
+      'nearby.sync.vault.deletedThere',
+    );
+  });
+});
+
+describe('fieldLabel', () => {
+  const t = ((key: string, options?: { name?: string }) =>
+    options?.name ? `${key}:${options.name}` : key) as unknown as TFunction;
+
+  it('names KeePass fields, variables by their names and the rest by what they are', () => {
+    expect(fieldLabel(t, 's:Password', 'login')).toBe('nearby.sync.vault.fields.password');
+    expect(fieldLabel(t, 's:Password', 'shared')).toBe('nearby.sync.vault.fields.value');
+    expect(fieldLabel(t, 's:DB_URL', 'environment')).toBe('DB_URL');
+    expect(fieldLabel(t, 's:env.URL', 'environment')).toBe('URL');
+    expect(fieldLabel(t, 's:Title', 'environment')).toBe('nearby.sync.vault.fields.title');
+    expect(fieldLabel(t, 'a:key.pem', 'login')).toBe('nearby.sync.vault.fields.file:key.pem');
+    expect(fieldLabel(t, 'cd:sshkm.env.files', 'environment')).toBe(
+      'nearby.sync.vault.fields.files',
+    );
+    expect(fieldLabels(t, ['fg', 'bg', 'icon'], 'login')).toEqual([
+      'nearby.sync.vault.fields.look',
+    ]);
+  });
+
+  it('never offers a 2FA secret or a non-text field to show', () => {
+    expect(canShow('s:Password')).toBe(true);
+    expect(canShow('s:otp')).toBe(false);
+    expect(canShow('s:Unrecognized 2FA secret')).toBe(false);
+    expect(canShow('s:TOTP Seed')).toBe(false);
+    expect(canShow('s:TimeOtp-Secret-Base32')).toBe(false);
+    expect(canShow('s:HmacOtp-Secret')).toBe(false);
+    expect(canShow('s:OTP')).toBe(false);
+    expect(canShow('s:totp seed')).toBe(false);
+    expect(canShow('a:key.pem')).toBe(false);
+    expect(canShow('group')).toBe(false);
+  });
+});
+
+describe('mayShow', () => {
+  const conflict = (id: string, there: 'changed' | 'deleted'): VaultConflict => ({
+    id,
+    kind: 'login',
+    label: 'Mail',
+    here: 'changed',
+    there,
+    fields: ['s:Password', 's:TOTP Seed'],
+    risky: [],
+    toBin: false,
+  });
+  const review: Review = {
+    conflicts: [],
+    risky: [],
+    deletions: [],
+    vault: {
+      conflicts: [conflict('both', 'changed'), conflict('gone', 'deleted')],
+      risky: [],
+      deletions: [],
+    },
+  };
+
+  it('shows only a text field of a conflict both computers changed', () => {
+    expect(mayShow(review, 'both', 's:Password')).toBe(true);
+    expect(mayShow(review, 'both', 's:TOTP Seed')).toBe(false);
+    expect(mayShow(review, 'both', 's:Notes')).toBe(false);
+    expect(mayShow(review, 'gone', 's:Password')).toBe(false);
+    expect(mayShow(review, 'elsewhere', 's:Password')).toBe(false);
   });
 });
 

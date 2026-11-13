@@ -13,8 +13,11 @@
 //   server's password instead.
 // - `?vault=missing&nearby=join`: another computer gives this one its vault
 //   a few seconds after "Get it from my other computer".
-// - `?nearby=sync`: "Sync" brings a conflict, a risky host and many
-//   deletions to decide on.
+// - `?nearby=sync`: "Sync" brings conflicts (a host, a login, an
+//   environment), a risky host, a risky variable and many deletions to
+//   decide on.
+// - `?nearby=cloud`: the vault is in iCloud Drive, so its entries don't
+//   sync with the user's devices; a sync says why.
 // - `?nearby=renamed`: whatever computer the user sends to, a contact
 //   answers that calls itself by that computer's name.
 
@@ -31,6 +34,7 @@ import type { SendRequest } from '@/bindings/SendRequest';
 import type { SyncDecisions } from '@/bindings/SyncDecisions';
 import type { SyncSummary } from '@/bindings/SyncSummary';
 import type { VaultStatus } from '@/bindings/VaultStatus';
+import { mayShow } from '@/features/nearby/model';
 import {
   MOCK_CHANGED_EVENT,
   MOCK_CONTACTS_EVENT,
@@ -181,6 +185,7 @@ const mine: MyDevice[] = [
     this: true,
     lastSync: null,
     reachable: false,
+    learnedFrom: null,
   },
   {
     key: IMAC,
@@ -189,6 +194,16 @@ const mine: MyDevice[] = [
     this: false,
     lastSync: new Date(Date.now() - 2 * 3600_000).toISOString(),
     reachable: true,
+    learnedFrom: null,
+  },
+  {
+    key: 'bW9jay10YWJsZXQ=',
+    name: 'Pixel Tablet',
+    added: '2026-10-30T18:20:00Z',
+    this: false,
+    lastSync: null,
+    reachable: false,
+    learnedFrom: 'iMac at home',
   },
 ];
 
@@ -319,6 +334,7 @@ function addMine(peer: string) {
     this: false,
     lastSync: null,
     reachable: false,
+    learnedFrom: null,
   });
   window.dispatchEvent(new CustomEvent(MOCK_DEVICES_EVENT));
 }
@@ -351,6 +367,78 @@ const REVIEW: Review = {
     },
   ],
   deletions: ['old-ci-1', 'old-ci-2', 'old-ci-3', 'old-ci-4', 'old-ci-5', 'old-ci-6', 'old-vpn'],
+  vault: {
+    conflicts: [
+      {
+        id: '3f6c2a10-6d3b-4c1e-9a55-0b7d2e8f4a01',
+        kind: 'login',
+        label: 'GitHub',
+        here: 'changed',
+        there: 'changed',
+        fields: ['s:Password', 's:URL'],
+        risky: [],
+        toBin: false,
+      },
+      {
+        id: '3f6c2a10-6d3b-4c1e-9a55-0b7d2e8f4a07',
+        kind: 'login',
+        label: 'Old VPN',
+        here: 'changed',
+        there: 'changed',
+        fields: ['s:Password'],
+        risky: [],
+        toBin: true,
+      },
+      {
+        id: '3f6c2a10-6d3b-4c1e-9a55-0b7d2e8f4a02',
+        kind: 'environment',
+        label: 'Shop · backend · staging',
+        here: 'deleted',
+        there: 'changed',
+        fields: [],
+        risky: [],
+        toBin: false,
+      },
+    ],
+    risky: [
+      {
+        id: '3f6c2a10-6d3b-4c1e-9a55-0b7d2e8f4a03',
+        kind: 'environment',
+        label: 'Shop · frontend · local',
+        op: 'update',
+        fields: ['s:NODE_OPTIONS', 'cd:sshkm.env'],
+        removal: false,
+        fromBin: false,
+        risky: ['NODE_OPTIONS'],
+        version: 'mock',
+      },
+    ],
+    deletions: [
+      ['…a04', 'login', 'Old CI token', false],
+      ['…a05', 'login', 'Staging admin', true],
+      ['…a06', 'environment', 'Blog · prod', false],
+    ].map(([id, kind, label, fromBin]) => ({
+      id: `3f6c2a10-6d3b-4c1e-9a55-0b7d2e8f4${String(id).slice(1)}`,
+      kind: kind as 'login' | 'environment',
+      label: String(label),
+      op: 'delete' as const,
+      fields: [],
+      removal: true,
+      fromBin: Boolean(fromBin),
+      risky: [],
+      version: '',
+    })),
+  },
+};
+
+/** Most values shown in one sync's review, as in the app. */
+const MAX_VALUES_SHOWN = 200;
+let valuesShown = 0;
+
+/** The two values of a conflict's field, as each computer has it. */
+const CONFLICT_VALUES: Record<string, [string, string]> = {
+  's:Password': ['correct-horse-1', 'correct-horse-2'],
+  's:URL': ['https://github.com', 'https://github.com/login'],
 };
 
 function syncSummary(decisions: SyncDecisions | null): SyncSummary {
@@ -359,6 +447,7 @@ function syncSummary(decisions: SyncDecisions | null): SyncSummary {
     changed: 1 + (decisions?.theirs.length ?? 0),
     removed: decisions?.delete ? REVIEW.deletions.length : 0,
     keysAdded: 3,
+    devicesAdded: SWITCH === 'sync' ? ['Pixel Tablet'] : [],
     keysDiffer: [
       {
         host: 'legacy-nas',
@@ -378,6 +467,29 @@ function syncSummary(decisions: SyncDecisions | null): SyncSummary {
       ? REVIEW.conflicts.length - decisions.mine.length - decisions.theirs.length
       : 0,
     failed: 0,
+    vault:
+      SWITCH === 'cloud'
+        ? {
+            logins: { added: 0, changed: 0, removed: 0 },
+            environments: { added: 0, changed: 0, removed: 0 },
+            shared: { added: 0, changed: 0, removed: 0 },
+            folders: { added: 0, changed: 0, removed: 0 },
+          }
+        : {
+            logins: {
+              added: 3,
+              changed: 1 + (decisions?.vaultTheirs.length ?? 0),
+              removed: decisions?.delete ? 2 : 0,
+            },
+            environments: {
+              added: 2,
+              changed: decisions?.vaultApply.length ?? 0,
+              removed: decisions?.delete ? 1 : 0,
+            },
+            shared: { added: 1, changed: 0, removed: 0 },
+            folders: { added: 1, changed: 0, removed: 0 },
+          },
+    vaultOff: SWITCH === 'cloud' ? { type: 'cloud', service: 'iCloudDrive', here: true } : null,
   };
 }
 
@@ -524,6 +636,7 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
     if (active()) return fail('conflict', 'another pairing is going on');
     if (status().ownFound.length === 0) return fail('not_found', 'no device of yours is reachable');
     const id = nextId++;
+    valuesShown = 0;
     pairing = { id, peer: null, outgoing: true, kind: 'sync', phase: { type: 'connecting' } };
     changed();
     later(600, () => update(id, { peer: 'iMac at home', phase: { type: 'syncing' } }));
@@ -533,6 +646,23 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
     });
     return undefined;
   },
+  nearby_sync_value: ({ id: raw, item, field, theirs }) => {
+    const id = Number(raw);
+    if (pairing?.id !== id || pairing.phase.type !== 'decide') {
+      return fail('invalid_input', 'no sync under review');
+    }
+    // As the app: a field of a conflict under review, a limited number of times.
+    if (!mayShow(pairing.phase.review, String(item), String(field))) {
+      return fail('invalid_input', 'not a field of a conflict under review');
+    }
+    if (valuesShown >= MAX_VALUES_SHOWN)
+      return fail('invalid_input', 'no more values in this sync');
+    valuesShown += 1;
+    // As the app: a field one side doesn't have reads as empty there.
+    const values = CONFLICT_VALUES[String(field)] ?? ['', ''];
+    return values[theirs ? 1 : 0];
+  },
+  nearby_vault_cloud: () => (SWITCH === 'cloud' ? 'iCloudDrive' : null),
   nearby_decide: ({ id: raw, decisions }) => {
     const id = Number(raw);
     if (pairing?.id !== id || pairing.phase.type !== 'decide') {

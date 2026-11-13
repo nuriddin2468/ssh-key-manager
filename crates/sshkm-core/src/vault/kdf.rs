@@ -87,6 +87,78 @@ pub(crate) fn check_kdbx(bytes: &[u8]) -> Result<()> {
     }
 }
 
+/// Whether `bytes` is a KDBX file (3 or 4) whose payload is compressed:
+/// what versions before sync copies sent when a vault moved.
+pub(crate) fn compressed_kdbx(bytes: &[u8]) -> bool {
+    if bytes.get(0..4) != Some(&KDBX_SIGNATURE[..]) || bytes.get(4..8) != Some(&KDBX_VERSION_2[..])
+    {
+        return false;
+    }
+    let wide = match bytes.get(10..12).map(|v| u16::from_le_bytes([v[0], v[1]])) {
+        Some(3) => false,
+        Some(4) => true,
+        _ => return false,
+    };
+    let mut pos = 12;
+    while let Some(&id) = bytes.get(pos) {
+        let (len, start) = if wide {
+            let Ok(len) = take::<4>(bytes, pos + 1).map(u32::from_le_bytes) else {
+                return false;
+            };
+            (usize::try_from(len).unwrap_or(usize::MAX), pos + 5)
+        } else {
+            let Ok(len) = take::<2>(bytes, pos + 1).map(u16::from_le_bytes) else {
+                return false;
+            };
+            (usize::from(len), pos + 3)
+        };
+        let Some(value) = start.checked_add(len).and_then(|end| bytes.get(start..end)) else {
+            return false;
+        };
+        match id {
+            HEADER_END => return false,
+            COMPRESSION => return value.iter().any(|b| *b != 0),
+            _ => pos = start + len,
+        }
+    }
+    false
+}
+
+/// Fails unless `bytes` is a KDBX 4 file whose payload isn't compressed
+/// and whose outer header is at most `max_header` bytes: what goes between
+/// the user's devices, so that its payload is no larger than the file and
+/// its header small. What the payload holds is bounded before the `keepass`
+/// crate reads it (`vault::sync::copy::read_bounded`).
+pub(crate) fn check_uncompressed_kdbx4(bytes: &[u8], max_header: usize) -> Result<()> {
+    let kdbx = bytes.get(0..4) == Some(&KDBX_SIGNATURE[..])
+        && bytes.get(4..8) == Some(&KDBX_VERSION_2[..])
+        && bytes.get(10..12).map(|v| u16::from_le_bytes([v[0], v[1]])) == Some(4);
+    if !kdbx {
+        return Err(Error::invalid("not a KDBX 4 file"));
+    }
+    let mut pos = 12;
+    let mut uncompressed = false;
+    loop {
+        let id = *bytes.get(pos).ok_or_else(truncated)?;
+        let len = length(u32::from_le_bytes(take(bytes, pos + 1)?))?;
+        let value = bytes.get(pos + 5..pos + 5 + len).ok_or_else(truncated)?;
+        pos += 5 + len;
+        if pos > max_header {
+            return Err(Error::invalid("a header too large"));
+        }
+        match id {
+            HEADER_END => break,
+            COMPRESSION => uncompressed = value == [0, 0, 0, 0],
+            _ => {}
+        }
+    }
+    if uncompressed {
+        Ok(())
+    } else {
+        Err(Error::invalid("a compressed file"))
+    }
+}
+
 /// KDBX 3: fields with 16-bit lengths; the AES-KDF rounds are field 6.
 fn check_kdbx3(bytes: &[u8]) -> Result<()> {
     let mut pos = 12;
@@ -190,7 +262,7 @@ fn numbers(dict: &[u8]) -> Result<Vec<(&[u8], u64)>> {
     Ok(numbers)
 }
 
-fn check_aes(rounds: u64) -> Result<()> {
+pub(crate) fn check_aes(rounds: u64) -> Result<()> {
     if rounds <= MAX_AES_ROUNDS {
         Ok(())
     } else {

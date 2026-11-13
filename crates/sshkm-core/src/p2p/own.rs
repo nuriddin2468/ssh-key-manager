@@ -43,6 +43,7 @@ const SALT: &[u8] = b"sshkm own devices";
 const PROOF_LABEL: &[u8] = b"sshkm own proof";
 const PRESENCE_LABEL: &[u8] = b"sshkm presence";
 const SESSION_LABEL: &[u8] = b"sshkm own session";
+const DIGEST_LABEL: &[u8] = b"sshkm own sync digests";
 /// Hex digits of a presence name.
 const PRESENCE_LEN: usize = 16;
 
@@ -118,6 +119,15 @@ impl OwnKey {
         })
     }
 
+    /// The key both own devices hash the vault's fields with for the
+    /// digests they compare after a sync, so that even the encrypted
+    /// channel carries no plain hash of a value.
+    pub fn digest_key(&self) -> Zeroizing<[u8; 32]> {
+        let mut key = Zeroizing::new([0; 32]);
+        key.copy_from_slice(&self.mac(DIGEST_LABEL).finalize().into_bytes());
+        key
+    }
+
     fn proof_mac(&self, hash: &[u8], initiator: bool) -> Hmac<Sha256> {
         let mut mac = self.mac(PROOF_LABEL);
         mac.update(hash);
@@ -153,6 +163,18 @@ mod tests {
         let mut bytes = [0; SEED_LEN];
         bytes[..seed.len()].copy_from_slice(seed.as_bytes());
         OwnKey::from_seed(&bytes)
+    }
+
+    #[test]
+    fn the_digest_key_is_the_vaults() {
+        assert_eq!(
+            *key("vault one").digest_key(),
+            *key("vault one").digest_key()
+        );
+        assert_ne!(
+            *key("vault one").digest_key(),
+            *key("vault two").digest_key()
+        );
     }
 
     #[test]

@@ -4,6 +4,7 @@
 
 use std::collections::VecDeque;
 use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -12,15 +13,21 @@ use sha2::{Digest, Sha256};
 use sshkm_core::config::SshConfig;
 use sshkm_core::known_hosts::KnownHosts;
 use sshkm_core::p2p::own::OwnKey;
-use sshkm_core::p2p::protocol::{Intent, Item, ItemSummary, SecretText, VaultState};
-use sshkm_core::p2p::{Identity, PeerKey, accept, connect};
+use sshkm_core::p2p::protocol::{EntrySync, Intent, Item, ItemSummary, SecretText, VaultState};
+use sshkm_core::p2p::{Identity, PeerKey, accept, accept_own, connect, connect_own};
 use sshkm_core::sync::Hasher;
-use sshkm_core::vault::DeviceRecord;
 use sshkm_core::vault::projects::ProjectRecord;
+use sshkm_core::vault::sync::{
+    Pairs, PeerVault, VaultApplied, VaultBase, VaultChoices, VaultPlan, digests,
+};
+use sshkm_core::vault::{ContactRecord, DeviceRecord};
 use zeroize::Zeroizing;
 
-use super::pairing::{PairingFailure, PairingPhase, Purpose, Side, Stored, conversation};
-use super::sync::{RiskyChange, SyncDecisions, SyncLocal, SyncState, SyncWrite};
+use super::pairing::{
+    PairingFailure, PairingPhase, Purpose, Side, Stored, VaultItems, conversation,
+    conversation_after,
+};
+use super::sync::{RiskyChange, RiskyVariables, SyncDecisions, SyncLocal, SyncState, SyncWrite};
 
 /// The vault a script has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +109,22 @@ pub struct Script {
     pub allows_added: bool,
     /// How many times the system dialog asked that.
     pub asked_added: Mutex<u32>,
+    /// The contact records this side sends, and then the other side's.
+    pub contact_records: Mutex<Vec<ContactRecord>>,
+    /// What its `Hello` says about syncing the vault's entries.
+    pub entries: Option<EntrySync>,
+    /// A real vault whose entries sync, with its backups' folder.
+    pub real: Option<(Mutex<sshkm_core::vault::Vault>, PathBuf)>,
+    /// The other side's copy during a sync.
+    pub peer_vault: Mutex<Option<PeerVault>>,
+    /// This user allows variables that load code in the system dialog.
+    pub allows_variables: bool,
+    /// The variables the system dialog asked about.
+    pub asked_variables: Mutex<Vec<RiskyVariables>>,
+    /// Hangs up after applying a sync, before saying what it has.
+    pub hangs_up: bool,
+    /// The records of the user's devices this side sends.
+    pub device_records: Vec<DeviceRecord>,
 }
 
 impl Script {
@@ -144,7 +167,44 @@ impl Script {
             removed: false,
             allows_added: true,
             asked_added: Mutex::default(),
+            contact_records: Mutex::default(),
+            entries: None,
+            real: None,
+            peer_vault: Mutex::default(),
+            allows_variables: true,
+            asked_variables: Mutex::default(),
+            hangs_up: false,
+            device_records: Vec::new(),
         }
+    }
+
+    /// [`Self::own`], whose entries sync with the real vault `vault`.
+    pub fn with_vault(
+        name: &'static str,
+        config: &str,
+        vault: sshkm_core::vault::Vault,
+        backups: PathBuf,
+    ) -> Self {
+        let mut script = Self::own(name, "s", config);
+        script.entries = Some(EntrySync::On { version: 1 });
+        script.real = Some((Mutex::new(vault), backups));
+        script
+    }
+
+    /// The real vault, for a test to look at or change.
+    pub fn real_vault(&self) -> std::sync::MutexGuard<'_, sshkm_core::vault::Vault> {
+        self.real
+            .as_ref()
+            .expect("a script with a vault")
+            .0
+            .lock()
+            .unwrap()
+    }
+
+    fn vault_hasher(&self) -> Hasher {
+        Hasher::new(Zeroizing::new(
+            [u8::try_from(self.name.len()).unwrap() + 100; 32],
+        ))
     }
 
     /// One of the user's devices with the vault `secret` and this config.
@@ -283,8 +343,9 @@ impl Side for Script {
         Ok(SyncLocal {
             config: self.config.lock().unwrap().clone(),
             known: self.known.lock().unwrap().clone(),
-            devices: Vec::new(),
+            devices: self.device_records.clone(),
             projects: self.projects.lock().unwrap().clone(),
+            contacts: self.contact_records.lock().unwrap().clone(),
             state: self.sync_state.lock().unwrap().clone(),
             hasher: Hasher::new(Zeroizing::new([u8::try_from(self.name.len()).unwrap(); 32])),
         })
@@ -298,10 +359,18 @@ impl Side for Script {
         }
         self.devices.lock().unwrap().clone_from(&write.devices);
         self.projects.lock().unwrap().clone_from(&write.projects);
+        self.contact_records
+            .lock()
+            .unwrap()
+            .clone_from(&write.contacts);
         Ok(())
     }
     fn sync_keep(&self, _: PeerKey, state: &SyncState) -> Result<(), PairingFailure> {
         *self.sync_state.lock().unwrap() = state.clone();
+        Ok(())
+    }
+    fn sync_unasked(&self, unasked: &[(i64, u32)]) -> Result<(), PairingFailure> {
+        self.sync_state.lock().unwrap().unasked = unasked.to_vec();
         Ok(())
     }
     fn decisions(&self, _: Duration) -> Result<Option<SyncDecisions>, PairingFailure> {
@@ -325,6 +394,59 @@ impl Side for Script {
         *self.asked_added.lock().unwrap() += 1;
         self.allows_added
     }
+    fn allow_risky_variables(&self, changes: &[RiskyVariables]) -> bool {
+        self.asked_variables
+            .lock()
+            .unwrap()
+            .extend_from_slice(changes);
+        self.allows_variables
+    }
+    fn entry_sync(&self) -> Option<EntrySync> {
+        self.entries
+    }
+    fn vault_copy(&self) -> Result<Zeroizing<Vec<u8>>, PairingFailure> {
+        self.real_vault()
+            .sync_copy()
+            .map_err(|_| PairingFailure::NotSaved)
+    }
+    fn vault_plan(&self, copy: &[u8], base: &VaultBase) -> Result<VaultPlan, PairingFailure> {
+        let vault = self.real_vault();
+        let peer = vault
+            .open_sync_copy(copy)
+            .map_err(|_| PairingFailure::Broken)?;
+        let plan = vault.plan_sync(&peer, base, &self.vault_hasher());
+        *self.peer_vault.lock().unwrap() = Some(peer);
+        Ok(plan)
+    }
+    fn vault_apply(
+        &self,
+        plan: &VaultPlan,
+        choices: &VaultChoices,
+    ) -> Result<VaultApplied, PairingFailure> {
+        let peer = self.peer_vault.lock().unwrap();
+        let peer = peer.as_ref().ok_or(PairingFailure::Broken)?;
+        let mut vault = self.real_vault();
+        let applied = vault
+            .apply_sync(peer, plan, &self.vault_hasher(), choices)
+            .map_err(|_| PairingFailure::NotSaved)?;
+        // Saved when the app saves: something counted, or a version kept.
+        if applied.changed() {
+            let backups = &self.real.as_ref().expect("a script with a vault").1;
+            vault.save(backups).map_err(|_| PairingFailure::NotSaved)?;
+        }
+        Ok(applied)
+    }
+    fn vault_items(&self, pairs: &Pairs) -> Result<VaultItems, PairingFailure> {
+        if self.hangs_up {
+            return Err(PairingFailure::Broken);
+        }
+        let vault = self.real_vault();
+        let shared = Hasher::new(vault.own_key().ok_or(PairingFailure::NotOwn)?.digest_key());
+        Ok(VaultItems {
+            snapshots: vault.sync_items(pairs, &self.vault_hasher()),
+            digests: digests(&vault.sync_items(pairs, &shared)),
+        })
+    }
 }
 
 /// Runs `left` as the side that connects, for `purpose`, and `right` as
@@ -341,24 +463,55 @@ pub fn talk(
     )
 }
 
-/// [`talk`], each side with the device key given.
+/// [`talk`], each side with the device key given. As in the app, the side
+/// connected to reads the other's `Hello` before the conversation; a sync
+/// between two sides of one vault opens with the key own devices mix into
+/// their handshake.
 pub fn talk_as(
     (left, left_key): (Script, Identity),
     (right, right_key): (Script, Identity),
     purpose: Purpose<'_>,
 ) -> ((PairingPhase, Script), (PairingPhase, Script)) {
+    let own = own_session_key(&left, &right, &purpose);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let other = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let mut session = accept(stream, &right_key).unwrap();
-        (conversation(&mut session, &right, None), right)
+        let mut session = match own {
+            Some(key) => accept_own(stream, &right_key, &key).unwrap(),
+            None => accept(stream, &right_key).unwrap(),
+        };
+        let hello = session.recv().ok();
+        (conversation_after(&mut session, &right, None, hello), right)
     });
     let stream = TcpStream::connect(address).unwrap();
-    let mut session = connect(stream, &left_key).unwrap();
+    let mut session = match own {
+        Some(key) => connect_own(stream, &left_key, &key).unwrap(),
+        None => connect(stream, &left_key).unwrap(),
+    };
     let mine = (conversation(&mut session, &left, Some(purpose)), left);
     drop(session);
     (mine, other.join().unwrap())
+}
+
+/// The key both sides mix into the handshake of a sync, as own devices do,
+/// when both have the same vault: a sync with any other side opens without
+/// one, so it can fail in the conversation instead.
+fn own_session_key(left: &Script, right: &Script, purpose: &Purpose<'_>) -> Option<[u8; 32]> {
+    if !matches!(purpose, Purpose::Sync) {
+        return None;
+    }
+    let (left, right) = (
+        left.own_key()?.session_key(),
+        right.own_key()?.session_key(),
+    );
+    (*left == *right).then_some(*left)
+}
+
+/// Whether `talk` ran a sync between `left` and `right` over the handshake
+/// own devices use.
+pub fn over_own_handshake(left: &Script, right: &Script) -> bool {
+    own_session_key(left, right, &Purpose::Sync).is_some()
 }
 
 /// The names a side showed for the other device.

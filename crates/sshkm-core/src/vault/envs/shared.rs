@@ -85,7 +85,7 @@ pub(super) fn reference(id: Uuid) -> String {
 
 /// The entry whose password `value` refers to, if it is a reference and
 /// nothing else (KeePass reads placeholders without case).
-pub(super) fn referenced(value: &str) -> Option<Uuid> {
+pub(in crate::vault) fn referenced(value: &str) -> Option<Uuid> {
     const PREFIX: &str = "{REF:P@I:";
     if value.len() != PREFIX.len() + 33 || !value.is_char_boundary(PREFIX.len()) {
         return None;
@@ -95,6 +95,15 @@ pub(super) fn referenced(value: &str) -> Option<Uuid> {
     (prefix.eq_ignore_ascii_case(PREFIX) && hex.bytes().all(|b| b.is_ascii_hexdigit()))
         .then(|| Uuid::parse_str(hex).ok())
         .flatten()
+}
+
+/// The shared values an environment's variables refer to: each variable's
+/// name and the shared value's UUID.
+pub(in crate::vault) fn shared_references(entry: &keepass::db::Entry) -> Vec<(String, Uuid)> {
+    variables_of(entry)
+        .into_iter()
+        .filter_map(|var| Some((var.name.clone(), referenced(var.value.expose_secret())?)))
+        .collect()
 }
 
 impl Vault {

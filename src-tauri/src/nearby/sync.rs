@@ -2,13 +2,18 @@
 //! is one (see [`conversation`]).
 //!
 //! 1. Each sends its [`Manifest`]: hosts, their server keys, and the
-//!    records of the user's devices and projects. The side that connected
-//!    goes first.
-//! 2. Each works out on its own what to take ([`plan`]) and sorts it:
+//!    records of the user's devices, projects and contacts. The side that
+//!    connected goes first. When both sync the vault's entries
+//!    ([`Entries`]), each then sends its copy of the vault
+//!    ([`Side::vault_copy`]) as bytes.
+//! 2. Each works out on its own what to take ([`plan`], [`Side::vault_plan`])
+//!    and sorts it:
 //!    - changes nobody needs to look at;
 //!    - changes that add a directive running a program or reaching beyond
-//!      the host;
-//!    - more than [`MASS_DELETE`] deletions;
+//!      the host, or a variable that makes programs load code;
+//!    - deletions past [`MASS_DELETE`] in a day from the user's other
+//!      devices, all of them together, hosts and the vault's items counted
+//!      alike, those made without asking before included;
 //!    - conflicts.
 //! 3. The user of the side that connected decides on all but the first
 //!    kind; its choices on conflicts go to the other side
@@ -16,43 +21,61 @@
 //!    changes and mass deletions: its user is asked when they sync from it.
 //!    A risky change the user chose, a conflict settled for the other
 //!    computer's version included, is made only once they allow it in a
-//!    system dialog ([`Side::allow_risky`]), which a script in the page
-//!    can't answer; what they don't allow waits for the next sync.
-//! 4. Each writes its files (after a backup) and says what it has now
-//!    ([`Message::Applied`]). What both have alike becomes the snapshot for
-//!    next time ([`agree`]).
+//!    system dialog ([`Side::allow_risky`], [`Side::allow_risky_variables`]),
+//!    which a script in the page can't answer; what they don't allow waits
+//!    for the next sync.
+//! 4. Each writes its files and its vault (after a backup) and says what it
+//!    has now ([`Message::Applied`]). What both have alike becomes the
+//!    snapshot for next time ([`agree`], [`agree_hashed`]).
 //!
 //! [`conversation`]: super::pairing::conversation
 
-use std::collections::BTreeMap;
-use std::fmt::Write as _;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::TcpStream;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use sshkm_core::config::SshConfig;
 use sshkm_core::known_hosts::KnownHosts;
+use sshkm_core::p2p::protocol::{EntrySync, VaultDecisions};
 use sshkm_core::p2p::{Message, PeerKey, Session};
 use sshkm_core::sync::host_keys::{self, KeysDiffer};
 use sshkm_core::sync::hosts::{self, RiskyLine};
 use sshkm_core::sync::{
-    Base, Change, Conflict, Hasher, MAX_MANIFEST, Manifest, agree, digest, digests, plan,
+    Base, Change, Conflict, Hasher, MAX_MANIFEST, Manifest, agree, agree_hashed, digest, digests,
+    plan,
 };
-use sshkm_core::vault::DeviceRecord;
+use sshkm_core::vault::envs::files::CloudService;
 use sshkm_core::vault::projects::ProjectRecord;
+use sshkm_core::vault::sync::{
+    Party, VaultBase, VaultChange, VaultChoices, VaultConflict, VaultCounts, VaultPlan,
+};
+use sshkm_core::vault::{ContactRecord, DeviceRecord, MAX_DATABASE_SIZE, learned_devices};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use zeroize::Zeroizing;
 
-use super::pairing::{ANSWER_TIMEOUT, POLL, PairingFailure, PairingPhase, Side, broken, waiting};
+use super::IO_TIMEOUT;
+use super::pairing::{
+    ANSWER_TIMEOUT, Entries, POLL, PairingFailure, PairingPhase, Side, VaultItems, broken, waiting,
+};
 use super::transfer::STEP_TIMEOUT;
-use crate::confirm::Localized;
+use crate::confirm::{Localized, invisible, shown};
 
-/// More incoming deletions than this need the user's yes.
+/// More deletions than this within [`DELETION_WINDOW`] from the user's
+/// other devices, all of them together, need the user's yes: a device
+/// can't get more by syncing under other names or through another one.
 pub const MASS_DELETE: usize = 5;
+/// Over how long deletions from the user's other devices are counted, in
+/// seconds.
+const DELETION_WINDOW: i64 = 24 * 60 * 60;
 /// Most directives the system dialog lists.
 const SHOWN_LINES: usize = 8;
-/// Longest value the system dialog shows in full.
+/// Longest name the system dialog shows in full.
 const SHOWN_CHARS: usize = 120;
+/// Longest value of a directive or variable the system dialog shows in
+/// full: past it, its start and its end.
+const SHOWN_VALUE: usize = 1000;
 
 /// What a sync starts from on one side.
 pub struct SyncLocal {
@@ -60,6 +83,7 @@ pub struct SyncLocal {
     pub known: KnownHosts,
     pub devices: Vec<DeviceRecord>,
     pub projects: Vec<ProjectRecord>,
+    pub contacts: Vec<ContactRecord>,
     pub state: SyncState,
     pub hasher: Hasher,
 }
@@ -76,11 +100,55 @@ pub struct SyncState {
     /// When the last sync ended: RFC 3339, UTC.
     #[serde(default)]
     pub synced: Option<String>,
+    /// The vault's snapshot of the last sync, and the groups paired.
+    #[serde(default)]
+    pub vault: VaultBase,
+    /// The vault's risky changes this user said no to, by item: the
+    /// version turned down.
+    #[serde(default)]
+    pub vault_declined: BTreeMap<String, String>,
+    /// Deletions this computer made from the user's other devices without
+    /// asking, whichever they came from: when (seconds since 1970) and how
+    /// many. Those of the last [`DELETION_WINDOW`] count with a sync's own.
+    /// Kept in a small file of their own for this computer
+    /// ([`Side::sync_unasked`]), written before a sync changes anything.
+    #[serde(skip)]
+    pub unasked: Vec<(i64, u32)>,
+}
+
+impl SyncState {
+    /// Deletions made from the device without asking in the
+    /// [`DELETION_WINDOW`] before `now`; one dated after `now` (a clock set
+    /// back) counts too.
+    fn recent_unasked(&self, now: i64) -> usize {
+        self.unasked
+            .iter()
+            .filter(|(when, _)| now - when < DELETION_WINDOW)
+            .map(|(_, count)| usize::try_from(*count).unwrap_or(usize::MAX))
+            .fold(0, usize::saturating_add)
+    }
+
+    /// Remembers `made` deletions made now without asking, and forgets
+    /// those older than [`DELETION_WINDOW`]; whether there were any.
+    fn note_unasked(&mut self, now: i64, made: usize) -> bool {
+        self.unasked
+            .retain(|(when, _)| now - when < DELETION_WINDOW);
+        if made > 0 {
+            self.unasked.push((now, count(made)));
+        }
+        made > 0
+    }
+
+    /// What [`Self::unasked`] is when it can't be read: at the limit for a
+    /// day, so that deletions wait for the user rather than go unasked.
+    pub fn at_the_limit(now: i64) -> Vec<(i64, u32)> {
+        vec![(now, count(MASS_DELETE))]
+    }
 }
 
 /// What a sync writes: the files that changed, checked against the
-/// revisions they had when it started, and the other side's device and
-/// project records.
+/// revisions they had when it started, and the other side's device,
+/// project and contact records.
 pub struct SyncWrite {
     pub config: Option<SshConfig>,
     pub config_revision: String,
@@ -88,6 +156,9 @@ pub struct SyncWrite {
     pub known_revision: String,
     pub devices: Vec<DeviceRecord>,
     pub projects: Vec<ProjectRecord>,
+    pub contacts: Vec<ContactRecord>,
+    /// The config loses hosts: a kept backup goes first.
+    pub deletes: bool,
 }
 
 /// What the user of the side that connected decides on.
@@ -100,14 +171,51 @@ pub struct Review {
     /// Changes that add a directive running a program or reaching beyond
     /// the host.
     pub risky: Vec<RiskyChange>,
-    /// Hosts the other computer deleted, when there are more than
-    /// [`MASS_DELETE`].
+    /// Hosts the other computer deleted, when the deletions from it pass
+    /// [`MASS_DELETE`] in a day.
     pub deletions: Vec<String>,
+    /// The same for the vault's entries and groups.
+    pub vault: VaultReview,
+}
+
+/// What the user decides on of the vault's entries and groups.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = crate::types::BINDINGS))]
+pub struct VaultReview {
+    /// Items both computers changed, differently, or one deleted and the
+    /// other changed.
+    pub conflicts: Vec<VaultConflict>,
+    /// Changes that add or change a variable that makes programs load code.
+    pub risky: Vec<VaultChange>,
+    /// What leaves the vault or goes to the recycle bin, when the deletions
+    /// from the other computer pass [`MASS_DELETE`] in a day.
+    pub deletions: Vec<VaultChange>,
 }
 
 impl Review {
+    /// Whether the user may see `field` of `item` while this review is
+    /// open: a text field that differs in a conflict both computers
+    /// changed, never a 2FA secret.
+    pub fn may_show(&self, item: &str, field: &str) -> bool {
+        field
+            .strip_prefix("s:")
+            .is_some_and(|name| !sshkm_core::vault::is_otp_field(name))
+            && self.vault.conflicts.iter().any(|conflict| {
+                conflict.id == item
+                    && conflict.here == Party::Changed
+                    && conflict.there == Party::Changed
+                    && conflict.fields.iter().any(|f| f == field)
+            })
+    }
+
     fn is_empty(&self) -> bool {
-        self.conflicts.is_empty() && self.risky.is_empty() && self.deletions.is_empty()
+        self.conflicts.is_empty()
+            && self.risky.is_empty()
+            && self.deletions.is_empty()
+            && self.vault.conflicts.is_empty()
+            && self.vault.risky.is_empty()
+            && self.vault.deletions.is_empty()
     }
 }
 
@@ -118,6 +226,17 @@ impl Review {
 pub struct RiskyChange {
     pub id: String,
     pub lines: Vec<RiskyLine>,
+}
+
+/// An environment's variables a sync adds or changes that make programs
+/// load code, as the system dialog lists them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RiskyVariables {
+    /// The environment's entry id.
+    pub id: String,
+    /// The environment, for people: `Shop · backend · prod`.
+    pub environment: String,
+    pub names: Vec<String>,
 }
 
 /// The user's choices on a [`Review`]; what is in no list waits for the
@@ -138,9 +257,19 @@ pub struct SyncDecisions {
     /// Risky changes turned down: not asked about again.
     #[serde(default)]
     pub decline: Vec<String>,
-    /// Make the deletions.
+    /// Make the deletions, hosts' and the vault's.
     #[serde(default)]
     pub delete: bool,
+    /// The same as `mine`, `theirs`, `apply` and `decline` for the vault's
+    /// entries and groups, by id.
+    #[serde(default)]
+    pub vault_mine: Vec<String>,
+    #[serde(default)]
+    pub vault_theirs: Vec<String>,
+    #[serde(default)]
+    pub vault_apply: Vec<String>,
+    #[serde(default)]
+    pub vault_decline: Vec<String>,
 }
 
 /// How a sync went on this side.
@@ -154,6 +283,9 @@ pub struct SyncSummary {
     pub removed: u32,
     /// Server keys added to `known_hosts` here.
     pub keys_added: u32,
+    /// Devices the other computer's records made the user's here: their
+    /// names. Shown, so a device learned through a sync is never silent.
+    pub devices_added: Vec<String>,
     /// Hosts the two trust different keys for: shown, never resolved.
     pub keys_differ: Vec<KeysDiffer>,
     /// Changes put off for this computer's user, and for the other's.
@@ -163,11 +295,54 @@ pub struct SyncSummary {
     pub conflicts: u32,
     /// Changes `ssh_config` didn't take.
     pub failed: u32,
+    /// What the vault took, by kind.
+    pub vault: VaultCounts,
+    /// Why the vault's entries didn't sync, when they didn't.
+    pub vault_off: Option<VaultOff>,
+}
+
+/// Why the vault's entries didn't sync.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = crate::types::BINDINGS))]
+pub enum VaultOff {
+    /// A vault is in a folder this cloud service keeps in step: this
+    /// computer's (`here`) or the other's.
+    Cloud { service: CloudService, here: bool },
+    /// The other device's version doesn't sync them.
+    Version,
+}
+
+impl VaultOff {
+    /// Why entries don't sync, from what both sides said; `None` when they
+    /// do, or this side doesn't either (its vault is locked).
+    fn of(entries: Entries) -> Option<Self> {
+        if EntrySync::agreed(entries.mine, entries.theirs).is_some() {
+            return None;
+        }
+        match (entries.mine, entries.theirs) {
+            (Some(EntrySync::Cloud { service }), _) => Some(Self::Cloud {
+                service,
+                here: true,
+            }),
+            (_, Some(EntrySync::Cloud { service })) => Some(Self::Cloud {
+                service,
+                here: false,
+            }),
+            (Some(EntrySync::On { .. }), _) => Some(Self::Version),
+            _ => None,
+        }
+    }
 }
 
 /// The rest of the conversation on either side.
-pub fn run(session: &mut Session<TcpStream>, side: &impl Side, peer: PeerKey) -> PairingPhase {
-    talk(session, side, peer).unwrap_or_else(|reason| PairingPhase::Failed { reason })
+pub fn run(
+    session: &mut Session<TcpStream>,
+    side: &impl Side,
+    peer: PeerKey,
+    entries: Entries,
+) -> PairingPhase {
+    talk(session, side, peer, entries).unwrap_or_else(|reason| PairingPhase::Failed { reason })
 }
 
 /// What a plan holds, sorted by who has to look at it.
@@ -177,22 +352,144 @@ struct Sorted {
     risky: Vec<(Change, Vec<RiskyLine>)>,
     deletions: Vec<Change>,
     conflicts: Vec<Conflict>,
+    vault: VaultSorted,
+    /// Deletions that go without asking: few enough today.
+    unasked: usize,
+}
+
+/// The vault's part of [`Sorted`].
+#[derive(Default)]
+struct VaultSorted {
+    safe: Vec<VaultChange>,
+    risky: Vec<VaultChange>,
+    removals: Vec<VaultChange>,
+    conflicts: Vec<VaultConflict>,
 }
 
 fn talk(
     session: &mut Session<TcpStream>,
     side: &impl Side,
     peer: PeerKey,
+    entries: Entries,
 ) -> Result<PairingPhase, PairingFailure> {
     let initiator = session.is_initiator();
     side.show(None, &PairingPhase::Syncing);
     let local = side.sync_load(peer)?;
+    let (mine, theirs) = swap_manifests(session, &local)?;
+    let vault = match EntrySync::agreed(entries.mine, entries.theirs) {
+        Some(_) => Some(swap_vault(session, side, &local.state.vault)?),
+        None => None,
+    };
+
+    let sorted = sort(
+        &local,
+        &plan(&local.state.base, &local.hasher, &mine.hosts, &theirs.hosts),
+        vault.as_ref(),
+    );
+    let decisions = settle(session, side, &local.config, &sorted, vault.is_some())?;
+    let mut summary = SyncSummary {
+        vault_off: VaultOff::of(entries),
+        ..SyncSummary::default()
+    };
+    let mut state = local.state.clone();
+    // On the side that didn't connect, what the other user's choices on
+    // conflicts delete counts with the sync's other deletions too.
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let decided = if initiator {
+        0
+    } else {
+        decided_deletions(&sorted, &decisions)
+    };
+    let within = local.state.recent_unasked(now) + sorted.unasked + decided <= MASS_DELETE;
+    let unasked = sorted.unasked + if within { decided } else { 0 };
+    let choice = Choice {
+        initiator,
+        within,
+        decisions: &decisions,
+    };
+    let vault_choices = choose_vault(&choice, &sorted.vault, &mut state, &mut summary);
+    if state.note_unasked(now, unasked) {
+        // Kept before anything changes: a sync that ends early counts too.
+        side.sync_unasked(&state.unasked)?;
+    }
+    let changes = choose(&choice, &local.config, sorted, &mut state, &mut summary);
+    let (config, known) = apply_hosts(&local, &changes, &theirs, &mut summary);
+    let learned = learned_devices(&local.devices, &theirs.devices);
+    let written = side.sync_write(
+        peer,
+        &SyncWrite {
+            config: (config != local.config).then(|| config.clone()),
+            config_revision: local.config.revision(),
+            known: (known != local.known).then_some(known),
+            known_revision: local.known.revision(),
+            devices: theirs.devices.clone(),
+            projects: theirs.projects.clone(),
+            contacts: theirs.contacts.clone(),
+            deletes: changes.iter().any(|c| matches!(c, Change::Delete(_))),
+        },
+    );
+    let vault_written = vault.as_ref().map(|plan| {
+        side.vault_apply(plan, &vault_choices)
+            .map(|applied| summary.vault = applied.counts)
+    });
+    let vault_now = match &vault {
+        Some(plan) => Some(side.vault_items(&plan.pairs)?),
+        None => None,
+    };
+    // What is on disk now: the other side's snapshot must match it.
+    let after = hosts::portable(if written.is_ok() {
+        &config
+    } else {
+        &local.config
+    });
+    let Message::Applied {
+        hashes: their_hashes,
+        deferred: deferred_there,
+        vault: their_vault,
+    } = swap(
+        session,
+        &Message::Applied {
+            hashes: digests(&after),
+            deferred: summary.deferred,
+            vault: vault_now
+                .as_ref()
+                .map(|now| now.digests.clone())
+                .unwrap_or_default(),
+        },
+    )?
+    else {
+        return Err(PairingFailure::Broken);
+    };
+    written?;
+    summary.devices_added = learned.into_iter().map(|device| device.name).collect();
+    vault_written.transpose()?;
+    summary.deferred_there = deferred_there;
+
+    state.base = agree(&local.state.base, &local.hasher, &after, &their_hashes);
+    if let (Some(plan), Some(now)) = (&vault, &vault_now) {
+        remember_vault(&mut state, &local.state.vault, plan, now, &their_vault);
+    }
+    let offered = digests(&theirs.hosts);
+    state
+        .declined
+        .retain(|id, declined| offered.get(id) == Some(declined));
+    state.synced = OffsetDateTime::now_utc().format(&Rfc3339).ok();
+    side.sync_keep(peer, &state)?;
+    Ok(PairingPhase::Synced { summary })
+}
+
+/// Sends this side's manifest and reads the other's, checked.
+fn swap_manifests(
+    session: &mut Session<TcpStream>,
+    local: &SyncLocal,
+) -> Result<(Manifest, Manifest), PairingFailure> {
     let hosts = hosts::portable(&local.config);
     let mine = Manifest {
         host_keys: host_keys::collect(&local.known, &hosts),
         hosts,
         devices: local.devices.clone(),
         projects: local.projects.clone(),
+        contacts: local.contacts.clone(),
     };
     let _ = session.stream().set_read_timeout(Some(STEP_TIMEOUT));
     let Message::Manifest { manifest: theirs } = swap(
@@ -205,25 +502,19 @@ fn talk(
         return Err(PairingFailure::Broken);
     };
     theirs.check().map_err(|_| PairingFailure::Broken)?;
+    Ok((mine, theirs))
+}
 
-    let sorted = sort(
-        &local,
-        &plan(&local.state.base, &local.hasher, &mine.hosts, &theirs.hosts),
-    );
-    let decisions = settle(session, side, &local.config, &sorted)?;
-    let mut summary = SyncSummary::default();
-    let mut state = local.state.clone();
-    let changes = choose(
-        initiator,
-        &local.config,
-        sorted,
-        &decisions,
-        &mut state,
-        &mut summary,
-    );
-
+/// The config and `known_hosts` after `changes` and the other side's
+/// server keys, counted in `summary`.
+fn apply_hosts(
+    local: &SyncLocal,
+    changes: &[Change],
+    theirs: &Manifest,
+    summary: &mut SyncSummary,
+) -> (SshConfig, KnownHosts) {
     let mut config = local.config.clone();
-    for change in &changes {
+    for change in changes {
         match (hosts::apply(&mut config, change), change) {
             (Ok(()), Change::Add(_)) => summary.added += 1,
             (Ok(()), Change::Update(_)) => summary.changed += 1,
@@ -235,47 +526,55 @@ fn talk(
     let keys = host_keys::merge(&mut known, &theirs.host_keys);
     summary.keys_added = keys.added;
     summary.keys_differ = keys.differ;
-    let written = side.sync_write(
-        peer,
-        &SyncWrite {
-            config: (config != local.config).then(|| config.clone()),
-            config_revision: local.config.revision(),
-            known: (known != local.known).then_some(known),
-            known_revision: local.known.revision(),
-            devices: theirs.devices.clone(),
-            projects: theirs.projects.clone(),
-        },
-    );
-    // What is on disk now: the other side's snapshot must match it.
-    let after = hosts::portable(if written.is_ok() {
-        &config
-    } else {
-        &local.config
-    });
-    let Message::Applied {
-        hashes: their_hashes,
-        deferred: deferred_there,
-    } = swap(
-        session,
-        &Message::Applied {
-            hashes: digests(&after),
-            deferred: summary.deferred,
-        },
-    )?
-    else {
-        return Err(PairingFailure::Broken);
-    };
-    written?;
-    summary.deferred_there = deferred_there;
+    (config, known)
+}
 
-    state.base = agree(&local.state.base, &local.hasher, &after, &their_hashes);
-    let offered = digests(&theirs.hosts);
+/// The vault's snapshot for next time: what both have alike, with the
+/// groups paired; and the risky changes turned down that still come.
+fn remember_vault(
+    state: &mut SyncState,
+    old: &VaultBase,
+    plan: &VaultPlan,
+    now: &VaultItems,
+    theirs: &BTreeMap<String, String>,
+) {
+    state.vault = VaultBase {
+        base: agree_hashed(&old.base, &now.snapshots, &now.digests, theirs),
+        pairs: plan.pairs.clone(),
+    };
+    let offered: BTreeMap<&String, &String> =
+        plan.changes.iter().map(|c| (&c.id, &c.version)).collect();
     state
-        .declined
-        .retain(|id, declined| offered.get(id) == Some(declined));
-    state.synced = OffsetDateTime::now_utc().format(&Rfc3339).ok();
-    side.sync_keep(peer, &state)?;
-    Ok(PairingPhase::Synced { summary })
+        .vault_declined
+        .retain(|id, declined| offered.get(id) == Some(&&*declined));
+}
+
+/// Sends this side's copy of the vault and reads the other's (the side
+/// that connected first), then works out what to take from it. The side
+/// that didn't connect reads before it makes its own copy, so the other
+/// isn't left writing while it does; writes may take as long as a step.
+fn swap_vault(
+    session: &mut Session<TcpStream>,
+    side: &impl Side,
+    base: &VaultBase,
+) -> Result<VaultPlan, PairingFailure> {
+    let _ = session.stream().set_write_timeout(Some(STEP_TIMEOUT));
+    let theirs = if session.is_initiator() {
+        let copy = side.vault_copy()?;
+        session.send_bytes(&copy, &mut |_, _| {}).map_err(broken)?;
+        session
+            .recv_bytes(MAX_DATABASE_SIZE, &mut |_, _| {})
+            .map_err(broken)?
+    } else {
+        let theirs = session
+            .recv_bytes(MAX_DATABASE_SIZE, &mut |_, _| {})
+            .map_err(broken)?;
+        let copy = side.vault_copy()?;
+        session.send_bytes(&copy, &mut |_, _| {}).map_err(broken)?;
+        theirs
+    };
+    let _ = session.stream().set_write_timeout(Some(IO_TIMEOUT));
+    side.vault_plan(&Zeroizing::new(theirs.to_vec()), base)
 }
 
 /// What the users decided: on the side that connected, its user's choices
@@ -286,6 +585,7 @@ fn settle(
     side: &impl Side,
     config: &SshConfig,
     sorted: &Sorted,
+    vault: bool,
 ) -> Result<SyncDecisions, PairingFailure> {
     if session.is_initiator() {
         let review = Review {
@@ -299,6 +599,11 @@ fn settle(
                 })
                 .collect(),
             deletions: sorted.deletions.iter().map(|c| c.id().to_owned()).collect(),
+            vault: VaultReview {
+                conflicts: sorted.vault.conflicts.clone(),
+                risky: sorted.vault.risky.clone(),
+                deletions: sorted.vault.removals.clone(),
+            },
         };
         let mut decisions = if review.is_empty() {
             SyncDecisions::default()
@@ -311,6 +616,10 @@ fn settle(
             .send(&Message::Decisions {
                 initiator: decisions.mine.clone(),
                 responder: decisions.theirs.clone(),
+                vault: vault.then(|| VaultDecisions {
+                    initiator: decisions.vault_mine.clone(),
+                    responder: decisions.vault_theirs.clone(),
+                }),
             })
             .map_err(|_| PairingFailure::Broken)?;
         side.show(None, &PairingPhase::Syncing);
@@ -323,24 +632,28 @@ fn settle(
     let Message::Decisions {
         initiator: theirs_stay,
         responder: mine_stay,
+        vault,
     } = session.recv().map_err(broken)?
     else {
         return Err(PairingFailure::Broken);
     };
     let _ = session.stream().set_read_timeout(Some(STEP_TIMEOUT));
+    let vault = vault.unwrap_or_default();
     Ok(SyncDecisions {
         mine: mine_stay,
         theirs: theirs_stay,
+        vault_mine: vault.responder,
+        vault_theirs: vault.initiator,
         ..SyncDecisions::default()
     })
 }
 
 /// Keeps in `decisions` only the risky changes this computer's user allows
-/// in the system dialog: the ones they chose to make, and the conflicts
+/// in the system dialogs: the ones they chose to make, and the conflicts
 /// they settled for the other computer's version that would add a directive
-/// running a program or reaching beyond the host. The page's choice alone
-/// never writes one. On a no, all of them wait for the next sync; the rest
-/// of the sync goes on.
+/// running a program or reaching beyond the host, or a variable that makes
+/// programs load code. The page's choice alone never writes one. On a no,
+/// all of them wait for the next sync; the rest of the sync goes on.
 fn allow_risky(
     side: &impl Side,
     config: &SshConfig,
@@ -368,12 +681,37 @@ fn allow_risky(
             });
         }
     }
-    if asked.is_empty() || side.allow_risky(&asked) {
-        return;
+    if !asked.is_empty() && !side.allow_risky(&asked) {
+        let asked = |id: &String| asked.iter().any(|change| change.id == *id);
+        decisions.apply.retain(|id| !asked(id));
+        decisions.theirs.retain(|id| !asked(id));
     }
-    let asked = |id: &String| asked.iter().any(|change| change.id == *id);
-    decisions.apply.retain(|id| !asked(id));
-    decisions.theirs.retain(|id| !asked(id));
+
+    let variables = |id: &str, environment: &str, names: &[String]| RiskyVariables {
+        id: id.to_owned(),
+        environment: environment.to_owned(),
+        names: names.to_vec(),
+    };
+    let mut asked: Vec<RiskyVariables> = sorted
+        .vault
+        .risky
+        .iter()
+        .filter(|change| decisions.vault_apply.contains(&change.id))
+        .map(|change| variables(&change.id, &change.label, &change.risky))
+        .collect();
+    asked.extend(
+        sorted
+            .vault
+            .conflicts
+            .iter()
+            .filter(|c| !c.risky.is_empty() && decisions.vault_theirs.contains(&c.id))
+            .map(|c| variables(&c.id, &c.label, &c.risky)),
+    );
+    if !asked.is_empty() && !side.allow_risky_variables(&asked) {
+        let asked = |id: &String| asked.iter().any(|change| change.id == *id);
+        decisions.vault_apply.retain(|id| !asked(id));
+        decisions.vault_theirs.retain(|id| !asked(id));
+    }
 }
 
 /// The system dialog that asks to allow `changes` from a sync with `peer`
@@ -386,7 +724,7 @@ pub fn risky_prompt(
     let en = risky_list(changes, |n| format!("…and {n} more"));
     let ru = risky_list(changes, |n| format!("…и ещё {n}"));
     let uz = risky_list(changes, |n| format!("…va yana {n} ta"));
-    let peer = shown(peer);
+    let peer = shown(peer, SHOWN_CHARS);
     (
         Localized::new(
             "Allow ssh to run this?",
@@ -432,9 +770,9 @@ fn risky_list(changes: &[RiskyChange], more: impl Fn(usize) -> String) -> String
             change.lines.iter().map(move |line| {
                 format!(
                     "• Host {}: {} {}",
-                    shown(&change.id),
-                    shown(&line.key),
-                    shown(&line.value)
+                    shown(&change.id, SHOWN_CHARS),
+                    shown(&line.key, SHOWN_CHARS),
+                    shown_value(&line.value)
                 )
             })
         })
@@ -446,46 +784,155 @@ fn risky_list(changes: &[RiskyChange], more: impl Fn(usize) -> String) -> String
     lines.join("\n")
 }
 
-/// `text` as the dialog shows it: control characters and invisible or
-/// direction-changing ones as `<U+…>`, so what is shown is what `ssh` runs,
-/// and at most [`SHOWN_CHARS`] characters, with how many more there are.
-fn shown(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for (i, c) in text.chars().enumerate() {
-        if i == SHOWN_CHARS {
-            let rest = text.chars().count() - SHOWN_CHARS;
-            let _ = write!(out, "… (+{rest})");
-            break;
+/// The system dialog that asks to allow `changes` to environments from a
+/// sync with `peer`: its title, text and button. One line per variable,
+/// with the value `value` gives for it (`NODE_OPTIONS=--require …`), so
+/// what is allowed is what programs will load.
+pub fn variables_prompt(
+    peer: &str,
+    changes: &[RiskyVariables],
+    value: &dyn Fn(&RiskyVariables, &str) -> Option<String>,
+) -> (Localized, Localized, Localized) {
+    let list = |more: &dyn Fn(usize) -> String| {
+        let all: Vec<String> = changes
+            .iter()
+            .flat_map(|change| {
+                change.names.iter().map(move |name| {
+                    let shown_value = value(change, name)
+                        .map(|value| format!("={}", shown_value(&value)))
+                        .unwrap_or_default();
+                    format!(
+                        "• {}: {}{shown_value}",
+                        shown(&change.environment, SHOWN_CHARS),
+                        shown(name, SHOWN_CHARS)
+                    )
+                })
+            })
+            .collect();
+        let mut lines: Vec<String> = all.iter().take(SHOWN_LINES).cloned().collect();
+        if all.len() > SHOWN_LINES {
+            lines.push(more(all.len() - SHOWN_LINES));
         }
-        let invisible = matches!(
-            c,
-            '\u{00AD}'
-                | '\u{061C}'
-                | '\u{180E}'
-                | '\u{200B}'..='\u{200F}'
-                | '\u{202A}'..='\u{202E}'
-                | '\u{2060}'..='\u{2069}'
-                | '\u{FEFF}'
-        );
-        if c.is_control() || invisible {
-            let _ = write!(out, "<U+{:04X}>", u32::from(c));
+        lines.join("\n")
+    };
+    let en = list(&|n| format!("…and {n} more"));
+    let ru = list(&|n| format!("…и ещё {n}"));
+    let uz = list(&|n| format!("…va yana {n} ta"));
+    let peer = shown(peer, SHOWN_CHARS);
+    (
+        Localized::new(
+            "Allow variables that run code?",
+            "Разрешить переменные, которые запускают код?",
+            "Kod ishga tushiradigan oʻzgaruvchilarga ruxsat berilsinmi?",
+        ),
+        Localized::new(
+            format!(
+                "The sync with {peer} adds or changes variables that make programs load \
+                 code or run commands when you use the environment in a terminal or a \
+                 .env file:\n\n{en}\n\nAllow it only if you made these changes on {peer} \
+                 yourself. Otherwise they wait for the next sync."
+            ),
+            format!(
+                "Синхронизация с {peer} добавляет или меняет переменные, из-за которых \
+                 программы загружают код или запускают команды, когда вы используете \
+                 окружение в терминале или в файле .env:\n\n{ru}\n\nРазрешайте, только \
+                 если эти изменения на {peer} сделали вы сами. Иначе они подождут следующей \
+                 синхронизации."
+            ),
+            format!(
+                "{peer} bilan sinxronlash muhitni terminalda yoki .env faylida \
+                 ishlatganingizda dasturlarga kod yuklatadigan yoki buyruq ishga \
+                 tushiradigan oʻzgaruvchilarni qoʻshadi yoki oʻzgartiradi:\n\n{uz}\n\n\
+                 Faqat bu oʻzgarishlarni {peer} da oʻzingiz qilgan boʻlsangiz, ruxsat \
+                 bering. Aks holda ular keyingi sinxronlashni kutadi."
+            ),
+        ),
+        Localized::new(
+            "Allow and sync",
+            "Разрешить и синхронизировать",
+            "Ruxsat berish va sinxronlash",
+        ),
+    )
+}
+
+/// A value as the dialog shows it ([`shown`]): a run of spaces as one, so
+/// padding can't push what follows out of sight, and in full up to
+/// [`SHOWN_VALUE`] characters; past that, its start and its end.
+fn shown_value(text: &str) -> String {
+    let mut collapsed = String::with_capacity(text.len());
+    for c in text.chars() {
+        if c.is_whitespace() && !c.is_control() && !invisible(c) {
+            if !collapsed.ends_with(' ') {
+                collapsed.push(' ');
+            }
         } else {
-            out.push(c);
+            collapsed.push(c);
         }
     }
-    out
+    let chars: Vec<char> = collapsed.chars().collect();
+    if chars.len() <= SHOWN_VALUE {
+        return shown(&collapsed, SHOWN_VALUE);
+    }
+    let half = SHOWN_VALUE / 2;
+    let head: String = chars[..half].iter().collect();
+    let tail: String = chars[chars.len() - half..].iter().collect();
+    format!(
+        "{} … (+{}) … {}",
+        shown(&head, half),
+        chars.len() - SHOWN_VALUE,
+        shown(&tail, half)
+    )
+}
+
+/// What the changes to make here follow: which side this is, the
+/// decisions, and whether the deletions the other user decided through
+/// conflicts fit within the limit ([`decided_deletions`]).
+struct Choice<'a> {
+    initiator: bool,
+    within: bool,
+    decisions: &'a SyncDecisions,
+}
+
+/// Whether taking the other side's version of a conflict deletes the item
+/// or moves it to the recycle bin.
+fn removes(conflict: &VaultConflict) -> bool {
+    conflict.there == Party::Deleted || conflict.to_bin
+}
+
+/// Deletions the other user decided through conflicts, on the side that
+/// didn't connect: the conflicts settled for a version that deletes, or
+/// moves to the recycle bin.
+fn decided_deletions(sorted: &Sorted, decisions: &SyncDecisions) -> usize {
+    let hosts = sorted
+        .conflicts
+        .iter()
+        .filter(|c| {
+            decisions.theirs.contains(&c.id) && matches!(c.take_theirs(), Change::Delete(_))
+        })
+        .count();
+    let vault = sorted
+        .vault
+        .conflicts
+        .iter()
+        .filter(|c| decisions.vault_theirs.contains(&c.id) && removes(c))
+        .count();
+    hosts + vault
 }
 
 /// The changes to make here after the decisions, counting what waits in
 /// `summary` and remembering what the user turned down in `state`.
 fn choose(
-    initiator: bool,
+    choice: &Choice<'_>,
     config: &SshConfig,
     sorted: Sorted,
-    decisions: &SyncDecisions,
     state: &mut SyncState,
     summary: &mut SyncSummary,
 ) -> Vec<Change> {
+    let Choice {
+        initiator,
+        within,
+        decisions,
+    } = *choice;
     let mut changes = sorted.safe;
     if initiator {
         for (change, _) in sorted.risky {
@@ -512,7 +959,8 @@ fn choose(
         if decisions.theirs.contains(&conflict.id) {
             let change = conflict.take_theirs();
             let risky = !hosts::risky(config, &change).unwrap_or_default().is_empty();
-            if !initiator && risky {
+            let past_limit = !within && matches!(change, Change::Delete(_));
+            if !initiator && (risky || past_limit) {
                 summary.deferred += 1;
             } else {
                 changes.push(change);
@@ -522,6 +970,59 @@ fn choose(
         }
     }
     changes
+}
+
+/// The vault's changes to make here and how its conflicts are settled, as
+/// [`choose`] does for hosts.
+fn choose_vault(
+    choice: &Choice<'_>,
+    sorted: &VaultSorted,
+    state: &mut SyncState,
+    summary: &mut SyncSummary,
+) -> VaultChoices {
+    let Choice {
+        initiator,
+        within,
+        decisions,
+    } = *choice;
+    let mut make: BTreeSet<String> = sorted.safe.iter().map(|c| c.id.clone()).collect();
+    if initiator {
+        for change in &sorted.risky {
+            if decisions.vault_apply.contains(&change.id) {
+                make.insert(change.id.clone());
+            } else if decisions.vault_decline.contains(&change.id) {
+                state
+                    .vault_declined
+                    .insert(change.id.clone(), change.version.clone());
+            } else {
+                summary.deferred += 1;
+            }
+        }
+        if decisions.delete {
+            make.extend(sorted.removals.iter().map(|c| c.id.clone()));
+        } else {
+            summary.deferred += count(sorted.removals.len());
+        }
+    } else {
+        summary.deferred += count(sorted.risky.len() + sorted.removals.len());
+    }
+    let (mut theirs, mut kept) = (BTreeSet::new(), BTreeSet::new());
+    for conflict in &sorted.conflicts {
+        if decisions.vault_theirs.contains(&conflict.id) {
+            let past_limit = !within && removes(conflict);
+            if !initiator && (!conflict.risky.is_empty() || past_limit) {
+                summary.deferred += 1;
+            } else {
+                theirs.insert(conflict.id.clone());
+            }
+        } else if decisions.vault_mine.contains(&conflict.id) {
+            // The other side's version goes among the entry's earlier ones.
+            kept.insert(conflict.id.clone());
+        } else {
+            summary.conflicts += 1;
+        }
+    }
+    VaultChoices { make, theirs, kept }
 }
 
 /// Sends `message` and reads the other side's: the side that connected
@@ -538,8 +1039,12 @@ fn swap(session: &mut Session<TcpStream>, message: &Message) -> Result<Message, 
 }
 
 /// Sorts a plan's changes by who has to look at them; a risky change the
-/// user turned down before, in the same version, is left out.
-fn sort(local: &SyncLocal, plan: &sshkm_core::sync::Plan) -> Sorted {
+/// user turned down before, in the same version, is left out. Deletions
+/// from the user's other devices are limited over time, not per sync: they
+/// need a look when, with those made from any of them without asking in the
+/// last [`DELETION_WINDOW`], they pass [`MASS_DELETE`], hosts and the
+/// vault's items counted together.
+fn sort(local: &SyncLocal, plan: &sshkm_core::sync::Plan, vault: Option<&VaultPlan>) -> Sorted {
     let mut sorted = Sorted {
         conflicts: plan.conflicts.clone(),
         ..Sorted::default()
@@ -556,8 +1061,27 @@ fn sort(local: &SyncLocal, plan: &sshkm_core::sync::Plan) -> Sorted {
             _ => sorted.safe.push(change.clone()),
         }
     }
-    if sorted.deletions.len() <= MASS_DELETE {
+    if let Some(vault) = vault {
+        sorted.vault.conflicts.clone_from(&vault.conflicts);
+        for change in &vault.changes {
+            if local.state.vault_declined.get(&change.id) == Some(&change.version) {
+                continue;
+            }
+            if !change.risky.is_empty() {
+                sorted.vault.risky.push(change.clone());
+            } else if change.removal {
+                sorted.vault.removals.push(change.clone());
+            } else {
+                sorted.vault.safe.push(change.clone());
+            }
+        }
+    }
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let incoming = sorted.deletions.len() + sorted.vault.removals.len();
+    if local.state.recent_unasked(now) + incoming <= MASS_DELETE {
+        sorted.unasked = incoming;
         sorted.safe.append(&mut sorted.deletions);
+        sorted.vault.safe.append(&mut sorted.vault.removals);
     }
     sorted
 }
@@ -591,7 +1115,7 @@ fn count(n: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::super::pairing::Purpose;
-    use super::super::script::{Script, talk};
+    use super::super::script::{Script, over_own_handshake, talk};
     use super::*;
 
     const LEFT: &str =
@@ -817,8 +1341,20 @@ mod tests {
         assert_eq!(body.en.matches("• Host").count(), SHOWN_LINES);
         assert!(body.en.contains("…and 3 more"));
         assert!(body.ru.contains("…и ещё 3"));
-        let long = "x".repeat(SHOWN_CHARS + 5);
-        assert_eq!(shown(&long), format!("{}… (+5)", "x".repeat(SHOWN_CHARS)));
+        // Padding can't hide what follows, nor a line break of its own.
+        let padded = format!(
+            "--max-old-space-size=4096{}--require /tmp/x.js",
+            " ".repeat(100)
+        );
+        assert_eq!(
+            shown_value(&padded),
+            "--max-old-space-size=4096 --require /tmp/x.js"
+        );
+        assert_eq!(shown_value("a\u{2028}b\u{2029}c"), "a<U+2028>b<U+2029>c");
+        let long = format!("{}{}", "x".repeat(SHOWN_VALUE), "--require /tmp/x.js");
+        let value = shown_value(&long);
+        assert!(value.ends_with("--require /tmp/x.js"), "{value}");
+        assert!(value.contains(" … (+19) … "));
     }
 
     #[test]
@@ -841,6 +1377,63 @@ mod tests {
         let ((left_sum, left), _) = sync(left, right);
         assert_eq!(left_sum.removed, 6);
         assert_eq!(left.config_text().matches("Host h").count(), 0);
+    }
+
+    #[test]
+    fn deletions_from_a_device_count_over_the_day() {
+        let hosts = |numbers: std::ops::RangeInclusive<u32>| {
+            numbers
+                .map(|n| format!("Host h{n}\n    HostName 10.0.1.{n}\n\n"))
+                .collect::<Vec<_>>()
+                .concat()
+        };
+        let ((_, left), (_, right)) = sync(
+            Script::own("alice", "s", &hosts(1..=6)),
+            Script::own("bob", "s", ""),
+        );
+        // Three deletions go without asking, and are remembered.
+        set(&right, &hosts(4..=6));
+        let ((left_sum, mut left), (_, right)) = sync(left, right);
+        assert_eq!((left_sum.removed, left_sum.deferred), (3, 0));
+        let unasked: u32 = left
+            .sync_state
+            .lock()
+            .unwrap()
+            .unasked
+            .iter()
+            .map(|(_, n)| n)
+            .sum();
+        assert_eq!(unasked, 3);
+        // Three more the same day: past the limit with the first three,
+        // so the user decides on them; left alone, they wait.
+        set(&right, "");
+        let ((left_sum, mut left_after), (_, right)) = sync(left, right);
+        assert_eq!((left_sum.removed, left_sum.deferred), (0, 3));
+        assert_eq!(left_after.config_text().matches("Host h").count(), 3);
+        assert!(
+            left_after
+                .shown
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(_, phase)| matches!(
+                    phase,
+                    PairingPhase::Decide { review } if review.deletions.len() == 3
+                ))
+        );
+        left_after.decisions.delete = true;
+        let ((left_sum, left_after), _) = sync(left_after, right);
+        assert_eq!(left_sum.removed, 3);
+        assert_eq!(left_after.config_text().matches("Host h").count(), 0);
+
+        // A day later the count starts again.
+        left = left_after;
+        left.sync_state.lock().unwrap().unasked = vec![(
+            OffsetDateTime::now_utc().unix_timestamp() - DELETION_WINDOW - 1,
+            5,
+        )];
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        assert_eq!(left.sync_state.lock().unwrap().recent_unasked(now), 0);
     }
 
     #[test]
@@ -868,5 +1461,464 @@ mod tests {
         let ((_, _), (right_end, _)) =
             talk(Script::new("alice", Some(true)), announced, Purpose::Pair);
         assert_eq!(right_end, not_own);
+    }
+
+    /// Two copies of one vault (with the key own devices share), each on
+    /// a side whose entries sync, the first with a login `Mail`.
+    fn vault_pair() -> (tempfile::TempDir, Script, Script, String) {
+        use sshkm_core::SecretString;
+        use sshkm_core::vault::{EntryInput, Vault, VaultPaths};
+        let dir = tempfile::tempdir().unwrap();
+        let paths = |name: &str| {
+            let folder = dir.path().join(name);
+            std::fs::create_dir_all(&folder).unwrap();
+            VaultPaths::new(folder.join("vault.kdbx"))
+        };
+        let (a, b) = (paths("a"), paths("b"));
+        let master = SecretString::from("master");
+        let (mut vault, _) = Vault::create(&a, &master).unwrap();
+        vault.make_own_key(&dir.path().join("a/backups")).unwrap();
+        let mail = vault
+            .add_entry(&EntryInput {
+                title: "Mail".into(),
+                password: Some(SecretString::from("p1")),
+                ..EntryInput::default()
+            })
+            .unwrap();
+        vault.save(&dir.path().join("a/backups")).unwrap();
+        drop(vault);
+        std::fs::copy(&a.database, &b.database).unwrap();
+        std::fs::copy(&a.keys, &b.keys).unwrap();
+        let side = |name: &'static str, paths: &VaultPaths, config: &str, folder: &str| {
+            Script::with_vault(
+                name,
+                config,
+                Vault::unlock(paths, &master).unwrap(),
+                dir.path().join(folder).join("backups"),
+            )
+        };
+        let left = side("alice", &a, LEFT, "a");
+        let right = side("bob", &b, RIGHT, "b");
+        (dir, left, right, mail)
+    }
+
+    fn add_login(side: &Script, title: &str) -> String {
+        side.real_vault()
+            .add_entry(&sshkm_core::vault::EntryInput {
+                title: title.into(),
+                ..sshkm_core::vault::EntryInput::default()
+            })
+            .unwrap()
+    }
+
+    fn title(side: &Script, id: &str) -> Option<String> {
+        side.real_vault().entry(id).ok().map(|e| e.summary.title)
+    }
+
+    #[test]
+    fn the_vault_syncs_by_entries_when_both_sides_do() {
+        let (_dir, left, right, mail) = vault_pair();
+        let shop = add_login(&left, "Shop");
+        let blog = add_login(&right, "Blog");
+        // Over the handshake own devices use, as in the app.
+        assert!(over_own_handshake(&left, &right));
+        let ((left_sum, left), (right_sum, right)) = sync(left, right);
+        assert_eq!(left_sum.vault.logins.added, 1);
+        assert_eq!(right_sum.vault.logins.added, 1);
+        assert_eq!((left_sum.vault_off, right_sum.vault_off), (None, None));
+        assert_eq!(title(&right, &shop).as_deref(), Some("Shop"));
+        assert_eq!(title(&left, &blog).as_deref(), Some("Blog"));
+        // Both keep a snapshot of the same items.
+        let keys = |side: &Script| -> Vec<String> {
+            side.sync_state
+                .lock()
+                .unwrap()
+                .vault
+                .base
+                .items
+                .keys()
+                .cloned()
+                .collect()
+        };
+        assert_eq!(keys(&left), keys(&right));
+        assert!(keys(&left).contains(&mail));
+
+        // Next time, a change goes across; nothing else comes up.
+        {
+            let mut vault = left.real_vault();
+            let detail = vault.entry(&mail).unwrap();
+            vault
+                .update_entry(
+                    &mail,
+                    &sshkm_core::vault::EntryInput {
+                        title: detail.summary.title,
+                        url: "https://mail.example".into(),
+                        ..sshkm_core::vault::EntryInput::default()
+                    },
+                )
+                .unwrap();
+        }
+        let ((left_sum, _), (right_sum, right)) = sync(left, right);
+        assert_eq!(left_sum.vault, VaultCounts::default());
+        assert_eq!(right_sum.vault.logins.changed, 1);
+        assert_eq!(
+            right.real_vault().entry(&mail).unwrap().summary.url,
+            "https://mail.example"
+        );
+    }
+
+    #[test]
+    fn a_peer_without_entry_sync_syncs_hosts_only() {
+        let (_dir, left, mut right, _) = vault_pair();
+        let shop = add_login(&left, "Shop");
+        right.entries = None;
+        let ((left_sum, _), (right_sum, right)) = sync(left, right);
+        assert_eq!(left_sum.vault_off, Some(VaultOff::Version));
+        assert_eq!(right_sum.vault_off, None);
+        assert_eq!((left_sum.added, right_sum.added), (1, 1));
+        assert_eq!(title(&right, &shop), None);
+    }
+
+    #[test]
+    fn a_vault_in_a_cloud_folder_is_left_to_the_cloud() {
+        let (_dir, mut left, right, _) = vault_pair();
+        let shop = add_login(&left, "Shop");
+        left.entries = Some(EntrySync::Cloud {
+            service: CloudService::Dropbox,
+        });
+        let ((left_sum, _), (right_sum, right)) = sync(left, right);
+        let cloud = |here| {
+            Some(VaultOff::Cloud {
+                service: CloudService::Dropbox,
+                here,
+            })
+        };
+        assert_eq!(left_sum.vault_off, cloud(true));
+        assert_eq!(right_sum.vault_off, cloud(false));
+        assert_eq!(title(&right, &shop), None);
+        assert_eq!(right_sum.added, 1);
+    }
+
+    #[test]
+    fn vault_conflicts_and_many_deletions_are_the_users() {
+        let (dir, left, right, mail) = vault_pair();
+        let doomed: Vec<String> = (0..7)
+            .map(|n| add_login(&left, &format!("Old {n}")))
+            .collect();
+        let ((_, mut left), (_, right)) = sync(left, right);
+        for id in &doomed {
+            left.real_vault().trash_entry(id).unwrap();
+        }
+        let retitle = |side: &Script, to: &str| {
+            side.real_vault()
+                .update_entry(
+                    &mail,
+                    &sshkm_core::vault::EntryInput {
+                        title: to.into(),
+                        ..sshkm_core::vault::EntryInput::default()
+                    },
+                )
+                .unwrap();
+        };
+        retitle(&left, "Mail (left)");
+        retitle(&right, "Mail (right)");
+        let right_versions = right.real_vault().entry(&mail).unwrap().history_len;
+        // The user who started takes the other's version of the conflict;
+        // the side that answers puts off the seven moves to the bin.
+        left.decisions.vault_theirs = vec![mail.clone()];
+        let ((left_sum, left), (right_sum, mut right)) = sync(left, right);
+        assert_eq!(right_sum.deferred, 7);
+        assert_eq!(left_sum.deferred_there, 7);
+        assert!(
+            doomed
+                .iter()
+                .all(|id| !right.real_vault().entry(id).unwrap().summary.in_trash)
+        );
+        assert_eq!(title(&left, &mail).as_deref(), Some("Mail (right)"));
+        assert_eq!(title(&right, &mail).as_deref(), Some("Mail (right)"));
+        // The version not kept stays among the entry's earlier versions,
+        // on both sides: the side that kept its own has the other's too.
+        assert!(left.real_vault().entry(&mail).unwrap().history_len >= 1);
+        assert_eq!(
+            right.real_vault().entry(&mail).unwrap().history_len,
+            right_versions + 1
+        );
+        // Saved, though nothing else of the vault changed on that side.
+        let saved = sshkm_core::vault::Vault::unlock(
+            &sshkm_core::vault::VaultPaths::new(dir.path().join("b/vault.kdbx")),
+            &sshkm_core::SecretString::from("master"),
+        )
+        .unwrap();
+        assert_eq!(saved.entry(&mail).unwrap().history_len, right_versions + 1);
+
+        // Started from that side, its user sees them and lets them go.
+        right.decisions.delete = true;
+        let ((right_sum, right), _) = sync(right, left);
+        assert_eq!(right_sum.vault.logins.removed, 7);
+        assert!(
+            doomed
+                .iter()
+                .all(|id| right.real_vault().entry(id).unwrap().summary.in_trash)
+        );
+        assert!(
+            right
+                .shown
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(_, phase)| matches!(
+                    phase,
+                    PairingPhase::Decide { review } if review.vault.deletions.len() == 7
+                ))
+        );
+    }
+
+    #[test]
+    fn a_variable_that_loads_code_needs_the_system_dialog() {
+        use sshkm_core::SecretString;
+        use sshkm_core::vault::envs::{EnvInput, EnvVarInput};
+        let (_dir, mut left, right, _) = vault_pair();
+        let env = {
+            let mut vault = right.real_vault();
+            let env = vault
+                .add_environment(&EnvInput {
+                    project: None,
+                    part: String::new(),
+                    name: "dev".into(),
+                    notes: String::new(),
+                })
+                .unwrap();
+            vault
+                .set_env_variable(
+                    &env,
+                    None,
+                    &EnvVarInput {
+                        name: "NODE_OPTIONS".into(),
+                        value: Some(SecretString::from("--require /tmp/x.js")),
+                        secret: false,
+                        note: String::new(),
+                    },
+                )
+                .unwrap();
+            env
+        };
+        left.decisions.vault_apply = vec![env.clone()];
+        left.allows_variables = false;
+        let ((left_sum, left), _) = sync(left, right);
+        assert_eq!(left_sum.deferred, 1);
+        assert!(left.real_vault().environment(&env).is_err());
+        let asked = left.asked_variables.lock().unwrap().clone();
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].names, ["NODE_OPTIONS"]);
+        assert_eq!(asked[0].environment, "dev");
+    }
+
+    #[test]
+    fn the_variables_dialog_names_the_environment_and_shows_the_values() {
+        let value = |_: &RiskyVariables, name: &str| {
+            (name == "NODE_OPTIONS").then(|| "--require /tmp/x.js\u{202E}".to_owned())
+        };
+        let (_, body, _) = variables_prompt(
+            "MacBook",
+            &[RiskyVariables {
+                id: "x".into(),
+                environment: "Shop · dev".into(),
+                names: vec!["NODE_OPTIONS".into(), "PATH".into()],
+            }],
+            &value,
+        );
+        assert!(
+            body.en.contains(
+                "• Shop · dev: NODE_OPTIONS=--require /tmp/x.js<U+202E>\n• Shop · dev: PATH\n"
+            ),
+            "{}",
+            body.en
+        );
+        assert!(body.ru.contains("MacBook"));
+    }
+
+    fn unasked(side: &Script) -> u32 {
+        side.sync_state
+            .lock()
+            .unwrap()
+            .unasked
+            .iter()
+            .map(|(_, n)| n)
+            .sum()
+    }
+
+    #[test]
+    fn deletions_count_even_when_the_other_side_hangs_up() {
+        let (_dir, left, right, _) = vault_pair();
+        let doomed: Vec<String> = (0..6)
+            .map(|n| add_login(&right, &format!("Old {n}")))
+            .collect();
+        let ((_, left), (_, mut right)) = sync(left, right);
+        for id in &doomed[..3] {
+            right.real_vault().trash_entry(id).unwrap();
+        }
+        // This side makes the three without asking, then the other hangs
+        // up instead of saying what it has: they still count.
+        right.hangs_up = true;
+        let ((left_end, mut left), (_, mut right)) = talk(left, right, Purpose::Sync);
+        assert!(
+            matches!(left_end, PairingPhase::Failed { .. }),
+            "{left_end:?}"
+        );
+        assert!(
+            doomed[..3]
+                .iter()
+                .all(|id| left.real_vault().entry(id).unwrap().summary.in_trash)
+        );
+        assert_eq!(unasked(&left), 3);
+        // Three more the same day wait for the user.
+        right.hangs_up = false;
+        for id in &doomed[3..] {
+            right.real_vault().trash_entry(id).unwrap();
+        }
+        left.decisions.delete = false;
+        let ((left_sum, left), _) = sync(left, right);
+        assert_eq!((left_sum.vault.logins.removed, left_sum.deferred), (0, 3));
+        assert!(
+            doomed[3..]
+                .iter()
+                .all(|id| !left.real_vault().entry(id).unwrap().summary.in_trash)
+        );
+    }
+
+    #[test]
+    fn deletions_the_other_user_decides_on_conflicts_count_too() {
+        let hosts = |numbers: std::ops::RangeInclusive<u32>, net: u32| {
+            numbers
+                .map(|n| format!("Host h{n}\n    HostName 10.0.{net}.{n}\n\n"))
+                .collect::<Vec<_>>()
+                .concat()
+        };
+        let ((_, mut left), (_, right)) = sync(
+            Script::own("alice", "s", &hosts(1..=6, 1)),
+            Script::own("bob", "s", ""),
+        );
+        assert_eq!(right.config_text().matches("Host h").count(), 6);
+        // Deleted on the side that connects, changed on the other; its user
+        // keeps the deletions. Two fit within the limit: they go, counted.
+        set(&left, &hosts(3..=6, 1));
+        set(&right, &(hosts(1..=2, 2) + &hosts(3..=6, 1)));
+        left.decisions.mine = vec!["h1".into(), "h2".into()];
+        let ((_, mut left), (right_sum, right)) = sync(left, right);
+        assert_eq!(right_sum.removed, 2);
+        assert_eq!(unasked(&right), 2);
+        // Four more the same day pass it with the first two: put off.
+        set(&left, "");
+        set(&right, &hosts(3..=6, 2));
+        left.decisions.mine = (3..=6).map(|n| format!("h{n}")).collect();
+        let ((left_sum, _), (right_sum, right)) = sync(left, right);
+        assert_eq!((right_sum.removed, right_sum.deferred), (0, 4));
+        assert_eq!(left_sum.deferred_there, 4);
+        assert_eq!(right.config_text().matches("Host h").count(), 4);
+        assert_eq!(unasked(&right), 2);
+    }
+
+    #[test]
+    fn conflicts_settled_for_a_version_in_the_bin_count_as_deletions() {
+        let (_dir, left, right, _) = vault_pair();
+        let ids: Vec<String> = (0..6)
+            .map(|n| add_login(&left, &format!("Login {n}")))
+            .collect();
+        let ((_, mut left), (_, right)) = sync(left, right);
+        let retitle = |side: &Script, id: &str, to: &str| {
+            side.real_vault()
+                .update_entry(
+                    id,
+                    &sshkm_core::vault::EntryInput {
+                        title: to.into(),
+                        ..sshkm_core::vault::EntryInput::default()
+                    },
+                )
+                .unwrap();
+        };
+        for id in &ids {
+            retitle(&left, id, "Left");
+            left.real_vault().trash_entry(id).unwrap();
+            retitle(&right, id, "Right");
+        }
+        // The user who started keeps its versions, in the bin: on the other
+        // side that moves six to the bin, past the limit, so they wait.
+        left.decisions.vault_mine.clone_from(&ids);
+        let ((left_sum, _), (right_sum, right)) = sync(left, right);
+        assert_eq!(right_sum.deferred, 6);
+        assert_eq!(left_sum.deferred_there, 6);
+        assert!(
+            ids.iter()
+                .all(|id| !right.real_vault().entry(id).unwrap().summary.in_trash)
+        );
+        assert_eq!(unasked(&right), 0);
+    }
+
+    #[test]
+    fn a_device_learned_through_a_sync_is_named_in_the_summary() {
+        let key = sshkm_core::p2p::Identity::generate()
+            .unwrap()
+            .public()
+            .to_string();
+        let now = OffsetDateTime::now_utc()
+            .replace_nanosecond(0)
+            .unwrap()
+            .format(&Rfc3339)
+            .unwrap();
+        let mut left = Script::own("alice", "s", LEFT);
+        left.device_records = vec![DeviceRecord {
+            key,
+            record: format!(r#"{{"name":"Phone","added":"{now}","modified":"{now}"}}"#),
+        }];
+        let ((left_sum, _), (right_sum, _)) = sync(left, Script::own("bob", "s", RIGHT));
+        assert_eq!(right_sum.devices_added, ["Phone"]);
+        assert_eq!(left_sum.devices_added, Vec::<String>::new());
+    }
+
+    #[test]
+    fn only_a_text_field_of_a_conflict_both_changed_is_shown() {
+        use sshkm_core::vault::sync::ItemKind;
+        let conflict = |id: &str, there: Party| VaultConflict {
+            id: id.into(),
+            kind: ItemKind::Login,
+            label: "Mail".into(),
+            here: Party::Changed,
+            there,
+            fields: [
+                "s:Password",
+                "s:otp",
+                "s:TOTP Seed",
+                "s:TimeOtp-Secret-Base32",
+                "s:HmacOtp-Secret",
+                "a:key.pem",
+            ]
+            .map(String::from)
+            .to_vec(),
+            risky: Vec::new(),
+            to_bin: false,
+        };
+        let review = Review {
+            vault: VaultReview {
+                conflicts: vec![
+                    conflict("both", Party::Changed),
+                    conflict("gone", Party::Deleted),
+                ],
+                ..VaultReview::default()
+            },
+            ..Review::default()
+        };
+        assert!(review.may_show("both", "s:Password"));
+        for field in [
+            "s:otp",
+            "s:TOTP Seed",
+            "s:TimeOtp-Secret-Base32",
+            "s:HmacOtp-Secret",
+            "a:key.pem",
+            "s:UserName",
+        ] {
+            assert!(!review.may_show("both", field), "{field}");
+        }
+        assert!(!review.may_show("gone", "s:Password"), "deleted there");
+        assert!(!review.may_show("elsewhere", "s:Password"), "no conflict");
     }
 }

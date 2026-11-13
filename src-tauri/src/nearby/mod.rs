@@ -54,24 +54,30 @@ use serde::{Deserialize, Serialize};
 use sshkm_core::config::SshConfig;
 use sshkm_core::known_hosts::KnownHosts;
 use sshkm_core::p2p::deadline::Deadline;
-use sshkm_core::p2p::protocol::{Intent, Item, SecretText, VaultState, clean_name};
+use sshkm_core::p2p::protocol::{EntrySync, Intent, Item, SecretText, VaultState, clean_name};
 use sshkm_core::p2p::{self, Identity, Message, PeerKey, Session};
+use sshkm_core::paths::home_dir;
 use sshkm_core::sync::Hasher;
 use sshkm_core::sync::host_keys;
+use sshkm_core::vault::envs::files::{CloudRoots, CloudService};
+use sshkm_core::vault::sync::{
+    ENTRY_SYNC_VERSION, Pairs, Party, PeerVault, VaultApplied, VaultBase, VaultChoices, VaultPlan,
+    check_moved, digests,
+};
 use sshkm_core::vault::{self, Vault};
 use sshkm_core::{ErrorCode, ExposeSecret, SecretString, fsutil};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Listener, Manager};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use zeroize::Zeroizing;
 
 use self::items::{ReceivedGroup, SendRequest};
 use self::pairing::{
-    PairingFailure, PairingPhase, Purpose, Side, Stored, broken, conversation_after,
+    PairingFailure, PairingPhase, Purpose, Side, Stored, VaultItems, broken, conversation_after,
 };
 pub use self::presence::OWN_SERVICE_TYPE;
 use self::presence::{OwnFound, Presence};
-use self::sync::{RiskyChange, SyncDecisions, SyncLocal, SyncState, SyncWrite};
+use self::sync::{RiskyChange, RiskyVariables, SyncDecisions, SyncLocal, SyncState, SyncWrite};
 use crate::commands::Shared;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
@@ -103,11 +109,15 @@ const MAX_HANDSHAKES_PER_ADDRESS: usize = 2;
 /// it, before it hides: someone may be trying until the code is one they
 /// want.
 const MAX_BROKEN_OFF: u32 = 3;
+/// Most values the user may see in one sync's review, both sides' counted.
+const MAX_VALUES_SHOWN: u32 = 200;
 const KEY_SERVICE: &str = "SSH Key Manager nearby";
 const KEY_ACCOUNT: &str = "device";
 const SETTINGS_FILE: &str = "nearby.json";
 /// What the hashes of a sync's snapshots are keyed with.
 pub const BASE_LABEL: &[u8] = b"sshkm sync base";
+/// The same for the vault's snapshots.
+pub const VAULT_BASE_LABEL: &[u8] = b"sshkm sync vault base";
 
 /// What the Nearby page shows.
 #[derive(Debug, Clone, Serialize)]
@@ -206,6 +216,9 @@ pub struct MyDevice {
     pub last_sync: Option<String>,
     /// Found on the network now.
     pub reachable: bool,
+    /// The device a sync with which made it one of the user's on this
+    /// computer, by its name then; `None` when it was added here.
+    pub learned_from: Option<String>,
 }
 
 /// What `nearby.json` holds.
@@ -327,6 +340,12 @@ struct Slot {
     known: Option<String>,
     /// The code both users compared, for the system dialogs after it.
     code: Option<String>,
+    /// The other device's copy of the vault during a sync, for the values
+    /// of a conflict the user asks to see; dropped when the sync ends or
+    /// the vault locks.
+    peer_vault: Option<Arc<PeerVault>>,
+    /// How many values the user asked to see in this sync's review.
+    values_shown: u32,
 }
 
 impl Slot {
@@ -364,9 +383,24 @@ impl Nearby {
     /// Hands over the app, for events and the vault, and starts keeping
     /// this computer announced to the user's devices. Called once at start.
     pub fn attach(self: &Arc<Self>, app: AppHandle) {
+        // The other device's copy of the vault goes when the vault locks,
+        // as the vault itself does.
+        let nearby = Arc::downgrade(self);
+        app.listen_any(crate::vault::LOCKED_EVENT, move |_| {
+            if let Some(nearby) = nearby.upgrade() {
+                nearby.forget_peer_vault();
+            }
+        });
         let _ = self.app.set(app);
         Arc::clone(self).watch_presence();
         Arc::clone(self).watch_chats();
+    }
+
+    /// Drops the other device's copy of the vault, if a sync holds one.
+    fn forget_peer_vault(&self) {
+        if let Some(slot) = self.lock().pairing.as_mut() {
+            slot.peer_vault = None;
+        }
     }
 
     pub fn status(&self) -> NearbyStatus {
@@ -873,6 +907,7 @@ impl Nearby {
         let devices = state
             .vault
             .with_quietly(self.app()?, |vault| Ok(vault.own_devices()))?;
+        let learned = store::learned(&self.data_dir);
         Ok(devices
             .into_iter()
             .map(|device| {
@@ -882,6 +917,7 @@ impl Nearby {
                 MyDevice {
                     this: device.key == me,
                     reachable: found.contains(&device.key),
+                    learned_from: learned.get(&device.key).map(|learned| learned.from.clone()),
                     key: device.key,
                     name: device.name,
                     added: device.added,
@@ -1162,6 +1198,8 @@ impl Nearby {
             pending: None,
             known: None,
             code: None,
+            peer_vault: None,
+            values_shown: 0,
         });
         drop(inner);
         self.changed();
@@ -1258,8 +1296,84 @@ impl Nearby {
             slot.view.phase = end;
             slot.answer = None;
             slot.socket = None;
+            // The other device's copy of the vault goes once the sync ends.
+            slot.peer_vault = None;
         }
         self.changed();
+    }
+
+    /// One text field of a conflict in the sync `id` under review, as this
+    /// computer (`theirs` false) or the other one has it: for the user who
+    /// asked to see it.
+    pub fn sync_value(
+        &self,
+        id: u32,
+        item: &str,
+        field: &str,
+        theirs: bool,
+    ) -> AppResult<SecretString> {
+        let (peer, label) = self.shown_from(id, item, field)?;
+        let state = self.state()?;
+        let app = self.app()?;
+        // A secret goes as anywhere else in the app: past a few a minute,
+        // each is asked for in a native dialog, before it is read.
+        let secret = state
+            .vault
+            .with_quietly(app, |vault| Ok(vault.sync_value_secret(&peer, item, field)))?;
+        if secret {
+            let name = field.strip_prefix("s:").unwrap_or(field);
+            let name = name.strip_prefix("env.").unwrap_or(name);
+            crate::secret_gate::take_secret(
+                app,
+                crate::secret_gate::Taking::Show,
+                &crate::secret_gate::sync_value(name, &label, theirs),
+            )?;
+        }
+        state.vault.with(app, |vault| {
+            Ok(vault.sync_value(&peer, item, field, theirs)?)
+        })
+    }
+
+    /// The other device's copy, to show `field` of `item` from, and the
+    /// item's label: only a field [`sync::Review::may_show`] allows in the
+    /// review open in the sync `id`, and at most [`MAX_VALUES_SHOWN`] in one
+    /// sync.
+    fn shown_from(&self, id: u32, item: &str, field: &str) -> AppResult<(Arc<PeerVault>, String)> {
+        let mut slot = self.slot(id);
+        let slot = slot
+            .as_mut()
+            .ok_or_else(|| AppError::invalid("no sync under review"))?;
+        let PairingPhase::Decide { review } = &slot.view.phase else {
+            return Err(AppError::invalid("no sync under review"));
+        };
+        let Some(label) = review
+            .may_show(item, field)
+            .then(|| review.vault.conflicts.iter().find(|c| c.id == item))
+            .flatten()
+            .map(|conflict| conflict.label.clone())
+        else {
+            return Err(AppError::invalid("not a field of a conflict under review"));
+        };
+        if slot.values_shown >= MAX_VALUES_SHOWN {
+            return Err(AppError::invalid("no more values in this sync"));
+        }
+        slot.values_shown += 1;
+        let peer = slot
+            .peer_vault
+            .clone()
+            .ok_or_else(|| AppError::invalid("no sync under review"))?;
+        Ok((peer, label))
+    }
+
+    /// The cloud service whose folder holds the unlocked vault, if one does:
+    /// then its entries don't sync with the user's devices here.
+    pub fn vault_cloud(&self) -> AppResult<Option<CloudService>> {
+        let state = self.state()?;
+        let app = self.app()?;
+        let paths = state
+            .vault
+            .with_quietly(app, |vault| Ok(vault.paths().clone()))?;
+        Ok(vault_cloud(&paths))
     }
 
     /// The pairing slot, if it holds pairing `id`.
@@ -1581,6 +1695,12 @@ impl AppSide<'_> {
             })
     }
 
+    /// What this computer keys the vault's snapshots with.
+    fn vault_hasher(&self) -> Result<Hasher, PairingFailure> {
+        let identity = self.nearby.identity().map_err(|_| PairingFailure::Broken)?;
+        Ok(Hasher::new(identity.derive_key(VAULT_BASE_LABEL)))
+    }
+
     fn joining(&self) -> bool {
         self.nearby
             .lock()
@@ -1780,10 +1900,8 @@ impl Side for AppSide<'_> {
             .vault
             .with(app, |vault| {
                 let secret = vault.share_secret();
-                Ok((
-                    vault.saved_bytes()?,
-                    SecretText::new(secret.expose_secret()),
-                ))
+                // Not compressed: the new computer reads it within bounds.
+                Ok((vault.moved_copy()?, SecretText::new(secret.expose_secret())))
             })
             .map_err(|_| PairingFailure::NotSaved)
     }
@@ -1794,7 +1912,11 @@ impl Side for AppSide<'_> {
         secret: SecretText,
     ) -> Result<(), PairingFailure> {
         let secret = SecretString::from(secret.expose().to_owned());
-        vault::check_shared(&file, &secret).map_err(|_| PairingFailure::NotSaved)?;
+        check_moved(&file, &secret).map_err(|error| match error {
+            // Sent compressed: the other computer needs the new version.
+            sshkm_core::Error::Unsupported(_) => PairingFailure::Version,
+            _ => PairingFailure::NotSaved,
+        })?;
         let mut slot = self.nearby.slot(self.id);
         let slot = slot.as_mut().ok_or(PairingFailure::Cancelled)?;
         slot.pending = Some(PendingVault { file, secret });
@@ -1812,6 +1934,7 @@ impl Side for AppSide<'_> {
             known,
             devices: self.read(Vault::device_records)?,
             projects: self.read(Vault::project_records)?,
+            contacts: self.read(Vault::contact_records)?,
             state: store::load(&self.nearby.data_dir, &peer),
             hasher: Hasher::new(identity.derive_key(BASE_LABEL)),
         })
@@ -1823,21 +1946,161 @@ impl Side for AppSide<'_> {
             log::warn!("nearby: a sync was not saved: {error}");
             PairingFailure::NotSaved
         })?;
-        if self.write(|vault| vault.merge_own_devices(&write.devices))?
-            && let Some(app) = self.nearby.app.get()
-        {
-            let _ = app.emit(DEVICES_EVENT, ());
+        // The other device's records, saved as one change.
+        let (mut devices, mut projects) = (false, false);
+        let mut learned = Vec::new();
+        self.write(|vault| {
+            learned = vault::learned_devices(&vault.device_records(), &write.devices);
+            devices = vault.merge_own_devices(&write.devices)?;
+            projects = vault.merge_projects(&write.projects)?;
+            let contacts = vault.merge_contacts(&write.contacts)?;
+            Ok(devices || projects || contacts)
+        })?;
+        if !learned.is_empty() {
+            let from = self
+                .nearby
+                .slot(self.id)
+                .as_mut()
+                .and_then(|slot| slot.view.peer.clone())
+                .unwrap_or_default();
+            // Best effort: the sync's summary names them too.
+            if let Err(error) = store::note_learned(&self.nearby.data_dir, &learned, &from) {
+                log::warn!("nearby: devices learned of were not noted: {error}");
+            }
         }
-        if self.write(|vault| vault.merge_projects(&write.projects))?
-            && let Some(app) = self.nearby.app.get()
-        {
-            let _ = app.emit(crate::commands::projects::CHANGED_EVENT, ());
+        if let Some(app) = self.nearby.app.get() {
+            if devices {
+                let _ = app.emit(DEVICES_EVENT, ());
+            }
+            if projects {
+                let _ = app.emit(crate::commands::projects::CHANGED_EVENT, ());
+            }
         }
         Ok(())
     }
 
     fn sync_keep(&self, peer: PeerKey, state: &SyncState) -> Result<(), PairingFailure> {
         store::save(&self.nearby.data_dir, &peer, state).map_err(|_| PairingFailure::NotSaved)
+    }
+
+    fn sync_unasked(&self, unasked: &[(i64, u32)]) -> Result<(), PairingFailure> {
+        store::save_unasked(&self.nearby.data_dir, unasked).map_err(|_| PairingFailure::NotSaved)
+    }
+
+    fn allow_risky_variables(&self, changes: &[RiskyVariables]) -> bool {
+        let Ok((_, app)) = self.context() else {
+            return false;
+        };
+        let (peer, copy) = self
+            .nearby
+            .slot(self.id)
+            .as_mut()
+            .map(|slot| (slot.view.peer.clone(), slot.peer_vault.clone()))
+            .unwrap_or_default();
+        // The values as the other device's copy has them.
+        let value = |change: &RiskyVariables, name: &str| {
+            copy.as_ref()?
+                .variable(&change.id, name)
+                .map(|value| value.expose_secret().to_owned())
+        };
+        let (title, body, approve) =
+            sync::variables_prompt(&peer.unwrap_or_default(), changes, &value);
+        crate::confirm::require(app, &title, &body, &approve).is_ok()
+    }
+
+    fn entry_sync(&self) -> Option<EntrySync> {
+        if self.joining() {
+            return None;
+        }
+        let paths = self.read(|vault| vault.paths().clone()).ok()?;
+        Some(match vault_cloud(&paths) {
+            Some(service) => EntrySync::Cloud { service },
+            None => EntrySync::On {
+                version: ENTRY_SYNC_VERSION,
+            },
+        })
+    }
+
+    fn vault_copy(&self) -> Result<Zeroizing<Vec<u8>>, PairingFailure> {
+        self.read(Vault::sync_copy)?
+            .map_err(|_| PairingFailure::NotSaved)
+    }
+
+    fn vault_plan(&self, copy: &[u8], base: &VaultBase) -> Result<VaultPlan, PairingFailure> {
+        let hasher = self.vault_hasher()?;
+        let mut planned = None;
+        // Changed: the file is read again first, as before any change.
+        self.write(|vault| {
+            vault.refresh()?;
+            let peer = vault.open_sync_copy(copy)?;
+            planned = Some((vault.plan_sync(&peer, base, &hasher), peer));
+            Ok(false)
+        })
+        .map_err(|_| PairingFailure::Broken)?;
+        let (plan, peer) = planned.ok_or(PairingFailure::Broken)?;
+        if let Some(slot) = self.nearby.slot(self.id).as_mut() {
+            slot.peer_vault = Some(Arc::new(peer));
+        }
+        Ok(plan)
+    }
+
+    fn vault_apply(
+        &self,
+        plan: &VaultPlan,
+        choices: &VaultChoices,
+    ) -> Result<VaultApplied, PairingFailure> {
+        let (make, theirs) = (&choices.make, &choices.theirs);
+        let hasher = self.vault_hasher()?;
+        let peer = self
+            .nearby
+            .slot(self.id)
+            .as_mut()
+            .and_then(|slot| slot.peer_vault.clone())
+            .ok_or(PairingFailure::Broken)?;
+        // The vault as it was before the day's first sync deletions
+        // outlives the rotation of backups.
+        let deletes = plan
+            .changes
+            .iter()
+            .any(|change| change.removal && make.contains(&change.id))
+            || plan.conflicts.iter().any(|conflict| {
+                (conflict.there == Party::Deleted || conflict.to_bin)
+                    && theirs.contains(&conflict.id)
+            });
+        if deletes {
+            let (state, _) = self.context()?;
+            let database = self.read(|vault| vault.paths().database.clone())?;
+            fsutil::keep_backup(&database, &state.backup_dir)
+                .map_err(|_| PairingFailure::NotSaved)?;
+        }
+        let mut applied = VaultApplied::default();
+        let changed = self.write(|vault| {
+            applied = vault.apply_sync(&peer, plan, &hasher, choices)?;
+            // A version kept in history changes the vault too.
+            Ok(applied.changed())
+        })?;
+        if changed && let Some(app) = self.nearby.app.get() {
+            // The page reads the vault again, and the files of environments
+            // that changed are written as after any change.
+            let _ = app.emit(crate::vault_watcher::EVENT, ());
+            let _ = app.emit(crate::commands::projects::CHANGED_EVENT, ());
+            if let Some(files) = app.try_state::<Arc<crate::env_files::EnvFiles>>() {
+                files.request();
+            }
+        }
+        Ok(applied)
+    }
+
+    fn vault_items(&self, pairs: &Pairs) -> Result<VaultItems, PairingFailure> {
+        let hasher = self.vault_hasher()?;
+        self.read(|vault| {
+            let shared = Hasher::new(vault.own_key()?.digest_key());
+            Some(VaultItems {
+                snapshots: vault.sync_items(pairs, &hasher),
+                digests: digests(&vault.sync_items(pairs, &shared)),
+            })
+        })?
+        .ok_or(PairingFailure::NotOwn)
     }
 
     fn allow_risky(&self, changes: &[RiskyChange]) -> bool {
@@ -1873,6 +2136,11 @@ fn write_files(state: &AppState, write: &SyncWrite) -> AppResult<()> {
             &SshConfig::load(path)?.revision(),
             &write.config_revision,
         )?;
+        // The config as it was before the day's first sync deletions
+        // outlives the rotation of backups.
+        if write.deletes {
+            fsutil::keep_backup(path, &state.backup_dir)?;
+        }
         config.save(path, &state.backup_dir)?;
     }
     if let Some(known) = &write.known {
@@ -2009,6 +2277,11 @@ fn default_name() -> String {
 
 /// The address this computer uses on the local network. Connecting a UDP
 /// socket sends nothing; it only picks the route.
+/// The cloud service whose folder holds the vault at `paths`, if one does.
+fn vault_cloud(paths: &vault::VaultPaths) -> Option<CloudService> {
+    vault::cloud_service(paths, &CloudRoots::detect(home_dir().as_deref()))
+}
+
 fn local_ip() -> Option<IpAddr> {
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
     socket.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).ok()?;
@@ -2298,6 +2571,42 @@ mod tests {
         }
     }
 
+    /// The deadline holds for the first steps only: what follows on the
+    /// own devices' port, such as a copy of the vault in a sync, takes as
+    /// long as it needs after it.
+    #[test]
+    fn the_handshakes_deadline_ends_with_the_first_steps() {
+        let key = [9; 32];
+        let copy = vec![7_u8; 3 * 1024 * 1024];
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let sent = copy.clone();
+        let other = thread::spawn(move || {
+            let mut session =
+                p2p::connect_own(client, &Identity::generate().unwrap(), &key).unwrap();
+            session.send(&hello()).unwrap();
+            // Past the deadline of the first steps.
+            thread::sleep(Duration::from_millis(600));
+            session.send_bytes(&sent, &mut |_, _| {}).unwrap();
+            session.recv().unwrap()
+        });
+        let (mut session, first) = handshake_within(
+            server,
+            &Identity::generate().unwrap(),
+            &Role::Answers { only_sync: true },
+            Some(&key),
+            Duration::from_millis(300),
+            |session| session.recv().map_err(broken),
+        )
+        .unwrap();
+        assert_eq!(first, hello());
+        let received = session.recv_bytes(8 * 1024 * 1024, &mut |_, _| {}).unwrap();
+        assert_eq!(*received, copy);
+        session.send(&hello()).unwrap();
+        assert_eq!(other.join().unwrap(), hello());
+    }
+
     #[test]
     fn pairing_broken_off_too_often_hides_this_computer() {
         let nearby = Nearby::new(std::env::temp_dir().join("sshkm-no-nearby"));
@@ -2462,6 +2771,59 @@ mod tests {
         };
         nearby.decide(id, decisions.clone()).unwrap();
         assert_eq!(side.decisions(WAIT), Ok(Some(decisions)));
+    }
+
+    #[test]
+    fn a_value_is_shown_only_from_the_review_and_not_without_end() {
+        use sshkm_core::vault::VaultPaths;
+        use sshkm_core::vault::sync::{ItemKind, Party, VaultConflict};
+        let dir = tempfile::tempdir().unwrap();
+        let (vault, _) = Vault::create(
+            &VaultPaths::new(dir.path().join("vault.kdbx")),
+            &SecretString::from("master"),
+        )
+        .unwrap();
+        let copy = vault.open_sync_copy(&vault.sync_copy().unwrap()).unwrap();
+        let nearby = Nearby::new(std::env::temp_dir().join("sshkm-no-nearby"));
+        let (id, _answers, _cancelled) = nearby.claim(true, ConversationKind::Sync).unwrap();
+        nearby.slot(id).as_mut().unwrap().peer_vault = Some(Arc::new(copy));
+        // While nothing is under review, nothing is shown.
+        assert!(nearby.shown_from(id, "mail", "s:Password").is_err());
+        let review = sync::Review {
+            vault: sync::VaultReview {
+                conflicts: vec![VaultConflict {
+                    id: "mail".into(),
+                    kind: ItemKind::Login,
+                    label: "Mail".into(),
+                    here: Party::Changed,
+                    there: Party::Changed,
+                    fields: vec!["s:Password".into(), "s:TOTP Seed".into()],
+                    risky: Vec::new(),
+                    to_bin: false,
+                }],
+                ..sync::VaultReview::default()
+            },
+            ..sync::Review::default()
+        };
+        at(&nearby, id, PairingPhase::Decide { review });
+        assert!(nearby.shown_from(id, "other", "s:Password").is_err());
+        assert!(nearby.shown_from(id, "mail", "s:Notes").is_err());
+        assert!(nearby.shown_from(id, "mail", "s:TOTP Seed").is_err());
+        // The item's label names it in the dialog past the free secrets.
+        assert_eq!(
+            nearby.shown_from(id, "mail", "s:Password").unwrap().1,
+            "Mail"
+        );
+        for _ in 1..MAX_VALUES_SHOWN {
+            assert!(nearby.shown_from(id, "mail", "s:Password").is_ok());
+        }
+        assert!(
+            nearby.shown_from(id, "mail", "s:Password").is_err(),
+            "no more in this sync"
+        );
+        // The copy goes when the vault locks.
+        nearby.forget_peer_vault();
+        assert!(nearby.slot(id).as_mut().unwrap().peer_vault.is_none());
     }
 
     #[test]

@@ -23,15 +23,19 @@
 //! [`own`]: super::own
 //! [`sync`]: super::sync
 
+use std::collections::BTreeMap;
 use std::io::{self, ErrorKind};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use sshkm_core::p2p::protocol::{
-    Intent, Item, ItemSummary, Own, SecretText, VERSION, VaultState, clean_name, features,
+    EntrySync, Intent, Item, ItemSummary, Own, SecretText, VERSION, VaultState, clean_name,
+    features,
 };
 use sshkm_core::p2p::{Message, PeerKey, Session};
+use sshkm_core::sync::Hashes;
+use sshkm_core::vault::sync::{Pairs, VaultApplied, VaultBase, VaultChoices, VaultPlan};
 use zeroize::Zeroizing;
 
 use super::sync::{Review, SyncDecisions, SyncLocal, SyncState, SyncSummary, SyncWrite};
@@ -286,6 +290,12 @@ pub trait Side {
     fn sync_keep(&self, _peer: PeerKey, _state: &SyncState) -> Result<(), PairingFailure> {
         Err(PairingFailure::NotSaved)
     }
+    /// Keeps the deletions this computer made without asking, from all the
+    /// user's devices ([`SyncState::unasked`]): before a sync writes
+    /// anything.
+    fn sync_unasked(&self, _unasked: &[(i64, u32)]) -> Result<(), PairingFailure> {
+        Err(PairingFailure::NotSaved)
+    }
     /// The user's decisions on a review, if they come within `wait`.
     fn decisions(&self, _wait: Duration) -> Result<Option<SyncDecisions>, PairingFailure> {
         Err(PairingFailure::Cancelled)
@@ -315,6 +325,45 @@ pub trait Side {
     fn allow_added(&self) -> bool {
         false
     }
+
+    /// Whether this user allows, in a system dialog that a script in the
+    /// page can't answer, the variables a sync would add or change that
+    /// make programs load code.
+    fn allow_risky_variables(&self, _changes: &[sync::RiskyVariables]) -> bool {
+        false
+    }
+
+    /// What this side's `Hello` says about syncing the vault's entries;
+    /// `None` for a side that doesn't.
+    fn entry_sync(&self) -> Option<EntrySync> {
+        None
+    }
+    /// This side's copy of the vault for a sync ([`Vault::sync_copy`]).
+    ///
+    /// [`Vault::sync_copy`]: sshkm_core::vault::Vault::sync_copy
+    fn vault_copy(&self) -> Result<Zeroizing<Vec<u8>>, PairingFailure> {
+        Err(PairingFailure::NotSaved)
+    }
+    /// Opens the other side's copy and works out what to take from it
+    /// against `base`; the copy stays open until the sync ends.
+    fn vault_plan(&self, _copy: &[u8], _base: &VaultBase) -> Result<VaultPlan, PairingFailure> {
+        Err(PairingFailure::Broken)
+    }
+    /// Makes the changes of `plan` the `choices` name and settles its
+    /// conflicts as they say, then saves the vault after a backup.
+    fn vault_apply(
+        &self,
+        _plan: &VaultPlan,
+        _choices: &VaultChoices,
+    ) -> Result<VaultApplied, PairingFailure> {
+        Err(PairingFailure::NotSaved)
+    }
+    /// The vault's items now, with the groups paired as `pairs`: their
+    /// snapshots (keyed with this device's key) and their digests (keyed
+    /// with the key own devices share).
+    fn vault_items(&self, _pairs: &Pairs) -> Result<VaultItems, PairingFailure> {
+        Err(PairingFailure::Broken)
+    }
 }
 
 /// What became of an item saved here.
@@ -338,6 +387,12 @@ impl Stored {
             ..Self::default()
         }
     }
+}
+
+/// The vault's items after a sync, as [`Side::vault_items`] gives them.
+pub struct VaultItems {
+    pub snapshots: BTreeMap<String, Hashes>,
+    pub digests: BTreeMap<String, String>,
 }
 
 /// What the side that connected came for.
@@ -389,7 +444,7 @@ pub fn conversation_after(
         (Met::Contacts(end, ..), Some(_)) => *end,
         (Met::Contacts(end, ..), None) => transfer::receive(session, side).unwrap_or(*end),
         (Met::AddDevice { peer, name, joins }, _) => own::add(session, side, peer, &name, joins),
-        (Met::Sync { peer }, _) => sync::run(session, side, peer),
+        (Met::Sync { peer, entries }, _) => sync::run(session, side, peer, entries),
     }
 }
 
@@ -405,8 +460,9 @@ enum Met {
         name: String,
         joins: bool,
     },
-    /// To sync, each one of the other's devices.
-    Sync { peer: PeerKey },
+    /// To sync, each one of the other's devices; what each said about
+    /// syncing the vault's entries.
+    Sync { peer: PeerKey, entries: Entries },
 }
 
 impl Met {
@@ -425,9 +481,7 @@ fn meet(
     let initiator = session.is_initiator();
     let hash = session.handshake_hash().to_vec();
     let known = side.knows(peer_key)?;
-    let mine = side
-        .vault(&hash, initiator)
-        .map(|vault| Own { intent, vault });
+    let mine = hello_own(side, &hash, initiator, intent);
     session
         .send(&Message::Hello {
             version: VERSION,
@@ -499,29 +553,62 @@ fn meet(
             })
         }
         Intent::Sync => {
-            let ok = same && side.is_own(peer_key);
-            if initiator {
-                if !ok {
-                    return Err(PairingFailure::NotOwn);
-                }
-                match session.recv().map_err(broken)? {
-                    Message::Confirm { matched: true } => Ok(Met::Sync { peer: peer_key }),
-                    Message::Confirm { matched: false } => Err(PairingFailure::NotOwn),
-                    _ => Err(PairingFailure::Broken),
-                }
-            } else {
-                session
-                    .send(&Message::Confirm { matched: ok })
-                    .map_err(|_| PairingFailure::Broken)?;
-                if ok {
-                    Ok(Met::Sync { peer: peer_key })
-                } else {
-                    Err(PairingFailure::NotOwn)
-                }
-            }
+            confirm_own(session, same && side.is_own(peer_key))?;
+            Ok(Met::Sync {
+                peer: peer_key,
+                entries: Entries {
+                    mine: mine.entries,
+                    theirs: theirs.entries,
+                },
+            })
         }
         Intent::Other => Err(PairingFailure::Version),
     }
+}
+
+/// What this side's `Hello` says about the user's own devices.
+fn hello_own(
+    side: &impl Side,
+    hash: &[u8],
+    initiator: bool,
+    intent: Option<Intent>,
+) -> Option<Own> {
+    side.vault(hash, initiator).map(|vault| Own {
+        intent,
+        vault,
+        entries: side.entry_sync(),
+    })
+}
+
+/// Before a sync, each side says whether the other is one of the user's
+/// devices (`ok`): the side that answers first, so the side that
+/// connected never starts with a device that turned it away.
+fn confirm_own(session: &mut Session<TcpStream>, ok: bool) -> Result<(), PairingFailure> {
+    if session.is_initiator() {
+        if !ok {
+            return Err(PairingFailure::NotOwn);
+        }
+        return match session.recv().map_err(broken)? {
+            Message::Confirm { matched: true } => Ok(()),
+            Message::Confirm { matched: false } => Err(PairingFailure::NotOwn),
+            _ => Err(PairingFailure::Broken),
+        };
+    }
+    session
+        .send(&Message::Confirm { matched: ok })
+        .map_err(|_| PairingFailure::Broken)?;
+    if ok {
+        Ok(())
+    } else {
+        Err(PairingFailure::NotOwn)
+    }
+}
+
+/// What both sides said about syncing the vault's entries.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Entries {
+    pub mine: Option<EntrySync>,
+    pub theirs: Option<EntrySync>,
 }
 
 /// The other side's `Hello`.

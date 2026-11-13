@@ -27,6 +27,7 @@ export const nearbyKeys = {
   status: ['nearby', 'status'] as const,
   contacts: ['nearby', 'contacts'] as const,
   devices: ['nearby', 'devices'] as const,
+  vaultCloud: ['nearby', 'vaultCloud'] as const,
 };
 
 export const useNearby = () => useQuery({ queryKey: nearbyKeys.status, queryFn: api.nearbyStatus });
@@ -47,6 +48,16 @@ export function useMyDevices() {
   return useQuery({
     queryKey: nearbyKeys.devices,
     queryFn: api.nearbyDevices,
+    enabled: unlocked,
+  });
+}
+
+/** The cloud service whose folder holds the vault, if one does: its entries then sync through it. */
+export function useVaultCloud() {
+  const unlocked = useVaultStatus().data?.state === 'unlocked';
+  return useQuery({
+    queryKey: nearbyKeys.vaultCloud,
+    queryFn: api.nearbyVaultCloud,
     enabled: unlocked,
   });
 }

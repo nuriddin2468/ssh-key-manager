@@ -1098,7 +1098,10 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
     and one received twice is kept once.
   - _Secrets._ Values reach the page only when the user clicks Show, one at a time,
     and hide again after 30 seconds; Copy goes through the app's clipboard, like a
-    password. Each side wipes a value when its term ends (at the next unlock if the
+    password. Both count against the same budget as the vault's passwords
+    (`secret_gate::take_secret`: ten in a row, then one every six minutes, each one
+    past that asked for in a native dialog naming the secret and the computer it came
+    from). Each side wipes a value when its term ends (at the next unlock if the
     app was closed). The sender can wipe it earlier on both computers while the
     receiver is online: the wipe goes there first, and if it can't, nothing is wiped
     and the user is told. Offline, the sender can wipe it here only, which the button

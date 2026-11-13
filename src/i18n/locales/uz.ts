@@ -2217,6 +2217,11 @@ const uz = {
     meta_one: '{{count}} ta yozuv',
     meta_other: '{{count}} ta yozuv',
     loadFailed: 'Omborni ochib boʻlmadi',
+    keysTooNew:
+      'Bu omborni SSH Key Manager’ning yangiroq versiyasi oʻzgartirgan. Uni ochish uchun ilovani yangilang.',
+    unsavedKeyTitle: 'Yangi tiklash kaliti hali saqlanmagan',
+    unsavedKeyText: 'Ombor siz tasdiqlashingizdan oldin qulflandi. Kalit «Parollar» sahifasida.',
+    unsavedKeyShow: 'Kalitni koʻrsatish',
     createTitle: 'Parollarni kalitlaringiz yonida saqlang',
     createText:
       'Server parollari, kalit parol iboralari va sayt loginlari — bitta shifrlangan omborda.',

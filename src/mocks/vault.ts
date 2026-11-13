@@ -37,6 +37,8 @@ let exists = START !== 'missing';
 let hasMaster = START !== 'keepass';
 let master = 'master';
 let unlocked = START === 'unlocked';
+/** A recovery key made and not yet confirmed as saved. */
+let recoveryKeyUnsaved = false;
 let lastActivity = Date.now();
 let deviceEnabled = false;
 let settings: VaultSettings = {
@@ -328,6 +330,7 @@ export const vaultHandlers: Record<string, (args: Record<string, unknown>) => un
     hasMaster = true;
     master = next as string;
     open();
+    recoveryKeyUnsaved = true;
     return RECOVERY_KEY;
   },
   vault_unlock: ({ master: typed }) => {
@@ -449,7 +452,13 @@ export const vaultHandlers: Record<string, (args: Record<string, unknown>) => un
   vault_new_recovery_key: ({ master: typed }) => {
     if (typed !== master) return fail('wrong_passphrase', 'wrong passphrase');
     deviceEnabled = false;
+    recoveryKeyUnsaved = true;
     return RECOVERY_KEY;
+  },
+  vault_unsaved_recovery_key: () =>
+    requireUnlocked() ?? (recoveryKeyUnsaved && hasMaster ? RECOVERY_KEY : null),
+  vault_recovery_key_saved: () => {
+    recoveryKeyUnsaved = false;
   },
   vault_test_connection: ({ alias }) => requireUnlocked() ?? passwordLogin(String(alias)),
   vault_test_key_login: ({ alias }) => {

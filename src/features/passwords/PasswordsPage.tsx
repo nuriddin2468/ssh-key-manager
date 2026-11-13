@@ -8,6 +8,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Spinner } from '@/components/ui/Spinner';
 import { Tile } from '@/components/ui/Tile';
 import { BackToProject } from '@/features/projects/BackToProject';
+import { AppError } from '@/lib/ipc';
 import { CreateVault, RecoveryKeyScreen } from './CreateVault';
 import { UnlockVault } from './UnlockVault';
 import { VaultBrowser } from './VaultBrowser';
@@ -44,7 +45,12 @@ export function PasswordsPage({ entryId }: { entryId?: string }) {
               </Tile>
             }
             title={t('passwords.loadFailed')}
-            description={errorMessage(t, status.error)}
+            description={
+              // The only `unsupported` the status gives: vault.keys from a newer app.
+              AppError.from(status.error).code === 'unsupported'
+                ? t('passwords.keysTooNew')
+                : errorMessage(t, status.error)
+            }
             action={<Button onClick={() => void status.refetch()}>{t('common.retry')}</Button>}
           />
         ) : state === 'missing' ? (

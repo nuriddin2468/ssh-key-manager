@@ -40,8 +40,10 @@ export function useVaultEntry(id: string | undefined) {
  * Switches the UI to the lock screen at once, before the status is fetched
  * again: entries and details leave the cache, finished commands leave
  * TanStack's mutation cache (their variables may hold a master password or a
- * passphrase), a new recovery key still on screen is dropped, and anything
- * that shows a revealed secret unmounts with the unlocked view.
+ * passphrase), a new recovery key still on screen is dropped (until it is
+ * confirmed as saved, the backend gives it back after the next unlock:
+ * `restoreUnsavedRecoveryKey`), and anything that shows a revealed secret
+ * unmounts with the unlocked view.
  */
 export function markLocked(): void {
   setPendingRecoveryKey(null);
@@ -188,13 +190,32 @@ export function takeSearchFocusRequest(): boolean {
 }
 
 // A recovery key that was just created and not yet confirmed as saved. It is
-// kept outside the page so switching sections doesn't lose it.
+// kept outside the page so switching sections doesn't lose it, and dropped
+// when the vault locks.
 let pendingRecoveryKey: string | null = null;
 const listeners = new Set<() => void>();
 
 export function setPendingRecoveryKey(key: string | null): void {
   pendingRecoveryKey = key;
   for (const listener of listeners) listener();
+}
+
+/** The user confirmed the new recovery key as saved: it isn't shown again. */
+export function recoveryKeySaved(): void {
+  setPendingRecoveryKey(null);
+  api.vaultRecoveryKeySaved().catch(() => undefined);
+}
+
+/**
+ * After an unlock: the recovery key made last, if a lock took it off the
+ * screen before the user confirmed it as saved. Returns whether it is back.
+ */
+export async function restoreUnsavedRecoveryKey(): Promise<boolean> {
+  if (pendingRecoveryKey) return false;
+  const key = await api.vaultUnsavedRecoveryKey().catch(() => null);
+  if (!key || pendingRecoveryKey) return false;
+  setPendingRecoveryKey(key);
+  return true;
 }
 
 export function usePendingRecoveryKey(): string | null {

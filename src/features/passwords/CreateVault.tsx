@@ -11,7 +11,13 @@ import { OpenExistingVaultButton } from './files';
 import { MasterPasswordFields, masterReady } from './MasterPasswordFields';
 import { RecoveryKeyPanel } from './RecoveryKeyPanel';
 import { VaultCard } from './VaultCard';
-import { requestSearchFocus, setPendingRecoveryKey, toastVaultError, useSecretCall } from './vault';
+import {
+  recoveryKeySaved,
+  requestSearchFocus,
+  setPendingRecoveryKey,
+  toastVaultError,
+  useSecretCall,
+} from './vault';
 
 /** No vault yet: what it is, and a master password to create one. */
 export function CreateVault() {
@@ -105,7 +111,10 @@ export function CreateVault() {
   );
 }
 
-/** Right after creating the vault: its recovery key, shown this once. */
+/**
+ * Right after creating the vault or a new recovery key: the key, shown until
+ * it is confirmed as saved (again after an unlock, if the vault locked first).
+ */
 export function RecoveryKeyScreen({ recoveryKey }: { recoveryKey: string }) {
   const { t } = useTranslation();
   const [saved, setSaved] = useState(false);
@@ -124,7 +133,7 @@ export function RecoveryKeyScreen({ recoveryKey }: { recoveryKey: string }) {
         disabled={!saved}
         onClick={() => {
           requestSearchFocus();
-          setPendingRecoveryKey(null);
+          recoveryKeySaved();
         }}
       >
         {t('passwords.continue')}

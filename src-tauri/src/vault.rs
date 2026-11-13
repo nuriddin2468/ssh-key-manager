@@ -40,6 +40,9 @@ pub const UNLOCKED_EVENT: &str = "vault-unlocked";
 const SETTINGS_FILE: &str = "vault.json";
 /// The projects without secrets, shown while the vault is locked.
 const PROJECTS_COPY: &str = "projects.json";
+/// The id of a vault whose recovery key was made here and not yet confirmed
+/// as saved ([`VaultRuntime::unsaved_recovery_key`]).
+const UNSAVED_RECOVERY_KEY: &str = "recovery-key-unsaved";
 const DATABASE_FILE: &str = "vault.kdbx";
 const TICK: Duration = Duration::from_secs(5);
 /// A tick that comes this late means the computer was asleep.
@@ -398,6 +401,42 @@ impl VaultRuntime {
         drop(vault);
         self.clear_copied_secret();
         true
+    }
+
+    /// Notes that the recovery key just made for `vault` is not yet confirmed
+    /// as saved. Only the app sets this, when it makes a key; the page can
+    /// only clear it ([`Self::recovery_key_saved`]). A note that can't be
+    /// written is logged: the key is on the screen already.
+    pub fn recovery_key_unsaved(&self, vault: &Vault) {
+        let path = self.data_dir.join(UNSAVED_RECOVERY_KEY);
+        if let Err(error) = fsutil::atomic_write(&path, vault.vault_id().as_bytes(), 0o600) {
+            log::warn!("vault: the note of an unsaved recovery key was not written: {error}");
+        }
+    }
+
+    /// The user confirmed the recovery key made last as saved.
+    pub fn recovery_key_saved(&self) -> AppResult<()> {
+        let path = self.data_dir.join(UNSAVED_RECOVERY_KEY);
+        match std::fs::remove_file(&path) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                Err(AppError::new(ErrorCode::Io, error.to_string()))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// The recovery key of the unlocked `vault`, while the one made here is
+    /// not yet confirmed as saved: a lock takes a new key off the screen,
+    /// and it comes back after the next unlock, from the unlocked vault
+    /// (whose password it is). Nothing of it is kept while the vault is
+    /// locked. `None` for another vault, or a password that isn't a recovery
+    /// key (a KeePass file's own).
+    pub fn unsaved_recovery_key(&self, vault: &Vault) -> Option<SecretString> {
+        let noted = std::fs::read_to_string(self.data_dir.join(UNSAVED_RECOVERY_KEY)).ok()?;
+        if noted.trim() != vault.vault_id() {
+            return None;
+        }
+        core_vault::canonical_recovery_key(&vault.share_secret())
     }
 
     /// Keeps the copy of the vault's projects without secrets that shows
@@ -921,6 +960,46 @@ mod tests {
         };
         lock(&runtime.last_activity).instant = instant;
         assert_eq!(runtime.lock_due_at(false, now), Some(LockReason::Idle));
+    }
+
+    #[test]
+    fn a_recovery_key_not_yet_saved_comes_back_after_a_lock_and_unlock() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(&dir.path().join("data"), &dir.path().join("vault.kdbx"));
+        let (vault, recovery) = Vault::create(&rt.paths(), &s("master")).unwrap();
+        assert!(rt.unsaved_recovery_key(&vault).is_none());
+        rt.recovery_key_unsaved(&vault);
+        rt.set_unlocked(vault);
+
+        // Locked, the app keeps nothing of it.
+        assert!(rt.lock_now());
+        assert!(run_locked(&rt).is_err());
+        // Unlocked again, it is the vault's own password.
+        rt.set_unlocked(Vault::unlock(&rt.paths(), &s("master")).unwrap());
+        let again = run(&rt, false, |vault| Ok(rt.unsaved_recovery_key(vault))).unwrap();
+        assert_eq!(again.expose_secret(), recovery.expose_secret());
+
+        // Once saved, it is never handed out again.
+        rt.recovery_key_saved().unwrap();
+        rt.recovery_key_saved().unwrap();
+        assert!(run(&rt, false, |vault| Ok(rt.unsaved_recovery_key(vault))).is_none());
+    }
+
+    #[test]
+    fn a_noted_recovery_key_is_only_shown_for_its_own_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(&dir.path().join("data"), &dir.path().join("vault.kdbx"));
+        let (first, _) = Vault::create(&rt.paths(), &s("master")).unwrap();
+        rt.recovery_key_unsaved(&first);
+        let other = VaultPaths::new(dir.path().join("other.kdbx"));
+        let (second, _) = Vault::create(&other, &s("master")).unwrap();
+        assert!(rt.unsaved_recovery_key(&second).is_none());
+        assert!(rt.unsaved_recovery_key(&first).is_some());
+    }
+
+    /// What a command gets while the vault is locked.
+    fn run_locked(runtime: &VaultRuntime) -> AppResult<()> {
+        runtime.access_then(false, |_| Ok(()), || {})
     }
 
     #[test]

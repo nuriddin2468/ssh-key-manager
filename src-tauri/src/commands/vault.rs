@@ -62,6 +62,7 @@ pub async fn vault_create(state: State<'_, Shared>, master: SecretString) -> App
             std::fs::create_dir_all(dir)?;
         }
         let (vault, recovery) = Vault::create(&paths, &master)?;
+        state.vault.recovery_key_unsaved(&vault);
         state.vault.set_unlocked(vault);
         Ok(recovery.expose_secret().to_owned())
     })
@@ -171,6 +172,10 @@ pub async fn vault_recover(
 ) -> AppResult<()> {
     blocking(&state, move |state| {
         let mut vault = Vault::recover(&state.vault.paths(), &recovery_key, &new_master)?;
+        // Whoever typed the recovery key has it saved.
+        if let Err(error) = state.vault.recovery_key_saved() {
+            log::warn!("vault: the note of an unsaved recovery key stays: {error}");
+        }
         device_unlock::retire_stored_key(state.vault.data_dir(), &mut vault);
         state.vault.set_unlocked(vault);
         Ok(())
@@ -417,7 +422,9 @@ pub async fn vault_new_recovery_key(
 ) -> AppResult<String> {
     blocking(&state, move |state| {
         let key = state.vault.with(&app, |vault| {
-            Ok(vault.new_recovery_key(&master, &state.backup_dir)?)
+            let key = vault.new_recovery_key(&master, &state.backup_dir)?;
+            state.vault.recovery_key_unsaved(vault);
+            Ok(key)
         })?;
         // Every device slot went with the old key.
         if let Some(link) = device_unlock::load_link(state.vault.data_dir()) {
@@ -426,6 +433,32 @@ pub async fn vault_new_recovery_key(
         Ok(key.expose_secret().to_owned())
     })
     .await
+}
+
+/// The recovery key made last, again, while the user hasn't confirmed it as
+/// saved: a lock took it off the screen before they could. It comes from the
+/// unlocked vault, whose password it is; `None` once it is confirmed. Quiet:
+/// the UI asks after every unlock.
+#[tauri::command]
+pub async fn vault_unsaved_recovery_key(
+    app: AppHandle,
+    state: State<'_, Shared>,
+) -> AppResult<Option<String>> {
+    blocking(&state, move |state| {
+        state.vault.with_quietly(&app, |vault| {
+            Ok(state
+                .vault
+                .unsaved_recovery_key(vault)
+                .map(|key| key.expose_secret().to_owned()))
+        })
+    })
+    .await
+}
+
+/// The user confirmed the recovery key made last as saved.
+#[tauri::command]
+pub async fn vault_recovery_key_saved(state: State<'_, Shared>) -> AppResult<()> {
+    blocking(&state, |state| state.vault.recovery_key_saved()).await
 }
 
 /// Saves the vault's preferences. A change that weakens its protection

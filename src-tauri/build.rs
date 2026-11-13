@@ -131,6 +131,8 @@ const COMMANDS: &[&str] = &[
     "vault_strength",
     "vault_change_master",
     "vault_new_recovery_key",
+    "vault_unsaved_recovery_key",
+    "vault_recovery_key_saved",
     "vault_set_settings",
     "vault_test_connection",
     "vault_install_public_key",

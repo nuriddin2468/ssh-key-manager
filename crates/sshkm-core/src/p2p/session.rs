@@ -6,6 +6,11 @@
 //! - **Messages.** A [`Message`] is JSON, at most [`MAX_MESSAGE`] bytes,
 //!   sent as its length (`u32`, big-endian) and the JSON, split over as
 //!   many Noise messages as it takes.
+//! - **Own devices.** Between the user's own devices the handshake is
+//!   `Noise_XXpsk0_25519_ChaChaPoly_SHA256`, with a key both have from the
+//!   vault ([`OwnKey::session_key`]) mixed in from the first message: a
+//!   computer without the vault fails it at once and learns nothing, not
+//!   even the other's device key.
 //! - **Pairing code.** Six digits both users compare, from the handshake
 //!   hash and a nonce from each side. The initiator commits to its nonce
 //!   before it sees the responder's, and the responder sends its own before
@@ -13,7 +18,10 @@
 //!   side, but must fix one side's nonce before learning what the other's
 //!   code will be, so the two codes agree by chance only, one time in a
 //!   million. (Taken from the handshake hash alone, the code could be
-//!   matched by trying a million keys.)
+//!   matched by trying a million keys.) The initiator does learn the code
+//!   before it reveals its nonce, and could hang up and try again until the
+//!   responder's code is one it wants; [`Session::gave_nonce`] tells the
+//!   responder that a session ended that way, so the app can count them.
 //! - **Large values.** Between own devices a value larger than a message (a
 //!   vault file, a long list of hosts) goes as [`Message::Bytes`], its size
 //!   and SHA-256, and then [`Message::Part`]s; the receiver sets how large it
@@ -21,6 +29,8 @@
 //! - **Chats.** A chat session's handshake has a prologue of its own
 //!   ([`connect_with`], [`accept_with`]), and the session splits in two
 //!   ([`Session::split`]): one thread reads while any other sends.
+//!
+//! [`OwnKey::session_key`]: super::own::OwnKey::session_key
 
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpStream};
@@ -38,8 +48,11 @@ use super::protocol::{MAX_MESSAGE, Message};
 use crate::{Error, Result};
 
 pub(crate) const PARAMS: &str = "Noise_XX_25519_ChaChaPoly_SHA256";
+/// Between own devices: see the module documentation.
+pub(crate) const OWN_PARAMS: &str = "Noise_XXpsk0_25519_ChaChaPoly_SHA256";
 /// Bound into the handshake: a peer speaking anything else fails it.
 const PROLOGUE: &[u8] = b"sshkm-p2p/1";
+const OWN_PROLOGUE: &[u8] = b"sshkm-own/1";
 const CODE_LABEL: &[u8] = b"sshkm-p2p pairing code";
 /// Largest Noise message, and the tag each one carries.
 const NOISE_MAX: usize = 65_535;
@@ -55,6 +68,8 @@ pub struct Session<S> {
     remote: PeerKey,
     hash: Vec<u8>,
     initiator: bool,
+    /// This side, the responder, sent its pairing nonce.
+    gave_nonce: bool,
 }
 
 /// Opens a session as the side that connected.
@@ -70,13 +85,45 @@ pub fn accept<S: Read + Write>(stream: S, identity: &Identity) -> Result<Session
 /// Opens a session bound to `prologue` as the side that connected: the
 /// peer's must be the same, or the handshake fails.
 pub fn connect_with<S: Read + Write>(
-    mut stream: S,
+    stream: S,
     identity: &Identity,
     prologue: &[u8],
 ) -> Result<Session<S>> {
-    let mut handshake = builder(identity, prologue)
-        .build_initiator()
-        .map_err(noise_error)?;
+    initiate(stream, builder(identity, prologue, None))
+}
+
+/// Opens a session bound to `prologue` as the side that was connected to.
+pub fn accept_with<S: Read + Write>(
+    stream: S,
+    identity: &Identity,
+    prologue: &[u8],
+) -> Result<Session<S>> {
+    respond(stream, builder(identity, prologue, None))
+}
+
+/// Opens a session with one of the user's own devices, as the side that
+/// connected; both sides have `key` from the vault.
+pub fn connect_own<S: Read + Write>(
+    stream: S,
+    identity: &Identity,
+    key: &[u8; 32],
+) -> Result<Session<S>> {
+    initiate(stream, builder(identity, OWN_PROLOGUE, Some(key)))
+}
+
+/// Opens a session with one of the user's own devices, as the side that
+/// was connected to; a peer without `key` fails at its first message,
+/// before this side sends anything.
+pub fn accept_own<S: Read + Write>(
+    stream: S,
+    identity: &Identity,
+    key: &[u8; 32],
+) -> Result<Session<S>> {
+    respond(stream, builder(identity, OWN_PROLOGUE, Some(key)))
+}
+
+fn initiate<S: Read + Write>(mut stream: S, builder: snow::Builder<'_>) -> Result<Session<S>> {
+    let mut handshake = builder.build_initiator().map_err(noise_error)?;
     let mut buffer = vec![0; NOISE_MAX];
     // -> e
     let n = handshake
@@ -96,15 +143,8 @@ pub fn connect_with<S: Read + Write>(
     finish(stream, handshake, true)
 }
 
-/// Opens a session bound to `prologue` as the side that was connected to.
-pub fn accept_with<S: Read + Write>(
-    mut stream: S,
-    identity: &Identity,
-    prologue: &[u8],
-) -> Result<Session<S>> {
-    let mut handshake = builder(identity, prologue)
-        .build_responder()
-        .map_err(noise_error)?;
+fn respond<S: Read + Write>(mut stream: S, builder: snow::Builder<'_>) -> Result<Session<S>> {
+    let mut handshake = builder.build_responder().map_err(noise_error)?;
     let mut buffer = vec![0; NOISE_MAX];
     let frame = read_frame(&mut stream)?;
     handshake
@@ -121,11 +161,27 @@ pub fn accept_with<S: Read + Write>(
     finish(stream, handshake, false)
 }
 
-fn builder<'a>(identity: &'a Identity, prologue: &'a [u8]) -> snow::Builder<'a> {
-    snow::Builder::new(params())
-        .prologue(prologue)
-        .and_then(|builder| builder.local_private_key(identity.private()))
-        .unwrap_or_else(|_| unreachable!("a 32-byte key and a prologue are accepted"))
+/// The handshake bound to `prologue`; with `own`, the one between own
+/// devices, with that key mixed in.
+fn builder<'a>(
+    identity: &'a Identity,
+    prologue: &'a [u8],
+    own: Option<&'a [u8; 32]>,
+) -> snow::Builder<'a> {
+    match own {
+        None => snow::Builder::new(params()).prologue(prologue),
+        Some(key) => snow::Builder::new(own_params())
+            .prologue(prologue)
+            .and_then(|builder| builder.psk(0, key)),
+    }
+    .and_then(|builder| builder.local_private_key(identity.private()))
+    .unwrap_or_else(|_| unreachable!("32-byte keys and a prologue are accepted"))
+}
+
+fn own_params() -> snow::params::NoiseParams {
+    OWN_PARAMS
+        .parse()
+        .unwrap_or_else(|_| unreachable!("valid Noise parameters"))
 }
 
 fn finish<S>(stream: S, handshake: snow::HandshakeState, initiator: bool) -> Result<Session<S>> {
@@ -142,6 +198,7 @@ fn finish<S>(stream: S, handshake: snow::HandshakeState, initiator: bool) -> Res
         remote,
         hash,
         initiator,
+        gave_nonce: false,
     })
 }
 
@@ -155,6 +212,7 @@ impl<S> Session<S> {
             remote: self.remote,
             hash: self.hash,
             initiator: self.initiator,
+            gave_nonce: self.gave_nonce,
         }
     }
 }
@@ -179,6 +237,14 @@ impl<S: Read + Write> Session<S> {
     /// Whether this side connected.
     pub fn is_initiator(&self) -> bool {
         self.initiator
+    }
+
+    /// Whether this side, the one connected to, sent its pairing nonce:
+    /// from then on the other side knows the code this side would show. A
+    /// session that fails after that without a code is one the other side
+    /// may have given up on because it didn't like the code.
+    pub fn gave_nonce(&self) -> bool {
+        self.gave_nonce
     }
 
     pub fn send(&mut self, message: &Message) -> Result<()> {
@@ -322,6 +388,7 @@ impl<S: Read + Write> Session<S> {
             let Message::Commit { hash } = self.recv()? else {
                 return Err(unexpected("its commitment"));
             };
+            self.gave_nonce = true;
             self.send(&Message::Nonce {
                 nonce: Base64::encode_string(&mine),
             })?;
@@ -578,6 +645,7 @@ mod tests {
     #[test]
     fn parameters_parse() {
         assert!(PARAMS.parse::<snow::params::NoiseParams>().is_ok());
+        assert!(OWN_PARAMS.parse::<snow::params::NoiseParams>().is_ok());
     }
 
     #[test]
@@ -629,6 +697,83 @@ mod tests {
         middle.join().unwrap();
         // Two independent codes match one time in a million.
         assert_ne!(alice_code, bob_side.join().unwrap());
+    }
+
+    #[test]
+    fn the_side_connected_to_knows_when_it_gave_its_nonce() {
+        let (alice, bob) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (client, server) = pipe();
+        let responder = thread::spawn(move || {
+            let mut session = accept(server, &bob).unwrap();
+            assert!(!session.gave_nonce());
+            let code = session.pairing_code();
+            (code.is_err(), session.gave_nonce())
+        });
+        // The side that connected learns the code, then hangs up before it
+        // reveals its nonce.
+        let mut session = connect(client, &alice).unwrap();
+        session
+            .send(&Message::Commit {
+                hash: Base64::encode_string(&Sha256::digest([1; NONCE_LEN])),
+            })
+            .unwrap();
+        assert!(matches!(session.recv().unwrap(), Message::Nonce { .. }));
+        assert!(!session.gave_nonce());
+        drop(session);
+        assert_eq!(responder.join().unwrap(), (true, true));
+
+        // One that hangs up before its commitment got nothing.
+        let (alice, bob) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (client, server) = pipe();
+        let responder = thread::spawn(move || {
+            let mut session = accept(server, &bob).unwrap();
+            let code = session.pairing_code();
+            (code.is_err(), session.gave_nonce())
+        });
+        drop(connect(client, &alice).unwrap());
+        assert_eq!(responder.join().unwrap(), (true, false));
+    }
+
+    #[test]
+    fn own_devices_hide_their_keys_from_anyone_without_the_vault() {
+        let (alice, bob) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (alice_key, bob_key) = (alice.public(), bob.public());
+        let key = [7; 32];
+        let (client, server) = pipe();
+        let responder = thread::spawn(move || {
+            let mut session = accept_own(server, &bob, &key).unwrap();
+            assert_eq!(session.remote(), alice_key);
+            session.send(&hello("bob")).unwrap();
+        });
+        let mut session = connect_own(client, &alice, &key).unwrap();
+        assert_eq!(session.remote(), bob_key);
+        assert_eq!(session.recv().unwrap(), hello("bob"));
+        responder.join().unwrap();
+
+        // Another key, or the plain handshake: the side connected to says
+        // nothing back, so its device key stays its own.
+        for (prologue, other) in [(OWN_PROLOGUE, Some([8; 32])), (PROLOGUE, None)] {
+            let bob = Identity::generate().unwrap();
+            let (mut client, server) = pipe();
+            let responder = thread::spawn(move || accept_own(server, &bob, &key).is_err());
+            let stranger = Identity::generate().unwrap();
+            let mut handshake = builder(&stranger, prologue, other.as_ref())
+                .build_initiator()
+                .unwrap();
+            let mut buffer = vec![0; NOISE_MAX];
+            let n = handshake.write_message(&[], &mut buffer).unwrap();
+            write_frame(&mut client, &buffer[..n]).unwrap();
+            assert!(responder.join().unwrap());
+            // Nothing came: the stream ends without a frame.
+            assert!(read_frame(&mut client).is_err());
+        }
+
+        // Nor does the side that connects get anywhere with a plain one.
+        let (client, server) = pipe();
+        let bob = Identity::generate().unwrap();
+        let responder = thread::spawn(move || accept(server, &bob).is_err());
+        assert!(connect_own(client, &Identity::generate().unwrap(), &key).is_err());
+        assert!(responder.join().unwrap());
     }
 
     #[test]

@@ -24,6 +24,7 @@ pub mod dotenv;
 pub mod files;
 mod format;
 mod shared;
+mod startup;
 #[cfg(test)]
 mod tests;
 
@@ -45,6 +46,7 @@ pub use self::format::{EnvFormat, render};
 pub(crate) use self::shared::is_shared;
 pub use self::shared::{SharedUse, SharedValue};
 pub(in crate::vault) use self::shared::{referenced, shared_references};
+pub use self::startup::runs_code;
 use super::export::{checked_target, write_private};
 use super::{Vault, check_field, duplicate, in_group, parse_id, rfc3339};
 use crate::{Error, Result};
@@ -293,48 +295,13 @@ struct StoredVar {
     note: String,
 }
 
-/// Variables that change how programs start or where they look for code:
-/// one taken from someone else is never set without the user's yes, and
-/// the review flags it. A trailing `*` stands for any rest of the name.
-const RISKY_VARIABLES: &[&str] = &[
-    "PATH",
-    "LD_*",
-    "DYLD_*",
-    "NODE_OPTIONS",
-    "NODE_PATH",
-    "PYTHONPATH",
-    "PYTHONSTARTUP",
-    "PYTHONHOME",
-    "PERL5OPT",
-    "PERL5LIB",
-    "RUBYOPT",
-    "RUBYLIB",
-    "BASH_ENV",
-    "ENV",
-    "ZDOTDIR",
-    "PROMPT_COMMAND",
-    "GIT_SSH",
-    "GIT_SSH_COMMAND",
-    "GIT_EXEC_PATH",
-    "GIT_CONFIG_*",
-    "SSH_ASKPASS",
-    "JAVA_TOOL_OPTIONS",
-    "_JAVA_OPTIONS",
-    "JDK_JAVA_OPTIONS",
-    "DOTNET_STARTUP_HOOKS",
-];
-
 /// Whether a variable named `name` changes how programs start or where
-/// they load code from (`PATH`, `LD_PRELOAD`, `NODE_OPTIONS`, …). Letter
-/// case is ignored, as Windows ignores it.
+/// they load code from (`PATH`, `LD_PRELOAD`, `NODE_OPTIONS`, …): one
+/// taken from someone else is never set without the user's yes, and the
+/// review flags it. The one list is [`runs_code`]'s; letter case is
+/// ignored, as Windows ignores it.
 pub fn risky_variable(name: &str) -> bool {
-    let name = name.to_ascii_uppercase();
-    RISKY_VARIABLES
-        .iter()
-        .any(|risky| match risky.strip_suffix('*') {
-            Some(prefix) => name.starts_with(prefix),
-            None => name == *risky,
-        })
+    runs_code(name)
 }
 
 /// A variable name: ASCII letters, digits and `_`, not starting with a

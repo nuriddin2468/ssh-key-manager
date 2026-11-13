@@ -439,6 +439,8 @@ mod tests {
             username: "deploy".into(),
             url: String::new(),
             otp: true,
+            host: None,
+            server: None,
         };
         let text = all(&send_item("Bob", &login).unwrap());
         assert!(text.contains("prod DB") && text.contains("2FA"));
@@ -562,6 +564,8 @@ mod tests {
             username: String::new(),
             url: String::new(),
             otp: false,
+            host: None,
+            server: None,
         };
         let text = all(&send_item("Bob", &login).unwrap());
         assert!(text.contains("“router”.") && !text.contains("()"), "{text}");

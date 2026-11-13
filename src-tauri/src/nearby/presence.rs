@@ -4,11 +4,13 @@
 //! the user didn't turn it off, the app listens on a TCP port and announces
 //! it as `_sshkm-own._tcp`. The instance name is the device's presence
 //! name for the current ten minutes ([`OwnKey::presence_name`]), and the
-//! TXT record has nothing but the version. Others see a name that changes
-//! and says nothing; the user's devices can tell whose it is. On that port
-//! only a sync is taken, and only from one of the user's devices: anyone
-//! else is turned away right after the handshake, before this computer
-//! says anything about its vault.
+//! TXT record has nothing but the version ([`OWN_VERSION`]). Others see a
+//! name that changes
+//! and says nothing; the user's devices can tell whose it is, and so does
+//! the port, a new one each window. On that port only a sync is taken, and
+//! only from one of the user's devices: the handshake there mixes in a key
+//! from the vault, so anyone else fails it before this computer sends
+//! anything, its device key included.
 //!
 //! The app also browses for the same service, to tell the user which of
 //! their devices are reachable and to have their addresses for a sync.
@@ -34,6 +36,10 @@ use crate::error::AppResult;
 pub const OWN_SERVICE_TYPE: &str = "_sshkm-own._tcp.local.";
 /// How often the app checks whether it should be announced.
 const CHECK_EVERY: Duration = Duration::from_secs(5);
+/// What `v` says in the record: `2` since the handshake between own
+/// devices mixes in their key; a device announced otherwise is one this
+/// version can't sync with.
+const OWN_VERSION: &str = "2";
 
 /// This computer, announced to the user's devices.
 pub(super) struct Presence {
@@ -41,7 +47,6 @@ pub(super) struct Presence {
     /// The user's other devices, to recognise.
     devices: Vec<PeerKey>,
     window: u64,
-    port: u16,
     fullname: String,
     stop: Arc<AtomicBool>,
 }
@@ -164,42 +169,44 @@ impl Nearby {
         }
     }
 
-    /// Announces this computer under the name for `window`: on a new port
-    /// the first time, re-announced on the same one after.
+    /// Announces this computer under the name for `window`, on a new port
+    /// each window, so neither the name nor the port links one window to
+    /// the next.
     fn start_presence(self: &Arc<Self>, wanted: Wanted, window: u64) -> AppResult<()> {
         let mut inner = self.lock();
         let daemon = mdns(&mut inner)?;
         let instance = wanted.key.presence_name(&wanted.me, window);
-        let (port, stop, fresh) = if let Some(old) = inner.presence.take() {
-            let _ = daemon.unregister(&old.fullname);
-            (old.port, old.stop, false)
-        } else {
-            let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))?;
-            listener.set_nonblocking(true)?;
-            let port = listener.local_addr()?.port();
-            let stop = Arc::new(AtomicBool::new(false));
-            let nearby = Arc::clone(self);
-            let flag = Arc::clone(&stop);
-            thread::spawn(move || nearby.listen_for_own(&listener, &flag));
-            (port, stop, true)
+        let fresh = match inner.presence.take() {
+            Some(old) => {
+                let _ = daemon.unregister(&old.fullname);
+                old.stop.store(true, Ordering::SeqCst);
+                false
+            }
+            None => true,
         };
+        let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+        listener.set_nonblocking(true)?;
+        let port = listener.local_addr()?.port();
         let info = ServiceInfo::new(
             OWN_SERVICE_TYPE,
             &instance,
             &format!("{instance}.local."),
             (),
             port,
-            &[("v", "1")][..],
+            &[("v", OWN_VERSION)][..],
         )
         .map_err(mdns_error)?
         .enable_addr_auto();
         let fullname = info.get_fullname().to_owned();
         daemon.register(info).map_err(mdns_error)?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let nearby = Arc::clone(self);
+        let flag = Arc::clone(&stop);
+        thread::spawn(move || nearby.listen_for_own(&listener, &flag));
         inner.presence = Some(Presence {
             key: wanted.key,
             devices: wanted.devices,
             window,
-            port,
             fullname,
             stop,
         });
@@ -238,7 +245,7 @@ impl Nearby {
     fn listen_for_own(self: Arc<Self>, listener: &TcpListener, stop: &AtomicBool) {
         while !stop.load(Ordering::SeqCst) {
             match listener.accept() {
-                Ok((stream, _)) => self.incoming(stream, true),
+                Ok((stream, from)) => self.incoming(stream, from, true),
                 Err(error) if error.kind() == ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(150));
                 }
@@ -262,7 +269,9 @@ impl Nearby {
                     .fullname
                     .strip_suffix(&format!(".{OWN_SERVICE_TYPE}"))
                     .unwrap_or_default();
-                if service.fullname == presence.fullname {
+                if service.fullname == presence.fullname
+                    || service.get_property_val_str("v") != Some(OWN_VERSION)
+                {
                     return true;
                 }
                 let Some(key) =

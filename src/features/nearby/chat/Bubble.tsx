@@ -450,7 +450,7 @@ function CardBody({
   const { navigate } = useRouter();
   const answer = useChatAction((accept: boolean) => api.chatAnswer(peer.key, entry.id, accept));
   if (entry.body.kind !== 'card') return null;
-  const { item, outcome, name, keysDiffer, group } = entry.body;
+  const { item, outcome, name, keysDiffer, group, leftOut } = entry.body;
   const mine = entry.mine;
   const said: Record<typeof outcome, string> = {
     waiting: mine
@@ -476,6 +476,14 @@ function CardBody({
         <p className="flex gap-1.5 text-[12px] leading-[18px] text-warning">
           <AlertTriangle aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" strokeWidth={2} />
           {t('nearby.chat.card.keysDiffer')}
+        </p>
+      ) : null}
+      {leftOut.length > 0 ? (
+        <p className="flex gap-1.5 text-[12px] leading-[18px] text-warning">
+          <AlertTriangle aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" strokeWidth={2} />
+          <span className="[overflow-wrap:anywhere]">
+            {t('nearby.send.leftOut', { names: leftOut.join(', ') })}
+          </span>
         </p>
       ) : null}
       {!mine && outcome === 'waiting' && peer.online ? (

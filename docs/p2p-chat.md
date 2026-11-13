@@ -179,7 +179,8 @@ Chat brings the first new message types, so this comes first:
   }
   ```
 
-  This version says `["chat/1", "personal-env/1"]` in every `Hello`. A side sends a
+  This version says `["chat/1", "personal-env/1", "server-password/1", "env-code-vars/1"]`
+  in every `Hello`. A side sends a
   message, frame or item kind that came after version 1 only to a peer that named its
   feature. **A chat frame never goes to a peer that didn't say `chat/1`.** A later
   incompatible chat change is a new name (`chat/2`). `VERSION` stays 1 and changes only if
@@ -190,6 +191,9 @@ Chat brings the first new message types, so this comes first:
   below): older receivers refuse its empty project label, so it needs `personal-env/1`.
   An item the peer can't take is refused **before anything is offered**, with the
   translated "_{name}_ can't take this yet: its SSH Key Manager needs updating".
+  `Item::for_peer` adapts the rest: a server's password goes for no host to a peer
+  without `server-password/1`, and an environment goes without its variables that run
+  code to one without `env-code-vars/1` (the send dialog names them as staying).
 - **Fallbacks.** `Message`, `Item` and `ItemSummary` get `#[serde(other)] Unknown`, so an
   unknown kind parses instead of failing. Nothing ever sends `Unknown`.
   - `Item::check` refuses it.
@@ -350,12 +354,11 @@ Two known bugs come with that code:
     confirm.
   - New names are ticked. Replacing a value the receiver already has is never ticked by
     default. Names that change how programs start are flagged and never ticked by
-    default. The list is one tested function shared with the vault sync,
-    `envs::risky_variable()`: `PATH`, `LD_*`, `DYLD_*`, `NODE_OPTIONS`, `NODE_PATH`,
-    `PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONHOME`, `PERL5OPT`, `PERL5LIB`, `RUBYOPT`,
-    `RUBYLIB`, `BASH_ENV`, `ENV`, `ZDOTDIR`, `PROMPT_COMMAND`, `GIT_SSH`,
-    `GIT_SSH_COMMAND`, `GIT_EXEC_PATH`, `GIT_CONFIG_*`, `SSH_ASKPASS`,
-    `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`, `JDK_JAVA_OPTIONS`, `DOTNET_STARTUP_HOOKS`.
+    default. The list is one tested function shared with the vault sync, Nearby's
+    pairing sends and Run in terminal, `envs::risky_variable()` (the list itself is in
+    `crates/sshkm-core/src/vault/envs/startup.rs`): shell startup files and prompts,
+    `PATH`, `LD_*`, `DYLD_*`, `GIT_*` but who a commit is by, pagers and editors, and
+    what runtimes load first (`NODE_OPTIONS`, `NODE_PATH`, `PYTHONPATH`, …).
   - Nothing is saved without that confirmation.
 - **A whole environment** can still go as a card (§2). It is permanent, and its values go
   only after the receiver accepts.

@@ -15,13 +15,13 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use sshkm_core::ExposeSecret;
 use sshkm_core::paths::home_dir;
 use sshkm_core::vault::envs::{
     self, EnvComparison, EnvDetail, EnvFormat, EnvImportPreview, EnvInput, EnvSummary, EnvVarInput,
     ImportChoice, ImportCounts, PartRename, SharedValue,
 };
 use sshkm_core::vault::projects::{PartFolderChoice, places};
-use sshkm_core::{ExposeSecret, SecretString};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -552,19 +552,11 @@ pub async fn envs_run(
 ) -> AppResult<TerminalInfo> {
     let shared = Arc::clone(&state);
     blocking(&state, move |state| {
-        crate::secret_gate::confirm_env_secrets(
-            &app,
-            state,
-            &id,
-            &crate::secret_gate::EnvUse::Shell,
-        )?;
-        let (label, vars, places) = state.vault.with(&app, |vault| {
+        // The shell gets the variables as the dialog showed them, not as
+        // they may be after.
+        let vars = crate::secret_gate::confirm_shell_env(&app, state, &id)?;
+        let (label, places) = state.vault.with(&app, |vault| {
             let env = vault.environment(&id)?.summary;
-            let vars: Vec<(String, SecretString)> = vault
-                .env_variables(&id)?
-                .into_iter()
-                .map(|var| (var.name, var.value))
-                .collect();
             let places = match &env.project {
                 Some(project) if !env.in_trash => Some((
                     vault.project(project)?,
@@ -572,11 +564,7 @@ pub async fn envs_run(
                 )),
                 _ => None,
             };
-            Ok((
-                envs::label(Some(&vault.env_label(&env)), &env.name),
-                vars,
-                places,
-            ))
+            Ok((envs::label(Some(&vault.env_label(&env)), &env.name), places))
         })?;
         let home = home_dir();
         let folder = places

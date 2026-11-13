@@ -5400,6 +5400,7 @@ dependencies = [
  "auto-launch",
  "dirs 7.0.0",
  "gethostname",
+ "if-addrs",
  "log",
  "mdns-sd",
  "nix 0.28.0",

@@ -22,6 +22,7 @@ function status(pairing: Pairing | null): NearbyStatus {
     visibleUntil: null,
     address: null,
     joining: false,
+    hiddenAfterAttempts: false,
     reachable: true,
     present: true,
     ownFound: [],

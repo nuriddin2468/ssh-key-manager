@@ -17,4 +17,9 @@ name: string | null, keysDiffer: boolean,
 /**
  * A hosts file group waits on the Hosts file page under this id.
  */
-group: number | null, } | { "kind": "line", line: Line, };
+group: number | null, 
+/**
+ * An environment's variables left out here, as they make programs
+ * run code.
+ */
+leftOut: Array<string>, } | { "kind": "line", line: Line, };

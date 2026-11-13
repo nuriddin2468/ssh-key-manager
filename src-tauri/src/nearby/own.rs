@@ -3,14 +3,19 @@
 //!
 //! The side that connected has the vault. Its user confirms with Touch ID
 //! or the master password ([`Side::authorized`]: only the app's check of
-//! either says so, never the page's yes to the code); then it records both
-//! computers as the user's devices and says so ([`Message::Added`]). If the
-//! other computer has no vault yet, the vault file follows in parts, then
-//! its secret. The other computer checks that the secret opens the file and
-//! keeps both in memory until its user sets a master password of its own.
-//! If it has the same vault already (a synced folder), it only records both
-//! as well; the two tell that by the key own devices share, which is in the
-//! file ([`sshkm_core::p2p::own`]).
+//! either says so, never the page's yes to the code), and says so
+//! ([`Message::Added`]). If the other computer has no vault yet, the first
+//! records both computers as the user's devices before it says so, the
+//! vault file follows in parts, then its secret. The other computer checks
+//! that the secret opens the file and keeps both in memory until its user
+//! sets a master password of its own.
+//!
+//! If the other computer has the same vault already (a synced folder; the
+//! two tell that by the key own devices share, which is in the file, see
+//! [`sshkm_core::p2p::own`]), its user confirms too, in a system dialog
+//! ([`Side::allow_added`]), while the first confirms; a computer the user
+//! removed from their devices is turned away there ([`Side::removed`]).
+//! Then each records both, the first only once the other did.
 //!
 //! [`conversation`]: super::pairing::conversation
 
@@ -52,7 +57,11 @@ fn give(
         let _ = session.send(&Message::Confirm { matched: false });
         return Err(reason);
     }
-    side.add_device(peer, name)?;
+    // The vault a new computer gets lists both; one that has it records
+    // both itself, and this one follows once it did.
+    if joins {
+        side.add_device(peer, name)?;
+    }
     session
         .send(&Message::Added)
         .map_err(|_| PairingFailure::Broken)?;
@@ -70,18 +79,30 @@ fn give(
             .send(&Message::Secret { key: secret })
             .map_err(broken)?;
     }
-    let _ = session.stream().set_read_timeout(Some(STEP_TIMEOUT));
+    // The other user may still be answering the system dialog.
+    let wait = if joins {
+        STEP_TIMEOUT
+    } else {
+        ANSWER_TIMEOUT + STEP_TIMEOUT
+    };
+    let _ = session.stream().set_read_timeout(Some(wait));
     match session.recv().map_err(broken)? {
-        Message::Received { saved: true } => Ok(PairingPhase::Added { vault: joins }),
+        Message::Received { saved: true } => {
+            if !joins {
+                side.add_device(peer, name)?;
+            }
+            Ok(PairingPhase::Added { vault: joins })
+        }
         Message::Received { saved: false } => Err(PairingFailure::NotSaved),
+        Message::Confirm { matched: false } => Err(PairingFailure::PeerDeclined),
         _ => Err(PairingFailure::Broken),
     }
 }
 
 /// Waits for this user to confirm with Touch ID / Windows Hello or the
 /// master password ([`Side::authorized`]); a yes or no meant for the code
-/// doesn't count. The other side says nothing meanwhile, so anything from
-/// it is it hanging up.
+/// doesn't count. Meanwhile the other side only ever says no (its user
+/// turned it down), or hangs up.
 fn wait_for_authorization(
     session: &mut Session<TcpStream>,
     side: &impl Side,
@@ -92,7 +113,10 @@ fn wait_for_authorization(
             return Ok(());
         }
         if waiting(session.stream()).map_err(|_| PairingFailure::Broken)? {
-            return Err(PairingFailure::PeerLeft);
+            return Err(match session.recv() {
+                Ok(Message::Confirm { matched: false }) => PairingFailure::PeerDeclined,
+                _ => PairingFailure::PeerLeft,
+            });
         }
         if started.elapsed() > ANSWER_TIMEOUT {
             return Err(PairingFailure::TimedOut);
@@ -107,6 +131,23 @@ fn take(
     name: &str,
     joins: bool,
 ) -> Result<PairingPhase, PairingFailure> {
+    // With the vault here already, this computer becomes one of the user's
+    // devices only on its own user's yes in a system dialog (the code they
+    // compared is the page's word), and never with a computer the user
+    // removed from them.
+    if !joins {
+        let refused = if side.removed(peer) {
+            Some(PairingFailure::NotOwn)
+        } else if side.allow_added() {
+            None
+        } else {
+            Some(PairingFailure::Cancelled)
+        };
+        if let Some(reason) = refused {
+            let _ = session.send(&Message::Confirm { matched: false });
+            return Err(reason);
+        }
+    }
     side.show(None, &PairingPhase::Approving);
     let _ = session
         .stream()
@@ -203,6 +244,43 @@ mod tests {
         assert_eq!(*right.added.lock().unwrap(), ["MacBook"]);
         assert_eq!(*right.taken.lock().unwrap(), None);
         assert_eq!(codes(&left).len(), 1);
+        // The computer added confirmed in its system dialog.
+        assert_eq!(*right.asked_added.lock().unwrap(), 1);
+        assert_eq!(*left.asked_added.lock().unwrap(), 0);
+    }
+
+    /// A computer with the vault already: the page's yes to the code is not
+    /// enough there either.
+    fn same_vault() -> Script {
+        let mut other = Script::new("iMac", Some(true));
+        other.vault = Vault::Open("the secret");
+        other
+    }
+
+    #[test]
+    fn a_computer_with_the_vault_is_added_only_on_its_own_users_yes() {
+        let mut other = same_vault();
+        other.allows_added = false;
+        let ((left_end, left), (right_end, right)) = talk(giver(true), other, Purpose::AddDevice);
+        assert_eq!(right_end, failed(PairingFailure::Cancelled));
+        assert!(matches!(left_end, PairingPhase::Failed { .. }));
+        assert_eq!(*right.asked_added.lock().unwrap(), 1);
+        // Neither recorded the other.
+        assert_eq!(left.added.lock().unwrap().len(), 0);
+        assert_eq!(right.added.lock().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn a_removed_device_cant_add_itself_back() {
+        let mut other = same_vault();
+        other.removed = true;
+        let ((left_end, left), (right_end, right)) = talk(giver(true), other, Purpose::AddDevice);
+        assert_eq!(right_end, failed(PairingFailure::NotOwn));
+        assert!(matches!(left_end, PairingPhase::Failed { .. }));
+        // It wasn't even asked.
+        assert_eq!(*right.asked_added.lock().unwrap(), 0);
+        assert_eq!(left.added.lock().unwrap().len(), 0);
+        assert_eq!(right.added.lock().unwrap().len(), 0);
     }
 
     #[test]
@@ -262,10 +340,12 @@ mod tests {
         assert_eq!(left.added.lock().unwrap().len(), 0);
         assert_eq!(*right.taken.lock().unwrap(), None);
 
-        // The side that is added confirms nothing; the one that adds, once.
+        // A new computer, which gets the vault, confirms nothing; the one
+        // that adds, once.
         let ((_, left), (_, right)) = talk(giver(true), newcomer(), Purpose::AddDevice);
         assert_eq!(*left.asked_to_authorize.lock().unwrap(), 1);
         assert_eq!(*right.asked_to_authorize.lock().unwrap(), 0);
+        assert_eq!(*right.asked_added.lock().unwrap(), 0);
     }
 
     #[test]

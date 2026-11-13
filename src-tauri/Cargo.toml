@@ -26,6 +26,9 @@ tauri-plugin-opener = "2"
 tauri-plugin-window-state = "2"
 log = "0.4"
 mdns-sd = "0.21"
+# This computer's addresses and their networks, to keep Nearby on the local
+# network. The version mdns-sd uses, so this adds no crate to the build.
+if-addrs = "0.15"
 notify = "8"
 rand_core = { version = "0.6", features = ["getrandom"] }
 serde = { version = "1", features = ["derive"] }

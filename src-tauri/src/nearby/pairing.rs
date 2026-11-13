@@ -98,6 +98,9 @@ pub enum PairingPhase {
         /// A host came with server keys other than the ones this computer
         /// has for it; this computer's are kept.
         keys_differ: bool,
+        /// An environment's variables left out, as they make programs run
+        /// code; the user adds them by hand if they trust them.
+        left_out: Vec<String>,
     },
     /// The other computer becomes one of the user's devices once this user
     /// confirms, with Touch ID or the master password. With `vault`, it
@@ -227,9 +230,9 @@ pub trait Side {
     /// The user's answer if one comes within `wait`; `Err(Cancelled)` once
     /// the user cancelled.
     fn answer(&self, wait: Duration) -> Result<Option<bool>, PairingFailure>;
-    /// Saves an item the user accepted, checked against what was offered.
-    /// Returns its name and whether a host's keys differ from the ones here.
-    fn store(&self, item: &Item) -> Result<(String, bool), PairingFailure>;
+    /// Saves an item the user accepted, checked against what was offered,
+    /// and says what became of it.
+    fn store(&self, item: &Item) -> Result<Stored, PairingFailure>;
 
     /// What this side's `Hello` says about its vault in the session with
     /// handshake `hash`; `None` leaves own devices out of it.
@@ -302,6 +305,27 @@ pub trait Side {
     fn allow_risky(&self, _changes: &[sync::RiskyChange]) -> bool {
         false
     }
+    /// Whether this user allows, in a system dialog that a script in the
+    /// page can't answer, sending `item`, which holds a secret, to the
+    /// other side, as it goes: without the variables named in `left_out`,
+    /// which the other side's version would set without asking.
+    fn allow_send(&self, _item: &Item, _left_out: &[String]) -> bool {
+        false
+    }
+    /// The other side hung up after this side gave it what it needs to work
+    /// out the code this side would show, and before this side showed it:
+    /// it may be trying again until the code is one it wants.
+    fn broke_off(&self) {}
+    /// Whether `peer` was one of the user's devices and was removed.
+    fn removed(&self, _peer: PeerKey) -> bool {
+        false
+    }
+    /// On a computer being added that has the vault already: whether this
+    /// user allows, in a system dialog, becoming one of their devices with
+    /// the computer that adds it.
+    fn allow_added(&self) -> bool {
+        false
+    }
 
     /// Whether this user allows, in a system dialog that a script in the
     /// page can't answer, the variables a sync would add or change that
@@ -343,6 +367,29 @@ pub trait Side {
     }
 }
 
+/// What became of an item saved here.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Stored {
+    /// Its name here: the entry's title, the host's alias (with a number if
+    /// it is taken), the key's file name, the environment's label.
+    pub name: String,
+    /// A host came with server keys other than the ones trusted here, which
+    /// are kept.
+    pub keys_differ: bool,
+    /// An environment's variables left out, as they make programs run code.
+    pub left_out: Vec<String>,
+}
+
+impl Stored {
+    /// Saved as `name`, as it came.
+    pub fn named(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+}
+
 /// The vault's items after a sync, as [`Side::vault_items`] gives them.
 pub struct VaultItems {
     pub snapshots: BTreeMap<String, Hashes>,
@@ -370,12 +417,24 @@ pub fn conversation(
     side: &impl Side,
     purpose: Option<Purpose<'_>>,
 ) -> PairingPhase {
+    conversation_after(session, side, purpose, None)
+}
+
+/// [`conversation`], the other side's `Hello` read already (`hello`), on
+/// the side that was connected to: it reads that before the conversation
+/// takes its place, under the deadline of the handshake.
+pub fn conversation_after(
+    session: &mut Session<TcpStream>,
+    side: &impl Side,
+    purpose: Option<Purpose<'_>>,
+    hello: Option<Message>,
+) -> PairingPhase {
     let intent = match purpose {
         Some(Purpose::AddDevice) => Some(Intent::AddDevice),
         Some(Purpose::Sync) => Some(Intent::Sync),
         _ => None,
     };
-    let met = match meet(session, side, intent) {
+    let met = match meet(session, side, intent, hello) {
         Ok(met) => met,
         Err(reason) => return PairingPhase::Failed { reason },
     };
@@ -383,8 +442,8 @@ pub fn conversation(
         (Met::Contacts(_, known, features), Some(Purpose::Send { item, to })) => {
             transfer::send(session, side, item, known.as_deref(), to, &features)
         }
-        (Met::Contacts(end, ..), Some(_)) => end,
-        (Met::Contacts(end, ..), None) => transfer::receive(session, side).unwrap_or(end),
+        (Met::Contacts(end, ..), Some(_)) => *end,
+        (Met::Contacts(end, ..), None) => transfer::receive(session, side).unwrap_or(*end),
         (Met::AddDevice { peer, name, joins }, _) => own::add(session, side, peer, &name, joins),
         (Met::Sync { peer, entries }, _) => sync::run(session, side, peer, entries),
     }
@@ -394,7 +453,7 @@ pub fn conversation(
 enum Met {
     /// As contacts: `Paired` or `Known`, with the name this side kept for
     /// the other before, if it knew it, and what the other can do.
-    Contacts(PairingPhase, Option<String>, Vec<String>),
+    Contacts(Box<PairingPhase>, Option<String>, Vec<String>),
     /// To make one the other's device; with `joins`, the side that
     /// answered gets the vault.
     AddDevice {
@@ -407,10 +466,17 @@ enum Met {
     Sync { peer: PeerKey, entries: Entries },
 }
 
+impl Met {
+    fn contacts(end: PairingPhase, known: Option<String>, features: Vec<String>) -> Self {
+        Self::Contacts(Box::new(end), known, features)
+    }
+}
+
 fn meet(
     session: &mut Session<TcpStream>,
     side: &impl Side,
     intent: Option<Intent>,
+    hello: Option<Message>,
 ) -> Result<Met, PairingFailure> {
     let peer_key = session.remote();
     let initiator = session.is_initiator();
@@ -431,7 +497,10 @@ fn meet(
         known: they_know,
         own: theirs,
         features: their_features,
-    } = their_hello(session)?;
+    } = match hello {
+        Some(message) => hello_of(message)?,
+        None => hello_of(session.recv().map_err(broken)?)?,
+    };
     let announced = Some(clean_name(&name)).filter(|name| !name.is_empty());
     let peer_name = announced.clone().unwrap_or_else(|| "?".to_owned());
     // A device this side knows goes by the name it keeps for it, since any
@@ -447,14 +516,14 @@ fn meet(
 
     let Some(intent) = intent else {
         if known.is_some() && they_know {
-            return Ok(Met::Contacts(PairingPhase::Known, known, their_features));
+            return Ok(Met::contacts(PairingPhase::Known, known, their_features));
         }
         compare_codes(session, side, peer.as_deref())?;
         // A device known here already stays as it is, name and all.
         if known.is_none() {
             side.save(peer_key, &peer_name)?;
         }
-        return Ok(Met::Contacts(PairingPhase::Paired, known, their_features));
+        return Ok(Met::contacts(PairingPhase::Paired, known, their_features));
     };
     let (Some(mine), Some(theirs)) = (mine, theirs) else {
         return Err(PairingFailure::Version);
@@ -551,9 +620,9 @@ struct Hello {
     features: Vec<String>,
 }
 
-/// Reads the other side's `Hello`, of this version.
-fn their_hello(session: &mut Session<TcpStream>) -> Result<Hello, PairingFailure> {
-    match session.recv().map_err(broken)? {
+/// The other side's `Hello`, of this version, from its first message.
+fn hello_of(message: Message) -> Result<Hello, PairingFailure> {
+    match message {
         Message::Hello {
             version,
             name,
@@ -579,7 +648,12 @@ fn compare_codes(
     side: &impl Side,
     peer: Option<&str>,
 ) -> Result<(), PairingFailure> {
-    let code = session.pairing_code().map_err(broken)?;
+    let code = session.pairing_code().map_err(|error| {
+        if session.gave_nonce() {
+            side.broke_off();
+        }
+        broken(error)
+    })?;
     side.show(peer, &PairingPhase::Compare { code: code.clone() });
     let (matched, mut theirs) = wait_for_answer(session, side)?;
     if !matched {
@@ -721,6 +795,67 @@ mod tests {
         );
         assert!(matches!(right_end, PairingPhase::Failed { .. }));
         assert!(right.saved.lock().unwrap().is_empty());
+    }
+
+    /// A side that connects, says hello, and hangs up once it got the other
+    /// side's nonce, as one would that didn't like the code; or, without
+    /// `commits`, right after the hello.
+    fn hang_up_after_the_nonce(commits: bool) -> Script {
+        use std::net::{TcpListener, TcpStream};
+        use std::thread;
+
+        use sshkm_core::p2p::{accept, connect};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let other = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut session = accept(stream, &Identity::generate().unwrap()).unwrap();
+            let side = Script::new("bob", Some(true));
+            (conversation(&mut session, &side, None), side)
+        });
+        let stream = TcpStream::connect(address).unwrap();
+        let mut session = connect(stream, &Identity::generate().unwrap()).unwrap();
+        session
+            .send(&Message::Hello {
+                version: VERSION,
+                name: "mallory".into(),
+                known: false,
+                own: None,
+                features: Vec::new(),
+            })
+            .unwrap();
+        assert!(matches!(session.recv().unwrap(), Message::Hello { .. }));
+        if commits {
+            // What it commits to is only checked when it reveals it.
+            session
+                .send(&Message::Commit {
+                    hash: "a commitment".into(),
+                })
+                .unwrap();
+            assert!(matches!(session.recv().unwrap(), Message::Nonce { .. }));
+        }
+        drop(session);
+        let (end, side) = other.join().unwrap();
+        assert!(matches!(end, PairingPhase::Failed { .. }));
+        assert_eq!(codes(&side), Vec::<String>::new());
+        side
+    }
+
+    #[test]
+    fn a_side_hears_of_a_hang_up_after_its_nonce() {
+        assert_eq!(*hang_up_after_the_nonce(true).broken_off.lock().unwrap(), 1);
+        assert_eq!(
+            *hang_up_after_the_nonce(false).broken_off.lock().unwrap(),
+            0
+        );
+        // A pairing that went through is no such thing.
+        let ((_, left), (_, right)) = pair(
+            Script::new("alice", Some(true)),
+            Script::new("bob", Some(true)),
+        );
+        assert_eq!(*left.broken_off.lock().unwrap(), 0);
+        assert_eq!(*right.broken_off.lock().unwrap(), 0);
     }
 
     #[test]

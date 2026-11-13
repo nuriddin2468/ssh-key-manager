@@ -1,3 +1,4 @@
+import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { HostEdit } from '@/bindings/HostEdit';
 import type { HostEntry } from '@/bindings/HostEntry';
 import type { HostOption } from '@/bindings/HostOption';
@@ -403,4 +404,29 @@ export function gitAccount(output: string): string | null {
     if (match?.[1]) return match[1];
   }
   return null;
+}
+
+/**
+ * The entry for `alias`'s password, as the backend's `host_entry` picks it:
+ * of the host entries outside the recycle bin that name it, the one made
+ * first (one without a time counting as older still), then by id. Titles
+ * don't decide, so an entry made later never takes the place of another.
+ */
+export function hostEntry<T extends EntrySummary>(
+  entries: readonly T[],
+  alias: string,
+): T | undefined {
+  let first: T | undefined;
+  for (const entry of entries) {
+    if (entry.kind !== 'host' || entry.inTrash || entry.host !== alias) continue;
+    if (first === undefined || madeBefore(entry, first)) first = entry;
+  }
+  return first;
+}
+
+/** Whether `a` was made before `b`: one without a time first, then by time, then by id. */
+function madeBefore(a: EntrySummary, b: EntrySummary): boolean {
+  if ((a.created === null) !== (b.created === null)) return a.created === null;
+  if (a.created !== b.created) return (a.created ?? '') < (b.created ?? '');
+  return a.id < b.id;
 }

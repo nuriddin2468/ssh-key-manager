@@ -1115,7 +1115,7 @@ fn count(n: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::super::pairing::Purpose;
-    use super::super::script::{Script, talk};
+    use super::super::script::{Script, over_own_handshake, talk};
     use super::*;
 
     const LEFT: &str =
@@ -1520,6 +1520,8 @@ mod tests {
         let (_dir, left, right, mail) = vault_pair();
         let shop = add_login(&left, "Shop");
         let blog = add_login(&right, "Blog");
+        // Over the handshake own devices use, as in the app.
+        assert!(over_own_handshake(&left, &right));
         let ((left_sum, left), (right_sum, right)) = sync(left, right);
         assert_eq!(left_sum.vault.logins.added, 1);
         assert_eq!(right_sum.vault.logins.added, 1);

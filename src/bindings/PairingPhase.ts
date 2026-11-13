@@ -12,4 +12,9 @@ export type PairingPhase = { "type": "connecting" } | { "type": "compare", code:
  * A host came with server keys other than the ones this computer
  * has for it; this computer's are kept.
  */
-keysDiffer: boolean, } | { "type": "authorize", vault: boolean, } | { "type": "approving" } | { "type": "transfer", done: number, total: number, } | { "type": "setMaster" } | { "type": "added", vault: boolean, } | { "type": "joined" } | { "type": "syncing" } | { "type": "decide", review: Review, } | { "type": "synced", summary: SyncSummary, } | { "type": "failed", reason: PairingFailure, };
+keysDiffer: boolean, 
+/**
+ * An environment's variables left out, as they make programs run
+ * code; the user adds them by hand if they trust them.
+ */
+leftOut: Array<string>, } | { "type": "authorize", vault: boolean, } | { "type": "approving" } | { "type": "transfer", done: number, total: number, } | { "type": "setMaster" } | { "type": "added", vault: boolean, } | { "type": "joined" } | { "type": "syncing" } | { "type": "decide", review: Review, } | { "type": "synced", summary: SyncSummary, } | { "type": "failed", reason: PairingFailure, };

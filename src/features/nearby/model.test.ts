@@ -17,6 +17,7 @@ import {
   mayShow,
   percent,
   secondsLeft,
+  serverAddress,
   summaryLine,
   summaryLines,
 } from './model';
@@ -234,6 +235,14 @@ describe('conflictRows', () => {
     ]);
     const deleted = conflictRows({ id: 'x', mine: null, theirs: { id: 'x', fields: [] } });
     expect(deleted).toEqual([]);
+  });
+});
+
+describe('serverAddress', () => {
+  it('names the account and the server, and the port unless it is 22', () => {
+    const server = { user: 'deploy', hostName: '10.0.4.12', port: 22, proxyJump: null };
+    expect(serverAddress(server)).toBe('deploy@10.0.4.12');
+    expect(serverAddress({ ...server, port: 2222 })).toBe('deploy@10.0.4.12:2222');
   });
 });
 

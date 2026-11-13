@@ -22,6 +22,8 @@
 //!   device key and the current ten-minute window, so the name changes, says
 //!   nothing about the device, and only the user's other devices can tell
 //!   whose it is.
+//! - **Session.** Own devices mix a key from it into their handshake, so a
+//!   computer that connects to the port they announce learns nothing.
 
 use std::fmt::{self, Write as _};
 
@@ -40,6 +42,7 @@ pub const PRESENCE_WINDOW: u64 = 600;
 const SALT: &[u8] = b"sshkm own devices";
 const PROOF_LABEL: &[u8] = b"sshkm own proof";
 const PRESENCE_LABEL: &[u8] = b"sshkm presence";
+const SESSION_LABEL: &[u8] = b"sshkm own session";
 const DIGEST_LABEL: &[u8] = b"sshkm own sync digests";
 /// Hex digits of a presence name.
 const PRESENCE_LEN: usize = 16;
@@ -81,6 +84,15 @@ impl OwnKey {
     pub fn verify(&self, hash: &[u8], initiator: bool, proof: &str) -> bool {
         Base64::decode_vec(proof)
             .is_ok_and(|bytes| self.proof_mac(hash, initiator).verify_slice(&bytes).is_ok())
+    }
+
+    /// The key own devices mix into their handshake ([`connect_own`]), so a
+    /// computer without the vault learns nothing from the port they listen
+    /// on for each other, not even the device key.
+    ///
+    /// [`connect_own`]: super::session::connect_own
+    pub fn session_key(&self) -> Zeroizing<[u8; 32]> {
+        Zeroizing::new(self.mac(SESSION_LABEL).finalize().into_bytes().into())
     }
 
     /// The name `device` announces itself under during `window`.
@@ -204,5 +216,17 @@ mod tests {
         assert_eq!(ours.recognize(&name, &devices, now + 1), Some(laptop));
         assert_eq!(ours.recognize(&name, &devices, now + 2), None);
         assert_eq!(key("vault two").recognize(&name, &devices, now), None);
+    }
+
+    #[test]
+    fn the_session_key_belongs_to_the_vault() {
+        assert_eq!(
+            *key("vault one").session_key(),
+            *key("vault one").session_key()
+        );
+        assert_ne!(
+            *key("vault one").session_key(),
+            *key("vault two").session_key()
+        );
     }
 }

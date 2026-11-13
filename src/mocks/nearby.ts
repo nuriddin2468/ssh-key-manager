@@ -8,8 +8,9 @@
 //
 // URL switches:
 // - `?nearby=incoming`: a fourth computer asks to pair a few seconds after
-//   this one is shown, and sends a login; `&item=group` or `&item=key` makes
-//   it send a hosts file group or a public key instead.
+//   this one is shown, and sends a login; `&item=group`, `&item=key` or
+//   `&item=server` makes it send a hosts file group, a public key or a
+//   server's password instead.
 // - `?vault=missing&nearby=join`: another computer gives this one its vault
 //   a few seconds after "Get it from my other computer".
 // - `?nearby=sync`: "Sync" brings conflicts (a host, a login, an
@@ -68,7 +69,24 @@ const receivedGroups = new Map<number, ReceivedGroup>();
 
 /** What the computer that asks to pair sends, by `?item=`. */
 const INCOMING: Record<string, ItemSummary> = {
-  password: { type: 'password', title: 'Office Wi-Fi', username: 'guest', url: '', otp: false },
+  password: {
+    type: 'password',
+    title: 'Office Wi-Fi',
+    username: 'guest',
+    url: '',
+    otp: false,
+    host: null,
+    server: null,
+  },
+  server: {
+    type: 'password',
+    title: 'prod-api',
+    username: 'deploy',
+    url: '',
+    otp: true,
+    host: 'prod',
+    server: { user: 'deploy', hostName: '10.0.4.12', port: 22, proxyJump: null },
+  },
   group: {
     type: 'hostsGroup',
     name: 'Staging',
@@ -102,7 +120,15 @@ function summary(request: SendRequest): ItemSummary {
         hostKeys: 1,
       };
     case 'password':
-      return { type: 'password', title: 'prod-api', username: 'deploy', url: '', otp: request.otp };
+      return {
+        type: 'password',
+        title: 'prod-api',
+        username: 'deploy',
+        url: '',
+        otp: request.otp,
+        host: 'prod-api',
+        server: { user: 'deploy', hostName: '10.0.4.12', port: 22, proxyJump: null },
+      };
     case 'hostsGroup': {
       const entries = hostsFileInfo().view.entries.filter((e) => e.group === request.name);
       return {
@@ -189,6 +215,7 @@ function status(): NearbyStatus {
     visibleUntil,
     address: visibleUntil ? '192.168.1.24:48213' : null,
     joining,
+    hiddenAfterAttempts: false,
     reachable,
     present: reachable && !locked(),
     ownFound: reachable && !locked() ? [IMAC] : [],
@@ -704,6 +731,7 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
                 item,
                 name: receivedName(item, peer),
                 keysDiffer: false,
+                leftOut: [],
               },
             }
           : { phase: { type: 'failed', reason: 'turned' } },

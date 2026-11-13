@@ -25,7 +25,7 @@ use sshkm_core::vault::projects::{
     self, FolderPlace, PartFolderChoice, Project, ProjectFolder, ProjectInput, ProjectMember,
     places,
 };
-use sshkm_core::{ErrorCode, SecretString, fsutil, keys};
+use sshkm_core::{ErrorCode, fsutil, keys};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -642,29 +642,23 @@ pub async fn projects_open_terminal(
         path: path.unwrap_or_default(),
     };
     blocking(&state, move |state| {
-        if let Some(env) = &env {
-            crate::secret_gate::confirm_env_secrets(
-                &app,
-                state,
-                env,
-                &crate::secret_gate::EnvUse::Shell,
-            )?;
-        }
+        // The shell gets the variables as the dialog showed them, not as
+        // they may be after.
+        let approved = match &env {
+            Some(env) => crate::secret_gate::confirm_shell_env(&app, state, env)?,
+            None => Vec::new(),
+        };
         let opened = state.vault.with(&app, |vault| {
             let project = vault.project(&id)?;
             let places = vault.project_places(&id)?;
-            let vars = match &env {
-                Some(env) => {
-                    if !find_place(&places, &place)?.terminal.contains(env) {
-                        return Err(AppError::invalid(
-                            "not an environment for a terminal in this folder",
-                        ));
-                    }
-                    variables(vault, env)?
-                }
-                None => Vec::new(),
-            };
-            Ok((project, places, vars))
+            if let Some(env) = &env
+                && !find_place(&places, &place)?.terminal.contains(env)
+            {
+                return Err(AppError::invalid(
+                    "not an environment for a terminal in this folder",
+                ));
+            }
+            Ok((project, places, approved))
         });
         let (project, places, vars) = match opened {
             // Asked for variables: none while locked would be a surprise.
@@ -895,18 +889,6 @@ fn terminal_folder(project: &Project, folder: &str, home: Option<&Path>) -> AppR
     projects::folder_path(folder, home)
         .filter(|path| path.is_dir())
         .ok_or_else(|| AppError::not_found(format!("{folder} on this computer")))
-}
-
-/// An environment's variables, as a shell gets them.
-fn variables(
-    vault: &mut sshkm_core::vault::Vault,
-    env: &str,
-) -> AppResult<Vec<(String, SecretString)>> {
-    Ok(vault
-        .env_variables(env)?
-        .into_iter()
-        .map(|var| (var.name, var.value))
-        .collect())
 }
 
 /// Host renames made while the vault was locked, oldest first: applied the

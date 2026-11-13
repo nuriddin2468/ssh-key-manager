@@ -35,7 +35,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use sshkm_app_lib::nearby::pairing::{
-    PairingFailure, PairingPhase, Purpose, Side, VaultItems, conversation,
+    PairingFailure, PairingPhase, Purpose, Side, Stored, VaultItems, conversation,
 };
 use sshkm_app_lib::nearby::sync::{SyncLocal, SyncState, SyncWrite};
 use sshkm_app_lib::nearby::{BASE_LABEL, OWN_SERVICE_TYPE, SERVICE_TYPE, VAULT_BASE_LABEL};
@@ -143,7 +143,7 @@ impl Side for Terminal {
         Ok(Some(line.trim().eq_ignore_ascii_case("y")))
     }
 
-    fn store(&self, item: &Item) -> Result<(String, bool), PairingFailure> {
+    fn store(&self, item: &Item) -> Result<Stored, PairingFailure> {
         match item {
             Item::Password {
                 title,
@@ -161,7 +161,7 @@ impl Side for Terminal {
                         ""
                     }
                 );
-                Ok((title.clone(), false))
+                Ok(Stored::named(title.clone()))
             }
             Item::Host {
                 alias, host_keys, ..
@@ -174,7 +174,7 @@ impl Side for Terminal {
                     },
                     host_keys.len()
                 );
-                Ok((alias.clone(), false))
+                Ok(Stored::named(alias.clone()))
             }
             Item::HostsGroup { name, entries } => {
                 println!("Got the hosts file group \"{name}\":");
@@ -191,11 +191,11 @@ impl Side for Terminal {
                             .unwrap_or_default()
                     );
                 }
-                Ok((name.clone(), false))
+                Ok(Stored::named(name.clone()))
             }
             Item::PublicKey { name, key } => {
                 println!("Got the public key {name}: {key}");
-                Ok((name.clone(), false))
+                Ok(Stored::named(name.clone()))
             }
             Item::Environment {
                 project,
@@ -209,7 +209,7 @@ impl Side for Terminal {
                     let secret = if var.secret { " (secret)" } else { "" };
                     println!("  {}{secret}", var.name);
                 }
-                Ok((format!("{project} / {name}"), false))
+                Ok(Stored::named(format!("{project} / {name}")))
             }
             Item::Unknown => Err(PairingFailure::Unsupported),
         }
@@ -242,6 +242,12 @@ impl Side for Terminal {
     fn is_own(&self, peer: PeerKey) -> bool {
         self.with_vault(|vault| vault.is_own_device(&peer))
             .unwrap_or(false)
+    }
+
+    /// The app asks in a system dialog; here, the sample was chosen with
+    /// `--send` when the example started.
+    fn allow_send(&self, _item: &Item, _left_out: &[String]) -> bool {
+        true
     }
 
     fn takes(&self, intent: Option<Intent>) -> Result<(), PairingFailure> {
@@ -513,6 +519,7 @@ fn sample(kind: &str, name: &str) -> Item {
             notes: "Sent by the nearby_peer example.".into(),
             otp: None,
             host: None,
+            server: None,
         }
     }
 }
@@ -582,7 +589,7 @@ fn announcement(side: &Terminal, port: u16) -> Result<ServiceInfo, Box<dyn std::
             &format!("{instance}.local."),
             (),
             port,
-            &[("v", "1")][..],
+            &[("v", "2")][..],
         )?
     } else {
         let instance = format!("test-peer-{port}");
@@ -682,7 +689,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (stream, from) = listener.accept()?;
         println!("{from} connected.");
         stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-        let mut session = p2p::accept(stream, &side.identity)?;
+        // The user's devices mix the key they share into the handshake.
+        let mut session = match side
+            .with_vault(|vault| vault.own_key().map(|key| key.session_key()))
+            .flatten()
+        {
+            Some(key) => p2p::accept_own(stream, &side.identity, &key)?,
+            None => p2p::accept(stream, &side.identity)?,
+        };
         conversation(&mut session, &side, None)
     };
     println!("Result: {end:?}");

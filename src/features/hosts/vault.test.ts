@@ -65,6 +65,23 @@ describe('findHostEntry', () => {
     expect(findHostEntry(entries, ['prod'])).toEqual({ alias: 'prod', entry: entries[2] });
   });
 
+  it('takes the entry made first, as the backend does, whatever the titles', () => {
+    // As the vault lists them: by title.
+    const entries = [
+      entry({ id: 'b', title: '0 prod', created: '2026-11-13T10:00:00Z' }),
+      entry({ id: 'a', title: 'Work prod', created: '2026-02-01T08:00:00Z' }),
+    ];
+    expect(findHostEntry(entries, ['prod'])?.entry.id).toBe('a');
+    // One without a time is older still; the same time goes by id.
+    const undated = entry({ id: 'z', title: 'Z', created: null });
+    expect(findHostEntry([...entries, undated], ['prod'])?.entry.id).toBe('z');
+    const tied = [
+      entry({ id: 'y', created: '2026-01-01T00:00:00Z' }),
+      entry({ id: 'x', created: '2026-01-01T00:00:00Z' }),
+    ];
+    expect(findHostEntry(tied, ['prod'])?.entry.id).toBe('x');
+  });
+
   it('tries the aliases in order and says which one matched', () => {
     const entries = [entry({ id: 'long', host: 'prod.example.com' })];
     expect(findHostEntry(entries, ['prod', 'prod.example.com'])?.alias).toBe('prod.example.com');

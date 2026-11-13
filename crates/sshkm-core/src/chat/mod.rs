@@ -90,6 +90,10 @@ pub enum Body {
         /// A hosts file group waits on the Hosts file page under this id.
         #[serde(default)]
         group: Option<u32>,
+        /// An environment's variables left out on the receiving side, as
+        /// they make programs run code.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        left_out: Vec<String>,
     },
     Line {
         line: Line,
@@ -499,6 +503,7 @@ mod tests {
                 name: None,
                 keys_differ: false,
                 group: None,
+                left_out: Vec::new(),
             },
             delivery: Delivery::Received,
         };

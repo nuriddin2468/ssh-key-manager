@@ -18,7 +18,7 @@ use sshkm_core::p2p::PeerKey;
 use sshkm_core::p2p::contact::{self, ContactKey};
 use sshkm_core::p2p::own::window;
 
-use super::super::{addresses_of, mdns, mdns_error};
+use super::super::{addresses_of, from_local_network, mdns, mdns_error};
 use super::{Conversation, Found, Nearby, Stop};
 use crate::error::AppResult;
 
@@ -238,10 +238,12 @@ impl Nearby {
     fn listen_chats(self: Arc<Self>, listener: &TcpListener, stop: &AtomicBool) {
         while !stop.load(Ordering::SeqCst) {
             match listener.accept() {
-                Ok((stream, _)) => {
+                // Only from the local network, as every Nearby connection.
+                Ok((stream, from)) if from_local_network(from) => {
                     let nearby = Arc::clone(&self);
                     thread::spawn(move || nearby.chat_incoming(stream));
                 }
+                Ok(_) => {}
                 Err(error) if error.kind() == ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(150));
                 }

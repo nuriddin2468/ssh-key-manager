@@ -183,10 +183,94 @@ pub fn merge(known: &mut KnownHosts, theirs: &[HostKeys]) -> KeysMerge {
     merge
 }
 
+/// Takes out of `known` the keys it has beyond `before`, which a [`merge`]
+/// added at its end, for hosts one of `elsewhere` trusts a key for: `ssh`
+/// reads those files too (`known_hosts2`, the system's
+/// `ssh_known_hosts`…), and would take the other computer's key next to
+/// the one, or the certificate authority, trusted there. Returns how many
+/// it took out.
+pub fn drop_trusted_elsewhere(
+    known: &mut KnownHosts,
+    before: &KnownHosts,
+    elsewhere: &[KnownHosts],
+) -> usize {
+    let kept = before.to_string().lines().count();
+    let doomed: Vec<u32> = known
+        .entries()
+        .into_iter()
+        .filter(|entry| usize::try_from(entry.line).is_ok_and(|line| line > kept))
+        .filter(|entry| {
+            entry.hosts.iter().any(|pattern| {
+                split_pattern(pattern)
+                    .is_some_and(|(host, port)| trusted_in(elsewhere, &host, port))
+            })
+        })
+        .map(|entry| entry.line)
+        .collect();
+    known.remove_lines(&doomed)
+}
+
+/// Whether one of `files` trusts a key for `host` on `port`: one of its
+/// own, or a certificate authority's. A revoked key trusts nothing.
+pub fn trusted_in(files: &[KnownHosts], host: &str, port: u16) -> bool {
+    files.iter().any(|file| {
+        file.matches(host, port)
+            .iter()
+            .any(|entry| entry.marker != HostMarker::Revoked)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sync::Field;
+
+    #[test]
+    fn keys_trusted_in_another_file_are_not_added_next_to_it() {
+        let before = KnownHosts::parse(&format!("old.example.com ssh-ed25519 {ED_A}"));
+        let elsewhere = [
+            KnownHosts::parse(&format!(
+                "@cert-authority *.corp.example.com ssh-ed25519 {ED_A}\n"
+            )),
+            KnownHosts::parse(&format!("[git.example.com]:2222 ssh-ed25519 {ED_A}\n")),
+            KnownHosts::parse(&format!(
+                "@revoked revoked.example.com ssh-ed25519 {ED_A}\n"
+            )),
+        ];
+        let mut known = before.clone();
+        let theirs = |host: &str, port: u16| HostKeys {
+            host: host.into(),
+            port,
+            keys: vec![HostKey {
+                key_type: "ssh-ed25519".into(),
+                key: ED_B.into(),
+            }],
+        };
+        let merge = merge(
+            &mut known,
+            &[
+                theirs("db.corp.example.com", 22),
+                theirs("git.example.com", 2222),
+                theirs("git.example.com", 22),
+                theirs("revoked.example.com", 22),
+                theirs("new.example.com", 22),
+            ],
+        );
+        assert_eq!(merge.added, 5);
+        assert_eq!(drop_trusted_elsewhere(&mut known, &before, &elsewhere), 2);
+        let ed_b = vec![("ssh-ed25519".to_owned(), ED_B.to_owned())];
+        let none: Vec<(String, String)> = Vec::new();
+        assert_eq!(known.keys_for("db.corp.example.com", 22), none);
+        assert_eq!(known.keys_for("git.example.com", 2222), none);
+        assert_eq!(known.keys_for("git.example.com", 22), ed_b);
+        assert_eq!(known.keys_for("revoked.example.com", 22), ed_b);
+        assert_eq!(known.keys_for("new.example.com", 22), ed_b);
+        // What was there stays, whatever the other files say.
+        let mut known = before.clone();
+        let everywhere = [KnownHosts::parse(&format!("* ssh-ed25519 {ED_B}\n"))];
+        assert_eq!(drop_trusted_elsewhere(&mut known, &before, &everywhere), 0);
+        assert_eq!(known, before);
+    }
 
     use base64ct::{Base64, Encoding};
     use hmac::{Hmac, Mac};

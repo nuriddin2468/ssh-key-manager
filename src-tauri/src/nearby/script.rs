@@ -13,8 +13,8 @@ use sha2::{Digest, Sha256};
 use sshkm_core::config::SshConfig;
 use sshkm_core::known_hosts::KnownHosts;
 use sshkm_core::p2p::own::OwnKey;
-use sshkm_core::p2p::protocol::{EntrySync, Intent, Item, SecretText, VaultState};
-use sshkm_core::p2p::{Identity, PeerKey, accept, connect};
+use sshkm_core::p2p::protocol::{EntrySync, Intent, Item, ItemSummary, SecretText, VaultState};
+use sshkm_core::p2p::{Identity, PeerKey, accept, accept_own, connect, connect_own};
 use sshkm_core::sync::Hasher;
 use sshkm_core::vault::projects::ProjectRecord;
 use sshkm_core::vault::sync::{
@@ -23,7 +23,10 @@ use sshkm_core::vault::sync::{
 use sshkm_core::vault::{ContactRecord, DeviceRecord};
 use zeroize::Zeroizing;
 
-use super::pairing::{PairingFailure, PairingPhase, Purpose, Side, VaultItems, conversation};
+use super::pairing::{
+    PairingFailure, PairingPhase, Purpose, Side, Stored, VaultItems, conversation,
+    conversation_after,
+};
 use super::sync::{RiskyChange, RiskyVariables, SyncDecisions, SyncLocal, SyncState, SyncWrite};
 
 /// The vault a script has.
@@ -93,6 +96,21 @@ pub struct Script {
     pub devices: Mutex<Vec<DeviceRecord>>,
     /// The project records this side sends, and then the other side's.
     pub projects: Mutex<Vec<ProjectRecord>>,
+    /// This user allows sending a secret in the system dialog.
+    pub allows_send: bool,
+    /// The secrets the system dialog asked about sending.
+    pub asked_to_send: Mutex<Vec<ItemSummary>>,
+    /// For each of them, the variables it named as staying here.
+    pub asked_left_out: Mutex<Vec<Vec<String>>>,
+    /// How many times the other side hung up before this one showed a code
+    /// it could already work out.
+    pub broken_off: Mutex<u32>,
+    /// The other side was one of the user's devices and was removed.
+    pub removed: bool,
+    /// This user allows, in the system dialog, this computer to be added.
+    pub allows_added: bool,
+    /// How many times the system dialog asked that.
+    pub asked_added: Mutex<u32>,
     /// The contact records this side sends, and then the other side's.
     pub contact_records: Mutex<Vec<ContactRecord>>,
     /// What its `Hello` says about syncing the vault's entries.
@@ -145,6 +163,13 @@ impl Script {
             sync_state: Mutex::default(),
             devices: Mutex::default(),
             projects: Mutex::default(),
+            allows_send: true,
+            asked_to_send: Mutex::default(),
+            asked_left_out: Mutex::default(),
+            broken_off: Mutex::default(),
+            removed: false,
+            allows_added: true,
+            asked_added: Mutex::default(),
             contact_records: Mutex::default(),
             entries: None,
             real: None,
@@ -242,7 +267,7 @@ impl Side for Script {
         *last = answer;
         answer.map(Some).ok_or(PairingFailure::Cancelled)
     }
-    fn store(&self, item: &Item) -> Result<(String, bool), PairingFailure> {
+    fn store(&self, item: &Item) -> Result<Stored, PairingFailure> {
         if let Some(failure) = self.store_fails {
             return Err(failure);
         }
@@ -255,7 +280,11 @@ impl Side for Script {
             | Item::Environment { name, .. } => name.clone(),
             Item::Unknown => return Err(PairingFailure::Unsupported),
         };
-        Ok((name, false))
+        // As the app: an environment's variables that run code stay out.
+        Ok(Stored {
+            left_out: item.code_running(),
+            ..Stored::named(name)
+        })
     }
 
     fn vault(&self, hash: &[u8], initiator: bool) -> Option<VaultState> {
@@ -354,6 +383,21 @@ impl Side for Script {
         self.asked_risky.lock().unwrap().extend_from_slice(changes);
         self.allows_risky
     }
+    fn allow_send(&self, item: &Item, left_out: &[String]) -> bool {
+        self.asked_to_send.lock().unwrap().push(item.summary());
+        self.asked_left_out.lock().unwrap().push(left_out.to_vec());
+        self.allows_send
+    }
+    fn broke_off(&self) {
+        *self.broken_off.lock().unwrap() += 1;
+    }
+    fn removed(&self, _: PeerKey) -> bool {
+        self.removed
+    }
+    fn allow_added(&self) -> bool {
+        *self.asked_added.lock().unwrap() += 1;
+        self.allows_added
+    }
     fn allow_risky_variables(&self, changes: &[RiskyVariables]) -> bool {
         self.asked_variables
             .lock()
@@ -423,24 +467,55 @@ pub fn talk(
     )
 }
 
-/// [`talk`], each side with the device key given.
+/// [`talk`], each side with the device key given. As in the app, the side
+/// connected to reads the other's `Hello` before the conversation; a sync
+/// between two sides of one vault opens with the key own devices mix into
+/// their handshake.
 pub fn talk_as(
     (left, left_key): (Script, Identity),
     (right, right_key): (Script, Identity),
     purpose: Purpose<'_>,
 ) -> ((PairingPhase, Script), (PairingPhase, Script)) {
+    let own = own_session_key(&left, &right, &purpose);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let other = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
-        let mut session = accept(stream, &right_key).unwrap();
-        (conversation(&mut session, &right, None), right)
+        let mut session = match own {
+            Some(key) => accept_own(stream, &right_key, &key).unwrap(),
+            None => accept(stream, &right_key).unwrap(),
+        };
+        let hello = session.recv().ok();
+        (conversation_after(&mut session, &right, None, hello), right)
     });
     let stream = TcpStream::connect(address).unwrap();
-    let mut session = connect(stream, &left_key).unwrap();
+    let mut session = match own {
+        Some(key) => connect_own(stream, &left_key, &key).unwrap(),
+        None => connect(stream, &left_key).unwrap(),
+    };
     let mine = (conversation(&mut session, &left, Some(purpose)), left);
     drop(session);
     (mine, other.join().unwrap())
+}
+
+/// The key both sides mix into the handshake of a sync, as own devices do,
+/// when both have the same vault: a sync with any other side opens without
+/// one, so it can fail in the conversation instead.
+fn own_session_key(left: &Script, right: &Script, purpose: &Purpose<'_>) -> Option<[u8; 32]> {
+    if !matches!(purpose, Purpose::Sync) {
+        return None;
+    }
+    let (left, right) = (
+        left.own_key()?.session_key(),
+        right.own_key()?.session_key(),
+    );
+    (*left == *right).then_some(*left)
+}
+
+/// Whether `talk` ran a sync between `left` and `right` over the handshake
+/// own devices use.
+pub fn over_own_handshake(left: &Script, right: &Script) -> bool {
+    own_session_key(left, right, &Purpose::Sync).is_some()
 }
 
 /// The names a side showed for the other device.

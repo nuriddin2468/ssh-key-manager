@@ -731,7 +731,7 @@ fn set_file_mode(file: &fs::File, path: &Path, mode: u32) -> Result<()> {
 /// mode doesn't override (see [`drop_inherited_access`]). A link at `path`
 /// isn't followed for the access list.
 #[cfg_attr(
-    not(test),
+    not(all(test, target_os = "macos")),
     allow(
         dead_code,
         reason = "level-3 pipes are made owner-only through their folder, held open (`vault/envs/files/pipes.rs`)"

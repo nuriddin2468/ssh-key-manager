@@ -43,6 +43,7 @@ pub use self::dotenv::{ParseProblem, ParsedEnv, ProblemKind};
 pub use self::files::{EnvFile, EnvKind, FileLevel};
 pub use self::format::{EnvFormat, render};
 pub(crate) use self::shared::is_shared;
+pub(in crate::vault) use self::shared::shared_references;
 pub use self::shared::{SharedUse, SharedValue};
 use super::export::{checked_target, write_private};
 use super::{Vault, check_field, duplicate, in_group, parse_id, rfc3339};

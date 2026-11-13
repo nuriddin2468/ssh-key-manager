@@ -22,8 +22,8 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use super::LOCAL;
 use super::plan::ItemKind;
+use super::{LOCAL, Pairs};
 use crate::sync::{Hasher, Hashes};
 use crate::vault::envs::{MARKER, is_shared};
 use crate::vault::projects::TAG_PREFIX;
@@ -64,20 +64,14 @@ pub(super) struct Item {
 }
 
 impl<'a> Side<'a> {
-    /// `pairs` are this side's UUIDs → the other's when `mine`, else the
-    /// other way round; items with a UUID in `also_local` are left out.
-    pub fn new(
-        db: &'a Database,
-        pairs: &BTreeMap<String, String>,
-        mine: bool,
-        also_local: &HashSet<Uuid>,
-    ) -> Self {
+    /// `pairs` are by this computer's UUIDs: `mine` says whether `db` is
+    /// this computer's; items with a UUID in `also_local` are left out.
+    pub fn new(db: &'a Database, pairs: &Pairs, mine: bool, also_local: &HashSet<Uuid>) -> Self {
         let paired = pairs
             .iter()
-            .filter_map(|(m, t)| {
-                let here = if mine { m } else { t };
-                let common = if m < t { m } else { t };
-                Some((Uuid::parse_str(here).ok()?, common.clone()))
+            .filter_map(|(here, pair)| {
+                let here = if mine { here } else { &pair.there };
+                Some((Uuid::parse_str(here).ok()?, pair.common.clone()))
             })
             .collect();
         let bin = db.meta.recyclebin_uuid;

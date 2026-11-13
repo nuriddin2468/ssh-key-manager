@@ -59,9 +59,12 @@ is kept without being read (`FilesData::rest`), so it writes nothing. The UI sho
 reason, as for any inactive file.
 
 **The local marker.** Custom data `sshkm.local` (any value naming what it is) on an entry
-or a group means: this computer's own. The vault copy never carries it, a sync never
-changes, moves or deletes it, and an item from the other side that carries the marker, or
-has the UUID of a local item here, is ignored. Database-level custom data is per computer
+or a group means: this computer's own. The vault copy never carries it (only its UUID, in
+the copy's custom data `sshkm.sync.local`, so the other side doesn't take it for deleted), a
+sync never changes, moves or deletes it, and an item from the other side that carries the
+marker, or has the UUID of a local item here, is ignored. A local item here keeps the group
+it is in, and a shared value a local environment uses, from being deleted by a sync, which
+then doesn't plan that deletion again. Database-level custom data is per computer
 unless allowed by name (contacts, devices and projects travel as records), so the chat's
 key `sshkm.chat.<device key>` needs no marker; the chat keeps no entries or groups in the
 vault (`docs/p2p-chat.md` §4 on the `p2p-chat` branch).
@@ -104,7 +107,12 @@ conflict shows are read from the copy in memory, one at a time, when the user as
 
 **Checks on the copy before anything is planned** (`Vault::open_sync_copy`, failure = `Broken`,
 nothing applied):
-- it parses with this vault's secret (`check_shared`); a different secret → `OtherVault`;
+- it is KDBX 4 without compression (the sender writes it so), so nothing inflates beyond
+  the file's size; its XML is decrypted and scanned before it is parsed: at most 96 levels
+  deep and 8,388,608 elements, no document type, no attachment stored compressed in it
+  (the `keepass` crate inflates and recurses without limits; this is the guard in front of
+  it). A vault moved to a new computer goes the same way (`moved_copy`, `check_moved`);
+- it parses with this vault's secret; a different secret → `OtherVault`;
 - its root group has this vault's root UUID (two vaults are never merged; the keepass
   crate's own `_merge` panics on different roots, which is one of the reasons we don't use
   it);
@@ -141,9 +149,10 @@ default auto-type sequence, expiry, and `group` (its parent).
 - two groups made separately on each computer for the same thing (`Environments`,
   `Environments/Shared`, a project part) are **paired**: a group only one side has by UUID,
   with the same name and the same canonical parent as a group only the other side has, pairs
-  with it (by UUID order when several match, so both sides pair alike). A pair's canonical
-  id is the smaller UUID; pairs are kept in `SyncState.vault.pairs` so a later rename on one
-  side doesn't break them. Each side keeps its own UUID; an item put in a paired group goes
+  with it (by UUID order when several match, so both sides pair alike). A new pair goes by
+  the id the snapshot already holds, if it holds one of the two, else by the smaller UUID;
+  pairs are kept in `SyncState.vault.pairs` with that id, and stay while either group is
+  there, so a rename, or deleting one twin, doesn't change what the other is called. Each side keeps its own UUID; an item put in a paired group goes
   into this side's twin.
 
 **Snapshot.** `SyncState` (`<data_dir>/sync/<peer>.json`, 0600) gets `vault: VaultBase
@@ -178,8 +187,9 @@ Per item, against the snapshot (`b`), mine (`m`), theirs (`t`) — PR 1's rules
 **History.** Whenever an entry changes here — a field taken, or a conflict settled either
 way — this side's version before the change goes into its history, and the two histories
 become one: every version of both, without doubles (same time and same content), oldest
-dropped past the vault's `history_max_items`. So **a conflict loses nothing**: the version
-not kept is the newest earlier version of the entry. The entry's modification time is the
+dropped past the vault's `history_max_items` — but never the version a sync just
+displaced. A conflict settled for this side's version puts the other side's among the
+entry's earlier versions here too. So **a conflict loses nothing**, on either side. The entry's modification time is the
 other side's when its version is taken whole, now when fields of both were merged.
 
 **Moves.** A move is a change of the `group` field: one side moved the entry and the other
@@ -196,7 +206,9 @@ deletion limit like an entry's.
 **Permanent deletions.** The vault's `DeletedObjects` become the union of both, each UUID
 with the later time. A removal record older than 400 days (`projects::KEEP_REMOVED_MS`) is
 neither sent nor taken: after that long it removes nothing on a computer that comes back,
-as with project tombstones. Records already in the file stay (KeePassXC reads them).
+as with project tombstones. Records already in the file stay (KeePassXC reads them), but at
+most the newest 262,144 after a merge, which is what a copy may carry; nor does a merge
+take entries or groups past 65,536 and 8,192.
 
 ### Shared values and `{REF}`
 
@@ -214,7 +226,9 @@ environment that refers to it ends with the same value. On top of that:
 ### Ids that collide
 
 - An item whose kind differs on the two sides: a conflict (above).
-- An incoming entry with a group's UUID, the root's, or the bin's: the copy is refused.
+- An entry with a group's UUID, the root's, or the bin's within the copy: the copy is
+  refused. An id that is an entry on one side and a group on the other: left out on both,
+  never merged.
 - An incoming item with the UUID of a local-marked item here: ignored.
 - Two vaults with different roots or secrets: refused before planning.
 
@@ -249,8 +263,10 @@ review, then a system dialog the page can't answer; the other side puts it off):
 `PERL5OPT`, `PERL5LIB`, `RUBYOPT`, `RUBYLIB`, `BASH_ENV`, `ENV`, `ZDOTDIR`, `PROMPT_COMMAND`,
 `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_EXEC_PATH`, `GIT_CONFIG_*`, `SSH_ASKPASS`,
 `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`, `JDK_JAVA_OPTIONS`, `DOTNET_STARTUP_HOOKS`
-(`envs::risky_variable`, one list, tested). A change turned down is not asked about again
-until it changes (`SyncState.declined`, as hosts).
+(`envs::risky_variable`, one list, tested, the same as the chat's; a trailing `*` is a
+prefix, letter case is ignored). A shared value's new value goes into every variable that
+uses it: a change to it is risky when one of them, here or in the copy, has such a name. A
+change turned down is not asked about again until it changes (`SyncState.vault_declined`).
 
 **Conflicts** are the user's choice per item: keep this computer's or take the other's,
 seeing which fields differ (names only: `Password`, `URL`, `DB_URL`) and, when they ask,
@@ -286,7 +302,7 @@ has; the risk is damage and code running on this computer.
 | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | A stranger, or a former own device, syncs                           | PR 1: Noise XX, the own-vault proof, both in each other's registry; a removed device stays a tombstone                            |
 | A different vault gets merged                                       | proof, then the copy must open with this secret and have this root                                                                |
-| A copy built to exhaust memory or CPU                               | 256 MiB, KDF bounds (`kdf::check_kdbx`), item and depth limits, history cap                                                       |
+| A copy built to exhaust memory or CPU                               | 256 MiB, KDF bounds, no compression, XML depth and size scanned before parsing, item limits, history cap                          |
 | Mass deletion                                                       | more than 5 a day from one device need a yes on each device; a kept backup before a day's first deletions                         |
 | Values overwritten or emptied                                       | the previous version stays in each entry's history; backup before the save; step 2 adds undo                                      |
 | Code run through a variable (`NODE_OPTIONS`, `LD_PRELOAD`, `PATH`…) | risky variables need the review and the system dialog                                                                             |

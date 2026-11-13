@@ -17,7 +17,7 @@
 //! entry's earlier versions, so no choice loses one.
 
 mod apply;
-mod copy;
+pub(crate) mod copy;
 mod model;
 mod plan;
 #[cfg(test)]
@@ -27,8 +27,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-pub use self::apply::{Counts, VaultApplied, VaultCounts};
-pub use self::copy::PeerVault;
+pub use self::apply::{Counts, VaultApplied, VaultChoices, VaultCounts};
+pub use self::copy::{PeerVault, check_moved};
 pub use self::plan::{ChangeOp, ItemKind, Party, VaultChange, VaultConflict, VaultPlan};
 use crate::sync::{Base, Hashes};
 
@@ -57,9 +57,23 @@ pub struct VaultBase {
     #[serde(default)]
     pub base: Base,
     /// Groups made separately on each computer for the same thing
-    /// (`Environments`, say): this side's UUID → the other's.
+    /// (`Environments`, say), by this side's UUID.
     #[serde(default)]
-    pub pairs: BTreeMap<String, String>,
+    pub pairs: Pairs,
+}
+
+/// Paired groups, by this side's UUID ([`VaultBase::pairs`]).
+pub type Pairs = BTreeMap<String, Pair>;
+
+/// A group made on this side for the same thing as one made on the other.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Pair {
+    /// The other side's UUID.
+    pub there: String,
+    /// The id both sides name the pair by: chosen when it formed, and kept
+    /// while either group is there.
+    pub common: String,
 }
 
 /// The digest of each item as both sides compare them after a sync: the

@@ -1,24 +1,43 @@
 //! The copy of the vault one device sends another, and the checks on one
 //! that comes.
 
+use std::collections::{HashMap, HashSet};
+
 use chrono::{Duration, NaiveDateTime};
 use keepass::Database;
-use keepass::db::{EntryId, GroupId, History, Times};
+use keepass::config::CompressionConfig;
+use keepass::db::{CustomDataItem, CustomDataValue, EntryId, GroupId, History, Times};
+use secrecy::SecretString;
+use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use super::model::local_set;
 use super::{MAX_DELETED, MAX_DEPTH, MAX_ENTRIES, MAX_GROUPS, MAX_VERSIONS};
 use crate::vault::projects::KEEP_REMOVED_MS;
-use crate::vault::{MAX_DATABASE_SIZE, Vault, parse_database, serialize};
+use crate::vault::{
+    MAX_DATABASE_SIZE, Vault, kdf, key, open_error, parse_database, read_database, serialize,
+    sha256,
+};
 use crate::{Error, Result};
 
 /// How far ahead of this computer's clock a time from another device is
 /// believed; a later one counts as now.
 const MAX_AHEAD: Duration = Duration::minutes(5);
+/// The custom data of a copy that names, by UUID only, what the sender
+/// keeps on its computer ([`super::LOCAL`]): the receiver doesn't take it
+/// for deleted.
+const LOCAL_IDS: &str = "sshkm.sync.local";
+/// Deepest the elements of a copy's XML go: groups [`MAX_DEPTH`] deep, and
+/// the levels around and inside them.
+const MAX_XML_DEPTH: usize = MAX_DEPTH + 32;
+/// Most elements a copy's XML holds.
+const MAX_XML_ELEMENTS: usize = 1 << 23;
 
 /// Another device's copy of the vault, checked and opened.
 pub struct PeerVault {
     pub(super) db: Database,
+    /// What the other device keeps on its computer, by UUID.
+    pub(super) local: HashSet<Uuid>,
 }
 
 impl std::fmt::Debug for PeerVault {
@@ -35,24 +54,35 @@ impl Vault {
     /// [`super::LOCAL`], and without removal records older than
     /// [`KEEP_REMOVED_MS`].
     pub fn sync_copy(&self) -> Result<Zeroizing<Vec<u8>>> {
+        let local = local_set(&self.db);
         let mut db = self.db.clone();
         strip(&mut db);
-        let oldest = Times::now() - Duration::milliseconds(KEEP_REMOVED_MS);
-        db.deleted_objects
-            .retain(|_, when| when.is_none_or(|when| when >= oldest));
+        newest_removals(&mut db.deleted_objects, true);
+        // Not compressed: the receiver reads it without inflating anything.
+        db.config.compression_config = CompressionConfig::None;
+        if !local.is_empty() {
+            let mut ids: Vec<String> = local.iter().map(Uuid::to_string).collect();
+            ids.sort();
+            let json = serde_json::to_string(&ids).map_err(|e| Error::Parse(e.to_string()))?;
+            db.meta.custom_data.insert(
+                LOCAL_IDS.to_owned(),
+                CustomDataItem {
+                    value: Some(CustomDataValue::String(json)),
+                    last_modification_time: None,
+                },
+            );
+        }
         Ok(Zeroizing::new(serialize(&db, &self.secret)?))
     }
 
     /// Opens a copy another of the user's devices sent: it must be this
     /// vault (it opens with this secret and has this root), within bounds,
-    /// and it is read without what never syncs. Times ahead of this clock
-    /// count as now, and each entry keeps only its newest
-    /// [`MAX_VERSIONS`] earlier versions.
+    /// and it is read without what never syncs. It must be KDBX 4 without
+    /// compression, and its XML is checked before it is parsed
+    /// ([`read_bounded`]). Times ahead of this clock count as now, and each
+    /// entry keeps only its newest [`MAX_VERSIONS`] earlier versions.
     pub fn open_sync_copy(&self, bytes: &[u8]) -> Result<PeerVault> {
-        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_DATABASE_SIZE {
-            return Err(Error::invalid("the copy is too large"));
-        }
-        let mut db = parse_database(bytes, &self.secret).map_err(|error| match error {
+        let mut db = read_bounded(bytes, &self.secret).map_err(|error| match error {
             Error::WrongPassphrase => Error::invalid("another vault"),
             other => other,
         })?;
@@ -60,9 +90,194 @@ impl Vault {
             return Err(Error::invalid("another vault"));
         }
         check(&db)?;
+        let local = local_ids(&db);
         strip(&mut db);
         settle_times(&mut db);
-        Ok(PeerVault { db })
+        Ok(PeerVault { db, local })
+    }
+
+    /// The database as it goes to a new device of the user's, which makes
+    /// it its vault: whole, but not compressed, so that the receiver reads
+    /// it within bounds ([`check_moved`]). Fails with [`Error::Conflict`]
+    /// if the file changed on disk since it was read here.
+    pub fn moved_copy(&self) -> Result<Zeroizing<Vec<u8>>> {
+        let on_disk = read_database(&self.paths.database)?;
+        if sha256(&on_disk) != self.disk_hash {
+            return Err(Error::Conflict(self.paths.database.display().to_string()));
+        }
+        let mut db = self.db.clone();
+        db.config.compression_config = CompressionConfig::None;
+        Ok(Zeroizing::new(serialize(&db, &self.secret)?))
+    }
+}
+
+/// Checks a vault another of the user's devices sent to become this one's
+/// ([`Vault::moved_copy`]): KDBX 4 without compression, its XML within
+/// bounds, sane key derivation, and `secret` opens it. A compressed file,
+/// as older versions send, is [`Error::Unsupported`]: the sender needs the
+/// new version.
+pub fn check_moved(database: &[u8], secret: &SecretString) -> Result<()> {
+    if kdf::compressed_kdbx(database) {
+        return Err(Error::Unsupported(
+            "a vault sent compressed, by an older version".into(),
+        ));
+    }
+    read_bounded(database, secret).map(drop)
+}
+
+/// Reads a database another device sent, within bounds: at most
+/// [`MAX_DATABASE_SIZE`], sane key derivation, KDBX 4 without compression
+/// (so nothing inflates past the file's size), and its XML, decrypted first,
+/// neither deeper than [`MAX_XML_DEPTH`] nor more than [`MAX_XML_ELEMENTS`]
+/// elements, without a DTD and without attachments stored compressed in it.
+/// The `keepass` crate inflates and recurses without limits; this is the
+/// guard in front of it.
+fn read_bounded(bytes: &[u8], secret: &SecretString) -> Result<Database> {
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_DATABASE_SIZE {
+        return Err(Error::invalid("the copy is too large"));
+    }
+    kdf::check_kdbx(bytes)?;
+    kdf::check_uncompressed_kdbx4(bytes)?;
+    let xml = Zeroizing::new(Database::get_xml(&mut &bytes[..], key(secret)).map_err(open_error)?);
+    check_xml(&xml)?;
+    drop(xml);
+    parse_database(bytes, secret)
+}
+
+/// Fails unless a database's XML is within the bounds of [`read_bounded`].
+fn check_xml(xml: &[u8]) -> Result<()> {
+    let bad = |what: &str| Error::invalid(format!("the copy's XML: {what}"));
+    let find = |from: usize, needle: &[u8]| -> Result<usize> {
+        xml.get(from..)
+            .and_then(|rest| rest.windows(needle.len()).position(|w| w == needle))
+            .map(|at| from + at + needle.len())
+            .ok_or_else(|| bad("cut off"))
+    };
+    let (mut depth, mut elements, mut at) = (0usize, 0usize, 0usize);
+    while let Some(start) = xml
+        .get(at..)
+        .and_then(|rest| rest.iter().position(|b| *b == b'<'))
+        .map(|offset| at + offset)
+    {
+        let rest = &xml[start..];
+        if rest.starts_with(b"<!--") {
+            at = find(start, b"-->")?;
+            continue;
+        }
+        if rest.starts_with(b"<![CDATA[") {
+            at = find(start, b"]]>")?;
+            continue;
+        }
+        if rest.starts_with(b"<!") {
+            return Err(bad("a document type"));
+        }
+        if rest.starts_with(b"<?") {
+            at = find(start, b"?>")?;
+            continue;
+        }
+        // The tag's end, minding quoted attribute values.
+        let mut end = 1;
+        let mut quote = None;
+        loop {
+            let c = *rest.get(end).ok_or_else(|| bad("cut off"))?;
+            match quote {
+                Some(q) if c == q => quote = None,
+                None if c == b'"' || c == b'\'' => quote = Some(c),
+                None if c == b'>' => break,
+                _ => {}
+            }
+            end += 1;
+        }
+        let tag = &rest[..=end];
+        at = start + end + 1;
+        if tag.starts_with(b"</") {
+            depth = depth.saturating_sub(1);
+            continue;
+        }
+        elements += 1;
+        if elements > MAX_XML_ELEMENTS {
+            return Err(bad("too many elements"));
+        }
+        if compressed_binary(tag) {
+            return Err(bad("a compressed attachment"));
+        }
+        if !tag.ends_with(b"/>") {
+            depth += 1;
+            if depth > MAX_XML_DEPTH {
+                return Err(bad("too deep"));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn check_xml_for_tests(xml: &[u8]) -> Result<()> {
+    check_xml(xml)
+}
+
+/// Whether a start tag is a `Binary` whose `Compressed` attribute is
+/// anything but false: the parser inflates such a value without a limit.
+fn compressed_binary(tag: &[u8]) -> bool {
+    let name_end = tag
+        .iter()
+        .position(|b| b.is_ascii_whitespace() || *b == b'/' || *b == b'>')
+        .unwrap_or(tag.len());
+    if tag.get(1..name_end) != Some(&b"Binary"[..]) {
+        return false;
+    }
+    let Some(at) = tag.windows(11).position(|w| w == b"Compressed=") else {
+        return false;
+    };
+    let value = &tag[at + 11..];
+    let Some(quote) = value.first().copied() else {
+        return true;
+    };
+    let inner = value.get(1..).unwrap_or_default();
+    let end = inner
+        .iter()
+        .position(|b| *b == quote)
+        .unwrap_or(inner.len());
+    !inner[..end].eq_ignore_ascii_case(b"false")
+}
+
+/// What the sender keeps on its computer, from a copy's custom data.
+fn local_ids(db: &Database) -> HashSet<Uuid> {
+    let Some(CustomDataValue::String(json)) = db
+        .meta
+        .custom_data
+        .get(LOCAL_IDS)
+        .and_then(|item| item.value.as_ref())
+    else {
+        return HashSet::new();
+    };
+    serde_json::from_str::<Vec<String>>(json)
+        .unwrap_or_default()
+        .iter()
+        .take(MAX_ENTRIES + MAX_GROUPS)
+        .filter_map(|id| Uuid::parse_str(id).ok())
+        .collect()
+}
+
+/// Keeps removal records within what a copy may carry: at most the newest
+/// [`MAX_DELETED`], and, for a copy (`for_copy`), none older than
+/// [`KEEP_REMOVED_MS`] (a vault's own stay in its file, as KeePass keeps
+/// them).
+pub(super) fn newest_removals(records: &mut HashMap<Uuid, Option<NaiveDateTime>>, for_copy: bool) {
+    if for_copy {
+        let oldest = Times::now() - Duration::milliseconds(KEEP_REMOVED_MS);
+        records.retain(|_, when| when.is_none_or(|when| when >= oldest));
+    }
+    if records.len() > MAX_DELETED {
+        let mut all: Vec<(Option<NaiveDateTime>, Uuid)> =
+            records.iter().map(|(uuid, when)| (*when, *uuid)).collect();
+        all.sort_unstable_by(|a, b| b.cmp(a));
+        let keep: HashSet<Uuid> = all
+            .iter()
+            .take(MAX_DELETED)
+            .map(|(_, uuid)| *uuid)
+            .collect();
+        records.retain(|uuid, _| keep.contains(uuid));
     }
 }
 

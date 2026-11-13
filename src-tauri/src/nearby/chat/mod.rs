@@ -27,6 +27,8 @@ mod link;
 mod presence;
 mod prompt;
 
+pub use self::presence::CHAT_SERVICE_TYPE;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;

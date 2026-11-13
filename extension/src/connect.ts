@@ -16,6 +16,7 @@ const PROBLEMS: Partial<Record<Problem, Key>> = {
   busy: 'connectBusy',
   locked: 'connectLocked',
   notRunning: 'connectNotRunning',
+  outdatedApp: 'connectOutdatedApp',
   noVault: 'noVaultText',
   noHost: 'noHostText',
 };
@@ -55,7 +56,7 @@ function problem(found: Problem): void {
         'primary',
       ),
     );
-  } else if (found === 'locked' || found === 'noVault') {
+  } else if (found === 'locked' || found === 'noVault' || found === 'outdatedApp') {
     actions.append(button(t('openApp'), () => void showApp()));
   } else if (found === 'noHost') {
     // The app may not be installed at all: the browser can't tell.

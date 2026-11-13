@@ -1,0 +1,6 @@
+{
+  "kind": "notice",
+  "en": "Links in the terminal now open with ⌘-click (Ctrl-click on Windows and Linux), as in other terminals, and pointing at one shows where it leads.",
+  "ru": "Ссылки в терминале теперь открываются по ⌘-клику (Ctrl-клику в Windows и Linux), как в других терминалах, а если навести на ссылку указатель, видно, куда она ведёт.",
+  "uz": "Terminaldagi havolalar endi boshqa terminallardagidek ⌘ bosib turib bosilganda (Windows va Linux’da Ctrl bilan) ochiladi, havolaga koʻrsatkich olib borilsa, u qayerga olib borishi koʻrinadi."
+}

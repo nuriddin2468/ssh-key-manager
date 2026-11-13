@@ -3,10 +3,10 @@
 //! The extension talks to the native messaging host, which passes each
 //! message on unchanged, wrapped as `{"caller": "<extension origin>",
 //! "message": …}` ([`Envelope`]). Only [`Message::Hello`], [`Message::Show`],
-//! [`Message::Unlock`], [`Message::SameSite`] and [`Message::Pair`] travel in
-//! the clear; everything
-//! else is a [`Message::Request`] sealed with the paired browser's keys
-//! ([`super::channel`]), whose opened payload is an [`Opened`] request.
+//! [`Message::Unlock`], [`Message::SameSite`] and pairing
+//! ([`Message::PairStart`], [`Message::PairFinish`]) travel in the clear;
+//! everything else is a [`Message::Request`] sealed with the paired browser's
+//! keys ([`super::channel`]), whose opened payload is an [`Opened`] request.
 //!
 //! Requests are externally tagged (`{"fill": {…}}`, or `"status"`), so serde
 //! reads a password straight into its [`SecretString`] without buffering the
@@ -45,21 +45,50 @@ pub enum Message {
     /// Does a page belong to another origin's site? Needs no pairing: the
     /// answer depends on the two names alone.
     SameSite(SameSite),
-    /// Pair this browser. Waits until the user decides in the app.
-    Pair(PairRequest),
+    /// Start pairing this browser: the app answers at once with the public
+    /// key it made for this pairing ([`Reply::PairStarted`]). Unknown to apps
+    /// before protocol 2, which answer `invalid`.
+    PairStart(PairStart),
+    /// Finish the pairing started with [`Message::PairStart`]: the
+    /// extension's public key, which must match what it committed to. Waits
+    /// until the user decides in the app.
+    PairFinish(PairFinish),
+    /// Pairing in one message, as extensions before protocol 2 ask for it.
+    /// Refused ([`ReplyError::OutdatedExtension`]): its code covers only the
+    /// extension's key.
+    Pair(OldPair),
     /// A sealed request of a paired browser.
     Request(SealedRequest),
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PairRequest {
+pub struct PairStart {
     /// Random base64url id the extension made for this pairing.
+    pub client_id: String,
+    /// Base64 [`super::channel::pairing_commitment`] to the extension's
+    /// public key, which it sends with [`Message::PairFinish`].
+    pub commitment: String,
+    /// The browser's name as the extension sees it, e.g. "Chrome".
+    #[serde(default)]
+    pub browser: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairFinish {
+    /// The id the pairing started with.
     pub client_id: String,
     /// Base64 uncompressed P-256 public key.
     pub public_key: String,
     /// Base64 nonce that the sealed confirmation answers.
     pub nonce: String,
+}
+
+/// What the app reads of an old extension's pairing request: whom to tell
+/// that the extension needs an update.
+#[derive(Debug, Deserialize)]
+pub struct OldPair {
     /// The browser's name as the extension sees it, e.g. "Chrome".
     #[serde(default)]
     pub browser: String,
@@ -171,8 +200,15 @@ pub enum Reply {
     SameSite {
         same: bool,
     },
+    /// Answers [`Message::PairStart`]: the app's public key for this
+    /// pairing, uncompressed SEC1, base64.
+    PairStarted {
+        #[serde(rename = "publicKey")]
+        public_key: String,
+    },
     /// The pairing was approved. `payload` is a sealed [`PairedInfo`]
-    /// answering the request's nonce.
+    /// answering the request's nonce; `public_key` is the one
+    /// [`Reply::PairStarted`] gave.
     Paired {
         #[serde(rename = "publicKey")]
         public_key: String,
@@ -226,9 +262,13 @@ pub enum ReplyError {
     /// Sealed with keys this browser gave up, so someone else holds a copy
     /// of them: the app forgot the pairing. Connect again.
     Revoked,
-    /// Too many logins checked, fills asked about or unlocks asked for, in
-    /// the last minute.
+    /// Too many logins checked or changed, fills asked about, key changes,
+    /// pairings started, or windows and unlocks asked for, in the last
+    /// minute.
     TooMany,
+    /// The extension pairs the way versions before protocol 2 did: it needs
+    /// an update.
+    OutdatedExtension,
 }
 
 /// The sealed payload of [`Reply::Paired`].
@@ -300,17 +340,32 @@ mod tests {
     #[test]
     fn messages_parse() {
         let envelope: Envelope = serde_json::from_str(
-            r#"{"caller":"chrome-extension://abc/","message":{"type":"pair","clientId":"id","publicKey":"pk","nonce":"n","browser":"Chrome"}}"#,
+            r#"{"caller":"chrome-extension://abc/","message":{"type":"pairStart","clientId":"id","commitment":"c","browser":"Chrome"}}"#,
         )
         .unwrap();
         assert_eq!(envelope.caller, "chrome-extension://abc/");
-        let Message::Pair(pair) = envelope.message else {
+        let Message::PairStart(start) = envelope.message else {
             panic!("not a pairing");
         };
         assert_eq!(
-            (pair.client_id.as_str(), pair.browser.as_str()),
-            ("id", "Chrome")
+            (
+                start.client_id.as_str(),
+                start.commitment.as_str(),
+                start.browser.as_str()
+            ),
+            ("id", "c", "Chrome")
         );
+        let finish: Envelope = serde_json::from_str(
+            r#"{"message":{"type":"pairFinish","clientId":"id","publicKey":"pk","nonce":"n"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(finish.message, Message::PairFinish(f) if f.public_key == "pk"));
+        // An old extension's pairing still reads, to be refused by name.
+        let old: Envelope = serde_json::from_str(
+            r#"{"message":{"type":"pair","clientId":"id","publicKey":"pk","nonce":"n","browser":"Chrome"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(old.message, Message::Pair(OldPair { browser }) if browser == "Chrome"));
 
         let hello: Envelope = serde_json::from_str(r#"{"message":{"type":"hello"}}"#).unwrap();
         assert!(matches!(hello.message, Message::Hello));
@@ -397,6 +452,17 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&ReplyError::TooMany).unwrap(),
             r#""tooMany""#
+        );
+        assert_eq!(
+            serde_json::to_string(&ReplyError::OutdatedExtension).unwrap(),
+            r#""outdatedExtension""#
+        );
+        assert_eq!(
+            serde_json::to_string(&Reply::PairStarted {
+                public_key: "pk".into()
+            })
+            .unwrap(),
+            r#"{"type":"pairStarted","publicKey":"pk"}"#
         );
         let check = serde_json::to_string(&CheckReply::Update {
             entry_id: "e".into(),

@@ -1169,6 +1169,7 @@ fn ctx(dir: &std::path::Path) -> FilesContext {
         ssh_dir: dir.join(".ssh"),
         pipes: Vec::new(),
         pipe_list: None,
+        unlocked_list: None,
     }
 }
 

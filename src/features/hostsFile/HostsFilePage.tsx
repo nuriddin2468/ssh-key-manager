@@ -1,6 +1,4 @@
 import { useQuery } from '@tanstack/react-query';
-import { isTauri } from '@tauri-apps/api/core';
-import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import {
   ChevronRight,
   Clock,
@@ -25,7 +23,7 @@ import { type PointerEvent, useDeferredValue, useEffect, useMemo, useRef, useSta
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
-import { useEnvironment, useHostsFile } from '@/api/queries';
+import { useHostsFile } from '@/api/queries';
 import { errorMessage, toastError } from '@/api/useAppMutation';
 import { useLeaveGuard, useRouter } from '@/app/router';
 import { useFindShortcut } from '@/app/useAppEvents';
@@ -189,7 +187,6 @@ export function HostsFilePage({ line, received }: { line?: number; received?: nu
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const hostsFile = useHostsFile();
-  const environment = useEnvironment();
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
   const [dialog, setDialog] = useState<OpenDialog | null>(null);
@@ -270,14 +267,8 @@ export function HostsFilePage({ line, received }: { line?: number; received?: nu
     return () => clearTimeout(timer);
   }, [flash]);
 
-  const reveal = async () => {
-    const path = environment.data?.hostsFile;
-    if (!path || !isTauri()) return;
-    try {
-      await revealItemInDir(path);
-    } catch (error) {
-      toastError(t, error);
-    }
+  const reveal = () => {
+    api.revealPlace({ kind: 'hostsFile' }).catch((error: unknown) => toastError(t, error));
   };
 
   // Draft edits.
@@ -455,7 +446,7 @@ export function HostsFilePage({ line, received }: { line?: number; received?: nu
           label={t('keys.showIn', { app: fileManagerName })}
           variant="secondary"
           icon={<FolderOpen className="size-[15px]" strokeWidth={1.75} />}
-          onClick={() => void reveal()}
+          onClick={reveal}
         />
         {editable ? (
           <>

@@ -19,10 +19,17 @@ fn the_guard_removes_the_files_once_the_app_goes() {
     let edited = dir.path().join(".env.local");
     std::fs::write(&kept, "API_TOKEN=tok-1\n").unwrap();
     std::fs::write(&edited, "API_TOKEN=tok-1\n").unwrap();
+    // A file kept all the time, which the app was writing when it went:
+    // its temporary file goes, the file stays.
+    let always = dir.path().join(".env.test");
+    let writing = dir.path().join(".env.test.sshkm-Ab12Cd.tmp");
+    std::fs::write(&always, "API_TOKEN=tok-1\n").unwrap();
+    std::fs::write(&writing, "API_TOKEN=tok-2\n").unwrap();
     let list = dir.path().join("env-files-unlocked.json");
     Leftovers::new(vec![
         Leftover::of(&kept).unwrap(),
         Leftover::of(&edited).unwrap(),
+        Leftover::temps_of(&always),
     ])
     .save(&list)
     .unwrap();
@@ -57,5 +64,6 @@ fn the_guard_removes_the_files_once_the_app_goes() {
     assert!(guard.wait().unwrap().success());
     assert!(!kept.exists());
     assert!(edited.exists());
+    assert!(always.exists() && !writing.exists());
     assert!(!list.exists());
 }

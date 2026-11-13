@@ -11,7 +11,15 @@ import { OpenExistingVaultButton } from './files';
 import { MasterPasswordFields, masterReady } from './MasterPasswordFields';
 import { RecoveryKeyPanel } from './RecoveryKeyPanel';
 import { VaultCard } from './VaultCard';
-import { requestSearchFocus, setPendingRecoveryKey, toastVaultError, useSecretCall } from './vault';
+import {
+  dismissUnsavedRecoveryKey,
+  recoveryKeySaved,
+  requestSearchFocus,
+  setPendingRecoveryKey,
+  showUnsavedRecoveryKey,
+  toastVaultError,
+  useSecretCall,
+} from './vault';
 
 /** No vault yet: what it is, and a master password to create one. */
 export function CreateVault() {
@@ -105,7 +113,10 @@ export function CreateVault() {
   );
 }
 
-/** Right after creating the vault: its recovery key, shown this once. */
+/**
+ * Right after creating the vault or a new recovery key: the key, shown until
+ * it is confirmed as saved (again after an unlock, if the vault locked first).
+ */
 export function RecoveryKeyScreen({ recoveryKey }: { recoveryKey: string }) {
   const { t } = useTranslation();
   const [saved, setSaved] = useState(false);
@@ -124,10 +135,45 @@ export function RecoveryKeyScreen({ recoveryKey }: { recoveryKey: string }) {
         disabled={!saved}
         onClick={() => {
           requestSearchFocus();
-          setPendingRecoveryKey(null);
+          recoveryKeySaved();
         }}
       >
         {t('passwords.continue')}
+      </Button>
+    </VaultCard>
+  );
+}
+
+/**
+ * After an unlock, when a lock took a new recovery key off the screen before
+ * it was confirmed as saved. "Show key" asks in a native dialog first; the
+ * key is never fetched without the user asking.
+ */
+export function UnsavedRecoveryKey() {
+  const { t } = useTranslation();
+  const [pending, setPending] = useState(false);
+  const show = async () => {
+    setPending(true);
+    try {
+      await showUnsavedRecoveryKey();
+    } catch (error) {
+      toastVaultError(t, error);
+    } finally {
+      setPending(false);
+    }
+  };
+  return (
+    <VaultCard
+      icon={<FileKey className="size-[26px]" strokeWidth={1.9} />}
+      title={t('passwords.unsavedKeyTitle')}
+      text={t('passwords.unsavedKeyCardText')}
+      focusTitle
+    >
+      <Button variant="primary" size="lg" className="w-full" loading={pending} onClick={show}>
+        {t('passwords.unsavedKeyShow')}
+      </Button>
+      <Button variant="ghost" size="sm" className="self-center" onClick={dismissUnsavedRecoveryKey}>
+        {t('passwords.unsavedKeyLater')}
       </Button>
     </VaultCard>
   );

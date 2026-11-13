@@ -38,6 +38,7 @@ interface Peer {
   name: string;
   own: boolean;
   online: boolean;
+  removed?: boolean;
   entries: ChatEntry[];
   read: number;
 }
@@ -130,6 +131,23 @@ function seed(): ChatEntry[] {
 const peers: Peer[] = [
   { key: IMAC, name: 'iMac at home', own: true, online: false, entries: [], read: 0 },
   {
+    key: 'bW9jay1vbGQ=',
+    name: 'Old laptop',
+    own: false,
+    online: false,
+    removed: true,
+    entries: [
+      {
+        id: newId(),
+        mine: false,
+        at: ago(60 * 24 * 3),
+        delivery: { state: 'received' },
+        body: { kind: 'text', text: 'Moving to the new laptop tomorrow.' },
+      },
+    ],
+    read: 1,
+  },
+  {
     key: BOBURA,
     name: 'ThinkPad Bobura',
     own: false,
@@ -149,7 +167,7 @@ function peer(key: unknown): Peer | undefined {
 }
 
 function online(item: Peer): boolean {
-  return open && item.online;
+  return open && item.online && !item.removed;
 }
 
 function summary(item: Peer): ChatSummary {
@@ -159,7 +177,7 @@ function summary(item: Peer): ChatSummary {
     name: item.name,
     own: item.own,
     online: online(item),
-    removed: false,
+    removed: item.removed ?? false,
     unread: item.entries.slice(item.read).filter((entry) => !entry.mine).length,
     last: last
       ? {

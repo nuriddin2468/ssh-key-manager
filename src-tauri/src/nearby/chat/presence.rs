@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 use std::io::ErrorKind;
 use std::net::{Ipv4Addr, TcpListener};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -27,8 +27,13 @@ pub const CHAT_SERVICE_TYPE: &str = "_sshkm-chat._tcp.local.";
 /// TXT strings of tags an announcement may have (`t0`…).
 const MAX_TXT: usize = 3;
 
+static NEXT_ONLINE: AtomicU64 = AtomicU64::new(1);
+
 /// This computer, online for chats.
 pub(in crate::nearby) struct Online {
+    /// Which time online this is: an announcement made for an earlier one
+    /// is taken back.
+    id: u64,
     port: u16,
     stop: Stop,
     /// The mDNS name it is announced under; empty until it is.
@@ -56,6 +61,7 @@ impl Nearby {
             thread::spawn(move || nearby.listen_chats(&listener, &stop));
         }
         let before = self.chats().online.replace(Online {
+            id: NEXT_ONLINE.fetch_add(1, Ordering::SeqCst),
             port,
             stop,
             fullname: String::new(),
@@ -84,6 +90,12 @@ impl Nearby {
                 }
             }
         });
+        // Locked meanwhile: the lock went offline before this was online,
+        // so this goes now. Locked after, the lock finds it online.
+        if !self.state().is_ok_and(|state| state.vault.is_unlocked()) {
+            self.go_offline();
+            return Ok(());
+        }
         self.chats_changed(None);
         Ok(())
     }
@@ -147,11 +159,14 @@ impl Nearby {
 
     /// Announces this computer for chats under a new random name, with a
     /// tag for each contact and device: own devices first, then the
-    /// contacts chatted with last.
+    /// contacts chatted with last. One announcement at a time, from the
+    /// tick or not; one that finds this computer offline once it is made
+    /// is taken back, so none outlives going offline.
     fn announce_chats(&self) -> AppResult<()> {
+        let _announcing = self.chats.announcing();
         let me = self.identity()?.public();
         let daemon = mdns(&mut self.lock())?;
-        let (port, old, contacts) = {
+        let (id, port, old, contacts) = {
             let chats = self.chats();
             let Some(online) = &chats.online else {
                 return Ok(());
@@ -170,6 +185,7 @@ impl Nearby {
                 .collect();
             known.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
             (
+                online.id,
                 online.port,
                 online.fullname.clone(),
                 known.into_iter().map(|(_, _, key)| key).collect::<Vec<_>>(),
@@ -203,9 +219,18 @@ impl Nearby {
         .enable_addr_auto();
         let fullname = info.get_fullname().to_owned();
         daemon.register(info).map_err(mdns_error)?;
-        if let Some(online) = self.chats().online.as_mut() {
-            online.fullname = fullname;
-            online.window = current;
+        let kept = match self.chats().online.as_mut() {
+            Some(online) if online.id == id => {
+                online.fullname.clone_from(&fullname);
+                online.window = current;
+                true
+            }
+            _ => false,
+        };
+        // Offline meanwhile (or online again, under another name): going
+        // offline took back only the name it knew, so this one goes here.
+        if !kept {
+            let _ = daemon.unregister(&fullname);
         }
         Ok(())
     }

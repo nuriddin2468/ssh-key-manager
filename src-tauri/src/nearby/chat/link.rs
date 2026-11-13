@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::net::TcpStream;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -35,6 +35,9 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 /// For the knock, the handshake and the `Hello`s.
 const KNOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+/// A link one send has waited on this long is gone: its peer doesn't read,
+/// or reads a byte now and then (each write keeps within its timeout).
+const STUCK_AFTER: Duration = Duration::from_secs(60);
 const PING_EVERY: Duration = Duration::from_secs(30);
 /// A link that hears nothing for this long is gone.
 const DEAD_AFTER: Duration = Duration::from_secs(90);
@@ -65,6 +68,8 @@ pub(super) struct Link {
     /// When a message last went either way: pings don't count.
     pub last_use: Instant,
     ping: u64,
+    /// A thread is sending its receipts: never a second beside it.
+    pub receipting: Arc<AtomicBool>,
 }
 
 fn offline() -> AppError {
@@ -278,6 +283,7 @@ impl Nearby {
                     last_out: now,
                     last_use: now,
                     ping: 0,
+                    receipting: Arc::new(AtomicBool::new(false)),
                 },
             );
             pushed_out
@@ -413,14 +419,17 @@ impl Nearby {
         }
     }
 
-    /// Pings links that were quiet, and closes those idle for long.
+    /// Pings links that were quiet, and closes those idle for long or
+    /// stuck on a send.
     pub(super) fn keep_links_alive(&self) {
         let now = Instant::now();
         let mut pings = Vec::new();
         {
             let mut chats = self.chats();
             for link in chats.links.values_mut() {
-                if now.duration_since(link.last_use) >= IDLE_AFTER {
+                if now.duration_since(link.last_use) >= IDLE_AFTER
+                    || link.writer.busy_for() >= STUCK_AFTER
+                {
                     link.writer.shutdown();
                 } else if now.duration_since(link.last_out) >= PING_EVERY {
                     link.ping += 1;

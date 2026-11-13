@@ -58,6 +58,8 @@ export function useAppEvents(): void {
       // From the tray menu: a session to that host.
       else if (id.startsWith('connect:'))
         navigate({ page: 'terminal', connect: id.slice('connect:'.length), nonce: Date.now() });
+      // From the tray menu: the chats, where messages wait unread.
+      else if (id === 'chats') navigate({ page: 'nearby', tab: 'chats' });
       // From the tray menu: one of the Tools page's tools.
       else if (id.startsWith('tool:')) navigate({ page: 'tools', tool: id.slice('tool:'.length) });
     };

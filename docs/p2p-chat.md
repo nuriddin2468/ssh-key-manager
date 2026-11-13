@@ -1,6 +1,14 @@
 # Chats: messages between Nearby contacts
 
-Status: **approved** (with the decisions at the end); being built.
+Status: **built**: core and backend in [#63](https://github.com/nuriddin2468/ssh-key-manager/pull/63), the UI in [#66](https://github.com/nuriddin2468/ssh-key-manager/pull/66).
+
+Not built of what this design describes:
+
+- **Opening a conversation from its notification.** `tauri-plugin-notification` has no
+  click callback on desktop; clicking a notification brings the app forward, as the
+  system does, and the unread count shows where.
+- **Send again on an offer that ended.** The card says it ended; the item is offered
+  again from the composer's **+** menu.
 
 A chat lets two paired computers (Nearby contacts) or two of the user's own devices send
 each other text, secret values that expire, environment variables and the items Nearby
@@ -407,7 +415,11 @@ sealed with a key that only the unlocked vault holds:
 - **Sealing.** Each file is XChaCha20-Poly1305 (`chacha20poly1305`, already a dependency)
   over the conversation's JSON, with a fresh random nonce on every write. The associated
   data is this device's and the contact's keys, so a file can't be passed off as another
-  conversation. Writes are atomic and gathered: at most one per second per conversation.
+  conversation. Writes are atomic and gathered: at most one per second per conversation,
+  and one writer at a time, so a late write never lands over a newer one or brings back a
+  chat deleted meanwhile. A message's receipt goes only once it is on disk, and is sent
+  off the thread that wrote it: a contact that doesn't read holds up only its own link,
+  which closes once a send has waited a minute.
 - **The chat key** is 32 random bytes in the vault's database-level custom data,
   `sshkm.chat.<this device's key>`, made on first use. The file key is derived from it
   per conversation (HKDF).
@@ -469,10 +481,14 @@ So the history is per device by construction: the files never leave this compute
   - its tag leaves the announcement, its knocks fail, and an open session closes at once;
   - the remove dialog asks whether to delete the chat too (ticked);
   - a chat that is kept stays readable without a composer, and its secrets still expire;
+    its name comes from a sealed index, `chats/index.chat`. Only a missing index is an
+    empty one: one that can't be read for a moment (another program holds it) isn't
+    written over until it is read, and one the chat key doesn't open is kept aside;
   - a contact removed by another computer through a synced vault leaves its file hidden
     until the user deletes chats.
 - **Locking** drops the decrypted history from memory, closes sessions and stops the
-  announcement.
+  announcement at once, from the lock itself rather than the next look at chats. An
+  announcement made while going offline is taken back.
 - **System copies.** Deleting and expiry remove values from the app's files. Copies the
   system made of the encrypted file before (Time Machine, disk snapshots) stay as safe as
   the vault itself. `SECURITY.md` says so.
@@ -486,9 +502,10 @@ shows a system notification:
 - **Title and body.** The title is the contact's name; the body is "New message" or "3 new
   messages".
 - **Never any content.** Not even a text, and never a secret's label or value.
-- **Rate.** At most one per conversation per 30 seconds. Clicking it opens the
-  conversation.
-- **Unread counts** show on the Chats tab, on Nearby in the sidebar and in the tray menu.
+- **Rate.** At most one per conversation per 30 seconds.
+- **Unread counts** show on the Chats tab, on Nearby in the sidebar and in the tray menu
+  (which opens the chats). Messages are read only while the window is in front, so what
+  comes while it isn't stays unread and notifies.
 - **New dependency.** This needs `tauri-plugin-notification`, the official plugin. macOS
   asks the user's permission the first time.
 

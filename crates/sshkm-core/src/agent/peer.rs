@@ -14,7 +14,7 @@ pub(super) fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
         uid: 0,
         gid: 0,
     };
-    let mut len = libc::socklen_t::try_from(std::mem::size_of::<libc::ucred>())
+    let mut len = libc::socklen_t::try_from(size_of::<libc::ucred>())
         .map_err(|_| io::Error::other("ucred too large"))?;
     // SAFETY: `cred` and `len` are valid for writes of the sizes given, and
     // the descriptor stays open for the call, owned by `stream`.

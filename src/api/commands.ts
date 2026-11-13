@@ -421,8 +421,9 @@ export const api = {
   /** Copies a secret's value, or a variable's, without it passing through the page. */
   chatCopy: (key: string, id: string, name: string | null = null) =>
     call<CopyResult>('chat_copy', { key, id, name }),
-  /** Wipes a secret or variables this user sent, on both computers. */
-  chatRevoke: (key: string, id: string) => call<void>('chat_revoke', { key, id }),
+  /** Wipes a secret or variables this user sent: `everywhere`, on the other computer too (it must be online); else only here. */
+  chatRevoke: (key: string, id: string, everywhere: boolean) =>
+    call<void>('chat_revoke', { key, id, everywhere }),
   chatRetry: (key: string, id: string) => call<void>('chat_retry', { key, id }),
   /** What adding received variables to an environment (`null`: a new one) would do. */
   chatReviewVariables: (key: string, id: string, envId: string | null) =>

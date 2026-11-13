@@ -23,6 +23,7 @@
 mod audit;
 mod breach;
 mod browsers;
+mod chat;
 mod contacts;
 pub mod envs;
 mod export;

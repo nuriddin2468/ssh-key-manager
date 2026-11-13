@@ -18,8 +18,13 @@
 //!   vault file, a long list of hosts) goes as [`Message::Bytes`], its size
 //!   and SHA-256, and then [`Message::Part`]s; the receiver sets how large it
 //!   may be.
+//! - **Chats.** A chat session's handshake has a prologue of its own
+//!   ([`connect_with`], [`accept_with`]), and the session splits in two
+//!   ([`Session::split`]): one thread reads while any other sends.
 
 use std::io::{self, Read, Write};
+use std::net::{Shutdown, TcpStream};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use base64ct::{Base64, Encoding};
 use rand_core::{OsRng, RngCore};
@@ -52,8 +57,25 @@ pub struct Session<S> {
 }
 
 /// Opens a session as the side that connected.
-pub fn connect<S: Read + Write>(mut stream: S, identity: &Identity) -> Result<Session<S>> {
-    let mut handshake = builder(identity).build_initiator().map_err(noise_error)?;
+pub fn connect<S: Read + Write>(stream: S, identity: &Identity) -> Result<Session<S>> {
+    connect_with(stream, identity, PROLOGUE)
+}
+
+/// Opens a session as the side that was connected to.
+pub fn accept<S: Read + Write>(stream: S, identity: &Identity) -> Result<Session<S>> {
+    accept_with(stream, identity, PROLOGUE)
+}
+
+/// Opens a session bound to `prologue` as the side that connected: the
+/// peer's must be the same, or the handshake fails.
+pub fn connect_with<S: Read + Write>(
+    mut stream: S,
+    identity: &Identity,
+    prologue: &[u8],
+) -> Result<Session<S>> {
+    let mut handshake = builder(identity, prologue)
+        .build_initiator()
+        .map_err(noise_error)?;
     let mut buffer = vec![0; NOISE_MAX];
     // -> e
     let n = handshake
@@ -73,9 +95,15 @@ pub fn connect<S: Read + Write>(mut stream: S, identity: &Identity) -> Result<Se
     finish(stream, handshake, true)
 }
 
-/// Opens a session as the side that was connected to.
-pub fn accept<S: Read + Write>(mut stream: S, identity: &Identity) -> Result<Session<S>> {
-    let mut handshake = builder(identity).build_responder().map_err(noise_error)?;
+/// Opens a session bound to `prologue` as the side that was connected to.
+pub fn accept_with<S: Read + Write>(
+    mut stream: S,
+    identity: &Identity,
+    prologue: &[u8],
+) -> Result<Session<S>> {
+    let mut handshake = builder(identity, prologue)
+        .build_responder()
+        .map_err(noise_error)?;
     let mut buffer = vec![0; NOISE_MAX];
     let frame = read_frame(&mut stream)?;
     handshake
@@ -92,9 +120,9 @@ pub fn accept<S: Read + Write>(mut stream: S, identity: &Identity) -> Result<Ses
     finish(stream, handshake, false)
 }
 
-fn builder(identity: &Identity) -> snow::Builder<'_> {
+fn builder<'a>(identity: &'a Identity, prologue: &'a [u8]) -> snow::Builder<'a> {
     snow::Builder::new(params())
-        .prologue(PROLOGUE)
+        .prologue(prologue)
         .and_then(|builder| builder.local_private_key(identity.private()))
         .unwrap_or_else(|_| unreachable!("a 32-byte key and a prologue are accepted"))
 }
@@ -244,53 +272,17 @@ impl<S: Read + Write> Session<S> {
     }
 
     fn send_json(&mut self, json: &[u8]) -> Result<()> {
-        if json.len() > MAX_MESSAGE {
-            return Err(Error::invalid("the message is too large"));
-        }
-        let mut plain = Zeroizing::new(Vec::with_capacity(4 + json.len()));
-        plain.extend_from_slice(&u32::try_from(json.len()).unwrap_or(u32::MAX).to_be_bytes());
-        plain.extend_from_slice(json);
-        let mut out = Zeroizing::new(vec![0; NOISE_MAX]);
-        for chunk in plain.chunks(NOISE_MAX - TAG) {
-            let n = self
-                .noise
-                .write_message(chunk, &mut out)
-                .map_err(noise_error)?;
-            write_frame(&mut self.stream, &out[..n])?;
-        }
-        self.stream.flush().map_err(io_error)
+        let noise = &mut self.noise;
+        write_json(&mut self.stream, json, &mut |chunk, out| {
+            noise.write_message(chunk, out).map_err(noise_error)
+        })
     }
 
     pub fn recv(&mut self) -> Result<Message> {
-        let mut plain = Zeroizing::new(Vec::new());
-        let mut out = Zeroizing::new(vec![0; NOISE_MAX]);
-        let mut take = |session: &mut Self, plain: &mut Vec<u8>| -> Result<()> {
-            let frame = read_frame(&mut session.stream)?;
-            let n = session
-                .noise
-                .read_message(&frame, &mut out)
-                .map_err(noise_error)?;
-            plain.extend_from_slice(&out[..n]);
-            Ok(())
-        };
-        take(self, &mut plain)?;
-        let header: [u8; 4] = plain
-            .get(..4)
-            .and_then(|bytes| bytes.try_into().ok())
-            .ok_or_else(|| Error::Parse("a message without its length".into()))?;
-        let len = usize::try_from(u32::from_be_bytes(header)).unwrap_or(usize::MAX);
-        if len > MAX_MESSAGE {
-            return Err(Error::Parse(
-                "the peer sent a message that is too large".into(),
-            ));
-        }
-        while plain.len() < 4 + len {
-            take(self, &mut plain)?;
-        }
-        if plain.len() != 4 + len {
-            return Err(Error::Parse("a message longer than its length".into()));
-        }
-        serde_json::from_slice(&plain[4..]).map_err(|e| Error::Parse(format!("message: {e}")))
+        let noise = &mut self.noise;
+        read_message(&mut self.stream, &mut |frame, out| {
+            noise.read_message(frame, out).map_err(noise_error)
+        })
     }
 
     /// Agrees with the peer on the six-digit code both users compare; both
@@ -334,6 +326,144 @@ impl<S: Read + Write> Session<S> {
     }
 }
 
+impl Session<TcpStream> {
+    /// Splits the session in two: a [`Reader`] for one thread, and a
+    /// [`Writer`] any thread may send with. Both share the session's keys;
+    /// each message is sealed or opened under a short lock.
+    pub fn split(self) -> Result<(Reader, Writer)> {
+        let write = self.stream.try_clone().map_err(io_error)?;
+        let noise = Arc::new(Mutex::new(self.noise));
+        Ok((
+            Reader {
+                stream: self.stream,
+                noise: Arc::clone(&noise),
+                remote: self.remote,
+            },
+            Writer {
+                stream: Mutex::new(write),
+                noise,
+            },
+        ))
+    }
+}
+
+/// The half of a split session that reads.
+pub struct Reader {
+    stream: TcpStream,
+    noise: Arc<Mutex<snow::TransportState>>,
+    remote: PeerKey,
+}
+
+impl Reader {
+    /// The peer's device key, proven in the handshake.
+    pub fn remote(&self) -> PeerKey {
+        self.remote
+    }
+
+    /// The stream under the session, to set its timeouts.
+    pub fn stream(&self) -> &TcpStream {
+        &self.stream
+    }
+
+    pub fn recv(&mut self) -> Result<Message> {
+        let noise = &self.noise;
+        read_message(&mut self.stream, &mut |frame, out| {
+            noise
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .read_message(frame, out)
+                .map_err(noise_error)
+        })
+    }
+}
+
+/// The half of a split session that sends; shared between threads.
+pub struct Writer {
+    stream: Mutex<TcpStream>,
+    noise: Arc<Mutex<snow::TransportState>>,
+}
+
+impl Writer {
+    /// Sends `message`. Messages from several threads go one after the
+    /// other, never interleaved.
+    pub fn send(&self, message: &Message) -> Result<()> {
+        let json = to_json(message)?;
+        let mut stream = self.stream.lock().unwrap_or_else(PoisonError::into_inner);
+        let noise = &self.noise;
+        write_json(&mut *stream, &json, &mut |chunk, out| {
+            noise
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .write_message(chunk, out)
+                .map_err(noise_error)
+        })
+    }
+
+    /// Hangs up: the [`Reader`] stops with an error.
+    pub fn shutdown(&self) {
+        // Not under the lock: a send blocked on a full socket must not keep
+        // the hang-up waiting.
+        if let Ok(stream) = self
+            .stream
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .try_clone()
+        {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
+    }
+}
+
+/// What seals or opens one Noise message: `(input, output) -> bytes written`.
+type Seal<'a> = dyn FnMut(&[u8], &mut [u8]) -> Result<usize> + 'a;
+
+/// Writes `json` as its length and the JSON, sealed over as many Noise
+/// messages as it takes.
+fn write_json(stream: &mut impl Write, json: &[u8], seal: &mut Seal<'_>) -> Result<()> {
+    if json.len() > MAX_MESSAGE {
+        return Err(Error::invalid("the message is too large"));
+    }
+    let mut plain = Zeroizing::new(Vec::with_capacity(4 + json.len()));
+    plain.extend_from_slice(&u32::try_from(json.len()).unwrap_or(u32::MAX).to_be_bytes());
+    plain.extend_from_slice(json);
+    let mut out = Zeroizing::new(vec![0; NOISE_MAX]);
+    for chunk in plain.chunks(NOISE_MAX - TAG) {
+        let n = seal(chunk, &mut out)?;
+        write_frame(stream, &out[..n])?;
+    }
+    stream.flush().map_err(io_error)
+}
+
+/// Reads one message as [`write_json`] writes it.
+fn read_message(stream: &mut impl Read, open: &mut Seal<'_>) -> Result<Message> {
+    let mut plain = Zeroizing::new(Vec::new());
+    let mut out = Zeroizing::new(vec![0; NOISE_MAX]);
+    let mut take = |stream: &mut dyn Read, plain: &mut Vec<u8>| -> Result<()> {
+        let frame = read_frame(stream)?;
+        let n = open(&frame, &mut out)?;
+        plain.extend_from_slice(&out[..n]);
+        Ok(())
+    };
+    take(stream, &mut plain)?;
+    let header: [u8; 4] = plain
+        .get(..4)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| Error::Parse("a message without its length".into()))?;
+    let len = usize::try_from(u32::from_be_bytes(header)).unwrap_or(usize::MAX);
+    if len > MAX_MESSAGE {
+        return Err(Error::Parse(
+            "the peer sent a message that is too large".into(),
+        ));
+    }
+    while plain.len() < 4 + len {
+        take(stream, &mut plain)?;
+    }
+    if plain.len() != 4 + len {
+        return Err(Error::Parse("a message longer than its length".into()));
+    }
+    serde_json::from_slice(&plain[4..]).map_err(|e| Error::Parse(format!("message: {e}")))
+}
+
 fn to_json(message: &Message) -> Result<Zeroizing<Vec<u8>>> {
     serde_json::to_vec(message)
         .map(Zeroizing::new)
@@ -369,7 +499,7 @@ fn write_frame(stream: &mut impl Write, bytes: &[u8]) -> Result<()> {
     stream.write_all(bytes).map_err(io_error)
 }
 
-fn read_frame(stream: &mut impl Read) -> Result<Vec<u8>> {
+fn read_frame(stream: &mut (impl Read + ?Sized)) -> Result<Vec<u8>> {
     let mut len = [0; 2];
     stream.read_exact(&mut len).map_err(io_error)?;
     let mut frame = vec![0; usize::from(u16::from_be_bytes(len))];
@@ -411,6 +541,7 @@ mod tests {
             name: name.into(),
             known: false,
             own: None,
+            features: Vec::new(),
         }
     }
 
@@ -557,6 +688,64 @@ mod tests {
             })
             .unwrap();
         assert!(responder.join().unwrap().is_err());
+    }
+
+    #[test]
+    fn sessions_with_other_prologues_never_meet() {
+        let (alice, bob) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (client, server) = pipe();
+        let responder = thread::spawn(move || accept_with(server, &bob, b"sshkm-chat/1 x").is_ok());
+        assert!(connect(client, &alice).is_err());
+        assert!(!responder.join().unwrap());
+
+        let (alice, bob) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (client, server) = pipe();
+        let responder = thread::spawn(move || accept_with(server, &bob, b"same").is_ok());
+        assert!(connect_with(client, &alice, b"same").is_ok());
+        assert!(responder.join().unwrap());
+    }
+
+    #[test]
+    fn a_split_session_reads_on_one_thread_while_others_send() {
+        let (alice, bob) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let alice_key = alice.public();
+        let (client, server) = pipe();
+        let responder = thread::spawn(move || {
+            let (mut reader, writer) = accept(server, &bob).unwrap().split().unwrap();
+            assert_eq!(reader.remote(), alice_key);
+            let writer = Arc::new(writer);
+            // Two threads answer at once; every message arrives whole.
+            let senders: Vec<_> = (0..2)
+                .map(|n| {
+                    let writer = Arc::clone(&writer);
+                    thread::spawn(move || {
+                        for i in 0..50 {
+                            writer
+                                .send(&hello(&format!("{n}-{i}-{}", "x".repeat(70_000))))
+                                .unwrap();
+                        }
+                    })
+                })
+                .collect();
+            let got = reader.recv().unwrap();
+            for sender in senders {
+                sender.join().unwrap();
+            }
+            writer.shutdown();
+            got
+        });
+        let (mut reader, writer) = connect(client, &alice).unwrap().split().unwrap();
+        writer.send(&hello("alice")).unwrap();
+        let mut seen = 0;
+        while let Ok(message) = reader.recv() {
+            let Message::Hello { name, .. } = message else {
+                panic!("not a hello")
+            };
+            assert!(name.ends_with(&"x".repeat(70_000)));
+            seen += 1;
+        }
+        assert_eq!(seen, 100);
+        assert_eq!(responder.join().unwrap(), hello("alice"));
     }
 
     #[test]

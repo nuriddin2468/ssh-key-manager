@@ -121,8 +121,10 @@ impl Pipes {
                 continue;
             }
             // A server whose thread went is started again on its pipe,
-            // which stays: readers may be waiting on it.
-            servers.remove(&wanted.path);
+            // which stays: readers may be waiting on it. The old one holds
+            // the pipe until the new one does, so no other pipe gets its
+            // inode number in between.
+            let previous = servers.remove(&wanted.path);
             match PipeServer::start(&wanted.path, wanted.id, answer) {
                 Ok(started) => {
                     servers.insert(
@@ -139,6 +141,7 @@ impl Pipes {
                     pipes::remove(&wanted.path, wanted.id, &Answer::Stopped);
                 }
             }
+            drop(previous);
         }
         self.keep(&servers);
         went

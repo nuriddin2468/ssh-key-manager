@@ -55,12 +55,25 @@ pub const SERVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2)
 /// Most pipes a list keeps.
 const MAX_PIPES: usize = 4096;
 
-/// Which pipe: its device and inode, so a pipe put in its place by someone
-/// else is told apart.
+/// Which pipe: its device, inode and, on Linux, time of birth, so a pipe
+/// put in its place by someone else is told apart, even one that got the
+/// same inode number once the app's pipe was gone (ext4 hands a freed
+/// number out again at once). While the app serves a pipe its server holds
+/// it, so on Linux its number isn't freed even when it is removed or
+/// replaced ([`PipeServer`]). Before that and after a crash the time of
+/// birth tells them apart: it moves in steps of a few milliseconds, so
+/// only a pipe made within one step of the app's could pass for it. It is
+/// left out where the file system doesn't keep one, and on macOS, which
+/// doesn't hand inode numbers out again soon; then device and inode tell,
+/// as before.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PipeId {
     dev: u64,
     ino: u64,
+    /// Seconds and nanoseconds since 1970. Lists from before it was kept
+    /// have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    born: Option<(i64, u32)>,
 }
 
 impl PipeId {
@@ -69,12 +82,23 @@ impl PipeId {
         Self::of_meta(&fs::symlink_metadata(path).ok()?)
     }
 
+    /// Whether this pipe, found on disk now, is the one `listed` names on
+    /// the app's list: the same, or, for a list from before times of birth
+    /// were kept, on the same device and inode.
+    pub fn is_listed_as(&self, listed: &Self) -> bool {
+        match listed.born {
+            Some(_) => self == listed,
+            None => (self.dev, self.ino) == (listed.dev, listed.ino),
+        }
+    }
+
     #[cfg(unix)]
     fn of_meta(meta: &fs::Metadata) -> Option<Self> {
         use std::os::unix::fs::{FileTypeExt, MetadataExt};
         meta.file_type().is_fifo().then(|| Self {
             dev: meta.dev(),
             ino: meta.ino(),
+            born: born(meta),
         })
     }
 
@@ -82,6 +106,25 @@ impl PipeId {
     fn of_meta(_: &fs::Metadata) -> Option<Self> {
         None
     }
+}
+
+/// When the file was made (`statx`), where the file system says: on Linux,
+/// where nothing changes it. macOS moves it back when a file's time of
+/// change is set before it (`touch -t`), and a pipe whose id changed would
+/// be left with no server.
+#[cfg(target_os = "linux")]
+fn born(meta: &fs::Metadata) -> Option<(i64, u32)> {
+    let since = meta
+        .created()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    Some((i64::try_from(since.as_secs()).ok()?, since.subsec_nanos()))
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn born(_: &fs::Metadata) -> Option<(i64, u32)> {
+    None
 }
 
 /// Whether this system has pipes in folders: macOS and Linux do, Windows
@@ -236,7 +279,11 @@ impl PipeList {
         let removed = list
             .pipes
             .iter()
-            .filter(|pipe| remove(&pipe.path, pipe.id, &Answer::NotRunning))
+            .filter(|pipe| {
+                PipeId::of(&pipe.path)
+                    .filter(|now| now.is_listed_as(&pipe.id))
+                    .is_some_and(|now| remove(&pipe.path, now, &Answer::NotRunning))
+            })
             .count();
         let _ = Self::default().save(path);
         removed
@@ -599,6 +646,10 @@ mod imp {
     pub struct PipeServer {
         shared: Arc<Shared>,
         thread: std::thread::JoinHandle<()>,
+        /// The pipe, held for as long as the server lasts ([`hold`]): a
+        /// pipe found at the path with its id is it, never another that got
+        /// its inode number.
+        _held: Option<File>,
     }
 
     struct Shared {
@@ -619,7 +670,7 @@ mod imp {
     impl PipeServer {
         /// Starts serving the pipe `id` at `path` with `answer`.
         pub fn start(path: &Path, id: PipeId, answer: Answer) -> Result<Self> {
-            let meta = std::fs::symlink_metadata(path).map_err(|e| Error::io(e, path))?;
+            let (held, meta) = hold(path)?;
             if PipeId::of_meta(&meta) != Some(id) {
                 return Err(Error::invalid(format!("{} isn't the pipe", path.display())));
             }
@@ -643,7 +694,11 @@ mod imp {
                     serving.gone_signal.notify_all();
                 })
                 .map_err(|e| Error::io(e, path))?;
-            Ok(Self { shared, thread })
+            Ok(Self {
+                shared,
+                thread,
+                _held: held,
+            })
         }
 
         pub fn id(&self) -> PipeId {
@@ -728,6 +783,27 @@ mod imp {
                 drop(reader);
             }
         }
+    }
+
+    /// What is at `path` now, not following a link: its metadata, and on
+    /// Linux the file itself, held open as a path only (`O_PATH`: neither a
+    /// reader nor a writer, so a pipe's readers see no one). While it is
+    /// held its inode isn't freed, even once it is removed or replaced, so
+    /// no other file gets its number. Nothing is held where it can't be
+    /// opened (too many files open), and on macOS, whose file systems hand
+    /// inode numbers out in increasing order.
+    fn hold(path: &Path) -> Result<(Option<File>, std::fs::Metadata)> {
+        #[cfg(target_os = "linux")]
+        if let Ok(file) = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_PATH | libc::O_NOFOLLOW)
+            .open(path)
+        {
+            let meta = file.metadata().map_err(|e| Error::io(e, path))?;
+            return Ok((Some(file), meta));
+        }
+        let meta = std::fs::symlink_metadata(path).map_err(|e| Error::io(e, path))?;
+        Ok((None, meta))
     }
 
     /// A time as `futimens` takes it.
@@ -1137,13 +1213,81 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "the thread stayed");
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(!server.finish(&Answer::Stopped));
-        assert_eq!(fs::read_to_string(&path).unwrap(), "A=2\n");
-        // A pipe of someone else's in its place is left too.
-        fs::remove_file(&path).unwrap();
-        let (path, _) = pipe(dir.path());
         assert!(!remove(&path, id, &Answer::Stopped));
-        assert!(PipeId::of(&path).is_some());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "A=2\n");
+        // A pipe of someone else's made in its place before the server is
+        // done never gets the old one's inode number (ext4 would hand it
+        // out again at once): the server holds it. So it is left.
+        fs::remove_file(&path).unwrap();
+        let (path, other) = pipe(dir.path());
+        assert_ne!((other.dev, other.ino), (id.dev, id.ino));
+        assert!(!server.finish(&Answer::Stopped));
+        assert_eq!(PipeId::of(&path), Some(other));
+    }
+
+    #[test]
+    fn after_a_crash_a_pipe_on_a_reused_inode_is_someone_elses() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".env");
+        // ext4 hands a freed inode number out again at once; tmpfs and
+        // APFS count up. Without times of birth (macOS) there is nothing
+        // to check.
+        for _ in 0..8 {
+            let old = make(&path).unwrap();
+            if old.born.is_none() {
+                return;
+            }
+            // The app made its pipe a while before: a time of birth moves
+            // in steps of a few milliseconds on Linux.
+            std::thread::sleep(Duration::from_millis(50));
+            fs::remove_file(&path).unwrap();
+            let new = make(&path).unwrap();
+            if (new.dev, new.ino) == (old.dev, old.ino) {
+                assert_ne!(new, old);
+                assert!(!remove(&path, old, &Answer::Stopped));
+                assert_eq!(PipeId::of(&path), Some(new));
+                // The guard's sweep of a list naming the old one leaves it too.
+                let list_path = dir.path().join("pipes.json");
+                PipeList::new(vec![ListedPipe {
+                    path: path.clone(),
+                    id: old,
+                }])
+                .save(&list_path)
+                .unwrap();
+                assert_eq!(PipeList::sweep_at(&list_path), 0);
+                assert_eq!(PipeId::of(&path), Some(new));
+                return;
+            }
+            fs::remove_file(&path).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_list_from_before_times_of_birth_is_swept_by_inode() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, id) = pipe(dir.path());
+        let list_path = dir.path().join("pipes.json");
+        // As an older version wrote it: device and inode only.
+        let old = format!(
+            r#"{{"pipes":[{{"path":{},"id":{{"dev":{},"ino":{}}}}}]}}"#,
+            serde_json::to_string(&path).unwrap(),
+            id.dev,
+            id.ino
+        );
+        fs::write(&list_path, old).unwrap();
+        assert_eq!(PipeList::sweep_at(&list_path), 1);
+        assert!(!path.exists());
+        // A list naming the time of birth keeps it.
+        let (path, id) = pipe(dir.path());
+        PipeList::new(vec![ListedPipe {
+            path: path.clone(),
+            id,
+        }])
+        .save(&list_path)
+        .unwrap();
+        let saved = fs::read_to_string(&list_path).unwrap();
+        assert_eq!(saved.contains("born"), id.born.is_some(), "{saved}");
+        assert_eq!(PipeList::load(&list_path).pipes()[0].id, id);
     }
 
     #[test]

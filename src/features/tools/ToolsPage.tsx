@@ -88,7 +88,7 @@ function ToolCard({ tool, onOpen }: { tool: ToolDefinition; onOpen: () => void }
     <button
       type="button"
       onClick={onOpen}
-      className="pressable-soft glass flex h-full w-full items-start gap-3 rounded-2xl p-3.5 text-left hover:bg-white/[0.06]"
+      className="pressable-soft glass flex h-full w-full items-start gap-3 rounded-2xl p-3.5 text-left hover:bg-fill"
     >
       <Tile tone={tool.tone} size={34}>
         <Icon className="size-[17px]" strokeWidth={2} />

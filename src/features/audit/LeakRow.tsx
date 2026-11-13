@@ -154,7 +154,7 @@ export function LeakRow({ group, muted, onIgnore, onRestore }: LeakRowProps) {
           ref={list}
           tabIndex={-1}
           aria-label={t('audit.leaks.filesLabel', { secret: label })}
-          className="flex flex-col gap-0.5 rounded-md border-t border-white/[0.06] pt-2 outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.5)]"
+          className="flex flex-col gap-0.5 rounded-md border-t border-line-soft pt-2 outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--focus-rgb)/var(--ring-alpha-soft))]"
         >
           {shown.map((finding) => {
             const file = shortPath(finding.path);

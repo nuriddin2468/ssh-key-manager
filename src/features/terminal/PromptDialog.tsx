@@ -56,7 +56,7 @@ function HostKeyDialog({
   const { t } = useTranslation();
   const warning = ask.extra.length > 0;
   const key = (
-    <div className="selectable rounded-[11px] border border-white/[0.07] bg-terminal px-3 py-2.5 font-mono text-[12px] leading-[1.6] break-all">
+    <div className="selectable rounded-[11px] border border-ink/[0.07] bg-terminal px-3 py-2.5 font-mono text-[12px] leading-[1.6] break-all">
       <span className="text-subtle">{ask.host}</span>
       <br />
       <span className="text-subtle">{ask.keyType}</span>
@@ -294,7 +294,7 @@ function SecretDialog({
               <figcaption className="text-[12px] text-muted">
                 {t('terminal.prompt.otherQuote')}
               </figcaption>
-              <blockquote className="selectable max-h-[200px] overflow-auto rounded-[11px] border border-white/[0.07] border-l-2 border-l-white/25 bg-terminal px-3 py-2.5 font-mono text-[12px] leading-[1.6] break-words whitespace-pre-wrap text-fg">
+              <blockquote className="selectable max-h-[200px] overflow-auto rounded-[11px] border border-ink/[0.07] border-l-2 border-l-ink/25 bg-terminal px-3 py-2.5 font-mono text-[12px] leading-[1.6] break-words whitespace-pre-wrap text-fg">
                 {copy.quote}
               </blockquote>
             </figure>

@@ -197,7 +197,7 @@ export function ReviewDialog({
         ) : preview.data ? (
           <section
             aria-label={t('hostsFile.reviewTitle')}
-            className="selectable max-h-[46vh] overflow-auto rounded-xl border border-white/[0.08] bg-black/25 py-1.5 font-mono text-[12px] leading-[19px]"
+            className="selectable max-h-[46vh] overflow-auto rounded-xl border border-line bg-shade/25 py-1.5 font-mono text-[12px] leading-[19px]"
           >
             {preview.data.diff.map((line, index) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: the diff is static

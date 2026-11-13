@@ -40,11 +40,21 @@ real `~/.ssh`. Its modules:
     socket's peer credentials (`agent/peer.rs`, through libc), on Windows by the check
     the app sets.
 - `perms`
-  - Unix: checks and fixes file modes.
+  - Unix: checks and fixes file modes. On macOS it also empties a folder's access list
+    (`perms/extended_acl.rs`, through the system library), for the private folders
+    `fsutil` makes files in.
   - Windows: checks and fixes ACLs, using locale-independent SIDs through PowerShell and
-    `icacls`. It also creates files meant for plain-text secrets (the CSV export) with a
-    protected access list already in place, through Win32 (`perms/private_file.rs`,
-    one of the crate's few `unsafe` modules).
+    `icacls`. It also creates files meant for plain-text secrets (exports, converted
+    keys) with a protected access list already in place, through Win32
+    (`perms/private_file.rs`). These two modules, the Unix part of
+    `vault/envs/files/pipes.rs`, the Windows part of `vault/envs/files/folder.rs` and
+    `agent/peer.rs` (Unix) are the crate's only `unsafe` code.
+- `fsutil`: atomic writes. Files in `~/.ssh` and the app's data folder are written
+  through links (`atomic_write`; `atomic_write_private` for a private key, which keeps
+  only its owner's permissions); secrets written where the user picks are never written
+  through a link and are private from their first byte (`write_private`). On macOS a
+  file for the user alone is made in a new folder of its own whose access list hands
+  nothing down, then renamed into place (`fsutil/private_folder.rs`, through `rustix`).
 - `audit`: pure rules over the data above. Findings carry machine-readable kinds and
   parameters, so the UI can localise them.
   - `audit/config_risks.rs` reads `ssh_config` settings (host key checking, agent
@@ -165,13 +175,22 @@ translates.
   another computer) and after a bound file changes: it watches the folders of the
   bound files for their names, so editors that save by renaming are seen. A round
   saves the files' edits to the vault first, then writes files, and tells the UI with
-  `env-files-changed`. The revisions are kept in `env-files.json`.
+  `env-files-changed`. The revisions are kept in `env-files.json`. A file is read,
+  written, made a pipe or removed through its folder, opened once and checked as it
+  was opened (`vault/envs/files/folder.rs`: `openat`/`renameat` relative to that
+  folder on macOS and Linux; on Windows the folder is held open, not to be renamed
+  or deleted, and checked by its handle's path). A new file or pipe is made where
+  it waits and then renamed into place: on macOS in a private folder of its own
+  inside that folder (`fsutil/private_folder.rs`), on Linux under a temporary name
+  in it.
   - A file kept only while the vault is unlocked (level 2) is written by the round
     after an unlock and removed before the vault locks (`VaultHooks::before_lock`
     runs one last round first) and when the app quits. Each round lists those files,
     as they are on disk (identity, size, time; no values), in
-    `env-files-unlocked.json`; a file still as listed is removed, one edited since
-    stays until the next unlock. A crash or a forced quit is caught by the guard
+    `env-files-unlocked.json`, and lists each write there before it makes it (the
+    file's temporary files, and a level-2 file as it will be); a file still as listed
+    is removed, one edited since stays until the next unlock. A crash or a forced
+    quit is caught by the guard
     (`src-tauri/src/env_guard.rs`): the app's own executable run with
     `--sshkm-env-guard`, which sweeps the list when the pipe from the app closes; the
     next start sweeps it too. Level-2 files get the Time Machine, Dropbox and File

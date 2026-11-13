@@ -13,6 +13,11 @@ export interface Settings {
   defaultShell: string | null;
   /** Sidebar groups the user folded, by name (`library`, `system`). */
   foldedNav: string[];
+  /**
+   * Light or dark; `system` follows the system's appearance. `public/theme-boot.js`
+   * reads it too, before the first paint.
+   */
+  appearance: 'system' | 'light' | 'dark';
 }
 
 const KEY = 'sshkm.settings';
@@ -23,6 +28,7 @@ const DEFAULTS: Settings = {
   autoUpdate: true,
   defaultShell: null,
   foldedNav: [],
+  appearance: 'system',
 };
 
 function load(): Settings {
@@ -37,6 +43,10 @@ function load(): Settings {
 let current = load();
 const listeners = new Set<() => void>();
 
+function notify(): void {
+  for (const listener of listeners) listener();
+}
+
 export function updateSettings(patch: Partial<Settings>): void {
   current = { ...current, ...patch };
   try {
@@ -44,7 +54,23 @@ export function updateSettings(patch: Partial<Settings>): void {
   } catch {
     // Without storage the change lasts until the app quits.
   }
-  for (const listener of listeners) listener();
+  notify();
+}
+
+// The app's windows share the storage: a change made in one (the theme in
+// Settings) reaches the others, such as an open quick search window.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key !== KEY && event.key !== null) return;
+    current = load();
+    notify();
+  });
+}
+
+/** Calls `listener` after every change, here or in another window. Returns the unsubscribe. */
+export function subscribeSettings(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }
 
 /** The settings now, outside React. */
@@ -53,13 +79,7 @@ export function currentSettings(): Settings {
 }
 
 export function useSettings(): Settings {
-  return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    () => current,
-  );
+  return useSyncExternalStore(subscribeSettings, () => current);
 }
 
 export const LIFETIMES = [3600, 8 * 3600, null] as const;

@@ -36,7 +36,6 @@ use std::thread;
 
 use sshkm_core::ErrorCode;
 use sshkm_core::vault;
-use tauri::window::Color;
 use tauri::{AppHandle, Listener, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::commands::Shared;
@@ -51,9 +50,6 @@ pub const LABEL: &str = "unlock";
 const PAGE: &str = "unlock.html";
 const WIDTH: f64 = 380.0;
 const HEIGHT: f64 = 240.0;
-/// The main window's background, so the window doesn't flash white.
-const BACKGROUND: Color = Color(0x0A, 0x0D, 0x14, 0xFF);
-
 /// A Touch ID or Windows Hello prompt is up.
 static PROMPTING: AtomicBool = AtomicBool::new(false);
 
@@ -186,8 +182,8 @@ fn open(app: &AppHandle, asker: Asker) {
         .skip_taskbar(true)
         .center()
         .focused(true)
-        .theme(Some(tauri::Theme::Dark))
-        .background_color(BACKGROUND)
+        .theme(crate::appearance::theme(app))
+        .background_color(crate::appearance::background(app))
         .build();
     match built {
         Ok(window) => {

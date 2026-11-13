@@ -95,14 +95,17 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - Exports: the file is chosen in a system dialog the app opens itself, and both
     exports need the master password. The KeePass copy stays encrypted (it opens with
     the recovery key). The CSV export is plain text: it is readable only by you from the
-    moment it is created (mode 0600; on Windows the file is created with an access list
-    for you, SYSTEM and Administrators only, and no one else can open it while it is
-    written). On a drive that can't keep such an access list (FAT or exFAT USB sticks,
-    some network drives) both exports are refused and nothing is written. It is never
-    written into `~/.ssh` or over the vault's own files (compared by file identity, so
-    links and firmlinks don't get around it), and cells that a spreadsheet would run as
-    a formula are defused, except passwords. Files to import are also picked in a
-    system dialog. Imported CSV files can be moved to the Trash right after import.
+    moment it is created (mode 0600 whatever file it replaces, never that file's mode;
+    on Windows the file is created with an access list for you, SYSTEM and
+    Administrators only, and no one else can open it while it is written). Both are
+    written as a new file renamed onto the path you picked, so a link there is
+    replaced, never written through. On a drive that can't keep such an access list
+    (FAT or exFAT USB sticks, some network drives) both exports are refused and nothing
+    is written. It is never written into `~/.ssh` or over the vault's own files
+    (compared by file identity, so links and firmlinks don't get around it), and cells
+    that a spreadsheet would run as a formula are defused, except passwords. Files to
+    import are also picked in a system dialog. Imported CSV files can be moved to the
+    Trash right after import.
   - Secret environments (the **Environments** page) are entries of the same vault:
     one per environment, in the group `Environments/<project>`, with a custom field
     per variable; a secret variable's field is protected like a password. Lists,
@@ -118,11 +121,17 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - Exporting an environment writes it in plain text (`.env`, JSON, YAML, shell
     `export` lines, a Docker env file, or a Kubernetes Secret, whose base64 hides
     nothing), to a file picked in a system save dialog, with the same protections as
-    the CSV export: mode 0600 (or the private access list on Windows), never in
-    `~/.ssh`, never over the vault's files. Shell lines quote every value in `'…'`,
+    the CSV export: mode 0600 (or the private access list on Windows), a link at the
+    path replaced rather than written through, never in `~/.ssh`, never over the
+    vault's files. Shell lines quote every value in `'…'`,
     so sourcing the file runs nothing a value holds. When the file would be inside a
     Git working tree that doesn't ignore it (`git check-ignore`; without `git`, any
-    working tree counts), nothing is written until you confirm in the app.
+    working tree counts), nothing is written until you confirm in the app. A note,
+    or an environment's name, that the app writes as a `#` comment line (in an
+    export, or the first line a virtual file answers) stays on that one line:
+    control characters and U+2028 and U+2029, which some readers end a line at
+    (Node's `dotenv`, so Vite and Next.js, and YAML 1.1), become spaces, so the rest
+    of a comment is never read as a variable.
   - **Managed `.env` files.** A `local` environment can be written to files in the
     folders of the projects that hold it; a `remote` one never is. The interface names
     a file only as a project folder and a path in it. The app takes plain names ending
@@ -132,12 +141,32 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     anything in `~/.ssh` or over the vault's files. A binding is checked again each
     time it is used, so one that arrives from another computer or an edited database
     is held to the same rules. A file is written by renaming a new private file over
-    it (mode 0600, or the private access list on Windows; the temporary file is named
-    `<file>.sshkm-….tmp`, so `.env*` ignore rules cover it, and one a crash leaves is
-    removed on the next round), so a link put in its place is replaced, never written
-    through; a file that isn't there is only ever created, never written over. It is
-    read without following links, as a regular file only, and written only if its
-    folder is still the one it was found in. A missing folder is never created.
+    it (mode 0600, or the private access list on Windows), so a link put in its place
+    is replaced, never written through; a file that isn't there is only ever created,
+    never written over. It is read without following links, as a regular file only.
+    Its folder is opened once and checked as it was opened: still the folder the file
+    was found in, and inside the project folder (by file identity, walking up from the
+    folder that was opened). The file is then read, written, made a pipe or deleted
+    through that open folder, so a folder swapped meanwhile for a link or for another
+    folder gets nothing; a level-2 file or a pipe removed later is looked at and
+    removed through its folder held open in the same way, and only if it is still the
+    file or pipe the app listed. On Windows the folder is held open, so it can't be
+    renamed or deleted while the file is written, and checked by the path Windows
+    gives for the folder held; the file is then written by its path. On macOS a new
+    file or pipe is made in a folder of its own next to it, `<file>.sshkm-….tmp`
+    (mode 0700, its access list emptied before anything is made in it, so nothing a
+    folder's list hands down is on the file at any moment), under the file's own
+    name, and then renamed into place: ignore rules that name the file (`.env`,
+    `.env*`) cover it there, though not one anchored to the file's own path
+    (`/.env`). On Linux and Windows it is made next to the file as
+    `<file>.sshkm-….tmp`, which `.env*` covers but an exact `.env` doesn't. Either is
+    there only while the file is written, and is listed before it is made, so one a
+    crash leaves (with the values in it) is removed by the guard (below), or else by
+    the next start or the next round; one left while a pipe was made holds only the
+    pipe, and the next round removes it. A missing folder is never created.
+    A file is bound at the interface's request, without a system dialog: any
+    environment of a project, a remote one too (at level 2 or 3), to a `.env` path in
+    that project's folders; any warning about it comes from the interface.
   - Managed files and the vault are kept in step both ways. Per file, each computer
     keeps a keyed hash of the variables both last agreed on (`env-files.json` in the
     app's data folder; the key is in the vault, so the hashes say nothing without it).
@@ -165,6 +194,58 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     repository's settings say (`GIT_ALLOW_PROTOCOL`), so it fetches nothing, not even
     the objects a partial clone left out, and it gets none of the app's `GIT_*`
     environment. A line goes into `.gitignore` only when you ask.
+  - An edit of a managed file goes to the vault, whoever made it: any program that can
+    write in the folder (a build tool, an AI agent) changes what the vault holds, and,
+    through a shared value, the files of every environment that uses it, in any
+    project. Undo and the entry's history keep what it was.
+  - **Files only while the vault is unlocked** (level 2) are written when the vault
+    unlocks, and again whenever one is missing while it is unlocked. Before the vault
+    locks, when the app quits and before an update is installed, one last round takes
+    their edits to the vault and they are removed; one the vault couldn't take (both
+    sides changed, lines it can't read), or one changed after that round, stays until
+    the next unlock, and the app says so. Each is kept out of Time Machine, Dropbox
+    and the File Provider folders (iCloud Drive, and OneDrive and Dropbox in
+    `~/Library/CloudStorage`) by attributes set before it holds anything; on Linux
+    only Dropbox's attribute, on Windows Dropbox's stream, set before the file takes
+    its place. Limits: a file is removed by unlinking it, not overwritten first, so
+    its contents can stay in free blocks of the disk; snapshots of the whole volume
+    (the local APFS snapshots Time Machine takes, Btrfs or ZFS snapshots) and backup
+    tools that don't read those attributes can keep a copy; and the files aren't
+    removed before the computer sleeps, only when the vault locks (with locking after
+    sleep on, as the computer wakes). The app keeps a list of them in
+    `env-files-unlocked.json` in its data folder (each file's path, identity, size
+    and time of change; no value, nor a hash of one), and lists each write before it
+    makes it.
+  - **Virtual files** (level 3, macOS and Linux) leave nothing on disk: in place of
+    the file, a named pipe (mode 0600) the app answers while it runs, with the
+    variables while the vault is unlocked and otherwise a comment saying why. Any
+    program running as you can open the pipe and read the values while the vault is
+    unlocked: a pipe doesn't say who reads it, and the app checks only that the pipe
+    is its own (by its identity), never who the reader is. When the vault locks, an
+    answer left unread in the pipe is taken out at once, and no more of one is
+    written. A file saved over the pipe is taken like any edit, and the pipe comes
+    back. The pipes go when the app quits, after the readers waiting are told that it
+    isn't running; the list of them, `env-files-virtual.json`, holds where and which
+    they are, no values.
+  - **The guard.** While there are level-2 or virtual files, the app runs its own
+    program a second time as a guard (on macOS and Linux in a process group of its
+    own), given only the paths of those two lists, waiting on a pipe from the app.
+    When the app goes without putting them away (it crashed, or was killed or forced
+    to quit), the guard removes the listed level-2 files still as the app left them
+    and the temporary files and folders of writes next to them, tells the readers
+    waiting on the listed pipes that the app isn't running, removes the pipes that
+    are still the app's, and exits. A file changed since stays. If there is no guard
+    (it went too, in a power cut or with the whole session, or the app went during
+    the round that would have started it), the app's next start does the same.
+  - **AI tools' rules.** When you say so for a project folder, the app adds a line
+    naming each of its managed files to the AI tools' ignore files (`.cursorignore`
+    and the like in the folder, `.aiderignore` at the top of the Git working tree) and
+    a deny rule naming it by full path to Claude Code's `~/.claude/settings.json`, and
+    does so for files bound there later. They are added at the interface's request,
+    without a system dialog; they only ever name the folder's managed files, and
+    nothing else in those files changes. They are requests the tools honour, not
+    access control: a tool that doesn't read them, or a command it runs, can still
+    read the files.
   - **Run in terminal** starts your own shell (`$SHELL` as a login shell, or
     `%ComSpec%` on Windows) in the in-app terminal with the variables added to its
     environment. Nothing is written to disk, but the shell and everything it starts
@@ -248,7 +329,12 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     server gets access.
   - The key converter decrypts keys in Rust only; the page sees fingerprints and the
     public key. Converted keys go into `~/.ssh` only as new files (0600), or where you
-    pick in a system save dialog, never over a file in `~/.ssh`. New passphrases use
+    pick in a system save dialog, as the CSV export is written: readable only by you
+    from the first byte (mode 0600 whatever file it replaces, or the private access
+    list on Windows, where a drive that can't keep one is refused), renamed onto the
+    path itself so a link there is replaced, never written through. A converted key is
+    never saved over a file in `~/.ssh`, compared by file identity, so a link or `..`
+    in the path doesn't get around it. New passphrases use
     the formats' strong options (OpenSSH bcrypt, PuTTY v3 Argon2id, PKCS#8 PBES2 with
     PBKDF2-SHA256 and AES-256); PEM, whose encryption is one round of MD5, is written
     only without a passphrase, and the app says so. The key derivation settings a file
@@ -399,8 +485,31 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - CI checks the Rust dependencies with `cargo deny`: known advisories, crates from
     anywhere but crates.io, and licenses the app can't be shipped with (`deny.toml`).
 - **Standard files only.** The app edits the OpenSSH files in place.
-  - Writes are atomic (temp file plus rename), keep the file's permissions, and follow
-    symlinks.
+  - Writes are atomic: a temporary file next to the file, flushed to disk and renamed
+    over it. What they keep depends on the file:
+    - `config`, `known_hosts` and the app's own data files keep their permissions and
+      follow symlinks, so a `~/.ssh/config` that links into a dotfiles repository
+      stays a link and the repository file is updated.
+    - A private key rewritten in place (a passphrase added, changed or removed)
+      follows a symlink too, but keeps only its owner's permissions: a key others could
+      read becomes 0600 (a 0400 key stays 0400); on Windows it gets the private access
+      list as it is created.
+    - Secrets written where you pick (vault and environment exports, converted keys)
+      and managed `.env` files never follow a link at their path and never take the
+      mode of a file they replace: a new file, readable only by you from its first
+      byte, is renamed onto the path itself.
+    - On macOS a folder's access list can hand entries down to what is made in it, and
+      macOS checks them before the mode. A file the app makes for you alone (mode 0600
+      or stricter), and a level-3 `.env` pipe, is therefore made in a new folder of its
+      own next to where it goes (mode 0700, its access list emptied before anything is
+      made in it) and then renamed into place, so it never carries such an entry, not
+      even for the moment before its contents are written.
+    - A temporary file a crash leaves behind is removed: in `~/.ssh` and the app's
+      data folder at the next start, next to an export or converted key at the next
+      write to that file.
+  - Files the app reads (keys, `config`, `known_hosts`, a vault to switch to) are read
+    only if they are regular files: a pipe or a device is refused without waiting for
+    anything to be written to it (`/dev/null` reads as empty).
   - `config` and `known_hosts` are backed up before every write. An edit is tied to the
     version of the file it was made on and refused if the file changed meanwhile.
   - A change that adds or alters a directive that runs a program (here or on every

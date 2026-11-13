@@ -3,16 +3,17 @@
 //! proxy all come from `tauri.conf.json`, so script in the page can't point
 //! the updater anywhere else.
 
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sshkm_core::{ErrorCode, fsutil};
 use tauri::ipc::Channel;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 use super::{Shared, blocking};
+use crate::env_files::EnvFiles;
 use crate::error::{AppError, AppResult};
 
 /// The release the last check found, until a later check replaces it.
@@ -122,8 +123,8 @@ pub async fn update_install(
     .await?;
     let mut received: u64 = 0;
     let mut reported = None;
-    update
-        .download_and_install(
+    let bytes = update
+        .download(
             |chunk, total| {
                 received = received.saturating_add(chunk as u64);
                 let Some(total) = total.filter(|&total| total > 0) else {
@@ -140,6 +141,26 @@ pub async fn update_install(
         )
         .await
         .map_err(|e| updater_error(&e))?;
+    // The `.env` files kept only while the vault is unlocked go first, as on
+    // any quit: Windows quits into the installer without the app's own way
+    // out. They come back if the update doesn't go ahead.
+    let files = app
+        .try_state::<Arc<EnvFiles>>()
+        .map(|files| Arc::clone(&files));
+    if let Some(files) = files.clone() {
+        let handle = app.clone();
+        blocking(&state, move |state| {
+            files.put_away_for_update(&handle, state);
+            Ok(())
+        })
+        .await?;
+    }
+    if let Err(error) = update.install(bytes) {
+        if let Some(files) = files {
+            files.resume_after_update(&state);
+        }
+        return Err(updater_error(&error));
+    }
     // Windows has already quit into the installer; macOS and Linux restart here.
     app.request_restart();
     Ok(())

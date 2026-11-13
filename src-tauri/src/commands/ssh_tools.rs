@@ -7,12 +7,12 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ssh_key::PublicKey;
+use sshkm_core::SecretString;
 use sshkm_core::authorized_keys;
 use sshkm_core::authorized_line::{self, AuthorizedLine, LineOptions};
 use sshkm_core::config::HostKind;
 use sshkm_core::keys::convert::{self, KeyFileFormat, KeyFileInfo};
 use sshkm_core::tunnels::{Tunnel, TunnelKind};
-use sshkm_core::{ErrorCode, SecretString, fsutil};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
@@ -398,16 +398,12 @@ pub async fn key_convert_save(
         let Some(target) = pick_target(&app, source, format)? else {
             return Ok(None);
         };
-        if target.starts_with(&state.paths.dir) && std::fs::symlink_metadata(&target).is_ok() {
-            return Err(AppError::new(
-                ErrorCode::AlreadyExists,
-                format!("{} is in ~/.ssh already", target.display()),
-            ));
-        }
         if let Some(dir) = target.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        fsutil::atomic_write(&target, text.as_bytes(), 0o600)?;
+        // A private file, never written through a link, never over one in
+        // `~/.ssh` (compared by file identity).
+        convert::save(&target, &text, &state.paths.dir)?;
         Ok(Some(target.to_string_lossy().into_owned()))
     })
     .await

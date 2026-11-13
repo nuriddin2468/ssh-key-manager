@@ -5425,6 +5425,7 @@ dependencies = [
  "rsa",
  "rusqlite",
  "rust-argon2",
+ "rustix",
  "rustls",
  "rustls-platform-verifier",
  "secrecy",

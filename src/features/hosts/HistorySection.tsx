@@ -53,17 +53,17 @@ export function HistorySection({ aliases }: { aliases: readonly string[] }) {
         ) : null}
       </div>
       {events.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-white/[0.09] px-3 py-3 text-[12.5px] text-subtle">
+        <p className="rounded-xl border border-dashed border-ink/[0.09] px-3 py-3 text-[12.5px] text-subtle">
           {t('hosts.history.empty')}
         </p>
       ) : (
-        <ol className="flex flex-col overflow-hidden rounded-xl border border-white/[0.07]">
+        <ol className="flex flex-col overflow-hidden rounded-xl border border-ink/[0.07]">
           {shown.map((event) => {
             const Icon = event.via === 'check' ? PlugZap : Terminal;
             return (
               <li
                 key={`${event.via}-${event.at}`}
-                className="flex items-center gap-2.5 border-white/[0.06] px-3 py-2 not-last:border-b"
+                className="flex items-center gap-2.5 border-line-soft px-3 py-2 not-last:border-b"
               >
                 <span
                   aria-hidden="true"

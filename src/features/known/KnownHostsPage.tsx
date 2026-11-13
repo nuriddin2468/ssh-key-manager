@@ -109,13 +109,15 @@ export function KnownHostsPage() {
       </Toolbar>
 
       <PageBody>
-        <div className="flex flex-wrap items-center gap-x-[18px] gap-y-3 rounded-[18px] border border-amber-300/25 bg-[linear-gradient(135deg,rgb(245_158_11/0.16),rgb(255_255_255/0.03)_70%)] px-[18px] py-4 shadow-[inset_0_1px_0_rgb(255_255_255/0.05)]">
+        <div className="flex flex-wrap items-center gap-x-[18px] gap-y-3 rounded-[18px] banner px-[18px] py-4">
           <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-warning-solid/35 bg-warning-solid/15 text-warning">
             <AlertTriangle aria-hidden="true" className="size-[19px]" strokeWidth={2} />
           </span>
           <span className="flex min-w-[300px] flex-1 flex-col gap-0.5">
-            <span className="font-semibold text-amber-200">{t('known.bannerTitle')}</span>
-            <span className="text-[12.5px] leading-[19px] text-[#D9C9A6]">
+            <span className="font-semibold text-[var(--banner-title)]">
+              {t('known.bannerTitle')}
+            </span>
+            <span className="text-[12.5px] leading-[19px] text-[var(--banner-text)]">
               {t('known.bannerText')}
             </span>
           </span>
@@ -227,11 +229,7 @@ function Row({
   const tone = entry.hashed ? 'slate' : entry.marker === 'certAuthority' ? 'blue' : 'amber';
   return (
     <div
-      className={cn(
-        GRID,
-        'min-h-12 items-center rounded-xl px-3 py-1',
-        striped && 'bg-white/[0.02]',
-      )}
+      className={cn(GRID, 'min-h-12 items-center rounded-xl px-3 py-1', striped && 'bg-ink/[0.02]')}
     >
       <span className="flex min-w-0 items-center gap-2.5">
         <Tile tone={tone} size={28}>

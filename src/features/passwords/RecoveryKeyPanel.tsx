@@ -39,7 +39,7 @@ export function RecoveryKeyPanel({ recoveryKey, saved, onSavedChange }: Recovery
 
   return (
     <div className="flex flex-col gap-4">
-      <figure className="flex flex-col items-center gap-3 rounded-2xl border border-white/10 bg-black/35 px-5 pt-4 pb-3.5 shadow-[inset_0_1px_0_rgb(255_255_255/0.04)]">
+      <figure className="flex flex-col items-center gap-3 rounded-2xl border border-line-strong bg-shade/35 px-5 pt-4 pb-3.5 shadow-[inset_0_1px_0_var(--color-sheen)]">
         <figcaption className="self-start text-[11.5px] font-semibold tracking-[0.02em] text-subtle">
           {t('passwords.recoveryKey')}
         </figcaption>

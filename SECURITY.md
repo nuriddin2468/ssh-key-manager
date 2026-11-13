@@ -1102,10 +1102,10 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   merged. The copy is written without compression, and the receiver refuses one that
   is compressed, decrypts it itself and checks it before the KeePass library parses
   anything: an outer header of at most 64 KiB, key derivation parameters each of its
-  own type and within bounds as used, at most 65,536 attachments, its XML at most 96 levels and 8,388,608
-  elements, no document type, no attachment stored compressed, and a list of local
-  items no longer than any copy needs. So reading a copy never inflates, allocates or
-  recurses beyond bounds. It refuses a copy over 256 MiB, with key derivation settings
+  own type and within bounds as used, at most 65,536 attachments, its XML at most 96
+  levels and 8,388,608 elements, no document type, no attachment stored compressed,
+  and a list of local items no longer than any copy needs. So reading a copy never
+  inflates, allocates or recurses beyond bounds. It refuses a copy over 256 MiB, with key derivation settings
   out of bounds, more than 65,536 entries, 8,192 groups, 64 levels or 262,144 removal
   records, or an entry with a group's id; leaves out an id that is an entry on one side
   and a group on the other; takes at most 64 earlier versions of an entry; counts a time

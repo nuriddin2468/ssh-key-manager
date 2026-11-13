@@ -40,10 +40,11 @@ export function useVaultEntry(id: string | undefined) {
  * Switches the UI to the lock screen at once, before the status is fetched
  * again: entries and details leave the cache, finished commands leave
  * TanStack's mutation cache (their variables may hold a master password or a
- * passphrase), and anything that shows a revealed secret unmounts with the
- * unlocked view.
+ * passphrase), a new recovery key still on screen is dropped, and anything
+ * that shows a revealed secret unmounts with the unlocked view.
  */
 export function markLocked(): void {
+  setPendingRecoveryKey(null);
   queryClient.setQueryData<VaultStatus>(keys.vaultStatus, (status) =>
     status && status.state === 'unlocked'
       ? { ...status, state: status.files.exists ? 'locked' : 'missing' }

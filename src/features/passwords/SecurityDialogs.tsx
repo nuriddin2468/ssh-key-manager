@@ -1,8 +1,8 @@
 import { FileKey, LockKeyhole } from 'lucide-react';
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
-import { invalidateAll } from '@/api/queries';
+import { invalidateAll, useVaultStatus } from '@/api/queries';
 import type { BiometricKind } from '@/bindings/BiometricKind';
 import { Button } from '@/components/ui/Button';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
@@ -171,7 +171,8 @@ const DEVICE_UNLOCK = { macos: 'Touch ID', windows: 'Windows Hello', linux: null
 
 /**
  * Replaces the recovery key: the master password first, then the new key
- * shown once. The second step can't be dismissed until the key is saved.
+ * shown once. The second step can't be dismissed until the key is saved, or
+ * until the vault locks: the key leaves the screen with the rest of it.
  */
 export function NewRecoveryKeyDialog({ onDone }: { onDone: () => void }) {
   const { t } = useTranslation();
@@ -180,6 +181,14 @@ export function NewRecoveryKeyDialog({ onDone }: { onDone: () => void }) {
   const [recoveryKey, setRecoveryKey] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const device = DEVICE_UNLOCK[platform];
+  const state = useVaultStatus().data?.state;
+  const locked = state !== undefined && state !== 'unlocked';
+
+  useEffect(() => {
+    if (!locked) return;
+    setRecoveryKey(null);
+    onDone();
+  }, [locked, onDone]);
 
   // The new key stays out of TanStack's caches and is shown before anything refreshes.
   const create = useSecretCall(api.vaultNewRecoveryKey);
@@ -196,6 +205,8 @@ export function NewRecoveryKeyDialog({ onDone }: { onDone: () => void }) {
       else toastVaultError(t, error);
     }
   };
+
+  if (locked) return null;
 
   if (recoveryKey) {
     return (

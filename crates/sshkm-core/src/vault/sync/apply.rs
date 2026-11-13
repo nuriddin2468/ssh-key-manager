@@ -97,6 +97,9 @@ pub struct VaultApplied {
     pub skipped: BTreeSet<String>,
     /// Groups kept because something is still in them.
     pub kept: u32,
+    /// Entries that got the other side's version among their earlier ones:
+    /// conflicts settled for this side's ([`VaultChoices::kept`]).
+    pub versions_kept: u32,
 }
 
 impl Vault {
@@ -193,6 +196,7 @@ impl Vault {
                 && self.db.entry(their.id()).is_some()
             {
                 keep_theirs(&mut self.db, &mut keeper, &their);
+                applied.versions_kept += 1;
             }
         }
         keeper.finish(&mut self.db);
@@ -382,11 +386,13 @@ impl Vault {
         let entry = db
             .entry(EntryId::from_uuid(uuid))
             .ok_or_else(|| Error::NotFound("entry".into()))?;
-        let value = entry
-            .fields
-            .get(name)
-            .ok_or_else(|| Error::NotFound("field".into()))?;
-        Ok(SecretString::from(value.get().clone()))
+        // A field this side doesn't have reads as empty, as KeePass shows it.
+        Ok(SecretString::from(
+            entry
+                .fields
+                .get(name)
+                .map_or_else(String::new, |value| value.get().clone()),
+        ))
     }
 
     /// Whether `field` of the item `id` is a secret on either side: an
@@ -448,6 +454,12 @@ struct Work {
 }
 
 impl VaultApplied {
+    /// Whether the vault changed and must be saved: a change counted, or
+    /// another version kept in an entry's history.
+    pub fn changed(&self) -> bool {
+        !self.counts.is_empty() || self.versions_kept > 0
+    }
+
     /// Counts what was done, or leaves it for the next sync.
     fn note(&mut self, item: &Work, done: bool) {
         if !done {

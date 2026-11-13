@@ -1121,9 +1121,21 @@ fn a_conflict_value_is_shown_only_when_asked_for_one_field() {
         .unwrap();
     assert!(a.vault.sync_value_secret(&peer, &id, "s:Token"));
     assert!(!a.vault.sync_value_secret(&peer, &id, "a:file"));
+    // A field only one side has reads as empty on the other.
+    let token = |theirs| {
+        a.vault
+            .sync_value(&peer, &id, "s:Token", theirs)
+            .unwrap()
+            .expose_secret()
+            .to_owned()
+    };
+    assert_eq!((token(false), token(true)), (String::new(), "t".into()));
     for field in [
         "s:otp",
+        "s:OTP",
         "s:TOTP Seed",
+        "s:totp seed",
+        "s:timeotp-secret-base32",
         "s:TimeOtp-Secret-Base32",
         "s:HmacOtp-Secret",
     ] {
@@ -1462,7 +1474,11 @@ fn a_conflict_never_loses_the_version_not_kept() {
         b.edit(&id, |e| e.password = Some(s(&format!("from-b-{n}"))));
     }
     // `a` takes `b`'s version; each side keeps the other's in history.
-    sync_taking(&mut a, &mut b, |_| true);
+    let synced = sync_taking(&mut a, &mut b, |_| true);
+    // `b` kept its own: nothing counted, but the vault changed all the same.
+    assert!(synced.b.counts.is_empty());
+    assert_eq!(synced.b.versions_kept, 1);
+    assert!(synced.b.changed());
     let passwords = |device: &Device| -> Vec<String> {
         let entry = device
             .vault
@@ -1486,6 +1502,29 @@ fn a_conflict_never_loses_the_version_not_kept() {
         "{:?}",
         passwords(&b)
     );
+}
+
+#[test]
+fn a_conflict_whose_other_version_is_in_the_bin_says_so() {
+    let (_dir, mut a, mut b) = two();
+    let id = a.login("Mail", "p0");
+    sync(&mut a, &mut b);
+    a.edit(&id, |e| e.password = Some(s("from-a")));
+    b.edit(&id, |e| e.password = Some(s("from-b")));
+    b.vault.trash_entry(&id).unwrap();
+    let conflict = |mine: &Device, theirs: &Device| {
+        let peer = mine
+            .vault
+            .open_sync_copy(&theirs.vault.sync_copy().unwrap())
+            .unwrap();
+        let plan = mine.vault.plan_sync(&peer, &mine.base, &mine.hasher);
+        plan.conflicts.into_iter().find(|c| c.id == id).unwrap()
+    };
+    // Taking `b`'s version moves the entry to the bin: a deletion.
+    let on_a = conflict(&a, &b);
+    assert_eq!((on_a.there, on_a.to_bin), (Party::Changed, true));
+    // Taking `a`'s takes it out.
+    assert!(!conflict(&b, &a).to_bin);
 }
 
 #[test]

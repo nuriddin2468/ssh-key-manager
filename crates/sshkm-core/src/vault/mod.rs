@@ -86,13 +86,15 @@ const UNREADABLE_OTP_FIELD: &str = "Unrecognized 2FA secret";
 
 /// Whether a text field holds a 2FA secret, as this app, KeePassXC or
 /// KeePass's plugins write it (`otp`, `TOTP Seed`, `TimeOtp-Secret-…`,
-/// `HmacOtp-Secret-…`): never shown.
+/// `HmacOtp-Secret-…`), in any letter case (some plugins let the user
+/// rename the field): never shown.
 pub fn is_otp_field(name: &str) -> bool {
-    name == fields::OTP
-        || name == UNREADABLE_OTP_FIELD
-        || name == "TOTP Seed"
-        || name.starts_with("TimeOtp-Secret")
-        || name.starts_with("HmacOtp-Secret")
+    let name = name.to_ascii_lowercase();
+    [fields::OTP, UNREADABLE_OTP_FIELD, "TOTP Seed"]
+        .iter()
+        .any(|otp| name == otp.to_ascii_lowercase())
+        || name.starts_with("timeotp-secret")
+        || name.starts_with("hmacotp-secret")
 }
 
 /// What Windows Hello signs to unlock the vault `vault_id` on a computer; see

@@ -1,6 +1,6 @@
 # Chats: messages between Nearby contacts
 
-Status: **approved** (with the decisions at the end); being built.
+Status: **built**: core and backend in [#63](https://github.com/nuriddin2468/ssh-key-manager/pull/63), the UI in the pull request after it.
 
 A chat lets two paired computers (Nearby contacts) or two of the user's own devices send
 each other text, secret values that expire, environment variables and the items Nearby

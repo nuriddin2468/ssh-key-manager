@@ -1,11 +1,13 @@
-import { Laptop, RefreshCw, Trash2 } from 'lucide-react';
+import { Laptop, MessageSquare, RefreshCw, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
 import { useAppMutation } from '@/api/useAppMutation';
+import { useRouter } from '@/app/router';
 import type { MyDevice } from '@/bindings/MyDevice';
 import type { NearbyStatus } from '@/bindings/NearbyStatus';
 import { Button } from '@/components/ui/Button';
+import { Checkbox } from '@/components/ui/Checkbox';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { IconButton } from '@/components/ui/IconButton';
 import { Spinner } from '@/components/ui/Spinner';
@@ -23,15 +25,20 @@ export function MyDevices({ status }: { status: NearbyStatus | undefined }) {
   const { t, i18n } = useTranslation();
   const devices = useMyDevices();
   const [toRemove, setToRemove] = useState<MyDevice | null>(null);
+  const [deleteChat, setDeleteChat] = useState(true);
+  const { navigate } = useRouter();
 
   const sync = useAppMutation((key: string | null) => api.nearbySync(key));
   const reachable = useAppMutation((on: boolean) => api.nearbySetReachable(on), {
     onSuccess: setStatus,
   });
-  const remove = useAppMutation((device: MyDevice) => api.nearbyRemoveDevice(device.key), {
-    success: (_, device) => t('nearby.devices.removed', { name: device.name }),
-    onSuccess: () => setToRemove(null),
-  });
+  const remove = useAppMutation(
+    (device: MyDevice) => api.nearbyRemoveDevice(device.key, deleteChat),
+    {
+      success: (_, device) => t('nearby.devices.removed', { name: device.name }),
+      onSuccess: () => setToRemove(null),
+    },
+  );
 
   const list = devices.data ?? [];
   const others = list.filter((device) => !device.this);
@@ -115,6 +122,17 @@ export function MyDevices({ status }: { status: NearbyStatus | undefined }) {
                     >
                       {t('nearby.devices.sync')}
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      icon={
+                        <MessageSquare aria-hidden="true" className="size-3.5" strokeWidth={2} />
+                      }
+                      aria-label={t('nearby.chat.messageTo', { name: device.name })}
+                      onClick={() => navigate({ page: 'nearby', tab: 'chats', chat: device.key })}
+                    >
+                      {t('nearby.chat.message')}
+                    </Button>
                     <IconButton
                       label={t('nearby.devices.remove', { name: device.name })}
                       icon={<Trash2 className="size-[15px]" strokeWidth={1.9} />}
@@ -156,7 +174,13 @@ export function MyDevices({ status }: { status: NearbyStatus | undefined }) {
         destructive
         busy={remove.isPending}
         onConfirm={() => toRemove && remove.mutate(toRemove)}
-      />
+      >
+        <Checkbox
+          checked={deleteChat}
+          onCheckedChange={setDeleteChat}
+          label={t('nearby.chat.removeChat')}
+        />
+      </ConfirmDialog>
     </section>
   );
 }

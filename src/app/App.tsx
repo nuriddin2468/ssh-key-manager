@@ -14,6 +14,7 @@ import { HostsPage } from '@/features/hosts/HostsPage';
 import { HostsFilePage } from '@/features/hostsFile/HostsFilePage';
 import { KeysPage } from '@/features/keys/KeysPage';
 import { KnownHostsPage } from '@/features/known/KnownHostsPage';
+import { useChatEvents } from '@/features/nearby/chat/queries';
 import { NearbyPage } from '@/features/nearby/NearbyPage';
 import { PairingDialog } from '@/features/nearby/PairingDialog';
 import { useNearbyEvents } from '@/features/nearby/queries';
@@ -74,6 +75,7 @@ function Shell() {
   useVaultEvents();
   useVaultFileEvents();
   useNearbyEvents();
+  useChatEvents();
   useAutomaticUpdates(useSettings().autoUpdate);
   useKeysFromVault();
   const appVersion = useEnvironment().data?.appVersion;

@@ -243,6 +243,16 @@ translates.
     which `store` keeps per device in `sync/` in the app's data folder.
   - `examples/nearby_peer.rs` stands in for another computer, also as a new one
     (`--join`) and as one of the user's devices (`--sync`).
+  - `chat` runs chats ([design](p2p-chat.md)), outside the one conversation at a
+    time: online while the vault is unlocked and Nearby is open in a visible window
+    (the page says so with `chat_set_open`, and again every 20 seconds), and two
+    minutes after. `chat/presence.rs` listens on a port of its own and announces
+    `_sshkm-chat._tcp` with a tag per contact (`p2p::contact`); `chat/link.rs` knocks,
+    runs the handshake bound to the knock, and keeps up to 16 split sessions, one
+    reading thread each. A manager thread pings, closes idle links, wipes values whose
+    term ended and writes the conversations (`sshkm_core::chat`) to `chats/` in the
+    app's data folder, sealed with the chat key the vault keeps for this computer.
+    Every change goes to the UI as `nearby-chats` with the conversation's key.
 - **Watcher.** Watches `~/.ssh` and the hosts file so changes made in a terminal appear
   immediately.
 - **Vault runtime.** The unlocked vault lives only in the Rust process. A timer locks

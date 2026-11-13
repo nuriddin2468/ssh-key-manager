@@ -18,6 +18,8 @@ interface ConfirmDialogProps {
   alert?: boolean;
   busy?: boolean;
   onConfirm: () => void;
+  /** More between the text and the buttons, e.g. a checkbox. */
+  children?: ReactNode;
 }
 
 export function ConfirmDialog({
@@ -31,6 +33,7 @@ export function ConfirmDialog({
   alert = false,
   busy = false,
   onConfirm,
+  children,
 }: ConfirmDialogProps) {
   const { t } = useTranslation();
   const returnFocus = useReturnFocus();
@@ -52,6 +55,7 @@ export function ConfirmDialog({
               {description}
             </AlertDialog.Description>
           </div>
+          {children}
           <div className="flex justify-end gap-2">
             <AlertDialog.Cancel asChild>
               <Button>{cancelLabel ?? t('common.cancel')}</Button>

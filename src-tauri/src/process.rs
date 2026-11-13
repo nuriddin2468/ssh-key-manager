@@ -3,8 +3,10 @@
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+
+use sshkm_core::fsutil;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -54,7 +56,12 @@ pub fn command(program: &str) -> Command {
 /// not the objects a partial clone left out, over no transport. And it gets
 /// none of the app's own `GIT_*` environment.
 pub fn git(folder: &Path) -> Option<Command> {
-    let work_tree = std::path::absolute(sshkm_core::vault::envs::git_work_tree(folder)?).ok()?;
+    // Git for Windows takes `C:\…` but not `\\?\C:\…` (what canonical paths
+    // look like there) for the repository and the working tree.
+    let plain = |path: PathBuf| fsutil::without_verbatim_prefix(path);
+    let folder = plain(folder.to_path_buf());
+    let work_tree =
+        plain(std::path::absolute(sshkm_core::vault::envs::git_work_tree(&folder)?).ok()?);
     let mut git_dir = OsString::from("--git-dir=");
     git_dir.push(work_tree.join(".git"));
     let mut tree = OsString::from("--work-tree=");

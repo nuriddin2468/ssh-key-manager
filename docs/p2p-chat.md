@@ -360,6 +360,17 @@ Two known bugs come with that code:
 - **A whole environment** can still go as a card (§2). It is permanent, and its values go
   only after the receiver accepts.
 
+### Trying it with one machine
+
+`examples/chat_peer.rs` stands in for another computer's chats: two of them chat over
+the network as two apps do (announcement with a tag, recognition, knock, handshake,
+`Hello`s, frames and receipts), each with its device key in a folder of its own:
+
+```text
+cargo run -p sshkm-app --example chat_peer -- /tmp/alice <bob's key>
+cargo run -p sshkm-app --example chat_peer -- /tmp/bob <alice's key> --send
+```
+
 ### Asked natively
 
 A script in the page must not be able to send the vault's secrets away or

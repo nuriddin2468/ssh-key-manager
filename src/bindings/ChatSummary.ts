@@ -20,4 +20,9 @@ own: boolean,
 /**
  * Online for chats now: messages to it go.
  */
-online: boolean, unread: number, last: ChatPreview | null, };
+online: boolean, 
+/**
+ * No longer a contact or device: the chat is kept to read, until the
+ * user deletes it.
+ */
+removed: boolean, unread: number, last: ChatPreview | null, };

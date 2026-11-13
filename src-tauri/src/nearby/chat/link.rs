@@ -8,6 +8,7 @@
 //! the device with the smaller key started. Messages without a receipt go
 //! again on a new link, under the same id; the receiver keeps each once.
 
+use std::collections::HashMap;
 use std::net::TcpStream;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -38,9 +39,11 @@ const PING_EVERY: Duration = Duration::from_secs(30);
 const DEAD_AFTER: Duration = Duration::from_secs(90);
 /// A link nothing was said on for this long closes; it opens again on demand.
 const IDLE_AFTER: Duration = Duration::from_secs(10 * 60);
-/// Most links at once, and connections waiting at the knock.
+/// Most links at once, and connections waiting at the knock (in all, and
+/// from one address).
 const MAX_LINKS: usize = 16;
 const MAX_KNOCKING: usize = 8;
+const MAX_KNOCKING_PER_ADDRESS: usize = 2;
 /// Most offers that wait for this user's answer from one contact.
 const MAX_OFFERS: usize = 3;
 /// How long a contact that sent too much is turned away.
@@ -104,6 +107,7 @@ impl Nearby {
             };
             let _ = stream.set_read_timeout(Some(KNOCK_TIMEOUT));
             let _ = stream.set_write_timeout(Some(KNOCK_TIMEOUT));
+            let deadline = Deadline::arm(&stream, KNOCK_TIMEOUT);
             let Ok(prologue) = contact::knock(&mut stream, &key, peer) else {
                 continue;
             };
@@ -113,7 +117,9 @@ impl Nearby {
             if session.remote() != *peer {
                 continue;
             }
-            match self.start_link(session, *peer, me, me) {
+            let started = self.start_link(session, *peer, me, me);
+            deadline.disarm();
+            match started {
                 Ok(linked) => return Ok(linked),
                 Err(error) => log::warn!("nearby: a chat link didn't start: {error}"),
             }
@@ -123,13 +129,21 @@ impl Nearby {
 
     /// A connection to the chat port: a contact's knock, or nothing.
     pub(super) fn chat_incoming(self: &Arc<Self>, mut stream: TcpStream) {
+        let address = stream.peer_addr().ok().map(|address| address.ip());
         {
             let mut chats = self.chats();
-            if chats.knocking >= MAX_KNOCKING {
+            let from = address.map_or(0, |ip| chats.knocking_by.get(&ip).copied().unwrap_or(0));
+            if chats.knocking >= MAX_KNOCKING || from >= MAX_KNOCKING_PER_ADDRESS {
                 return;
             }
             chats.knocking += 1;
+            if let Some(ip) = address {
+                *chats.knocking_by.entry(ip).or_default() += 1;
+            }
         }
+        // One deadline for the knock, the handshake and the Hellos: bytes
+        // that trickle in don't keep a place at the knock.
+        let deadline = Deadline::arm(&stream, KNOCK_TIMEOUT);
         let result = (|| -> AppResult<()> {
             // A listener's socket hands on its non-blocking mode on some systems.
             stream.set_nonblocking(false)?;
@@ -151,6 +165,12 @@ impl Nearby {
                 return Ok(());
             };
             let peer = knocked.peer;
+            // Each knock counts against the contact's frames: knocking again
+            // and again earns nothing.
+            if !self.spend(&peer) {
+                self.pause(&peer);
+                return Ok(());
+            }
             let paused = {
                 let mut chats = self.chats();
                 let paused = chats
@@ -172,10 +192,26 @@ impl Nearby {
             self.start_link(session, peer, me, peer)?;
             Ok(())
         })();
+        deadline.disarm();
         if let Err(error) = result {
             log::debug!("nearby: a chat connection ended early: {error}");
         }
-        self.chats().knocking -= 1;
+        let mut chats = self.chats();
+        chats.knocking -= 1;
+        if let Some(ip) = address
+            && let Some(count) = chats.knocking_by.get_mut(&ip)
+        {
+            *count -= 1;
+            if *count == 0 {
+                chats.knocking_by.remove(&ip);
+            }
+        }
+    }
+
+    /// Counts one frame (or knock) from `peer` against its bucket, which
+    /// outlives its links; `false` once it sent too many.
+    fn spend(&self, peer: &PeerKey) -> bool {
+        spend(&mut self.chats().limits, *peer, Instant::now())
     }
 
     /// The `Hello`s; then the link is kept, read on a thread of its own,
@@ -212,34 +248,27 @@ impl Nearby {
         let (reader, writer) = session.split()?;
         let writer = Arc::new(writer);
         let linked = theirs.clone();
-        // Of two links at once, both sides keep the one the smaller key started.
-        let winner = if me.as_bytes() < peer.as_bytes() {
-            me
-        } else {
-            peer
-        };
         let id = NEXT_LINK.fetch_add(1, Ordering::SeqCst);
-        {
+        let pushed_out = {
             let mut chats = self.chats();
             if chats.online.is_none() {
                 writer.shutdown();
                 return Err(offline());
             }
+            let mut pushed_out = None;
             if let Some(old) = chats.links.get(&peer) {
-                if old.initiator == winner && initiator != winner {
+                if keeps_old(&me, &peer, &old.initiator, &initiator) {
                     writer.shutdown();
                     return Ok(old.features.clone());
                 }
                 old.writer.shutdown();
             } else if chats.links.len() >= MAX_LINKS
-                && let Some(oldest) = chats
-                    .links
-                    .iter()
-                    .min_by_key(|(_, link)| link.last_use)
-                    .map(|(key, _)| *key)
+                && let Some(oldest) =
+                    oldest(chats.links.iter().map(|(key, link)| (*key, link.last_use)))
                 && let Some(link) = chats.links.remove(&oldest)
             {
                 link.writer.shutdown();
+                pushed_out = Some(oldest);
             }
             let now = Instant::now();
             chats.links.insert(
@@ -254,6 +283,10 @@ impl Nearby {
                     ping: 0,
                 },
             );
+            pushed_out
+        };
+        if let Some(pushed_out) = pushed_out {
+            self.link_gone(&pushed_out);
         }
         let nearby = Arc::clone(self);
         thread::spawn(move || nearby.read_link(peer, id, reader));
@@ -264,9 +297,8 @@ impl Nearby {
 
     /// Reads a link until it ends.
     fn read_link(self: Arc<Self>, peer: PeerKey, id: u64, mut reader: Reader) {
-        let mut limit = RateLimit::new(Instant::now());
         while let Ok(message) = reader.recv() {
-            if !limit.take(Instant::now()) {
+            if !self.spend(&peer) {
                 self.pause(&peer);
                 break;
             }
@@ -291,7 +323,16 @@ impl Nearby {
     /// A contact sent too much at once: its link closes, and it is turned
     /// away for a minute.
     fn pause(&self, peer: &PeerKey) {
-        self.chats().paused.insert(*peer, Instant::now() + PAUSE);
+        let now = Instant::now();
+        let already = {
+            let mut chats = self.chats();
+            let already = chats.paused.get(peer).is_some_and(|until| now < *until);
+            chats.paused.insert(*peer, now + PAUSE);
+            already
+        };
+        if already {
+            return;
+        }
         let line = Entry {
             id: new_id(),
             mine: false,
@@ -421,18 +462,13 @@ impl Nearby {
             } => self.on_reply(peer, &id, accepted, unsupported),
             ChatFrame::Payload { id, item } => self.on_payload(peer, &id, &item),
             ChatFrame::Saved { id, saved } => {
-                let mine = self
-                    .chats()
-                    .offers
-                    .remove(&id)
-                    .is_some_and(|offer| offer.peer == *peer);
-                if mine {
+                if self.take_offer(peer, &id) {
                     let outcome = if saved {
                         Outcome::Saved
                     } else {
                         Outcome::NotSaved
                     };
-                    let _ = self.edit(peer, |chat| set_outcome(chat, &id, outcome));
+                    let _ = self.edit(peer, |chat| set_outcome(chat, &id, true, outcome));
                     self.chats_changed(Some(peer));
                 }
             }
@@ -444,14 +480,17 @@ impl Nearby {
                 }
             }
             ChatFrame::Refused { id, reason } => {
+                // Only this side's messages, and only its offers to this peer.
+                let offered = self.take_offer(peer, &id);
                 let changed = self
                     .edit(peer, |chat| {
                         let changed = chat.refused(&id, reason);
-                        set_outcome(chat, &id, Outcome::Ended);
+                        if offered {
+                            set_outcome(chat, &id, true, Outcome::Ended);
+                        }
                         changed
                     })
                     .unwrap_or(false);
-                self.chats().offers.retain(|offer, _| *offer != id);
                 if changed {
                     self.chats_changed(Some(peer));
                 }
@@ -486,9 +525,8 @@ impl Nearby {
         let Ok(new) = self.edit(peer, |chat| chat.receive(entry)) else {
             return;
         };
-        // Stored for good before the receipt says so.
-        self.write_conversations();
-        let _ = self.send_frame(peer, &ChatFrame::Delivered { ids: vec![id] });
+        // The receipt goes once the conversation is written: stored for good.
+        self.receipt(peer, id);
         if new {
             self.chats_changed(Some(peer));
             self.notify(peer);
@@ -553,13 +591,7 @@ impl Nearby {
                 },
             );
         }
-        self.write_conversations();
-        let _ = self.send_frame(
-            peer,
-            &ChatFrame::Delivered {
-                ids: vec![id.to_owned()],
-            },
-        );
+        self.receipt(peer, id.to_owned());
         if new {
             self.chats_changed(Some(peer));
             self.notify(peer);
@@ -589,7 +621,7 @@ impl Nearby {
             (false, true) => Outcome::Unsupported,
             (false, false) => Outcome::Declined,
         };
-        let _ = self.edit(peer, |chat| set_outcome(chat, id, outcome));
+        let _ = self.edit(peer, |chat| set_outcome(chat, id, true, outcome));
         self.chats_changed(Some(peer));
         if let Some(item) = item {
             let _ = self.send_frame(
@@ -649,6 +681,7 @@ impl Nearby {
                         group,
                         ..
                     },
+                mine: false,
                 ..
             }) = chat.get_mut(id)
             {
@@ -671,5 +704,154 @@ impl Nearby {
                 saved: saved.is_some(),
             },
         );
+    }
+}
+
+impl Nearby {
+    /// Takes this side's offer `id` if it went to `peer`; `false` for any
+    /// other id, or an offer to someone else, which stays.
+    fn take_offer(&self, peer: &PeerKey, id: &str) -> bool {
+        let mut chats = self.chats();
+        if chats
+            .offers
+            .get(id)
+            .is_some_and(|offer| offer.peer == *peer)
+        {
+            chats.offers.remove(id);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// A deadline for a connection: once it passes, the socket is shut down,
+/// whatever read or write waits on it, unless the deadline was disarmed.
+struct Deadline {
+    done: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Deadline {
+    fn arm(stream: &TcpStream, after: Duration) -> Self {
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        if let Ok(stream) = stream.try_clone() {
+            let flag = Arc::clone(&done);
+            thread::spawn(move || {
+                thread::sleep(after);
+                if !flag.load(Ordering::SeqCst) {
+                    let _ = stream.shutdown(std::net::Shutdown::Both);
+                }
+            });
+        }
+        Self { done }
+    }
+
+    fn disarm(&self) {
+        self.done.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Counts one frame from `peer` in `limits` at `now`; `false` once it sent
+/// too many.
+fn spend(limits: &mut HashMap<PeerKey, RateLimit>, peer: PeerKey, now: Instant) -> bool {
+    limits
+        .entry(peer)
+        .or_insert_with(|| RateLimit::new(now))
+        .take(now)
+}
+
+/// Whether a new link with `peer`, started by `initiator`, gives way to the
+/// one there, started by `old`: of two at once, both sides keep the one
+/// the device with the smaller key started.
+fn keeps_old(me: &PeerKey, peer: &PeerKey, old: &PeerKey, initiator: &PeerKey) -> bool {
+    let winner = if me.as_bytes() < peer.as_bytes() {
+        me
+    } else {
+        peer
+    };
+    old == winner && initiator != winner
+}
+
+/// The link used least recently: the one to go when there are too many.
+fn oldest(links: impl Iterator<Item = (PeerKey, Instant)>) -> Option<PeerKey> {
+    links.min_by_key(|(_, used)| *used).map(|(key, _)| key)
+}
+
+#[cfg(test)]
+mod tests {
+    use sshkm_core::p2p::Identity;
+
+    use super::*;
+
+    fn key() -> PeerKey {
+        Identity::generate().unwrap().public()
+    }
+
+    #[test]
+    fn the_rate_limit_outlives_a_link() {
+        let (bob, carol) = (key(), key());
+        let mut limits = HashMap::new();
+        let now = Instant::now();
+        for _ in 0..30 {
+            assert!(spend(&mut limits, bob, now));
+        }
+        // Bob hangs up and knocks again: the bucket is his, not the link's.
+        assert!(!spend(&mut limits, bob, now));
+        assert!(
+            spend(&mut limits, carol, now),
+            "another contact has its own"
+        );
+        assert!(spend(&mut limits, bob, now + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn of_two_links_both_sides_keep_the_one_the_smaller_key_started() {
+        let (a, b) = (key(), key());
+        let (small, large) = if a.as_bytes() < b.as_bytes() {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        // On the smaller key's side: its own link stays, the other's gives way.
+        assert!(keeps_old(&small, &large, &small, &large));
+        assert!(!keeps_old(&small, &large, &large, &small));
+        // On the larger key's side, the same link stays.
+        assert!(keeps_old(&large, &small, &small, &large));
+        assert!(!keeps_old(&large, &small, &large, &small));
+        // A link started again by the winner replaces its old one.
+        assert!(!keeps_old(&small, &large, &small, &small));
+    }
+
+    #[test]
+    fn the_link_used_least_recently_goes_first() {
+        let (a, b, c) = (key(), key(), key());
+        let start = Instant::now();
+        let links = [
+            (a, start + Duration::from_secs(60)),
+            (b, start),
+            (c, start + Duration::from_secs(55)),
+        ];
+        assert_eq!(oldest(links.into_iter()), Some(b));
+        assert_eq!(oldest(std::iter::empty()), None);
+    }
+
+    #[test]
+    fn a_deadline_shuts_a_slow_connection() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        let deadline = Deadline::arm(&server, Duration::from_millis(100));
+        let started = Instant::now();
+        // The peer sends nothing; the read ends when the deadline passes,
+        // long before any per-read timeout would.
+        server
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut byte = [0; 1];
+        let read = std::io::Read::read(&mut server, &mut byte);
+        assert!(matches!(read, Ok(0) | Err(_)));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        deadline.disarm();
+        drop(client);
     }
 }

@@ -39,6 +39,10 @@ pub(in crate::nearby) struct Online {
 impl Nearby {
     /// Listens, announces and browses; makes the chat key if there is none.
     pub(super) fn go_online(self: &Arc<Self>) -> AppResult<()> {
+        // Online already: never a second listener or announcement beside it.
+        if self.chats().online.is_some() {
+            return Ok(());
+        }
         self.chat_key()?;
         self.read_known();
         self.read_all_conversations();
@@ -51,12 +55,16 @@ impl Nearby {
             let stop = Arc::clone(&stop);
             thread::spawn(move || nearby.listen_chats(&listener, &stop));
         }
-        self.chats().online = Some(Online {
+        let before = self.chats().online.replace(Online {
             port,
             stop,
             fullname: String::new(),
             window: 0,
         });
+        // Should another have come meanwhile, it stops: one port, one name.
+        if let Some(before) = before {
+            self.stop_online(&before);
+        }
         let browse = self.announce_chats().and_then(|()| {
             let daemon = mdns(&mut self.lock())?;
             daemon.browse(CHAT_SERVICE_TYPE).map_err(mdns_error)
@@ -91,19 +99,35 @@ impl Nearby {
             (chats.online.take(), chats.links.drain().collect::<Vec<_>>())
         };
         if let Some(online) = online {
-            online.stop.store(true, Ordering::SeqCst);
+            self.stop_online(&online);
             if let Some(daemon) = &self.lock().mdns {
-                if !online.fullname.is_empty() {
-                    let _ = daemon.unregister(&online.fullname);
-                }
                 let _ = daemon.stop_browse(CHAT_SERVICE_TYPE);
             }
         }
+        self.chats().receipts.clear();
         for (peer, link) in links {
             link.writer.shutdown();
             let _ = self.edit(&peer, Conversation::disconnected);
         }
         self.chats_changed(None);
+    }
+
+    /// Stops a listener and takes its name off the network.
+    fn stop_online(&self, online: &Online) {
+        online.stop.store(true, Ordering::SeqCst);
+        if !online.fullname.is_empty()
+            && let Some(daemon) = &self.lock().mdns
+        {
+            let _ = daemon.unregister(&online.fullname);
+        }
+    }
+
+    /// Announces again now, with the contacts as they are: one added gets a
+    /// tag, one removed loses its.
+    pub(super) fn reannounce(&self) {
+        if let Err(error) = self.announce_chats() {
+            log::warn!("nearby: chats could not be announced again: {error}");
+        }
     }
 
     /// Announces again under a new name once the ten-minute window changed.

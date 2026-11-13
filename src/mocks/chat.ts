@@ -159,6 +159,7 @@ function summary(item: Peer): ChatSummary {
     name: item.name,
     own: item.own,
     online: online(item),
+    removed: false,
     unread: item.entries.slice(item.read).filter((entry) => !entry.mine).length,
     last: last
       ? {

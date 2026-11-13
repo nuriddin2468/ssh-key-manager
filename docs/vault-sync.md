@@ -361,8 +361,9 @@ ways. Sign-in keys stay where they are."
   prod`), what happened ("Changed here and on {{peer}}" / "Deleted here, changed on
   {{peer}}" / "Changed here, deleted on {{peer}}"), "Differs:" and the fields' names as
   badges, "Show values" (a text field's two values, one field at a time, when asked;
-  only for an item both changed, at most 200 in a sync, never a 2FA secret; focus stays
-  on the field's row) and "Keep this computer's" / "Take
+  only for an item both changed, at most 200 in a sync, never a 2FA secret; a secret
+  one counts with the app's free reveals and past them is asked for in a system dialog;
+  focus stays on the field's row) and "Keep this computer's" / "Take
   {{peer}}'s". Under them: "The version you don't keep stays among the entry's earlier
   versions."
 - _Runs a program or opens access_ — host directives as before, and an environment's

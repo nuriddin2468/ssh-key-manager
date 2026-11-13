@@ -356,6 +356,27 @@ pub fn env_value(name: &str, label: &str) -> Localized {
     )
 }
 
+/// A field of an item in a sync's conflict, for [`take_secret`]: `name` is
+/// the field's, `label` the item's, and `theirs` whether it is the other
+/// device's version.
+pub fn sync_value(name: &str, label: &str, theirs: bool) -> Localized {
+    let name = confirm::shown(name, 80);
+    let item = confirm::shown(label, 120);
+    if theirs {
+        Localized::new(
+            format!("{name} of “{item}” (the other device’s version)"),
+            format!("{name} из «{item}» (версия другого устройства)"),
+            format!("«{item}» dagi {name} (boshqa qurilma versiyasi)"),
+        )
+    } else {
+        Localized::new(
+            format!("{name} of “{item}” (this computer’s version)"),
+            format!("{name} из «{item}» (версия этого компьютера)"),
+            format!("«{item}» dagi {name} (bu kompyuter versiyasi)"),
+        )
+    }
+}
+
 /// The vault's password for a login being imported, for [`take_secret`].
 pub fn import_password() -> Localized {
     Localized::new(
@@ -560,5 +581,15 @@ mod tests {
         assert_eq!(title.ru, "Скопировать ещё один секрет?");
         assert!(body.ru.contains("DATABASE_URL из окружения «Shop · prod»"));
         assert!(body.uz.contains("«Shop · prod» muhitidagi DATABASE_URL"));
+        let what = sync_value("Password", "GitHub", true);
+        let (_, body, _) = take_question(Taking::Show, &what);
+        assert!(
+            body.en
+                .contains("Password of “GitHub” (the other device’s version).")
+        );
+        assert!(
+            body.ru
+                .contains("Password из «GitHub» (версия другого устройства)")
+        );
     }
 }

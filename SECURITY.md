@@ -52,9 +52,10 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     reaches the interface only when you choose to reveal it. A 2FA secret never does:
     only the current code, computed in the Rust process. Ten secrets (shown, or
     copied from the main window: passwords, secret variables, the vault's side of an
-    import's comparison) go without asking in a row, then one more every six minutes,
-    about ten an hour; each one past that is asked for in a system dialog that names
-    it, so the page can't read the vault out one secret after another.
+    import's comparison, a secret field of a sync's conflict) go without asking in a
+    row, then one more every six minutes, about ten an hour; each one past that is
+    asked for in a system dialog that names it, so the page can't read the vault out
+    one secret after another.
   - Copying a password, a 2FA code or the recovery key goes from Rust straight to the
     clipboard, marked so clipboard history (and Windows' cloud clipboard) skip it, and
     is cleared after 30 seconds by default if nothing else was copied. Locking the vault
@@ -1109,7 +1110,9 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   user's choice, which shows the names of the fields that differ. A text field's two
   values come only when the user asks, only for an item both computers changed while
   its review is open, at most 200 in a sync, and never a 2FA secret (`otp`,
-  `TOTP Seed`, `TimeOtp-Secret-…`, `HmacOtp-Secret-…`). The other computer's copy is
+  `TOTP Seed`, `TimeOtp-Secret-…`, `HmacOtp-Secret-…`). A secret one (a password, or a
+  field protected on either computer) counts with the ten secrets in a row above, and
+  past them is asked for in a system dialog. The other computer's copy is
   kept in memory only during the sync, and goes when the vault locks. The version not kept stays among
   the entry's earlier versions on both computers, whatever the history limit. A shared
   value goes only after the environments here

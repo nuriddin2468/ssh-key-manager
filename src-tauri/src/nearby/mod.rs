@@ -1076,18 +1076,33 @@ impl Nearby {
         field: &str,
         theirs: bool,
     ) -> AppResult<SecretString> {
-        let peer = self.shown_from(id, item, field)?;
+        let (peer, label) = self.shown_from(id, item, field)?;
         let state = self.state()?;
         let app = self.app()?;
+        // A secret goes as anywhere else in the app: past a few a minute,
+        // each is asked for in a native dialog, before it is read.
+        let secret = state
+            .vault
+            .with_quietly(app, |vault| Ok(vault.sync_value_secret(&peer, item, field)))?;
+        if secret {
+            let name = field.strip_prefix("s:").unwrap_or(field);
+            let name = name.strip_prefix("env.").unwrap_or(name);
+            crate::secret_gate::take_secret(
+                app,
+                crate::secret_gate::Taking::Show,
+                &crate::secret_gate::sync_value(name, &label, theirs),
+            )?;
+        }
         state.vault.with(app, |vault| {
             Ok(vault.sync_value(&peer, item, field, theirs)?)
         })
     }
 
-    /// The other device's copy, to show `field` of `item` from: only a
-    /// field [`sync::Review::may_show`] allows in the review open in the
-    /// sync `id`, and at most [`MAX_VALUES_SHOWN`] in one sync.
-    fn shown_from(&self, id: u32, item: &str, field: &str) -> AppResult<Arc<PeerVault>> {
+    /// The other device's copy, to show `field` of `item` from, and the
+    /// item's label: only a field [`sync::Review::may_show`] allows in the
+    /// review open in the sync `id`, and at most [`MAX_VALUES_SHOWN`] in one
+    /// sync.
+    fn shown_from(&self, id: u32, item: &str, field: &str) -> AppResult<(Arc<PeerVault>, String)> {
         let mut slot = self.slot(id);
         let slot = slot
             .as_mut()
@@ -1095,16 +1110,23 @@ impl Nearby {
         let PairingPhase::Decide { review } = &slot.view.phase else {
             return Err(AppError::invalid("no sync under review"));
         };
-        if !review.may_show(item, field) {
+        let Some(label) = review
+            .may_show(item, field)
+            .then(|| review.vault.conflicts.iter().find(|c| c.id == item))
+            .flatten()
+            .map(|conflict| conflict.label.clone())
+        else {
             return Err(AppError::invalid("not a field of a conflict under review"));
-        }
+        };
         if slot.values_shown >= MAX_VALUES_SHOWN {
             return Err(AppError::invalid("no more values in this sync"));
         }
         slot.values_shown += 1;
-        slot.peer_vault
+        let peer = slot
+            .peer_vault
             .clone()
-            .ok_or_else(|| AppError::invalid("no sync under review"))
+            .ok_or_else(|| AppError::invalid("no sync under review"))?;
+        Ok((peer, label))
     }
 
     /// The cloud service whose folder holds the unlocked vault, if one does:
@@ -2026,7 +2048,12 @@ mod tests {
         assert!(nearby.shown_from(id, "other", "s:Password").is_err());
         assert!(nearby.shown_from(id, "mail", "s:Notes").is_err());
         assert!(nearby.shown_from(id, "mail", "s:TOTP Seed").is_err());
-        for _ in 0..MAX_VALUES_SHOWN {
+        // The item's label names it in the dialog past the free secrets.
+        assert_eq!(
+            nearby.shown_from(id, "mail", "s:Password").unwrap().1,
+            "Mail"
+        );
+        for _ in 1..MAX_VALUES_SHOWN {
             assert!(nearby.shown_from(id, "mail", "s:Password").is_ok());
         }
         assert!(

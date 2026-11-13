@@ -37,12 +37,12 @@ mod store;
 pub mod sync;
 pub mod transfer;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread;
@@ -55,7 +55,7 @@ use sshkm_core::config::SshConfig;
 use sshkm_core::known_hosts::KnownHosts;
 use sshkm_core::p2p::deadline::Deadline;
 use sshkm_core::p2p::protocol::{Intent, Item, SecretText, VaultState, clean_name};
-use sshkm_core::p2p::{self, Identity, PeerKey, Session};
+use sshkm_core::p2p::{self, Identity, Message, PeerKey, Session};
 use sshkm_core::sync::Hasher;
 use sshkm_core::sync::host_keys;
 use sshkm_core::vault::{self, Vault};
@@ -66,7 +66,9 @@ use time::format_description::well_known::Rfc3339;
 use zeroize::Zeroizing;
 
 use self::items::{ReceivedGroup, SendRequest};
-use self::pairing::{PairingFailure, PairingPhase, Purpose, Side, Stored, conversation};
+use self::pairing::{
+    PairingFailure, PairingPhase, Purpose, Side, Stored, broken, conversation_after,
+};
 pub use self::presence::OWN_SERVICE_TYPE;
 use self::presence::{OwnFound, Presence};
 use self::sync::{RiskyChange, SyncDecisions, SyncLocal, SyncState, SyncWrite};
@@ -87,11 +89,15 @@ const VISIBLE_FOR: Duration = Duration::from_secs(10 * 60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// For the handshake and `Hello`; comparing codes waits longer.
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
-/// How long a connection has for its whole handshake, however slowly its
-/// bytes come.
+/// How long a connection has for its first steps (the handshake and, on
+/// the side connected to, the other's `Hello`), however slowly its bytes
+/// come.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-/// Most connections in their handshake at once; more are closed at once.
+/// Most connections in their first steps at once, on each port this
+/// computer listens on; more are closed at once.
 const MAX_HANDSHAKES: usize = 4;
+/// Most of those from one address, so one computer can't take them all.
+const MAX_HANDSHAKES_PER_ADDRESS: usize = 2;
 /// How many times, while this computer is visible, others may hang up
 /// after they could work out the code it would show and before it showed
 /// it, before it hides: someone may be trying until the code is one they
@@ -224,7 +230,7 @@ pub struct Nearby {
     app: OnceLock<AppHandle>,
     next_id: AtomicU32,
     /// Connections in their handshake (see [`MAX_HANDSHAKES`]).
-    handshakes: AtomicUsize,
+    handshakes: Mutex<Pending>,
     inner: Mutex<Inner>,
     chats: chat::Chats,
 }
@@ -345,7 +351,7 @@ impl Nearby {
             data_dir,
             app: OnceLock::new(),
             next_id: AtomicU32::new(1),
-            handshakes: AtomicUsize::new(0),
+            handshakes: Mutex::default(),
             inner: Mutex::new(Inner {
                 name,
                 settings,
@@ -974,23 +980,24 @@ impl Nearby {
     /// network or a conversation is going on (then the connection just
     /// closes). With `only_sync`, only a sync is taken.
     fn incoming(self: &Arc<Self>, stream: TcpStream, from: SocketAddr, only_sync: bool) {
-        if on_local_network(from.ip(), &local_subnets()) {
-            self.take_call(stream, only_sync);
+        if from_local_network(from) {
+            self.take_call(stream, from.ip(), only_sync);
         }
     }
 
-    /// Opens the session on a connection someone made, and only then
-    /// takes the slot: the handshake has [`HANDSHAKE_TIMEOUT`] in all, and
-    /// at most [`MAX_HANDSHAKES`] go on at once. With `only_sync`, only one
-    /// of the user's devices gets that far: anyone else is turned away
-    /// right after the handshake, which it can't even finish without the
-    /// vault. So a connection that says nothing, or a stranger, holds up no
-    /// conversation.
-    fn take_call(self: &Arc<Self>, stream: TcpStream, only_sync: bool) {
+    /// Takes a connection someone made from `from`, and gives it the slot
+    /// only once its first steps are done: the handshake and the other's
+    /// `Hello`, in [`HANDSHAKE_TIMEOUT`] in all, with at most
+    /// [`MAX_HANDSHAKES`] at once on each port and
+    /// [`MAX_HANDSHAKES_PER_ADDRESS`] from one address. With `only_sync`,
+    /// only one of the user's devices gets that far: anyone else fails the
+    /// handshake, which needs the vault. So a connection that says nothing,
+    /// a stranger, or one computer opening many holds up no conversation.
+    fn take_call(self: &Arc<Self>, stream: TcpStream, from: IpAddr, only_sync: bool) {
         if self.lock().pairing.as_ref().is_some_and(Slot::active) {
             return;
         }
-        let Some(handshaking) = self.handshaking() else {
+        let Some(handshaking) = self.handshaking(only_sync, from) else {
             return;
         };
         let nearby = Arc::clone(self);
@@ -1002,14 +1009,25 @@ impl Nearby {
                 return;
             };
             let role = Role::Answers { only_sync };
-            let session = nearby.handshake(stream, &identity, &role);
+            let first = nearby.own_key_for(&role).and_then(|own| {
+                handshake_within(
+                    stream,
+                    &identity,
+                    &role,
+                    own.as_deref(),
+                    HANDSHAKE_TIMEOUT,
+                    |session| {
+                        if only_sync && !nearby.is_own(session.remote()) {
+                            return Err(PairingFailure::NotOwn);
+                        }
+                        session.recv().map_err(broken)
+                    },
+                )
+            });
             drop(handshaking);
-            let Ok(session) = session else {
+            let Ok((session, hello)) = first else {
                 return;
             };
-            if only_sync && !nearby.is_own(session.remote()) {
-                return;
-            }
             let kind = if only_sync {
                 ConversationKind::Sync
             } else {
@@ -1023,35 +1041,55 @@ impl Nearby {
             {
                 slot.socket = Some(socket);
             }
-            nearby.talk(id, session, &role, answers, &cancelled);
+            nearby.talk(id, session, &role, answers, &cancelled, Some(hello));
         });
     }
 
-    /// One of the [`MAX_HANDSHAKES`] connections whose handshake may go on,
-    /// if one is free.
-    fn handshaking(self: &Arc<Self>) -> Option<Handshaking> {
-        let handshaking = Handshaking(Arc::clone(self));
-        // Counted at once, so the count goes back down as it drops.
-        (self.handshakes.fetch_add(1, Ordering::SeqCst) < MAX_HANDSHAKES).then_some(handshaking)
+    /// A place for a connection from `from` in its first steps on the port
+    /// own devices use (`own`) or the other, if one is free.
+    fn handshaking(self: &Arc<Self>, own: bool, from: IpAddr) -> Option<Handshaking> {
+        self.handshakes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take(own, from)
+            .then(|| Handshaking {
+                nearby: Arc::clone(self),
+                own,
+                from,
+            })
     }
 
-    /// Opens the session on `stream` as `role` says, in at most
-    /// [`HANDSHAKE_TIMEOUT`]. A sync is only ever with one of the user's
-    /// devices: its handshake mixes in the key own devices have from the
-    /// vault, so a computer without it learns nothing from it.
+    /// The key own devices mix into the handshake for `role`, if it is
+    /// with one of them; a sync is only ever with one.
+    fn own_key_for(&self, role: &Role) -> Result<Option<Zeroizing<[u8; 32]>>, PairingFailure> {
+        match role {
+            Role::Connects(Goal::Sync) | Role::Answers { only_sync: true } => {
+                self.session_key().map(Some).ok_or(PairingFailure::NotOwn)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Opens the session on a connection this side made, as `role` says, in
+    /// at most [`HANDSHAKE_TIMEOUT`]. A sync is only ever with one of the
+    /// user's devices: its handshake mixes in the key own devices have from
+    /// the vault, so a computer without it learns nothing from it.
     fn handshake(
         &self,
         stream: TcpStream,
         identity: &Identity,
         role: &Role,
     ) -> Result<Session<TcpStream>, PairingFailure> {
-        let own = match role {
-            Role::Connects(Goal::Sync) | Role::Answers { only_sync: true } => {
-                Some(self.session_key().ok_or(PairingFailure::NotOwn)?)
-            }
-            _ => None,
-        };
-        handshake_within(stream, identity, role, own.as_deref(), HANDSHAKE_TIMEOUT)
+        let own = self.own_key_for(role)?;
+        handshake_within(
+            stream,
+            identity,
+            role,
+            own.as_deref(),
+            HANDSHAKE_TIMEOUT,
+            |_| Ok(()),
+        )
+        .map(|(session, ())| session)
     }
 
     /// The key own devices mix into their handshake, from the vault.
@@ -1160,7 +1198,7 @@ impl Nearby {
             return;
         }
         match self.handshake(stream, identity, role) {
-            Ok(session) => self.talk(id, session, role, answers, cancelled),
+            Ok(session) => self.talk(id, session, role, answers, cancelled, None),
             Err(reason) => {
                 let reason = if cancelled.load(Ordering::SeqCst) {
                     PairingFailure::Cancelled
@@ -1180,6 +1218,7 @@ impl Nearby {
         role: &Role,
         answers: Receiver<Answer>,
         cancelled: &Arc<AtomicBool>,
+        hello: Option<Message>,
     ) {
         let end = {
             let side = AppSide {
@@ -1197,8 +1236,10 @@ impl Nearby {
                 _ if sync && !side.is_own(session.remote()) => PairingPhase::Failed {
                     reason: PairingFailure::NotOwn,
                 },
-                Role::Connects(goal) => conversation(&mut session, &side, Some(goal.purpose())),
-                Role::Answers { .. } => conversation(&mut session, &side, None),
+                Role::Connects(goal) => {
+                    conversation_after(&mut session, &side, Some(goal.purpose()), hello)
+                }
+                Role::Answers { .. } => conversation_after(&mut session, &side, None, hello),
             }
         };
         let end = if cancelled.load(Ordering::SeqCst) && matches!(end, PairingPhase::Failed { .. })
@@ -1373,39 +1414,96 @@ enum Role {
     },
 }
 
-/// A connection in its handshake, counted while this lives.
-struct Handshaking(Arc<Nearby>);
+/// The connections in their first steps: on each port, and from each
+/// address.
+#[derive(Default)]
+struct Pending {
+    /// On the port others reach while this computer is visible (`0`), and
+    /// on the one the user's devices use (`1`).
+    ports: [usize; 2],
+    addresses: HashMap<IpAddr, usize>,
+}
 
-impl Drop for Handshaking {
-    fn drop(&mut self) {
-        self.0.handshakes.fetch_sub(1, Ordering::SeqCst);
+impl Pending {
+    /// Counts one more from `from` on the own devices' port (`own`) or the
+    /// other, if neither that port nor that address has all it may.
+    fn take(&mut self, own: bool, from: IpAddr) -> bool {
+        let port = &mut self.ports[usize::from(own)];
+        let address = self.addresses.entry(from).or_default();
+        if *port >= MAX_HANDSHAKES || *address >= MAX_HANDSHAKES_PER_ADDRESS {
+            if *address == 0 {
+                self.addresses.remove(&from);
+            }
+            return false;
+        }
+        *port += 1;
+        *address += 1;
+        true
+    }
+
+    /// One fewer, of those [`Self::take`] counted.
+    fn release(&mut self, own: bool, from: IpAddr) {
+        let port = &mut self.ports[usize::from(own)];
+        *port = port.saturating_sub(1);
+        if let Some(address) = self.addresses.get_mut(&from) {
+            *address = address.saturating_sub(1);
+            if *address == 0 {
+                self.addresses.remove(&from);
+            }
+        }
     }
 }
 
+/// A connection in its first steps, counted while this lives.
+struct Handshaking {
+    nearby: Arc<Nearby>,
+    own: bool,
+    from: IpAddr,
+}
+
+impl Drop for Handshaking {
+    fn drop(&mut self) {
+        self.nearby
+            .handshakes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .release(self.own, self.from);
+    }
+}
+
+/// Whether a connection from `from` is from the local network (see
+/// [`on_local_network`]): any other is closed at once.
+fn from_local_network(from: SocketAddr) -> bool {
+    on_local_network(from.ip(), &local_subnets())
+}
+
 /// Opens the session on `stream` as `role` says, with `own`, the key own
-/// devices mix in, if it is with one of them; all of it within `limit`
+/// devices mix in, if it is with one of them, and takes the next step
+/// (`then`, such as reading the other's `Hello`); all of it within `limit`
 /// ([`Deadline`]), so a peer that sends a byte now and then can't keep it
 /// going, as it could a read with a timeout of its own.
-fn handshake_within(
+fn handshake_within<T>(
     stream: TcpStream,
     identity: &Identity,
     role: &Role,
     own: Option<&[u8; 32]>,
     limit: Duration,
-) -> Result<Session<TcpStream>, PairingFailure> {
+    then: impl FnOnce(&mut Session<Deadline>) -> Result<T, PairingFailure>,
+) -> Result<(Session<TcpStream>, T), PairingFailure> {
     let stream = Deadline::new(stream, limit);
-    let session = match (role, own) {
+    let mut session = match (role, own) {
         (Role::Connects(_), None) => p2p::connect(stream, identity),
         (Role::Connects(_), Some(key)) => p2p::connect_own(stream, identity, key),
         (Role::Answers { .. }, None) => p2p::accept(stream, identity),
         (Role::Answers { .. }, Some(key)) => p2p::accept_own(stream, identity, key),
     }
     .map_err(|_| PairingFailure::Broken)?;
+    let next = then(&mut session)?;
     let session = session.map_stream(Deadline::into_inner);
     // The deadline left the timeouts of its last step: the usual ones now.
     let _ = session.stream().set_read_timeout(Some(IO_TIMEOUT));
     let _ = session.stream().set_write_timeout(Some(IO_TIMEOUT));
-    Ok(session)
+    Ok((session, next))
 }
 
 /// The pairing slot while it holds one pairing; empty for any other.
@@ -2013,63 +2111,191 @@ mod tests {
         assert!(!on_local_network(ip("127.0.0.2"), &[(ip("127.0.0.1"), 8)]));
     }
 
-    /// A stand-in for the other side: connected to, it says nothing at all.
-    fn silent_connections(n: usize) -> (Arc<Nearby>, Vec<TcpStream>) {
+    fn pending(nearby: &Nearby) -> (usize, usize) {
+        let pending = nearby.handshakes.lock().unwrap();
+        (pending.ports[0], pending.ports[1])
+    }
+
+    /// A stand-in for others: connected to, each says nothing at all; the
+    /// `n`-th comes from the address `from(n)`.
+    fn silent_connections(
+        n: usize,
+        from: impl Fn(usize) -> IpAddr,
+    ) -> (Arc<Nearby>, Vec<TcpStream>) {
         let nearby = Arc::new(Nearby::new(std::env::temp_dir().join("sshkm-no-nearby")));
         nearby.lock().identity = Some(Arc::new(Identity::generate().unwrap()));
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let mut clients = Vec::new();
-        for _ in 0..n {
+        for index in 0..n {
             clients.push(TcpStream::connect(listener.local_addr().unwrap()).unwrap());
             let (stream, _) = listener.accept().unwrap();
-            nearby.take_call(stream, false);
+            nearby.take_call(stream, from(index), false);
         }
         (nearby, clients)
     }
 
+    /// Whether the other end hung up.
+    fn closed(client: &mut TcpStream) -> bool {
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        std::io::Read::read(client, &mut [0; 1]).is_ok_and(|n| n == 0)
+    }
+
     #[test]
     fn a_connection_that_says_nothing_holds_up_no_conversation() {
-        let (nearby, mut clients) = silent_connections(MAX_HANDSHAKES + 2);
+        let address =
+            |index: usize| IpAddr::V4(Ipv4Addr::new(192, 168, 1, u8::try_from(index).unwrap()));
+        let (nearby, mut clients) = silent_connections(MAX_HANDSHAKES + 2, address);
         thread::sleep(Duration::from_millis(200));
         // None of them took the slot: the user can start one.
         assert_eq!(nearby.status().pairing, None);
         assert!(nearby.claim(true, ConversationKind::Pair).is_ok());
-        // Only so many wait for their handshake; the others were closed at
-        // once.
-        assert_eq!(nearby.handshakes.load(Ordering::SeqCst), MAX_HANDSHAKES);
-        let last = clients.last_mut().unwrap();
-        last.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        assert_eq!(std::io::Read::read(last, &mut [0; 1]).unwrap(), 0);
+        // Only so many wait for their first steps; the others were closed
+        // at once.
+        assert_eq!(pending(&nearby), (MAX_HANDSHAKES, 0));
+        assert!(closed(clients.last_mut().unwrap()));
+    }
+
+    #[test]
+    fn one_computer_cant_take_every_place_for_a_handshake() {
+        let one = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 66));
+        let (nearby, mut clients) = silent_connections(MAX_HANDSHAKES, |_| one);
+        thread::sleep(Duration::from_millis(200));
+        assert_eq!(pending(&nearby), (MAX_HANDSHAKES_PER_ADDRESS, 0));
+        assert!(closed(clients.last_mut().unwrap()));
+
+        // Each port has places of its own, and a place is given back.
+        let mut pending = Pending::default();
+        let other = |n: u8| IpAddr::V4(Ipv4Addr::new(10, 0, 0, n));
+        for n in 0..u8::try_from(MAX_HANDSHAKES).unwrap() {
+            assert!(pending.take(false, other(n)));
+        }
+        assert!(!pending.take(false, other(99)));
+        assert!(pending.take(true, other(99)));
+        pending.release(false, other(0));
+        assert!(pending.take(false, other(99)));
+        assert!(!pending.take(false, other(99)), "two from that address");
+        assert_eq!(pending.addresses.get(&other(0)), None);
+    }
+
+    #[test]
+    fn connections_from_beyond_the_local_network_are_closed_at_once() {
+        let nearby = Arc::new(Nearby::new(std::env::temp_dir().join("sshkm-no-nearby")));
+        nearby.lock().identity = Some(Arc::new(Identity::generate().unwrap()));
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        for (from, taken) in [
+            ("8.8.8.8:40000", false),
+            ("127.0.0.1:40000", false),
+            ("192.168.1.24:40000", true),
+        ] {
+            let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let (stream, _) = listener.accept().unwrap();
+            nearby.incoming(stream, from.parse().unwrap(), false);
+            assert_eq!(pending(&nearby).0 == 1, taken, "{from}");
+            if !taken {
+                assert!(closed(&mut client), "{from}");
+            }
+        }
+        // As the chats' port takes them.
+        assert!(!from_local_network("203.0.113.9:1".parse().unwrap()));
+        assert!(from_local_network("[fe80::1]:1".parse().unwrap()));
+    }
+
+    /// The answers of a handshake on a loopback connection: the side
+    /// connected to runs [`handshake_within`] as `role` with `own`, then
+    /// reads the other's first message; the other side runs `connect`.
+    fn first_steps<T: Send + 'static>(
+        role: &Role,
+        own: Option<[u8; 32]>,
+        connect: impl FnOnce(TcpStream) -> T + Send + 'static,
+    ) -> (Result<Message, PairingFailure>, T, Duration) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let other = thread::spawn(move || connect(client));
+        let started = Instant::now();
+        let first = handshake_within(
+            server,
+            &Identity::generate().unwrap(),
+            role,
+            own.as_ref(),
+            Duration::from_millis(300),
+            |session| session.recv().map_err(broken),
+        )
+        .map(|(_, hello)| hello);
+        let took = started.elapsed();
+        (first, other.join().unwrap(), took)
     }
 
     #[test]
     fn a_handshake_ends_when_its_time_is_up_however_slowly_bytes_come() {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-        let (server, _) = listener.accept().unwrap();
-        let started = Instant::now();
-        let handshake = thread::spawn(move || {
-            handshake_within(
-                server,
-                &Identity::generate().unwrap(),
-                &Role::Answers { only_sync: false },
-                None,
-                Duration::from_millis(300),
-            )
-            .is_err()
-        });
         // A frame of 65535 bytes announced, then a byte every 100 ms: each
         // read is quick, the whole never ends.
-        thread::spawn(move || {
-            for _ in 0..50 {
-                if std::io::Write::write_all(&mut client, &[0xff]).is_err() {
-                    break;
+        let (first, (), took) =
+            first_steps(&Role::Answers { only_sync: false }, None, |mut client| {
+                for _ in 0..50 {
+                    if std::io::Write::write_all(&mut client, &[0xff]).is_err() {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(100));
                 }
-                thread::sleep(Duration::from_millis(100));
-            }
+            });
+        assert!(first.is_err());
+        assert!(took < Duration::from_secs(2));
+
+        // A peer that finishes the handshake and then says nothing: its
+        // `Hello` falls under the same deadline.
+        let (first, _session, took) =
+            first_steps(&Role::Answers { only_sync: false }, None, |client| {
+                let session = p2p::connect(client, &Identity::generate().unwrap()).unwrap();
+                thread::sleep(Duration::from_millis(800));
+                session.remote()
+            });
+        assert!(first.is_err());
+        assert!(took < Duration::from_millis(700));
+
+        // One that says hello in time is through.
+        let (first, (), _) = first_steps(&Role::Answers { only_sync: false }, None, |client| {
+            let mut session = p2p::connect(client, &Identity::generate().unwrap()).unwrap();
+            session.send(&hello()).unwrap();
         });
-        assert!(handshake.join().unwrap());
-        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(first.unwrap(), hello());
+    }
+
+    fn hello() -> Message {
+        Message::Hello {
+            version: p2p::protocol::VERSION,
+            name: "peer".into(),
+            known: false,
+            own: None,
+            features: Vec::new(),
+        }
+    }
+
+    /// The port the user's devices use takes only a handshake that mixes in
+    /// the key from the vault.
+    #[test]
+    fn the_own_devices_port_takes_only_their_handshake() {
+        let key = [9; 32];
+        let own = Role::Answers { only_sync: true };
+        let (first, (), _) = first_steps(&own, Some(key), move |client| {
+            let mut session =
+                p2p::connect_own(client, &Identity::generate().unwrap(), &key).unwrap();
+            session.send(&hello()).unwrap();
+        });
+        assert_eq!(first.unwrap(), hello());
+        for stranger in [None, Some([8; 32])] {
+            let own = Role::Answers { only_sync: true };
+            let (first, connected, _) = first_steps(&own, Some(key), move |client| {
+                let identity = Identity::generate().unwrap();
+                match stranger {
+                    None => p2p::connect(client, &identity).is_ok(),
+                    Some(other) => p2p::connect_own(client, &identity, &other).is_ok(),
+                }
+            });
+            assert!(first.is_err() && !connected);
+        }
     }
 
     #[test]

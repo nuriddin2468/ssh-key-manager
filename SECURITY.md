@@ -1044,9 +1044,11 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   pairing needs it unlocked. A computer that was a contact already keeps the name it
   has here when the two pair again.
 - **One at a time.** While a pairing, an adding or a sync goes on, other connections
-  are closed at once. A connection takes that one place only after its handshake,
-  which has ten seconds in all however slowly its bytes come, and at most four
-  handshakes go on at once: a connection that says nothing holds up nothing.
+  are closed at once. A connection takes that one place only after its first steps,
+  the handshake and the other side's `Hello`, which have ten seconds in all however
+  slowly the bytes come. At most four connections take their first steps at once on
+  each port, at most two of them from one address: a connection that says nothing,
+  or one computer opening many, holds up nothing.
   The users have three minutes to compare the codes.
 - **Sending.** After pairing, or straight away between contacts, the side that
   connected may send one item: a vault entry, a secret environment, a host, a hosts
@@ -1172,7 +1174,9 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   one sends anything, its device key included. On that port only a sync is taken,
   and only from a device that is one of the user's and proves it has the vault.
   Devices on versions before this handshake can't sync with this one until they are
-  updated.
+  updated. A computer the user removed from their devices still has that key, as it
+  has the vault: it gets through the handshake, and is turned away right after it as
+  no longer one of the user's devices, until a new recovery key replaces the key.
 - **Syncing hosts.** Only `Host` blocks for single names go: never `Match`, `Host *`
   and other patterns, options before the first block or `Include`. A block goes
   without what belongs to the computer (`IdentityFile`, `CertificateFile`,

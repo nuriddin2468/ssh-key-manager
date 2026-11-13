@@ -361,12 +361,24 @@ pub fn conversation(
     side: &impl Side,
     purpose: Option<Purpose<'_>>,
 ) -> PairingPhase {
+    conversation_after(session, side, purpose, None)
+}
+
+/// [`conversation`], the other side's `Hello` read already (`hello`), on
+/// the side that was connected to: it reads that before the conversation
+/// takes its place, under the deadline of the handshake.
+pub fn conversation_after(
+    session: &mut Session<TcpStream>,
+    side: &impl Side,
+    purpose: Option<Purpose<'_>>,
+    hello: Option<Message>,
+) -> PairingPhase {
     let intent = match purpose {
         Some(Purpose::AddDevice) => Some(Intent::AddDevice),
         Some(Purpose::Sync) => Some(Intent::Sync),
         _ => None,
     };
-    let met = match meet(session, side, intent) {
+    let met = match meet(session, side, intent, hello) {
         Ok(met) => met,
         Err(reason) => return PairingPhase::Failed { reason },
     };
@@ -407,6 +419,7 @@ fn meet(
     session: &mut Session<TcpStream>,
     side: &impl Side,
     intent: Option<Intent>,
+    hello: Option<Message>,
 ) -> Result<Met, PairingFailure> {
     let peer_key = session.remote();
     let initiator = session.is_initiator();
@@ -429,7 +442,10 @@ fn meet(
         known: they_know,
         own: theirs,
         features: their_features,
-    } = their_hello(session)?;
+    } = match hello {
+        Some(message) => hello_of(message)?,
+        None => hello_of(session.recv().map_err(broken)?)?,
+    };
     let announced = Some(clean_name(&name)).filter(|name| !name.is_empty());
     let peer_name = announced.clone().unwrap_or_else(|| "?".to_owned());
     // A device this side knows goes by the name it keeps for it, since any
@@ -516,9 +532,9 @@ struct Hello {
     features: Vec<String>,
 }
 
-/// Reads the other side's `Hello`, of this version.
-fn their_hello(session: &mut Session<TcpStream>) -> Result<Hello, PairingFailure> {
-    match session.recv().map_err(broken)? {
+/// The other side's `Hello`, of this version, from its first message.
+fn hello_of(message: Message) -> Result<Hello, PairingFailure> {
+    match message {
         Message::Hello {
             version,
             name,

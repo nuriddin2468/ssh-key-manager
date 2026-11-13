@@ -1081,6 +1081,7 @@ impl Nearby {
         self.ask(&super::prompt::naming_code_running(
             prompt::send_variables(&self.peer_name(&peer), &label, &picked),
             &risky,
+            super::prompt::CodeVars::Picked,
         ))?;
         let frame = ChatFrame::Variables {
             id: new_id(),
@@ -1101,6 +1102,7 @@ impl Nearby {
         let state = self.state()?;
         let item = items::build(&state, self.app()?, request)?;
         let features = self.link_to(&peer)?;
+        let left_out = item.left_out_for(&features);
         let item = item.for_peer(&features);
         if let Some(needed) = item.requires()
             && !features.iter().any(|feature| feature == needed)
@@ -1111,7 +1113,7 @@ impl Nearby {
             ));
         }
         let summary = item.summary();
-        if let Some(prompt) = super::prompt::send_item(&self.peer_name(&peer), &item) {
+        if let Some(prompt) = super::prompt::send_item(&self.peer_name(&peer), &item, &left_out) {
             self.ask(&prompt)?;
         }
         let id = new_id();

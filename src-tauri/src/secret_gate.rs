@@ -70,46 +70,100 @@ pub fn confirm_env_secrets(
     env: &str,
     to: &EnvUse<'_>,
 ) -> AppResult<()> {
-    let (label, secrets, code) = state.vault.with(app, |vault| {
+    gate_env(app, state, env, to).map(drop)
+}
+
+/// [`confirm_env_secrets`] before a shell gets the environment `env`:
+/// returns its variables as they were when the dialog was shown (or, with
+/// no dialog, when they were read). The shell gets exactly those, so a
+/// change made while the dialog is open never goes in unseen; it is asked
+/// about the next time.
+pub fn confirm_shell_env(app: &AppHandle, state: &AppState, env: &str) -> AppResult<Vec<EnvVar>> {
+    gate_env(app, state, env, &EnvUse::Shell)
+}
+
+/// Reads `env` once and asks about it as [`gate`] does, in a native dialog.
+fn gate_env(
+    app: &AppHandle,
+    state: &AppState,
+    env: &str,
+    to: &EnvUse<'_>,
+) -> AppResult<Vec<EnvVar>> {
+    let read = state.vault.with(app, |vault| {
         let summary = vault.environment(env)?.summary;
-        // In a shell, the variables that make it, or a program it starts,
-        // run code are named with their values, secret or not.
-        let code: Vec<CodeVar> = match to {
+        // A shell gets every variable; those that make it, or a program it
+        // starts, run code are named with their values, secret or not.
+        let vars = match to {
             EnvUse::Shell => vault
                 .env_variables(env)?
                 .into_iter()
-                .filter(|var| envs::runs_code(&var.name))
                 .map(|var| (var.name, var.value))
                 .collect(),
             EnvUse::File(_) => Vec::new(),
         };
-        Ok((
-            envs::label(Some(&vault.env_label(&summary)), &summary.name),
-            summary.secret_count,
-            code,
-        ))
+        Ok(EnvRead {
+            label: envs::label(Some(&vault.env_label(&summary)), &summary.name),
+            secrets: summary.secret_count,
+            vars,
+        })
     })?;
-    if secrets == 0 && code.is_empty() {
-        return Ok(());
-    }
     WATCH_LOCK.call_once(|| {
         for event in [crate::vault::LOCKED_EVENT, crate::vault::UNLOCKED_EVENT] {
             app.listen_any(event, |_| let_out().forget());
         }
     });
+    gate(
+        &LET_OUT,
+        &to.key(env),
+        read,
+        to,
+        |(title, body, approve)| confirm::require(app, &title, &body, &approve),
+    )
+}
+
+/// An environment as one read of the vault found it, for [`gate`].
+struct EnvRead {
+    /// Its label, as the dialog names it.
+    label: String,
+    /// How many of its values are secret.
+    secrets: u32,
+    /// Its variables, for a shell; none for a file.
+    vars: Vec<EnvVar>,
+}
+
+/// Asks with `ask` before `read`'s values go `to` where they go (`key`
+/// names the environment and use), unless it has neither secret values nor
+/// variables that run code, or a yes for it, and for those variables as
+/// they are, was kept in `let_out`. Returns `read`'s variables: what the
+/// question was about, never a later read.
+fn gate(
+    let_out: &Mutex<LetOut>,
+    key: &str,
+    read: EnvRead,
+    to: &EnvUse<'_>,
+    ask: impl FnOnce((Localized, Localized, Localized)) -> AppResult<()>,
+) -> AppResult<Vec<EnvVar>> {
+    let code: Vec<CodeVar> = read
+        .vars
+        .iter()
+        .filter(|(name, _)| envs::runs_code(name))
+        .cloned()
+        .collect();
+    if read.secrets == 0 && code.is_empty() {
+        return Ok(read.vars);
+    }
     // Asked again once those variables changed, names or values.
-    let key = code_key(&to.key(env), &code);
-    let Some(asked) = let_out().ask(&key) else {
-        return Ok(());
-    };
-    let (title, body, approve) = if code.is_empty() {
-        env_question(&label, secrets, to)
-    } else {
-        code_question(&label, secrets, &code)
-    };
-    confirm::require(app, &title, &body, &approve)?;
-    let_out().record(&key, asked);
-    Ok(())
+    let key = code_key(key, &code);
+    let asked = lock(let_out).ask(&key);
+    if let Some(asked) = asked {
+        ask(if code.is_empty() {
+            env_question(&read.label, read.secrets, to)
+        } else {
+            code_question(&read.label, read.secrets, &code)
+        })?;
+        lock(let_out).record(&key, asked);
+    }
+    Ok(read.vars)
 }
 
 /// The dialog's title, text and button: the environment, as its label names
@@ -186,9 +240,12 @@ fn env_question(label: &str, secrets: u32, to: &EnvUse<'_>) -> (Localized, Local
     }
 }
 
+/// An environment's variable as a shell gets it: its name and value.
+pub type EnvVar = (String, SecretString);
+
 /// A variable that makes a shell, or a program it starts, run code
 /// ([`envs::runs_code`]): its name and value.
-type CodeVar = (String, SecretString);
+type CodeVar = EnvVar;
 
 /// Most such variables a dialog lists.
 const SHOWN_CODE_VARS: usize = 12;
@@ -348,7 +405,11 @@ impl LetOut {
 }
 
 fn let_out() -> MutexGuard<'static, LetOut> {
-    LET_OUT.lock().unwrap_or_else(PoisonError::into_inner)
+    lock(&LET_OUT)
+}
+
+fn lock(let_out: &Mutex<LetOut>) -> MutexGuard<'_, LetOut> {
+    let_out.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 // --- Single secrets -----------------------------------------------------------
@@ -581,6 +642,8 @@ impl Bucket {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::AppError;
+    use sshkm_core::ErrorCode;
 
     #[test]
     fn an_environment_is_asked_for_once_per_use_until_the_vault_locks() {
@@ -647,6 +710,67 @@ mod tests {
             body.en
                 .contains("“prod<U+000A><U+000A>You were asked already<U+202E>”")
         );
+    }
+
+    fn value<'a>(vars: &'a [EnvVar], name: &str) -> &'a str {
+        vars.iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, value)| value.expose_secret())
+            .unwrap()
+    }
+
+    #[test]
+    fn a_shell_gets_the_variables_the_user_was_shown() {
+        let let_out = Mutex::new(LetOut::new());
+        let vault = Mutex::new(code(&[
+            ("NODE_OPTIONS", "--max-old-space-size=4096"),
+            ("API_URL", "https://api.example"),
+        ]));
+        let read = || EnvRead {
+            label: "Shop · prod".into(),
+            secrets: 0,
+            vars: vault.lock().unwrap().clone(),
+        };
+        let key = EnvUse::Shell.key("env-1");
+        // The environment changes while the dialog is open.
+        let vars = gate(&let_out, &key, read(), &EnvUse::Shell, |(_, body, _)| {
+            assert!(body.en.contains("NODE_OPTIONS=--max-old-space-size=4096"));
+            vault.lock().unwrap()[0].1 = SecretString::from("--require /tmp/x.js");
+            Ok(())
+        })
+        .unwrap();
+        // The shell gets what was shown, not the change.
+        assert_eq!(value(&vars, "NODE_OPTIONS"), "--max-old-space-size=4096");
+        assert_eq!(vars.len(), 2);
+
+        // The next shell is asked about the change; a no starts none.
+        let mut shown = None;
+        let refused = gate(&let_out, &key, read(), &EnvUse::Shell, |(_, body, _)| {
+            shown = Some(body.en);
+            Err(AppError::new(ErrorCode::Cancelled, "not approved"))
+        });
+        assert!(refused.is_err());
+        assert!(shown.unwrap().contains("NODE_OPTIONS=--require /tmp/x.js"));
+
+        // Back as it was approved: no question, and the shell gets it.
+        vault.lock().unwrap()[0].1 = SecretString::from("--max-old-space-size=4096");
+        let vars = gate(&let_out, &key, read(), &EnvUse::Shell, |_| {
+            panic!("asked again for what was approved")
+        })
+        .unwrap();
+        assert_eq!(value(&vars, "NODE_OPTIONS"), "--max-old-space-size=4096");
+
+        // Without secrets or such variables, nothing is asked.
+        let plain = EnvRead {
+            label: "dev".into(),
+            secrets: 0,
+            vars: code(&[("API_URL", "https://api.example")]),
+        };
+        let vars = gate(&let_out, "shell:env-2", plain, &EnvUse::Shell, |_| {
+            panic!("asked for an environment without secrets or code")
+        })
+        .unwrap();
+        assert_eq!(value(&vars, "API_URL"), "https://api.example");
     }
 
     fn code(vars: &[(&str, &str)]) -> Vec<CodeVar> {
@@ -740,10 +864,7 @@ mod tests {
             if yes {
                 Ok(())
             } else {
-                Err(crate::error::AppError::new(
-                    sshkm_core::ErrorCode::Cancelled,
-                    "not approved",
-                ))
+                Err(AppError::new(ErrorCode::Cancelled, "not approved"))
             }
         });
         (asked, result.is_ok())

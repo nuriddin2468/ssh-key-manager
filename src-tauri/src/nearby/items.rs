@@ -175,16 +175,18 @@ pub fn build(state: &AppState, app: &AppHandle, request: &SendRequest) -> AppRes
             })
         })?,
     };
-    let item = with_server(&state.paths, item);
+    let item = with_server(item, |alias| resolve_server(&state.paths, alias));
     item.check()
         .map_err(|error| AppError::invalid(format!("it can't be sent as it is: {error}")))?;
     Ok(item)
 }
 
-/// `item`, and if it is a server's password, where its alias leads here,
-/// which the receiver holds against its own hosts. Without that, it goes
-/// for no host, so no version binds it to a name that leads elsewhere there.
-fn with_server(paths: &SshPaths, item: Item) -> Item {
+/// `item`, and if it is a server's password, where its alias leads here
+/// (`resolve`, [`resolve_server`]), which the receiver holds against its
+/// own hosts. Without that, or without a server key trusted here to know
+/// the server by, it goes for no host: no version binds it to a name that
+/// leads elsewhere there, and none shows a host it can't be saved for.
+fn with_server(item: Item, resolve: impl Fn(&str) -> Option<Server>) -> Item {
     match item {
         Item::Password {
             host: Some(alias),
@@ -196,7 +198,7 @@ fn with_server(paths: &SshPaths, item: Item) -> Item {
             otp,
             ..
         } => {
-            let server = resolve_server(paths, &alias);
+            let server = resolve(&alias).filter(|server| !server.host_keys.is_empty());
             Item::Password {
                 host: server.is_some().then_some(alias),
                 server,
@@ -1346,6 +1348,36 @@ mod tests {
         }
         assert_eq!(entry(&bound, None), (EntryKind::Login, None));
         assert!(received_login(&Item::Unknown, Some(&config), resolve).is_none());
+    }
+
+    #[test]
+    fn a_servers_password_goes_for_its_host_only_with_a_server_key_trusted_here() {
+        let keyless = || Server {
+            host_keys: Vec::new(),
+            ..server("deploy", "10.0.4.12", 22)
+        };
+        let sent = |resolve: &dyn Fn(&str) -> Option<Server>| {
+            with_server(login(Some("prod"), None), resolve)
+        };
+        assert_eq!(
+            sent(&|_| Some(server("deploy", "10.0.4.12", 22))),
+            login(Some("prod"), Some(server("deploy", "10.0.4.12", 22)))
+        );
+        // No key trusted here for it, or nowhere it leads: for no host, and
+        // the summary names none, so no card shows a host it can't go to.
+        for resolve in [
+            &(|_: &str| Some(keyless())) as &dyn Fn(&str) -> Option<Server>,
+            &|_| None,
+        ] {
+            let item = sent(resolve);
+            assert_eq!(item, login(None, None));
+            let ItemSummary::Password { host, server, .. } = item.summary() else {
+                panic!("a password");
+            };
+            assert_eq!((host, server), (None, None));
+        }
+        // Other items go as they are.
+        assert_eq!(with_server(Item::Unknown, |_| None), Item::Unknown);
     }
 
     #[test]

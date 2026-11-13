@@ -307,8 +307,9 @@ pub trait Side {
     }
     /// Whether this user allows, in a system dialog that a script in the
     /// page can't answer, sending `item`, which holds a secret, to the
-    /// other side.
-    fn allow_send(&self, _item: &Item) -> bool {
+    /// other side, as it goes: without the variables named in `left_out`,
+    /// which the other side's version would set without asking.
+    fn allow_send(&self, _item: &Item, _left_out: &[String]) -> bool {
         false
     }
     /// The other side hung up after this side gave it what it needs to work

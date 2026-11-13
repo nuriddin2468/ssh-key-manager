@@ -20,15 +20,34 @@ const SHOWN_NAMES: usize = 12;
 
 /// The dialog before `item` leaves for `peer` (the one chats ask in), if it
 /// holds a secret, naming the variables among it that make programs run
-/// code.
-pub fn send_item(peer: &str, item: &Item) -> Option<Prompt> {
-    super::chat::prompt::send_item(peer, &item.summary())
-        .map(|prompt| naming_code_running(prompt, &item.code_running()))
+/// code, and those left out of it for a peer whose version would set them
+/// without asking (`left_out`, [`Item::left_out_for`]).
+pub fn send_item(peer: &str, item: &Item, left_out: &[String]) -> Option<Prompt> {
+    super::chat::prompt::send_item(peer, &item.summary()).map(|prompt| {
+        let prompt = naming_code_running(prompt, &item.code_running(), CodeVars::LeftOut);
+        naming_code_running(prompt, left_out, CodeVars::Kept)
+    })
+}
+
+/// What becomes of variables that make programs run code, as a dialog
+/// that sends them says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodeVars {
+    /// They go, and the other computer leaves them out and names them: a
+    /// whole environment.
+    LeftOut,
+    /// They go, and the other computer leaves them out unless its user
+    /// picks them: variables sent in a chat.
+    Picked,
+    /// They stay here: the other computer's version would set them without
+    /// asking.
+    Kept,
 }
 
 /// `prompt`, which sends variables, saying which of them (`names`) make
-/// programs run code wherever they are set.
-pub fn naming_code_running(mut prompt: Prompt, names: &[String]) -> Prompt {
+/// programs run code wherever they are set, and what becomes of them
+/// (`fate`).
+pub fn naming_code_running(mut prompt: Prompt, names: &[String], fate: CodeVars) -> Prompt {
     if names.is_empty() {
         return prompt;
     }
@@ -44,21 +63,56 @@ pub fn naming_code_running(mut prompt: Prompt, names: &[String]) -> Prompt {
     let en = joined(format!("and {more} more"));
     let ru = joined(format!("и ещё {more}"));
     let uz = joined(format!("va yana {more} ta"));
-    let _ = write!(
-        prompt.body.en,
-        "\n\nThese make programs run code wherever they are set: {en}. The other computer \
-         leaves them out unless its user picks them."
-    );
-    let _ = write!(
-        prompt.body.ru,
-        "\n\nЭти переменные заставляют программы выполнять код везде, где они заданы: {ru}. \
-         Другой компьютер не добавит их, если там их не выберут."
-    );
-    let _ = write!(
-        prompt.body.uz,
-        "\n\nBu oʻzgaruvchilar qayerda berilsa, dasturlarni kod bajarishga majbur qiladi: \
-         {uz}. Boshqa kompyuter ularni u yerda tanlanmasa qoʻshmaydi."
-    );
+    let (en, ru, uz) = match fate {
+        CodeVars::LeftOut => (
+            format!(
+                "These make programs run code wherever they are set: {en}. The other computer \
+                 leaves them out and shows their names."
+            ),
+            format!(
+                "Эти переменные заставляют программы выполнять код везде, где они заданы: {ru}. \
+                 Другой компьютер не добавит их и покажет их имена."
+            ),
+            format!(
+                "Bu oʻzgaruvchilar qayerda berilsa, dasturlarni kod bajarishga majbur qiladi: \
+                 {uz}. Boshqa kompyuter ularni qoʻshmaydi va nomlarini koʻrsatadi."
+            ),
+        ),
+        CodeVars::Picked => (
+            format!(
+                "These make programs run code wherever they are set: {en}. The other computer \
+                 leaves them out unless its user picks them."
+            ),
+            format!(
+                "Эти переменные заставляют программы выполнять код везде, где они заданы: {ru}. \
+                 Другой компьютер не добавит их, если там их не выберут."
+            ),
+            format!(
+                "Bu oʻzgaruvchilar qayerda berilsa, dasturlarni kod bajarishga majbur qiladi: \
+                 {uz}. Boshqa kompyuter ularni u yerda tanlanmasa qoʻshmaydi."
+            ),
+        ),
+        CodeVars::Kept => (
+            format!(
+                "These make programs run code wherever they are set, so they stay on this \
+                 computer: {en}. The other computer has an older version of the app, which \
+                 would set them without asking."
+            ),
+            format!(
+                "Эти переменные заставляют программы выполнять код везде, где они заданы, \
+                 поэтому они останутся на этом компьютере: {ru}. На другом компьютере старая \
+                 версия приложения, которая задала бы их без вопроса."
+            ),
+            format!(
+                "Bu oʻzgaruvchilar qayerda berilsa, dasturlarni kod bajarishga majbur qiladi, \
+                 shuning uchun ular shu kompyuterda qoladi: {uz}. Boshqa kompyuterda ilovaning \
+                 eski versiyasi bor, u ularni soʻramasdan oʻrnatgan boʻlardi."
+            ),
+        ),
+    };
+    let _ = write!(prompt.body.en, "\n\n{en}");
+    let _ = write!(prompt.body.ru, "\n\n{ru}");
+    let _ = write!(prompt.body.uz, "\n\n{uz}");
     prompt
 }
 
@@ -315,14 +369,32 @@ mod tests {
             notes: String::new(),
             variables: vec![var("PORT"), var("NODE_OPTIONS"), var("path")],
         };
-        let prompt = send_item("Carol", &item).unwrap();
-        assert!(
-            prompt.body.en.contains(
-                "These make programs run code wherever they are set: NODE_OPTIONS, path."
-            )
-        );
+        // To a version that leaves them out where they arrive.
+        let features = sshkm_core::p2p::protocol::features();
+        let left_out = item.left_out_for(&features);
+        let sent = item.clone().for_peer(&features);
+        let prompt = send_item("Carol", &sent, &left_out).unwrap();
+        assert!(prompt.body.en.contains(
+            "These make programs run code wherever they are set: NODE_OPTIONS, path. The other \
+             computer leaves them out and shows their names."
+        ));
         assert!(prompt.body.ru.contains("NODE_OPTIONS, path"));
         assert!(prompt.body.uz.contains("NODE_OPTIONS, path"));
+        assert!(!prompt.body.en.contains("older version"));
+
+        // To an older version, which would set them without asking: they
+        // stay here, and the dialog says so.
+        let left_out = item.left_out_for(&[]);
+        let sent = item.clone().for_peer(&[]);
+        let prompt = send_item("Carol", &sent, &left_out).unwrap();
+        assert!(prompt.body.en.contains(
+            "These make programs run code wherever they are set, so they stay on this \
+             computer: NODE_OPTIONS, path. The other computer has an older version of the app"
+        ));
+        assert!(!prompt.body.en.contains("shows their names"));
+        assert!(prompt.body.ru.contains("NODE_OPTIONS, path"));
+        assert!(prompt.body.uz.contains("NODE_OPTIONS, path"));
+
         // None among them: the dialog as chats have it.
         let plain = Item::Environment {
             project: "Shop".into(),
@@ -331,7 +403,7 @@ mod tests {
             variables: vec![var("PORT")],
         };
         assert!(
-            !send_item("Carol", &plain)
+            !send_item("Carol", &plain, &[])
                 .unwrap()
                 .body
                 .en
@@ -339,8 +411,11 @@ mod tests {
         );
         let many: Vec<String> = (0..14).map(|n| format!("GIT_CONFIG_KEY_{n}")).collect();
         let empty = super::super::chat::prompt::send_variables("Carol", "dev", &many);
-        let prompt = naming_code_running(empty, &many);
-        assert!(prompt.body.en.contains("GIT_CONFIG_KEY_11, and 2 more."));
+        let prompt = naming_code_running(empty, &many, CodeVars::Picked);
+        assert!(prompt.body.en.contains(
+            "GIT_CONFIG_KEY_11, and 2 more. The other computer leaves them out unless its user \
+             picks them."
+        ));
     }
 
     #[test]

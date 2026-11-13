@@ -58,8 +58,14 @@ pub const PERSONAL_ENV: &str = "personal-env/1";
 /// ([`Item::for_peer`]): older versions would bind it to the sender's alias
 /// whatever it leads to there.
 pub const SERVER_PASSWORD: &str = "server-password/1";
+/// An environment's variables that make programs run code
+/// ([`crate::vault::envs::runs_code`]) are left out where it arrives, and
+/// named. A peer without it gets the environment without them
+/// ([`Item::for_peer`]): older versions save them, and set them in a shell
+/// without asking.
+pub const ENV_CODE_VARS: &str = "env-code-vars/1";
 /// What this version can do beyond version 1, as its `Hello` says.
-pub const FEATURES: &[&str] = &[CHAT, PERSONAL_ENV, SERVER_PASSWORD];
+pub const FEATURES: &[&str] = &[CHAT, PERSONAL_ENV, SERVER_PASSWORD, ENV_CODE_VARS];
 
 /// [`FEATURES`], as a `Hello` carries them.
 pub fn features() -> Vec<String> {
@@ -534,9 +540,11 @@ impl Item {
                 server,
                 ..
             } => {
-                // A host without where it leads is saved for none, so the
-                // summary names none either, as an older version's does.
-                let (host, server) = host.clone().zip(server.clone()).unzip();
+                // A host without where it leads, or without a server key
+                // to know the server by, is saved for none, so the summary
+                // names none either, as an older version's does.
+                let server = server.clone().filter(|server| !server.host_keys.is_empty());
+                let (host, server) = host.clone().zip(server).unzip();
                 ItemSummary::Password {
                     title: title.clone(),
                     username: username.clone(),
@@ -644,13 +652,41 @@ impl Item {
         }
     }
 
+    /// The names of the variables [`Self::for_peer`] leaves out for a peer
+    /// whose `Hello` named `features`: those that run code
+    /// ([`Self::code_running`]), for one without [`ENV_CODE_VARS`].
+    pub fn left_out_for(&self, features: &[String]) -> Vec<String> {
+        if features.iter().any(|feature| feature == ENV_CODE_VARS) {
+            Vec::new()
+        } else {
+            self.code_running()
+        }
+    }
+
     /// The item as it goes to a peer whose `Hello` named `features`: a
     /// server's password to one without [`SERVER_PASSWORD`] goes for no
     /// host, since it would bind it to the alias whatever that leads to
-    /// there.
+    /// there; an environment to one without [`ENV_CODE_VARS`] goes without
+    /// its variables that run code ([`Self::left_out_for`]), since it would
+    /// save them and set them in a shell without asking.
     #[must_use]
     pub fn for_peer(self, features: &[String]) -> Self {
+        let left_out = self.left_out_for(features);
         match self {
+            Self::Environment {
+                project,
+                name,
+                notes,
+                variables,
+            } if !left_out.is_empty() => Self::Environment {
+                project,
+                name,
+                notes,
+                variables: variables
+                    .into_iter()
+                    .filter(|var| !left_out.contains(&var.name))
+                    .collect(),
+            },
             Self::Password {
                 title,
                 username,
@@ -1135,7 +1171,7 @@ mod tests {
         let json = serde_json::to_string(&hello).unwrap();
         assert_eq!(
             json,
-            r#"{"type":"hello","version":1,"name":"MacBook","known":true,"features":["chat/1","personal-env/1","server-password/1"]}"#
+            r#"{"type":"hello","version":1,"name":"MacBook","known":true,"features":["chat/1","personal-env/1","server-password/1","env-code-vars/1"]}"#
         );
         assert_eq!(serde_json::from_str::<Message>(&json).unwrap(), hello);
         // An older version reads it as it always did, and its Hello has none.
@@ -1312,6 +1348,13 @@ mod tests {
         // host: it is saved for none, and its summary is an older one's.
         let older = servers_password(None);
         assert_eq!(older.summary(), password().summary());
+        // Nor without a server key to know the server by: it can't bind.
+        let mut keyless = server();
+        keyless.host_keys.clear();
+        assert_eq!(
+            servers_password(Some(keyless)).summary(),
+            password().summary()
+        );
         let json = r#"{"type":"password","title":"prod DB","username":"deploy","url":"https://db.example.com","otp":false}"#;
         assert_eq!(
             serde_json::from_str::<ItemSummary>(json).unwrap(),
@@ -1700,6 +1743,25 @@ mod tests {
         assert!(item.check().is_ok());
         assert_eq!(item.code_running(), ["NODE_OPTIONS", "path"]);
         assert_eq!(host().code_running(), Vec::<String>::new());
+
+        // A peer that leaves them out where they arrive gets them all.
+        assert_eq!(item.left_out_for(&features()), Vec::<String>::new());
+        assert_eq!(item.clone().for_peer(&features()), item);
+        // One that doesn't (an older version would set them without asking)
+        // gets the environment without them, and they are named.
+        for older in [
+            Vec::new(),
+            vec![CHAT.to_owned(), SERVER_PASSWORD.to_owned()],
+        ] {
+            assert_eq!(item.left_out_for(&older), ["NODE_OPTIONS", "path"]);
+            let Item::Environment { variables, .. } = item.clone().for_peer(&older) else {
+                panic!("an environment");
+            };
+            let names: Vec<&str> = variables.iter().map(|var| var.name.as_str()).collect();
+            assert_eq!(names, ["PORT", "GIT_AUTHOR_NAME"]);
+        }
+        assert_eq!(environment().for_peer(&[]), environment());
+        assert_eq!(host().left_out_for(&[]), Vec::<String>::new());
     }
 
     #[test]

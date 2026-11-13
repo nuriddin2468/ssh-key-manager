@@ -72,13 +72,18 @@ pub fn send(
         }
     }
     // As the other side can take it: a server's password goes for no host
-    // to a version that would bind it to whatever the alias leads to there.
+    // to a version that would bind it to whatever the alias leads to
+    // there, and an environment without its variables that run code to one
+    // that would set them without asking.
+    let left_out = item.left_out_for(features);
     let item = &item.clone().for_peer(features);
     let summary = item.summary();
     // A secret goes only after this user's yes in a system dialog that
-    // names the device it goes to: what the page says (that the codes
-    // match, which device was picked) is never enough for one.
-    if matches!(item, Item::Password { .. } | Item::Environment { .. }) && !side.allow_send(item) {
+    // names the device it goes to, and what stays here: what the page says
+    // (that the codes match, which device was picked) is never enough.
+    if matches!(item, Item::Password { .. } | Item::Environment { .. })
+        && !side.allow_send(item, &left_out)
+    {
         return PairingPhase::Failed {
             reason: PairingFailure::Cancelled,
         };
@@ -531,12 +536,15 @@ mod tests {
         left.knows = true;
         let mut right = Script::new("bob", Some(true));
         right.knows = true;
-        let ((left_end, _), (right_end, _)) = run(left, right, Some(&item));
+        let ((left_end, left), (right_end, right)) = run(left, right, Some(&item));
         assert!(matches!(left_end, PairingPhase::Sent { .. }));
         let PairingPhase::Received { left_out, .. } = right_end else {
             panic!("not received: {right_end:?}")
         };
         assert_eq!(left_out, ["NODE_OPTIONS", "BASH_ENV"]);
+        // To this version they go, and the send dialog keeps none here.
+        assert_eq!(*right.stored.lock().unwrap(), [item]);
+        assert_eq!(*left.asked_left_out.lock().unwrap(), [Vec::<String>::new()]);
     }
 
     #[test]
@@ -700,6 +708,62 @@ mod tests {
     /// alias whatever that leads to there: it gets it for no host.
     #[test]
     fn a_servers_password_goes_for_no_host_to_a_version_without_the_feature() {
+        let login = |host: Option<&str>, server: Option<Server>| Item::Password {
+            title: "prod DB".into(),
+            username: "deploy".into(),
+            password: "s3cret".into(),
+            url: String::new(),
+            notes: String::new(),
+            otp: None,
+            host: host.map(str::to_owned),
+            server,
+        };
+        let item = login(
+            Some("prod"),
+            Some(Server {
+                user: "deploy".into(),
+                host_name: "10.0.4.12".into(),
+                port: 22,
+                proxy_jump: None,
+                host_keys: vec!["SHA256:76vvbGumhP/HpDH4tlyySHWs5hgRZJHr2wQ7hSDwRK8".into()],
+            }),
+        );
+        let (offered, sent, _) = send_to_an_older_version(&item);
+        let unbound = login(None, None);
+        assert_eq!(offered, unbound.summary());
+        assert_eq!(sent, unbound);
+    }
+
+    #[test]
+    fn variables_that_run_code_stay_here_for_a_version_that_would_set_them() {
+        let var = |name: &str| sshkm_core::p2p::protocol::EnvVariable {
+            name: name.into(),
+            value: "x".into(),
+            secret: false,
+            note: String::new(),
+        };
+        let env = |variables: &[&str]| Item::Environment {
+            project: "shop".into(),
+            name: "dev".into(),
+            notes: String::new(),
+            variables: variables.iter().map(|name| var(name)).collect(),
+        };
+        let (offered, sent, side) =
+            send_to_an_older_version(&env(&["PORT", "NODE_OPTIONS", "BASH_ENV"]));
+        assert_eq!(sent, env(&["PORT"]));
+        assert_eq!(offered, env(&["PORT"]).summary());
+        // The dialog was about what goes, and named what stays.
+        assert_eq!(*side.asked_to_send.lock().unwrap(), [offered]);
+        assert_eq!(
+            *side.asked_left_out.lock().unwrap(),
+            [vec!["NODE_OPTIONS".to_owned(), "BASH_ENV".to_owned()]]
+        );
+    }
+
+    /// Sends `item` from a scripted side to one of a version before
+    /// features, which takes it; returns what was offered and what was sent,
+    /// and the sending side.
+    fn send_to_an_older_version(item: &Item) -> (ItemSummary, Item, Script) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let older = thread::spawn(move || {
@@ -730,43 +794,14 @@ mod tests {
             session.send(&Message::Received { saved: true }).unwrap();
             (offered, item)
         });
-        let login = |host: Option<&str>, server: Option<Server>| Item::Password {
-            title: "prod DB".into(),
-            username: "deploy".into(),
-            password: "s3cret".into(),
-            url: String::new(),
-            notes: String::new(),
-            otp: None,
-            host: host.map(str::to_owned),
-            server,
-        };
-        let item = login(
-            Some("prod"),
-            Some(Server {
-                user: "deploy".into(),
-                host_name: "10.0.4.12".into(),
-                port: 22,
-                proxy_jump: None,
-                host_keys: vec!["SHA256:76vvbGumhP/HpDH4tlyySHWs5hgRZJHr2wQ7hSDwRK8".into()],
-            }),
-        );
         let stream = TcpStream::connect(address).unwrap();
         let mut session = connect(stream, &Identity::generate().unwrap()).unwrap();
         let mut side = Script::new("alice", Some(true));
         side.knows = true;
-        let end = conversation(
-            &mut session,
-            &side,
-            Some(Purpose::Send {
-                item: &item,
-                to: None,
-            }),
-        );
+        let end = conversation(&mut session, &side, Some(Purpose::Send { item, to: None }));
         assert!(matches!(end, PairingPhase::Sent { .. }));
         let (offered, sent) = older.join().unwrap();
-        let unbound = login(None, None);
-        assert_eq!(offered, unbound.summary());
-        assert_eq!(sent, unbound);
+        (offered, sent, side)
     }
 
     #[test]

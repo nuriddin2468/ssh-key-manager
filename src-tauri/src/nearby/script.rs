@@ -100,6 +100,8 @@ pub struct Script {
     pub allows_send: bool,
     /// The secrets the system dialog asked about sending.
     pub asked_to_send: Mutex<Vec<ItemSummary>>,
+    /// For each of them, the variables it named as staying here.
+    pub asked_left_out: Mutex<Vec<Vec<String>>>,
     /// How many times the other side hung up before this one showed a code
     /// it could already work out.
     pub broken_off: Mutex<u32>,
@@ -163,6 +165,7 @@ impl Script {
             projects: Mutex::default(),
             allows_send: true,
             asked_to_send: Mutex::default(),
+            asked_left_out: Mutex::default(),
             broken_off: Mutex::default(),
             removed: false,
             allows_added: true,
@@ -380,8 +383,9 @@ impl Side for Script {
         self.asked_risky.lock().unwrap().extend_from_slice(changes);
         self.allows_risky
     }
-    fn allow_send(&self, item: &Item) -> bool {
+    fn allow_send(&self, item: &Item, left_out: &[String]) -> bool {
         self.asked_to_send.lock().unwrap().push(item.summary());
+        self.asked_left_out.lock().unwrap().push(left_out.to_vec());
         self.allows_send
     }
     fn broke_off(&self) {

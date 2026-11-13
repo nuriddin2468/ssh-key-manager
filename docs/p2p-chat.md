@@ -179,7 +179,8 @@ Chat brings the first new message types, so this comes first:
   }
   ```
 
-  This version says `["chat/1", "personal-env/1"]` in every `Hello`. A side sends a
+  This version says `["chat/1", "personal-env/1", "server-password/1", "env-code-vars/1"]`
+  in every `Hello`. A side sends a
   message, frame or item kind that came after version 1 only to a peer that named its
   feature. **A chat frame never goes to a peer that didn't say `chat/1`.** A later
   incompatible chat change is a new name (`chat/2`). `VERSION` stays 1 and changes only if
@@ -190,6 +191,9 @@ Chat brings the first new message types, so this comes first:
   below): older receivers refuse its empty project label, so it needs `personal-env/1`.
   An item the peer can't take is refused **before anything is offered**, with the
   translated "_{name}_ can't take this yet: its SSH Key Manager needs updating".
+  `Item::for_peer` adapts the rest: a server's password goes for no host to a peer
+  without `server-password/1`, and an environment goes without its variables that run
+  code to one without `env-code-vars/1` (the send dialog names them as staying).
 - **Fallbacks.** `Message`, `Item` and `ItemSummary` get `#[serde(other)] Unknown`, so an
   unknown kind parses instead of failing. Nothing ever sends `Unknown`.
   - `Item::check` refuses it.

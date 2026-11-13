@@ -1832,7 +1832,7 @@ impl Side for AppSide<'_> {
         self.nearby.broke_off();
     }
 
-    fn allow_send(&self, item: &Item) -> bool {
+    fn allow_send(&self, item: &Item, left_out: &[String]) -> bool {
         let Ok((_, app)) = self.context() else {
             return false;
         };
@@ -1843,7 +1843,7 @@ impl Side for AppSide<'_> {
             .and_then(|slot| slot.view.peer.clone())
             .unwrap_or_default();
         // The dialog a chat asks in before the same item leaves.
-        prompt::send_item(&peer, item).is_none_or(|prompt| {
+        prompt::send_item(&peer, item, left_out).is_none_or(|prompt| {
             crate::confirm::require(app, &prompt.title, &prompt.body, &prompt.approve).is_ok()
         })
     }

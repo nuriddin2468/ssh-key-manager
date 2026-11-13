@@ -320,8 +320,9 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     (`NODE_OPTIONS=--max-old-space-size=…`); but when there is one of these, secret or
     not, the system dialog before the shell starts lists them with their values (a
     long value by its start and its end, every character that could hide something
-    shown as `<U+…>`), and asks again once their names or values change. Importing a
-    `.env` file keeps them.
+    shown as `<U+…>`), and asks again once their names or values change. The shell
+    gets the variables as the dialog showed them: a change made while it is open
+    waits for the next shell, and its question. Importing a `.env` file keeps them.
 - **Answering `ssh` prompts.** To log in with a password or one-time code, the app acts
   as `ssh`'s askpass program.
   - The secret goes over a local socket only this user can reach (a private 0700
@@ -1082,7 +1083,8 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
 - **A server's password is for the server it was sent for.** It goes with the alias
   and where that alias leads on the sender's computer (account, host name, port and
   jump hosts, as `ssh -G` works them out, and the fingerprints of the server keys its
-  `known_hosts` files trust for it), all of it in the summary. The receiver saves it
+  `known_hosts` files trust for it), all of it in the summary; with no such key, it
+  goes for no host, and no summary names a host without one. The receiver saves it
   for one of its own aliases only if `ssh -G` says that alias leads to the same
   place and its own `known_hosts` files trust one of those keys for it (the alias it
   was sent for, or another, such as the host received with it under a number): the
@@ -1106,7 +1108,10 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   system dialog names them as such. Where a whole environment arrives, nothing lets
   its user pick them one by one, so they are left out of it, and the app names the
   ones it left out; variables added from a chat show them flagged and not picked,
-  and the system dialog before they are added names the ones picked.
+  and the system dialog before they are added names the ones picked. A version
+  whose `Hello` doesn't name this (`env-code-vars/1`) would save them and set them
+  in a shell without asking, so they stay on the sender's computer: the environment
+  goes without them, and the sender's system dialog names them as staying.
   It is saved as a new environment: one of the same name in that project gets a
   number (`prod 2`), so a sender can never replace or add to an environment the
   receiver has.

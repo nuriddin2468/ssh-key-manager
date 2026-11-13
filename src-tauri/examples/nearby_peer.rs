@@ -246,7 +246,7 @@ impl Side for Terminal {
 
     /// The app asks in a system dialog; here, the sample was chosen with
     /// `--send` when the example started.
-    fn allow_send(&self, _item: &Item) -> bool {
+    fn allow_send(&self, _item: &Item, _left_out: &[String]) -> bool {
         true
     }
 

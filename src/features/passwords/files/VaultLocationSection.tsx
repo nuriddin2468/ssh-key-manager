@@ -1,5 +1,3 @@
-import { isTauri } from '@tauri-apps/api/core';
-import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import type { TFunction } from 'i18next';
 import { Cloud, FolderInput, FolderOpen, RotateCcw, Vault } from 'lucide-react';
 import { type ReactNode, useId, useState } from 'react';
@@ -26,8 +24,6 @@ type Pending =
   | { kind: 'move'; folder: string }
   | { kind: 'useFile'; path: string }
   | { kind: 'default'; moveFiles: boolean };
-
-const DEV_KDBX = '/Users/dev/Library/CloudStorage/Dropbox/Passwords.kdbx';
 
 /**
  * Where the vault's files are, for the Settings page: move them (e.g. into
@@ -71,7 +67,7 @@ export function VaultLocationSection({ className }: VaultLocationSectionProps) {
 
   const chooseFolder = async () => {
     try {
-      const folder = await pickFolder(t('vaultFiles.location.pickFolderTitle'));
+      const folder = await pickFolder();
       if (folder) setPending({ kind: 'move', folder });
     } catch (error) {
       toastError(t, error);
@@ -79,23 +75,14 @@ export function VaultLocationSection({ className }: VaultLocationSectionProps) {
   };
   const chooseFile = async () => {
     try {
-      const path = await pickFile(
-        t('vaultFiles.location.pickFileTitle'),
-        { name: t('vaultFiles.location.keepassFiles'), extensions: ['kdbx'] },
-        DEV_KDBX,
-      );
+      const path = await pickFile();
       if (path) setPending({ kind: 'useFile', path });
     } catch (error) {
       toastError(t, error);
     }
   };
-  const reveal = async (path: string) => {
-    if (!isTauri()) return;
-    try {
-      await revealItemInDir(path);
-    } catch (error) {
-      toastError(t, error);
-    }
+  const reveal = () => {
+    api.revealPlace({ kind: 'vault' }).catch((error: unknown) => toastError(t, error));
   };
 
   const confirm = loc && pending ? confirmation(t, pending, loc, shown) : null;
@@ -126,7 +113,7 @@ export function VaultLocationSection({ className }: VaultLocationSectionProps) {
                   size="sm"
                   variant="ghost"
                   icon={<FolderOpen className="size-[15px]" strokeWidth={1.75} />}
-                  onClick={() => void reveal(loc.paths.database)}
+                  onClick={reveal}
                 >
                   {t('keys.showIn', { app: fileManagerName })}
                 </Button>

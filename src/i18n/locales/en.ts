@@ -2479,6 +2479,8 @@ const en = {
     newSession: 'New session',
     closeSession: 'Close session {{alias}}',
     terminalLabel: 'Terminal: {{alias}}',
+    // Shown while the pointer is on a link in the terminal; {{key}} is ⌘ or Ctrl.
+    linkOpen: '{{key}}-click to open',
     shells: {
       cmd: 'Command Prompt',
     },
@@ -2491,6 +2493,7 @@ const en = {
       shellMissing:
         'This shell is no longer on this computer. Choose another one in Settings → Terminal.',
       folderMissing: 'This folder, or its project, is no longer on this computer.',
+      secretsDeclined: 'Not started: you chose not to give it the environment’s secret values.',
       status: {
         connecting: 'starting…',
         connected: 'running',
@@ -3464,9 +3467,6 @@ const en = {
       useFile: 'Use another vault file…',
       backToDefault: 'Back to default',
       sync: 'To use the vault on several computers, move it into a Dropbox, iCloud Drive or OneDrive folder, then choose the same file on the others. If two computers change it at once, nothing is lost: the other version is kept as a copy next to the backups.',
-      pickFolderTitle: 'Choose a folder for the vault',
-      pickFileTitle: 'Choose a vault file',
-      keepassFiles: 'KeePass databases',
       moveTitle: 'Move the vault to {{folder}}?',
       moveText:
         'Both vault files move to this folder. If the vault is unlocked, it stays unlocked.',

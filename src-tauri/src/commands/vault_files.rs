@@ -6,10 +6,11 @@
 //! chosen rows are imported.
 //!
 //! The files read and written here are chosen in system file dialogs that
-//! this side opens, never named by the page: the import's CSV file and the
-//! export's target. Moving the vault or switching to another file — whose
-//! paths the page picks — needs the user's confirmation in a native dialog
-//! that shows the path.
+//! this side opens, never named by the page: the import's CSV file, the
+//! export's target, the folder the vault moves to and the file it switches
+//! to. Moving or switching then needs the user's confirmation in a native
+//! dialog that shows the path, its control and invisible characters made
+//! visible; the file switched to isn't opened before that.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
@@ -35,6 +36,12 @@ static PICKED_IMPORT: Mutex<Option<PathBuf>> = Mutex::new(None);
 /// The CSV file imported last: the only one [`vault_trash_import_file`]
 /// moves to the Trash.
 static LAST_IMPORT: Mutex<Option<PathBuf>> = Mutex::new(None);
+/// The folder picked in [`vault_pick_folder`]: the only one [`vault_move`]
+/// moves the vault to.
+static PICKED_FOLDER: Mutex<Option<PathBuf>> = Mutex::new(None);
+/// The KeePass file picked in [`vault_pick_file`]: the only one
+/// [`vault_use_file`] switches to.
+static PICKED_DATABASE: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// A CSV file picked for import, and its rows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -303,28 +310,88 @@ pub async fn vault_location(state: State<'_, Shared>) -> AppResult<VaultLocation
     blocking(&state, |state| Ok(location(&state.vault))).await
 }
 
-/// Moves both files into `folder`, locked or unlocked, once the user
-/// confirms in a native dialog. Refuses if the folder already has files of
-/// those names.
+/// Asks for a folder to move the vault to in a system file dialog, and
+/// returns it for the page to show; `None` when the dialog was cancelled.
+#[tauri::command]
+pub async fn vault_pick_folder(
+    app: AppHandle,
+    state: State<'_, Shared>,
+) -> AppResult<Option<String>> {
+    blocking(&state, move |_| {
+        let mut dialog = app.dialog().file().set_title(
+            Localized::new(
+                "Choose a folder for the vault",
+                "Выберите папку для хранилища",
+                "Ombor uchun papka tanlang",
+            )
+            .pick(),
+        );
+        if let Some(window) = app.get_webview_window("main") {
+            dialog = dialog.set_parent(&window);
+        }
+        let picked = dialog.blocking_pick_folder().map(into_path).transpose()?;
+        Ok(remember(&PICKED_FOLDER, picked))
+    })
+    .await
+}
+
+/// Asks for a KeePass file to use in a system file dialog, and returns it
+/// for the page to show; `None` when the dialog was cancelled. Nothing is
+/// read from it yet.
+#[tauri::command]
+pub async fn vault_pick_file(
+    app: AppHandle,
+    state: State<'_, Shared>,
+) -> AppResult<Option<String>> {
+    blocking(&state, move |_| {
+        let mut dialog = app
+            .dialog()
+            .file()
+            .set_title(
+                Localized::new(
+                    "Choose a vault file",
+                    "Выберите файл хранилища",
+                    "Ombor faylini tanlang",
+                )
+                .pick(),
+            )
+            .add_filter(
+                Localized::new("KeePass databases", "Базы KeePass", "KeePass bazalari").pick(),
+                &["kdbx"],
+            );
+        if let Some(window) = app.get_webview_window("main") {
+            dialog = dialog.set_parent(&window);
+        }
+        let picked = dialog.blocking_pick_file().map(into_path).transpose()?;
+        Ok(remember(&PICKED_DATABASE, picked))
+    })
+    .await
+}
+
+/// Moves both files into `folder`, the one picked in [`vault_pick_folder`],
+/// locked or unlocked, once the user confirms in a native dialog. Refuses
+/// if the folder already has files of those names.
 #[tauri::command]
 pub async fn vault_move(
     app: AppHandle,
     state: State<'_, Shared>,
     folder: String,
 ) -> AppResult<VaultLocation> {
-    let folder = absolute(&folder)?;
+    let folder = picked(&PICKED_FOLDER, &folder, "choose the folder again")?;
     blocking(&state, move |state| {
         confirm_move(&app, &folder)?;
         move_to_folder(&state.vault, &folder)?;
+        forget_pick(&PICKED_FOLDER);
         Ok(after_change(&app, state))
     })
     .await
 }
 
 /// Switches to an existing KeePass file — this vault on another computer,
-/// or a KeePassXC database — once the user confirms in a native dialog. The
-/// current vault locks and stays where it is; the new one opens with its
-/// master password, or, without a keys file, with its recovery key or
+/// or a KeePassXC database — once the user confirms in a native dialog:
+/// `path`, the one picked in [`vault_pick_file`], which isn't opened before.
+/// The current vault locks and stays where it is; the new one opens with
+/// its master password, or, without a keys file, with its recovery key or
 /// KeePass password.
 #[tauri::command]
 pub async fn vault_use_file(
@@ -332,12 +399,14 @@ pub async fn vault_use_file(
     state: State<'_, Shared>,
     path: String,
 ) -> AppResult<VaultLocation> {
-    let path = absolute(&path)?;
+    let path = picked(&PICKED_DATABASE, &path, "choose the file again")?;
     blocking(&state, move |state| {
-        vault::check_database(&path)?;
-        if !same_file(&state.vault.paths().database, &path) {
+        // Compared as named: the file is touched only after the yes.
+        if state.vault.paths().database != path {
             confirm_switch(&app, &path)?;
         }
+        vault::check_database(&path)?;
+        forget_pick(&PICKED_DATABASE);
         // The `.env` files written while it is unlocked go first, their
         // edits in the vault; back if it stays.
         state.vault.put_files_away();
@@ -389,7 +458,6 @@ pub async fn vault_use_default(
 }
 
 fn confirm_move(app: &AppHandle, folder: &Path) -> AppResult<()> {
-    let folder = folder.display();
     confirm::require(
         app,
         &Localized::new(
@@ -397,29 +465,33 @@ fn confirm_move(app: &AppHandle, folder: &Path) -> AppResult<()> {
             "Переместить хранилище?",
             "Ombor koʻchirilsinmi?",
         ),
-        &Localized::new(
-            format!(
-                "The vault’s files will move to:\n{folder}\n\n\
-                 Anyone who can read this folder gets the encrypted vault. \
-                 Continue only if you chose this folder yourself."
-            ),
-            format!(
-                "Файлы хранилища переместятся в папку:\n{folder}\n\n\
-                 Любой, кто может читать эту папку, получит зашифрованное хранилище. \
-                 Продолжайте, только если эту папку выбрали вы."
-            ),
-            format!(
-                "Ombor fayllari bu papkaga koʻchadi:\n{folder}\n\n\
-                 Bu papkani oʻqiy oladigan har kim shifrlangan omborni oladi. \
-                 Bu papkani oʻzingiz tanlagan boʻlsangizgina davom eting."
-            ),
-        ),
+        &move_body(folder),
         &Localized::new("Move", "Переместить", "Koʻchirish"),
     )
 }
 
+fn move_body(folder: &Path) -> Localized {
+    let folder = shown_path(folder);
+    Localized::new(
+        format!(
+            "The vault’s files will move to:\n{folder}\n\n\
+                 Anyone who can read this folder gets the encrypted vault. \
+                 Continue only if you chose this folder yourself."
+        ),
+        format!(
+            "Файлы хранилища переместятся в папку:\n{folder}\n\n\
+                 Любой, кто может читать эту папку, получит зашифрованное хранилище. \
+                 Продолжайте, только если эту папку выбрали вы."
+        ),
+        format!(
+            "Ombor fayllari bu papkaga koʻchadi:\n{folder}\n\n\
+                 Bu papkani oʻqiy oladigan har kim shifrlangan omborni oladi. \
+                 Bu papkani oʻzingiz tanlagan boʻlsangizgina davom eting."
+        ),
+    )
+}
+
 fn confirm_switch(app: &AppHandle, database: &Path) -> AppResult<()> {
-    let database = database.display();
     confirm::require(
         app,
         &Localized::new(
@@ -427,24 +499,60 @@ fn confirm_switch(app: &AppHandle, database: &Path) -> AppResult<()> {
             "Открыть другой файл хранилища?",
             "Boshqa ombor fayli ishlatilsinmi?",
         ),
-        &Localized::new(
-            format!(
-                "The current vault locks, and passwords will be read from and saved to:\n\
-                 {database}\n\nContinue only if you chose this file yourself."
-            ),
-            format!(
-                "Текущее хранилище заблокируется, а пароли будут читаться из этого файла \
-                 и сохраняться в него:\n{database}\n\n\
-                 Продолжайте, только если этот файл выбрали вы."
-            ),
-            format!(
-                "Joriy ombor qulflanadi, parollar esa shu fayldan oʻqiladi va unga \
-                 saqlanadi:\n{database}\n\n\
-                 Bu faylni oʻzingiz tanlagan boʻlsangizgina davom eting."
-            ),
-        ),
+        &switch_body(database),
         &Localized::new("Use this file", "Открыть файл", "Shu faylni ishlatish"),
     )
+}
+
+fn switch_body(database: &Path) -> Localized {
+    let database = shown_path(database);
+    Localized::new(
+        format!(
+            "The current vault locks, and passwords will be read from and saved to:\n\
+                 {database}\n\nContinue only if you chose this file yourself."
+        ),
+        format!(
+            "Текущее хранилище заблокируется, а пароли будут читаться из этого файла \
+                 и сохраняться в него:\n{database}\n\n\
+                 Продолжайте, только если этот файл выбрали вы."
+        ),
+        format!(
+            "Joriy ombor qulflanadi, parollar esa shu fayldan oʻqiladi va unga \
+                 saqlanadi:\n{database}\n\n\
+                 Bu faylni oʻzingiz tanlagan boʻlsangizgina davom eting."
+        ),
+    )
+}
+
+/// A path as the confirmation shows it: whole, with control and invisible
+/// characters made visible, so a name can't add lines to the dialog or
+/// show its text reversed.
+fn shown_path(path: &Path) -> String {
+    confirm::shown(&path.to_string_lossy(), usize::MAX)
+}
+
+/// Keeps `picked`, the path a system dialog this side opened returned, as
+/// the one `slot` lets the page use, and returns it for the page to show.
+fn remember(slot: &Mutex<Option<PathBuf>>, picked: Option<PathBuf>) -> Option<String> {
+    let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+    let picked = picked?;
+    let shown = picked.to_string_lossy().into_owned();
+    *slot = Some(picked);
+    Some(shown)
+}
+
+/// The path picked last into `slot`, if the page names that one; any other
+/// path fails with `again`.
+fn picked(slot: &Mutex<Option<PathBuf>>, named: &str, again: &str) -> AppResult<PathBuf> {
+    let slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+    match slot.as_ref() {
+        Some(path) if path.as_os_str() == named => Ok(path.clone()),
+        _ => Err(AppError::invalid(again)),
+    }
+}
+
+fn forget_pick(slot: &Mutex<Option<PathBuf>>) {
+    slot.lock().unwrap_or_else(PoisonError::into_inner).take();
 }
 
 fn location(runtime: &VaultRuntime) -> VaultLocation {
@@ -547,18 +655,6 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-fn absolute(path: &str) -> AppResult<PathBuf> {
-    let path = PathBuf::from(path);
-    if path.is_absolute() {
-        Ok(path)
-    } else {
-        Err(AppError::invalid(format!(
-            "not an absolute path: {}",
-            path.display()
-        )))
-    }
-}
-
 fn last_import() -> std::sync::MutexGuard<'static, Option<PathBuf>> {
     LAST_IMPORT.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -608,6 +704,37 @@ mod tests {
             .exclusive(|slot| Ok(slot.as_ref().map(|v| v.entries().len())))
             .unwrap()
             .unwrap()
+    }
+
+    #[test]
+    fn only_the_path_picked_in_the_dialog_is_used() {
+        let slot = Mutex::new(None);
+        assert_eq!(
+            code(&picked(&slot, "/elsewhere", "again").unwrap_err()),
+            "invalid_input"
+        );
+        let shown = remember(&slot, Some(PathBuf::from("/Users/me/Dropbox"))).unwrap();
+        assert_eq!(shown, "/Users/me/Dropbox");
+        assert_eq!(
+            picked(&slot, "/Users/me/Dropbox", "again").unwrap(),
+            PathBuf::from("/Users/me/Dropbox")
+        );
+        // Another path, even one that leads to the same place, is refused.
+        for named in ["/Users/me/Dropbox/../Public", "/Users/Shared", ""] {
+            assert!(picked(&slot, named, "again").is_err(), "{named}");
+        }
+        forget_pick(&slot);
+        assert!(picked(&slot, "/Users/me/Dropbox", "again").is_err());
+    }
+
+    #[test]
+    fn the_dialogs_show_the_path_with_its_hidden_characters() {
+        let folder = Path::new("/Users/me/Cloud\u{202E}stnemucod\nOK");
+        let body = move_body(folder).en;
+        assert!(body.contains("/Users/me/Cloud<U+202E>stnemucod<U+000A>OK\n\nAnyone"));
+        assert!(!body.contains('\u{202E}'));
+        let body = switch_body(Path::new("/Volumes/USB/vault\u{200F}.kdbx")).ru;
+        assert!(body.contains("/Volumes/USB/vault<U+200F>.kdbx"));
     }
 
     #[test]

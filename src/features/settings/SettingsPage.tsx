@@ -1,5 +1,3 @@
-import { isTauri } from '@tauri-apps/api/core';
-import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { Clock, FolderOpen, KeyRound } from 'lucide-react';
 import { type ReactNode, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -8,6 +6,7 @@ import { useEnvironment } from '@/api/queries';
 import { toastError } from '@/api/useAppMutation';
 import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
+import type { RevealPlace } from '@/bindings/RevealPlace';
 import { Logo } from '@/components/Logo';
 import { PageBody, Toolbar } from '@/components/layout/Toolbar';
 import { Button } from '@/components/ui/Button';
@@ -46,22 +45,21 @@ export function SettingsPage() {
   const env = environment.data;
   const home = env?.paths.home;
 
-  const reveal = async (path: string) => {
-    if (!isTauri()) return;
-    try {
-      await revealItemInDir(path);
-    } catch (error) {
-      toastError(t, error);
-    }
+  const reveal = (place: RevealPlace) => {
+    api.revealPlace(place).catch((error: unknown) => toastError(t, error));
   };
 
-  const files = env
+  const files: { label: string; path: string; place: RevealPlace }[] = env
     ? [
-        { label: t('settings.sshDir'), path: env.paths.dir },
-        { label: t('settings.config'), path: env.paths.config },
-        { label: t('settings.knownHosts'), path: env.paths.knownHosts },
-        { label: t('settings.hostsFile'), path: env.hostsFile },
-        { label: t('settings.backups'), path: env.backupDir },
+        { label: t('settings.sshDir'), path: env.paths.dir, place: { kind: 'sshDir' } },
+        { label: t('settings.config'), path: env.paths.config, place: { kind: 'config' } },
+        {
+          label: t('settings.knownHosts'),
+          path: env.paths.knownHosts,
+          place: { kind: 'knownHosts' },
+        },
+        { label: t('settings.hostsFile'), path: env.hostsFile, place: { kind: 'hostsFile' } },
+        { label: t('settings.backups'), path: env.backupDir, place: { kind: 'backups' } },
       ]
     : [];
 
@@ -137,7 +135,7 @@ export function SettingsPage() {
                   size="sm"
                   variant="ghost"
                   icon={<FolderOpen className="size-[15px]" strokeWidth={1.75} />}
-                  onClick={() => void reveal(file.path)}
+                  onClick={() => reveal(file.place)}
                 >
                   {t('keys.showIn', { app: fileManagerName })}
                 </Button>

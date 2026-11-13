@@ -10,8 +10,10 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
 - **Key passphrases are not stored**, unless you save them in the password vault. They
   travel from the form to the Rust process for one operation and are held in
   `secrecy::SecretString`. They are never logged. Adding a passphrase to a key that has
-  none, or removing one, is confirmed in a system dialog.
-- **Imported keys hold nothing but the key.** A file with anything after the key, or one
+  none, or removing one, is confirmed in a system dialog, and so is writing an
+  encrypted key out without one in the key converter.
+- **Imported keys hold nothing but the key.** The key file is picked in a system dialog
+  the app opens itself. A file with anything after the key, or one
   that isn't a well-formed key, is refused; the app writes the key and its public line
   out again rather than copying the file. Names OpenSSH reserves (`authorized_keys`,
   `rc`, `config`, …) are refused in any letter case. Keys that ask for more than 1024
@@ -64,7 +66,10 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - Turning off or loosening auto-lock, lock on sleep, screen lock or minimise, or
     clipboard clearing; turning off device unlock; and moving the vault or switching to
     another file are each confirmed in a system dialog, which the page can't answer or
-    slip under a key press (see "Standard files only").
+    slip under a key press (see "Standard files only"). The folder or file is picked in
+    a system dialog the app opens itself, the confirmation shows its path with control
+    and invisible characters made visible, and a file switched to isn't opened before
+    you confirm.
   - When it is used, a saved key passphrase goes from the vault straight to `ssh-agent`
     or `ssh` inside the Rust process; the interface receives it only when you choose to
     show it, like a password. Copying it goes from Rust straight to the clipboard. To
@@ -101,6 +106,13 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     links and firmlinks don't get around it), and cells that a spreadsheet would run as
     a formula are defused, except passwords. Files to import are also picked in a
     system dialog. Imported CSV files can be moved to the Trash right after import.
+  - Importing straight from a browser reads the logins it saved only after you confirm
+    in a system dialog that names the browser and the profile: not every system asks
+    before another app reads them (Firefox without a primary password never does, nor
+    Chromium browsers on Windows or with an open Linux keyring). The yes holds for that
+    profile until the import dialog closes or the vault locks. The logins read stay in
+    the Rust process for the preview, which carries no passwords, and are wiped when
+    they are imported, the dialog closes or the vault locks.
   - Secret environments (the **Environments** page) are entries of the same vault:
     one per environment, in the group `Environments/<project>`, with a custom field
     per variable; a secret variable's field is protected like a password. Lists,
@@ -161,7 +173,11 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     environment. Nothing is written to disk, but the shell and everything it starts
     hold the values in their environment: other programs running as you can read a
     process's environment (`/proc/<pid>/environ` on Linux, `ps -E` on macOS), and the
-    shell may save the commands you type in its history.
+    shell may save the commands you type in its history. Before an environment's secret
+    values go into a shell (here or in a project's terminal), a system dialog names the
+    environment and how many of its values are secret. It asks once per environment
+    until the vault locks: a script in the page could type into a shell that already
+    holds them, so asking for every shell would add clicks, not protection.
 - **Answering `ssh` prompts.** To log in with a password or one-time code, the app acts
   as `ssh`'s askpass program.
   - The secret goes over a local socket only this user can reach (a private 0700
@@ -213,8 +229,10 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     through the host editor's path: a backup first, refused if the file changed
     meanwhile, and a native confirmation for lines that say which server gets access.
   - The key converter decrypts keys in Rust only; the page sees fingerprints and the
-    public key. Converted keys go into `~/.ssh` only as new files (0600), or where you
-    pick in a system save dialog, never over a file in `~/.ssh`. New passphrases use
+    public key. It reads only a file picked in a system dialog the app opens itself, or
+    a private key in `~/.ssh`. Converted keys go into `~/.ssh` only as new files (0600), or where you
+    pick in a system save dialog, never over a file in `~/.ssh`. An encrypted key written
+    out without a passphrase is confirmed in a system dialog that names both files. New passphrases use
     the formats' strong options (OpenSSH bcrypt, PuTTY v3 Argon2id, PKCS#8 PBES2 with
     PBKDF2-SHA256 and AES-256); PEM, whose encryption is one round of MD5, is written
     only without a passphrase, and the app says so. The key derivation settings a file
@@ -425,6 +443,15 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     Microsoft as the publisher. PowerShell, `pkexec` and the other system tools the app
     starts are run by their full path in the system folders, never looked up on `PATH`.
 - **Locked-down webview**
+  - The page drives the in-app terminal, so a script running in the page could open a
+    shell and run commands as you. The model therefore rests on no outside code ever
+    running in the page: everything from outside (the SSH config, vault titles, names
+    from contacts, server output) is rendered as text, nothing parses it as HTML (a
+    test refuses HTML sinks in the app and the browser extension), and the Content
+    Security Policy below lets only the app's own scripts run. The system dialogs and
+    the rule that the page never names a file limit what such a script could take
+    quietly (an environment's secrets, a browser's passwords, the vault's place); they
+    don't stop it from running commands.
   - Strict Content Security Policy: only the app's own scripts run, and no `eval`.
   - Tauri's frozen JavaScript prototype (`freezePrototype`) is off: the terminal
     (xterm.js) assigns its own `toString` while loading, which a frozen prototype
@@ -434,9 +461,20 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     them, and a test checks the list against the commands registered), so a window
     can call only what its capability names: the main window all of them, the
     browser's unlock window only the three that unlock the vault, the quick search
-    window only what it lists and does (see "Quick search" above).
+    window only what it lists and does (see "Quick search" above). Of Tauri's own
+    commands and the plugins' the main window gets only what its page uses: listening to
+    the app's events, moving and maximising the window, opening `http(s)` links and
+    writing the clipboard. It can't change the tray or the menus, read images, send
+    events to the app, or open a file dialog or the file manager at a path it names:
+    files are picked, and shown in Finder, Explorer or Files, by the app's own commands,
+    which find the path themselves.
   - The window only shows the app's own page: navigating elsewhere is refused and new
     windows can't open. Links open in your browser, and only `http` and `https` links.
+    In the terminal a link opens only on ⌘-click (Ctrl-click on Windows and Linux), as
+    in native terminals, and pointing at it shows where it really leads (international
+    host names in their `xn--` form). Pasted text loses its escape and other control
+    characters (tabs and line ends stay), so it can't end bracketed paste early and run
+    what follows without your Enter.
   - Permission fixes apply only what the app's own audit found inside `~/.ssh`, and only
     ever remove permissions.
   - Config fixes from the audit apply only what its rules offer for the file at that

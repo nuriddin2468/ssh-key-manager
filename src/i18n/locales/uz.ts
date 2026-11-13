@@ -2515,6 +2515,7 @@ const uz = {
     newSession: 'Yangi seans',
     closeSession: '{{alias}} seansini yopish',
     terminalLabel: 'Terminal: {{alias}}',
+    linkOpen: 'Ochish: {{key}} + bosish',
     shells: {
       cmd: 'Buyruq satri',
     },
@@ -2527,6 +2528,8 @@ const uz = {
       shellMissing:
         'Bu shell endi kompyuterda yoʻq. Sozlamalar → Terminal boʻlimida boshqasini tanlang.',
       folderMissing: 'Bu papka yoki uning loyihasi endi bu kompyuterda yoʻq.',
+      secretsDeclined:
+        'Ishga tushirilmadi: siz unga muhitning maxfiy qiymatlarini bermaslikni tanladingiz.',
       status: {
         connecting: 'ishga tushmoqda…',
         connected: 'ishlamoqda',
@@ -3517,9 +3520,6 @@ const uz = {
       useFile: 'Boshqa ombor faylidan foydalanish…',
       backToDefault: 'Standart joyga qaytarish',
       sync: 'Ombordan bir nechta kompyuterda foydalanish uchun uni Dropbox, iCloud Drive yoki OneDrive papkasiga koʻchiring, qolganlarida esa xuddi shu faylni tanlang. Ikki kompyuter uni bir vaqtda oʻzgartirsa, hech narsa yoʻqolmaydi: boshqa versiya zaxira nusxalar yonida alohida nusxa sifatida saqlanadi.',
-      pickFolderTitle: 'Ombor uchun papka tanlang',
-      pickFileTitle: 'Ombor faylini tanlang',
-      keepassFiles: 'KeePass bazalari',
       moveTitle: 'Ombor {{folder}} ga koʻchirilsinmi?',
       moveText:
         'Ombor fayllarining ikkalasi shu papkaga koʻchadi. Ombor ochiq boʻlsa, ochiqligicha qoladi.',

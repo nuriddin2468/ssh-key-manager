@@ -9,6 +9,12 @@
 //! ([`vault_browser_import_forget`]), when another profile is read, and when
 //! the vault locks. The page names a profile only by the id
 //! [`vault_browser_profiles`] gave it; its folder never leaves this side.
+//!
+//! Not every system asks before another app reads a browser's passwords
+//! (Firefox never does without a primary password; Chromium doesn't on
+//! Windows or with an open Linux keyring), so this side asks first, in a
+//! native dialog naming the browser and the profile ([`confirm_read`]). The
+//! yes holds for that profile until the dialog closes or the vault locks.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -26,6 +32,7 @@ use tauri::{AppHandle, State};
 
 use super::vault_files::ImportPasswords;
 use super::{Shared, blocking};
+use crate::confirm::{self, Localized};
 use crate::error::{AppError, AppResult};
 
 /// How long logins read for a preview are kept for the import.
@@ -33,6 +40,8 @@ const KEEP_FOR: Duration = Duration::from_secs(15 * 60);
 
 /// The logins read for the last preview: from which profile, and when.
 static READ: Mutex<Option<Held>> = Mutex::new(None);
+/// The profile the user let the app read in the native dialog, by id.
+static ALLOWED: Mutex<Option<String>> = Mutex::new(None);
 /// Counts [`forget`] calls, so logins taken out to work with are not put
 /// back after the vault locked in the meantime.
 static FORGOTTEN: AtomicU64 = AtomicU64::new(0);
@@ -80,8 +89,9 @@ pub async fn vault_browser_profiles(state: State<'_, Shared>) -> AppResult<Vec<B
 }
 
 /// Reads the saved logins of the profile `profile_id` and lists them like a
-/// CSV preview, without secrets. May show a system prompt for the browser's
-/// key; a Firefox profile with a primary password needs `primary_password`.
+/// CSV preview, without secrets, once the user said yes in a native dialog
+/// ([`confirm_read`]). May show a system prompt for the browser's key, too;
+/// a Firefox profile with a primary password needs `primary_password`.
 #[tauri::command]
 pub async fn vault_browser_import_preview(
     app: AppHandle,
@@ -92,14 +102,20 @@ pub async fn vault_browser_import_preview(
     blocking(&state, move |state| {
         // Nothing is read, and no prompt shown, while the vault is locked.
         state.vault.with(&app, |_| Ok(()))?;
-        forget();
-        // Reading may wait on a system prompt; kept only if nothing was
+        drop_read();
+        // Asking and reading may wait on the user; kept only if nothing was
         // forgotten (the vault didn't lock) meanwhile.
         let epoch = FORGOTTEN.load(Ordering::SeqCst);
         let profile = browser_profiles()
             .into_iter()
             .find(|p| p.id == profile_id)
             .ok_or_else(|| AppError::not_found("that browser profile"))?;
+        if !allowed(&profile.id) {
+            confirm_read(&app, &profile)?;
+            // Not read if the vault locked while the dialog was open.
+            state.vault.with(&app, |_| Ok(()))?;
+            allow(&profile.id, epoch);
+        }
         let logins = match profile.read(&OsKeys, primary_password.as_ref()) {
             Ok(logins) => logins,
             Err(error) => {
@@ -179,16 +195,87 @@ pub async fn vault_browser_import_compare(
     .await
 }
 
-/// Drops the logins read for a preview: the dialog closed or went back.
+/// Drops the logins read for a preview, and the user's yes to reading the
+/// profile: the dialog closed or went back.
 #[tauri::command]
 pub fn vault_browser_import_forget() {
     forget();
 }
 
-/// Drops (and wipes) the logins read for a preview.
+/// Drops (and wipes) the logins read for a preview, and the user's yes to
+/// reading the profile: the vault locked or unlocked, the dialog closed.
 pub fn forget() {
+    drop_read();
+    allowed_profile().take();
+}
+
+/// Drops (and wipes) the logins read for a preview.
+fn drop_read() {
     FORGOTTEN.fetch_add(1, Ordering::SeqCst);
     held().take();
+}
+
+/// Asks the user in a native dialog whether to read the logins saved in
+/// `profile`, naming the browser and the profile as the browser's files
+/// name it. Fails with `cancelled` on a no.
+fn confirm_read(app: &AppHandle, profile: &BrowserProfile) -> AppResult<()> {
+    let (title, body) = read_question(&profile.browser, &profile.name);
+    confirm::require(
+        app,
+        &title,
+        &body,
+        &Localized::new("Read logins", "Прочитать логины", "Loginlarni oʻqish"),
+    )
+}
+
+/// The dialog's title and text for reading `browser`'s profile `profile`.
+fn read_question(browser: &str, profile: &str) -> (Localized, Localized) {
+    let browser = confirm::shown(browser, 60);
+    let profile = confirm::shown(profile, 80);
+    (
+        Localized::new(
+            format!("Read the logins saved in {browser}?"),
+            format!("Прочитать логины, сохранённые в {browser}?"),
+            format!("{browser}’da saqlangan loginlar oʻqilsinmi?"),
+        ),
+        Localized::new(
+            format!(
+                "SSH Key Manager will read the user names and passwords saved in the {browser} \
+                 profile “{profile}”, to list them for import. Nothing is imported until you \
+                 choose.\n\nContinue only if you started this import yourself."
+            ),
+            format!(
+                "SSH Key Manager прочитает имена пользователей и пароли, сохранённые в профиле \
+                 {browser} «{profile}», чтобы показать их для импорта. Ничего не импортируется, \
+                 пока вы не выберете.\n\nПродолжайте, только если импорт начали вы."
+            ),
+            format!(
+                "SSH Key Manager {browser}’ning «{profile}» profilida saqlangan foydalanuvchi \
+                 nomlari va parollarni import uchun roʻyxatga chiqarish maqsadida oʻqiydi. Siz \
+                 tanlamaguningizcha hech narsa import qilinmaydi.\n\nBu importni oʻzingiz \
+                 boshlagan boʻlsangizgina davom eting."
+            ),
+        ),
+    )
+}
+
+/// The user said yes to reading the profile `id`, and hasn't closed the
+/// dialog nor locked the vault since.
+fn allowed(id: &str) -> bool {
+    allowed_profile().as_deref() == Some(id)
+}
+
+/// Keeps the user's yes to reading the profile `id`, given to a question
+/// asked at `epoch`, unless the logins were forgotten since.
+fn allow(id: &str, epoch: u64) {
+    let mut allowed = allowed_profile();
+    if FORGOTTEN.load(Ordering::SeqCst) == epoch {
+        *allowed = Some(id.to_owned());
+    }
+}
+
+fn allowed_profile() -> MutexGuard<'static, Option<String>> {
+    ALLOWED.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Takes out the logins read for the last preview, if they are not too old,
@@ -300,6 +387,22 @@ mod tests {
             logins,
             at: Instant::now(),
         }
+    }
+
+    #[test]
+    fn reading_a_profile_names_the_browser_and_the_profile() {
+        let (title, body) = read_question("Firefox", "default-release");
+        assert_eq!(title.en, "Read the logins saved in Firefox?");
+        assert!(body.en.contains("the Firefox profile “default-release”"));
+        assert!(body.ru.contains("профиле Firefox «default-release»"));
+        assert!(body.uz.contains("Firefox’ning «default-release» profilida"));
+        // A profile's name is the browser's to choose: it can't add lines or
+        // turn the text around.
+        let (_, body) = read_question("Google Chrome", "Work\n\nNothing is read\u{202E}");
+        assert!(
+            body.en
+                .contains("“Work<U+000A><U+000A>Nothing is read<U+202E>”")
+        );
     }
 
     #[test]

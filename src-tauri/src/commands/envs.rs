@@ -523,7 +523,8 @@ pub async fn envs_export_anyway(app: AppHandle, state: State<'_, Shared>) -> App
 /// (`sshkm_core::vault::projects::places`): its part's folder, else the
 /// first of the project's folders found here; one in Personal, or with none
 /// here, in the home folder. Output and events arrive on `events`, as for
-/// `terminal_open`.
+/// `terminal_open`. Secret values go in only once the user said yes in a
+/// native dialog ([`super::terminal::confirm_env_secrets`]).
 #[tauri::command]
 pub async fn envs_run(
     app: AppHandle,
@@ -536,6 +537,7 @@ pub async fn envs_run(
 ) -> AppResult<TerminalInfo> {
     let shared = Arc::clone(&state);
     blocking(&state, move |state| {
+        super::terminal::confirm_env_secrets(&app, state, &id)?;
         let (label, vars, places) = state.vault.with(&app, |vault| {
             let env = vault.environment(&id)?.summary;
             let vars: Vec<(String, SecretString)> = vault

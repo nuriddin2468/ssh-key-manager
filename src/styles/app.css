@@ -2,22 +2,96 @@
 @import "@fontsource-variable/geist-mono";
 
 @custom-variant mac (&:where([data-platform="macos"], [data-platform="macos"] *));
+@custom-variant light (&:where([data-theme="light"], [data-theme="light"] *));
 
+/*
+ * Colour tokens. The values here are the dark theme; `[data-theme="light"]`
+ * below gives each one its light value. `src/lib/theme.ts` (and
+ * `public/theme-boot.js` before the first paint) sets `data-theme` on <html>.
+ *
+ * Components use these tokens only, never `white/…`, `black/…`, hex or rgb
+ * literals (`src/styles/tokens.test.ts` fails on those). Pick by role:
+ *
+ *   surfaces   canvas, surface, sidebar, popover, card, card-raised,
+ *              card-subtle (an option among others), field,
+ *              well (recessed: code, raw text), sticky (sticky headers, with
+ *              an alpha: `bg-sticky/92`), dialog-from/-to, scrim (behind
+ *              dialogs)
+ *   text       fg, fg-2, muted, subtle, faint; on-solid on a saturated fill
+ *   lines      line-soft (dividers), line (cards), line-strong (popovers),
+ *              line-field (the field utility), line-input (a text field's
+ *              or select's edge), line-control (a checkbox's), kbd-line
+ *   fills      fill-subtle (row hover), fill (resting chip), fill-hover,
+ *              fill-pressed (selected segment); knob, knob-off, switch-off,
+ *              switch-line (switches)
+ *   status     critical, warning, info, ok (text), and their -solid (dots,
+ *              bars, borders, tints: `bg-warning-solid/[0.09]`); online
+ *   shadows    shadow-card, -raised, -popover, -listbox, -dialog, -drag,
+ *              -thumb, -segment; sheen for a 1px top highlight
+ *   accent     var(--accent-…) from the page's data-section (further down)
+ *
+ * `ink` and `shade` are the neutral overlay colours under all of these: white
+ * and black in the dark theme, a dark slate and a faint slate in the light
+ * one. Use them with an alpha (`border-ink/[0.07]`, `bg-shade/35`) only when
+ * no role above fits.
+ */
 @theme {
   --font-sans:
     -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, Menlo, monospace;
 
+  --color-ink: #fff;
+  --color-shade: #000;
+
   --color-canvas: #0a0d14;
   --color-surface: #0b0f17;
   --color-sidebar: #11141e;
   --color-popover: #161b27;
+  --color-card: rgb(255 255 255 / 0.04);
+  --color-card-raised: rgb(255 255 255 / 0.045);
+  /* A quieter card: an option to choose among others. */
+  --color-card-subtle: rgb(255 255 255 / 0.03);
+  --color-field: rgb(255 255 255 / 0.05);
+  --color-well: rgb(0 0 0 / 0.3);
+  --color-sticky: rgb(14 18 27);
+  --color-dialog-from: rgb(26 31 46);
+  --color-dialog-to: rgb(15 18 28);
+  --color-scrim: rgb(4 6 11 / 0.62);
 
   --color-fg: #f2f4f8;
   --color-fg-2: #c9cfda;
   --color-muted: #a7b0c0;
   --color-subtle: #8892a6;
   --color-faint: #5c667a;
+  /* Small group headings: the sidebar's, menus'. */
+  --color-label: #7c869a;
+  --color-on-solid: #fff;
+  /* Sidebar navigation: an item, the current one and its background. */
+  --color-nav: #c3cad6;
+  --color-nav-current: #fff;
+  --color-nav-current-bg: rgb(255 255 255 / 0.1);
+
+  --color-line-soft: rgb(255 255 255 / 0.06);
+  --color-line: rgb(255 255 255 / 0.08);
+  --color-line-strong: rgb(255 255 255 / 0.1);
+  --color-line-field: rgb(255 255 255 / 0.1);
+  /* What identifies a control, 3:1 in the light theme (WCAG 1.4.11): a text
+     field's or select's edge, a checkbox's. */
+  --color-line-input: rgb(255 255 255 / 0.1);
+  --color-line-control: rgb(255 255 255 / 0.4);
+  --color-kbd-line: rgb(255 255 255 / 0.12);
+
+  --color-fill-subtle: rgb(255 255 255 / 0.03);
+  --color-fill: rgb(255 255 255 / 0.06);
+  --color-fill-hover: rgb(255 255 255 / 0.09);
+  --color-fill-pressed: rgb(255 255 255 / 0.12);
+  --color-knob: #fff;
+  /* A switch that is off: its track, the track's edge, its knob. */
+  --color-switch-off: rgb(255 255 255 / 0.1);
+  --color-switch-line: rgb(255 255 255 / 0.1);
+  --color-knob-off: #fff;
+  --color-sheen: rgb(255 255 255 / 0.05);
+  --color-scrollbar: rgb(255 255 255 / 0.14);
 
   --color-critical: #ff9b9b;
   --color-critical-solid: #ff6b6b;
@@ -26,13 +100,38 @@
   --color-info: #9ccbff;
   --color-info-solid: #6cb4ff;
   --color-ok: #5eead4;
+  --color-ok-solid: #14b8a6;
   /* A live session: dots, the signed-in banner. */
   --color-online: #4ade80;
+  /* Critical text under the pointer; reassuring text on an ok tint. */
+  --color-critical-strong: #ffbdbd;
+  --color-ok-strong: #99f6e4;
+  /* An added or changed line in a preview. */
+  --color-added: #86efac;
+  /* A production environment's name on a project card. */
+  --color-production: rgb(225 29 72);
+  --color-production-text: #fecdd3;
+  /* Password and passphrase strength, weak to strong: the meter and its label. */
+  --color-strength-1: #ff6b6b;
+  --color-strength-2: #ffb547;
+  --color-strength-3: #5eead4;
+  --color-strength-4: #14b8a6;
 
   /* The terminal's panel: the xterm surface and its tab strip. */
   --color-terminal: #06080d;
   --color-terminal-bar: #10141d;
   --color-terminal-line: rgb(255 255 255 / 0.09);
+
+  /* Shadows switch with the theme through `--elevation-…` (below). */
+  --shadow-card: var(--elevation-card);
+  --shadow-raised: var(--elevation-raised);
+  --shadow-popover: var(--elevation-popover);
+  --shadow-listbox: var(--elevation-listbox);
+  --shadow-dialog: var(--elevation-dialog);
+  --shadow-drag: var(--elevation-drag);
+  --shadow-thumb: var(--elevation-thumb);
+  --shadow-segment: var(--elevation-segment);
+  --shadow-nav: var(--elevation-nav);
 
   --animate-floaty: floaty 6s ease-in-out infinite;
   --animate-orbit: spin 48s linear infinite;
@@ -144,9 +243,144 @@
   }
 }
 
+:root {
+  --elevation-card: inset 0 1px 0 rgb(255 255 255 / 0.04);
+  --elevation-raised: inset 0 1px 0 rgb(255 255 255 / 0.05), 0 30px 60px -30px rgb(0 0 0 / 0.7);
+  --elevation-popover: 0 20px 40px -12px rgb(0 0 0 / 0.7);
+  --elevation-listbox: 0 24px 48px -16px rgb(0 0 0 / 0.75), inset 0 1px 0 rgb(255 255 255 / 0.06);
+  --elevation-dialog: 0 40px 80px -24px rgb(0 0 0 / 0.8), inset 0 1px 0 rgb(255 255 255 / 0.06);
+  --elevation-drag: 0 18px 40px -12px rgb(0 0 0 / 0.75);
+  --elevation-thumb: 0 2px 4px rgb(0 0 0 / 0.35);
+  --elevation-segment: 0 1px 2px rgb(0 0 0 / 0.4);
+  --elevation-nav: inset 0 0 0 0.5px rgb(255 255 255 / 0.1), 0 1px 2px rgb(0 0 0 / 0.35);
+  /*
+   * The dark sidebar shows the window's canvas: its gradient was written as a
+   * Tailwind class that compiled to nothing, so this is how it has always
+   * looked. Set the three values below to bring the glow in.
+   */
+  --sidebar-glow-a: transparent;
+  --sidebar-glow-b: transparent;
+  --sidebar-fill: transparent;
+  --sidebar-edge: rgb(0 0 0 / 0.4);
+  --count-from: #fb7185;
+  --count-to: #e11d48;
+  /* The focus ring and text selection, in the page's accent. */
+  --focus-alpha: 0.9;
+  --selection-alpha: 0.35;
+  color-scheme: dark;
+}
+
+/*
+ * The light theme. Surfaces go white on a cool grey page, lines and fills
+ * become a dark slate at about the same strength as the dark theme's white,
+ * and every text and status colour is dark enough for WCAG AA (4.5:1) on
+ * white, on the page and on its own tint.
+ */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --color-ink: #0f172a;
+  --color-shade: rgb(15 23 42 / 0.12);
+
+  --color-canvas: #eceef2;
+  --color-surface: #f6f7f9;
+  --color-sidebar: #eceef2;
+  --color-popover: #ffffff;
+  --color-card: #ffffff;
+  --color-card-raised: #ffffff;
+  --color-card-subtle: #ffffff;
+  --color-field: #ffffff;
+  --color-well: rgb(15 23 42 / 0.04);
+  --color-sticky: #f6f7f9;
+  --color-dialog-from: #ffffff;
+  --color-dialog-to: #f8f9fb;
+  --color-scrim: rgb(15 23 42 / 0.32);
+
+  --color-fg: #0f1420;
+  --color-fg-2: #2a3242;
+  --color-muted: #4b5567;
+  --color-subtle: #5d6779;
+  --color-faint: #6b7484;
+  --color-label: #5d6779;
+  --color-on-solid: #fff;
+  --color-nav: #2f3747;
+  --color-nav-current: #0f1420;
+  --color-nav-current-bg: #ffffff;
+
+  --color-line-soft: rgb(15 23 42 / 0.07);
+  --color-line: rgb(15 23 42 / 0.1);
+  --color-line-strong: rgb(15 23 42 / 0.12);
+  --color-line-field: rgb(15 23 42 / 0.18);
+  --color-line-input: rgb(15 23 42 / 0.5);
+  --color-line-control: rgb(15 23 42 / 0.5);
+  --color-kbd-line: rgb(15 23 42 / 0.18);
+
+  --color-fill-subtle: rgb(15 23 42 / 0.03);
+  --color-fill: rgb(15 23 42 / 0.05);
+  --color-fill-hover: rgb(15 23 42 / 0.08);
+  --color-fill-pressed: rgb(15 23 42 / 0.1);
+  --color-knob: #fff;
+  --color-switch-off: rgb(15 23 42 / 0.04);
+  --color-switch-line: rgb(15 23 42 / 0.5);
+  --color-knob-off: #6b7484;
+  --color-sheen: rgb(255 255 255 / 0.7);
+  --color-scrollbar: rgb(15 23 42 / 0.22);
+
+  --color-critical: #b42318;
+  --color-critical-solid: #d92d20;
+  --color-warning: #93500a;
+  --color-warning-solid: #c46a05;
+  --color-info: #175cd3;
+  --color-info-solid: #1570ef;
+  --color-ok: #0f766e;
+  --color-ok-solid: #0d9488;
+  --color-online: #15803d;
+  --color-critical-strong: #912018;
+  --color-ok-strong: #115e59;
+  --color-added: #15803d;
+  --color-production: rgb(225 29 72);
+  --color-production-text: #9f1239;
+  --color-strength-1: #b42318;
+  --color-strength-2: #93500a;
+  --color-strength-3: #0f766e;
+  --color-strength-4: #115e59;
+
+  --color-terminal: #fbfbfc;
+  --color-terminal-bar: #f0f2f5;
+  --color-terminal-line: rgb(15 23 42 / 0.1);
+
+  --elevation-card: 0 1px 2px rgb(15 23 42 / 0.05);
+  --elevation-raised: 0 1px 2px rgb(15 23 42 / 0.04), 0 24px 48px -28px rgb(15 23 42 / 0.2);
+  --elevation-popover: 0 12px 32px -8px rgb(15 23 42 / 0.18), 0 2px 6px rgb(15 23 42 / 0.06);
+  --elevation-listbox: 0 16px 40px -12px rgb(15 23 42 / 0.2), 0 2px 6px rgb(15 23 42 / 0.06);
+  --elevation-dialog: 0 32px 64px -24px rgb(15 23 42 / 0.3), 0 2px 8px rgb(15 23 42 / 0.06);
+  --elevation-drag: 0 12px 28px -8px rgb(15 23 42 / 0.24);
+  --elevation-thumb: 0 1px 3px rgb(15 23 42 / 0.3);
+  --elevation-segment: 0 1px 2px rgb(15 23 42 / 0.14), 0 0 0 0.5px rgb(15 23 42 / 0.08);
+  --elevation-nav: 0 0 0 0.5px rgb(15 23 42 / 0.08), 0 1px 2px rgb(15 23 42 / 0.1);
+  --sidebar-glow-a: rgb(20 184 166 / 0.1);
+  --sidebar-glow-b: rgb(124 58 237 / 0.07);
+  --sidebar-fill: color-mix(in srgb, var(--color-sidebar) 97%, transparent);
+  --sidebar-edge: transparent;
+  /* White on it at 4.5:1 or more. */
+  --count-from: #e11d48;
+  --count-to: #be123c;
+  --focus-alpha: 1;
+  --selection-alpha: 0.24;
+}
+
 /*
  * Every page sets data-section; its accent drives buttons, selection, focus
  * rings and the background glow.
+ *
+ *   --accent-1, --accent-2  the gradient of primary buttons, switches, bars
+ *   --accent-ink            text on that gradient
+ *   --accent-text           accent text: links, soft buttons, chips
+ *   --accent-fg             accent icons and counts on the page itself
+ *   --accent-rgb            tints, selected rows, the focus ring, selection
+ *   --glow-a, --glow-b      the page's background light
+ *
+ * The light theme keeps the gradients and darkens the rest.
  */
 :root,
 [data-section="overview"],
@@ -270,22 +504,212 @@
   --glow-a: rgb(100 116 139 / 0.18);
   --glow-b: rgb(37 99 235 / 0.08);
 }
+/*
+ * The banner at the top of a few pages (`banner`): its tint, edge and text.
+ * The editor's light on the hosts page (`--glow-strong`).
+ */
+[data-section="agent"] {
+  --banner-tint: rgb(124 58 237 / 0.2);
+  --banner-line: rgb(167 139 250 / 0.2);
+}
+[data-section="nearby"] {
+  --banner-tint: rgb(234 88 12 / 0.18);
+  --banner-line: rgb(251 146 60 / 0.2);
+}
+[data-section="hostsFile"] {
+  --banner-tint: rgb(99 102 241 / 0.16);
+  --banner-line: rgb(165 180 252 / 0.25);
+  --banner-text: #c9cceb;
+  --banner-title: #e0e7ff;
+}
+[data-section="known"] {
+  --banner-tint: rgb(245 158 11 / 0.16);
+  --banner-line: rgb(252 211 77 / 0.25);
+  --banner-text: #d9c9a6;
+  --banner-title: #fde68a;
+}
+[data-section="hosts"] {
+  --glow-strong: rgb(37 99 235 / 0.32);
+}
+/* Set where the section is, so it resolves to that section's colours. */
+:root,
+[data-section] {
+  --accent-fg: var(--accent-1);
+}
+
+/*
+ * Light accents: text and icons at AA on white and on the page, tints and the
+ * focus ring at 3:1 or more, a fainter glow.
+ */
+:root[data-theme="light"],
+[data-theme="light"]
+  :is(
+    [data-section="overview"],
+    [data-section="projects"],
+    [data-section="project"],
+    [data-section="personal"],
+    [data-section="suggestions"]
+  ) {
+  --accent-1: #5eead4;
+  --accent-2: #a78bfa;
+  --accent-text: #115e59;
+  --accent-rgb: 13 148 136;
+  --glow-a: rgb(20 184 166 / 0.12);
+  --glow-b: rgb(124 58 237 / 0.08);
+}
+[data-theme="light"] [data-section="keys"] {
+  --accent-text: #115e59;
+  --accent-rgb: 13 148 136;
+  --glow-a: rgb(20 184 166 / 0.12);
+  --glow-b: rgb(124 58 237 / 0.05);
+}
+[data-theme="light"] [data-section="hosts"] {
+  --accent-text: #1d4ed8;
+  --accent-rgb: 37 99 235;
+  --glow-a: rgb(37 99 235 / 0.12);
+  --glow-b: rgb(20 184 166 / 0.06);
+}
+[data-theme="light"] [data-section="agent"] {
+  --accent-text: #6d28d9;
+  --accent-rgb: 124 58 237;
+  --glow-a: rgb(124 58 237 / 0.12);
+  --glow-b: rgb(37 99 235 / 0.06);
+}
+[data-theme="light"] [data-section="known"] {
+  --accent-1: #fcd34d;
+  --accent-text: #92400e;
+  --accent-rgb: 180 83 9;
+  --glow-a: rgb(217 119 6 / 0.12);
+  --glow-b: rgb(37 99 235 / 0.05);
+}
+[data-theme="light"] [data-section="hostsFile"] {
+  --accent-text: #4338ca;
+  --accent-rgb: 79 70 229;
+  --glow-a: rgb(79 70 229 / 0.12);
+  --glow-b: rgb(20 184 166 / 0.05);
+}
+[data-theme="light"] [data-section="audit"] {
+  --accent-text: #be123c;
+  --accent-rgb: 225 29 72;
+  --glow-a: rgb(225 29 72 / 0.1);
+  --glow-b: rgb(124 58 237 / 0.05);
+}
+[data-theme="light"] [data-section="passwords"] {
+  --accent-text: #be185d;
+  --accent-rgb: 219 39 119;
+  --glow-a: rgb(219 39 119 / 0.1);
+  --glow-b: rgb(124 58 237 / 0.05);
+}
+[data-theme="light"] [data-section="envs"] {
+  --accent-1: #bef264;
+  --accent-text: #3f6212;
+  --accent-rgb: 77 124 15;
+  --glow-a: rgb(101 163 13 / 0.12);
+  --glow-b: rgb(37 99 235 / 0.05);
+}
+[data-theme="light"] [data-section="terminal"] {
+  --accent-text: #166534;
+  --accent-rgb: 21 128 61;
+  --glow-a: rgb(22 163 74 / 0.12);
+  --glow-b: rgb(37 99 235 / 0.05);
+}
+[data-theme="light"] [data-section="nearby"] {
+  --accent-text: #9a3412;
+  --accent-rgb: 234 88 12;
+  --glow-a: rgb(234 88 12 / 0.1);
+  --glow-b: rgb(124 58 237 / 0.05);
+}
+[data-theme="light"] [data-section="tools"] {
+  --accent-text: #155e75;
+  --accent-rgb: 8 145 178;
+  --glow-a: rgb(8 145 178 / 0.12);
+  --glow-b: rgb(124 58 237 / 0.05);
+}
+[data-theme="light"] [data-section="settings"] {
+  --accent-text: #334155;
+  --accent-rgb: 100 116 139;
+  --glow-a: rgb(100 116 139 / 0.12);
+  --glow-b: rgb(37 99 235 / 0.05);
+}
+:root[data-theme="light"],
+[data-theme="light"] [data-section] {
+  --accent-fg: var(--accent-text);
+}
+[data-theme="light"] [data-section="agent"] {
+  --banner-tint: rgb(124 58 237 / 0.1);
+  --banner-line: rgb(124 58 237 / 0.2);
+}
+[data-theme="light"] [data-section="nearby"] {
+  --banner-tint: rgb(234 88 12 / 0.09);
+  --banner-line: rgb(234 88 12 / 0.22);
+}
+[data-theme="light"] [data-section="hostsFile"] {
+  --banner-tint: rgb(99 102 241 / 0.1);
+  --banner-line: rgb(79 70 229 / 0.2);
+  --banner-text: #3c3f6b;
+  --banner-title: #312e81;
+}
+[data-theme="light"] [data-section="known"] {
+  --banner-tint: rgb(245 158 11 / 0.12);
+  --banner-line: rgb(180 83 9 / 0.22);
+  --banner-text: #5b4a24;
+  --banner-title: #78350f;
+}
+[data-theme="light"] [data-section="hosts"] {
+  --glow-strong: rgb(37 99 235 / 0.14);
+}
+
+/* A page's banner, tinted with its section's colour. */
+@utility banner {
+  border: 1px solid var(--banner-line);
+  background: linear-gradient(
+    135deg,
+    var(--banner-tint),
+    var(--color-fill-subtle) var(--banner-fade, 70%)
+  );
+  box-shadow: inset 0 1px 0 var(--color-sheen);
+}
+/* The agent page's emblem, running and stopped: a lit gem in both themes. */
+@utility agent-orb {
+  color: var(--color-on-solid);
+  background: linear-gradient(145deg, #ddd6fe 0%, #8b5cf6 45%, #4c1d95 100%);
+  box-shadow:
+    0 24px 44px -16px rgb(124 58 237 / 0.9),
+    inset 0 1px 0 rgb(255 255 255 / 0.5);
+}
+@utility agent-orb-off {
+  color: var(--color-on-solid);
+  background: linear-gradient(145deg, #cbd5e1, #475569);
+  box-shadow:
+    0 24px 44px -16px rgb(124 58 237 / 0.9),
+    inset 0 1px 0 rgb(255 255 255 / 0.5);
+}
 
 @utility glass {
-  background: rgb(255 255 255 / 0.04);
-  border: 1px solid rgb(255 255 255 / 0.08);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+  background: var(--color-card);
+  border: 1px solid var(--color-line);
+  box-shadow: var(--elevation-card);
 }
 @utility glass-raised {
-  background: rgb(255 255 255 / 0.045);
-  border: 1px solid rgb(255 255 255 / 0.09);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.05),
-    0 30px 60px -30px rgb(0 0 0 / 0.7);
+  background: var(--color-card-raised);
+  border: 1px solid color-mix(in oklab, var(--color-ink) 9%, transparent);
+  box-shadow: var(--elevation-raised);
 }
 @utility field {
-  background: rgb(255 255 255 / 0.05);
-  border: 1px solid rgb(255 255 255 / 0.1);
+  background: var(--color-field);
+  border: 1px solid var(--color-line-field);
+  /* Text fields and selects, not buttons: their edge is what shows them. */
+  &:is(input, textarea, [role="combobox"]),
+  &:has(input:not([type="checkbox"], [type="radio"], [type="hidden"]), textarea) {
+    border-color: var(--color-line-input);
+  }
+}
+@utility dialog-surface {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-dialog-from) var(--dialog-alpha, 97%), transparent),
+    color-mix(in srgb, var(--color-dialog-to) var(--dialog-alpha, 97%), transparent)
+  );
 }
 @utility accent-fill {
   background: linear-gradient(135deg, var(--accent-1), var(--accent-2));
@@ -293,6 +717,20 @@
   box-shadow:
     0 8px 20px -8px rgb(var(--accent-rgb) / 0.75),
     inset 0 1px 0 rgb(255 255 255 / 0.5);
+}
+/* The sidebar: two soft lights over its colour, and a dark edge on the right. */
+@utility sidebar-surface {
+  background:
+    radial-gradient(260px 220px at 0% 0%, var(--sidebar-glow-a), transparent 70%),
+    radial-gradient(320px 280px at 100% 100%, var(--sidebar-glow-b), transparent 70%),
+    var(--sidebar-fill);
+  box-shadow: inset -1px 0 0 var(--sidebar-edge);
+}
+/* A count that needs attention, such as audit findings: white on rose in both themes. */
+@utility count-badge {
+  background: linear-gradient(150deg, var(--count-from), var(--count-to));
+  color: var(--color-on-solid);
+  box-shadow: 0 2px 8px -2px rgb(225 29 72 / 0.8);
 }
 @utility accent-soft {
   background: rgb(var(--accent-rgb) / 0.12);
@@ -356,7 +794,7 @@
     height: 100%;
   }
   html {
-    color-scheme: dark;
+    background: var(--color-canvas);
   }
   body {
     margin: 0;
@@ -391,18 +829,18 @@
     cursor: default;
   }
   :focus-visible {
-    outline: 2px solid rgb(var(--accent-rgb) / 0.9);
+    outline: 2px solid rgb(var(--accent-rgb) / var(--focus-alpha));
     outline-offset: 2px;
   }
   ::selection {
-    background: rgb(var(--accent-rgb) / 0.35);
+    background: rgb(var(--accent-rgb) / var(--selection-alpha));
   }
   ::placeholder {
     color: var(--color-subtle);
   }
   * {
     scrollbar-width: thin;
-    scrollbar-color: rgb(255 255 255 / 0.14) transparent;
+    scrollbar-color: var(--color-scrollbar) transparent;
   }
   /* While an item is dragged, the whole window shows the grabbing hand. */
   body.dragging,

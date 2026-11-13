@@ -62,8 +62,8 @@ export function Select({
         aria-describedby={hint ? `${id}-hint` : undefined}
         className={cn(
           'field pressable-soft group flex w-full min-w-0 items-center gap-2 text-left text-fg outline-none',
-          'hover:bg-white/[0.07] focus-visible:border-[rgb(var(--accent-rgb)/0.55)] focus-visible:shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.15)]',
-          'data-[state=open]:border-[rgb(var(--accent-rgb)/0.55)] data-[state=open]:bg-white/[0.07] disabled:opacity-50',
+          'hover:bg-ink/[0.07] focus-visible:border-[rgb(var(--accent-rgb)/0.55)] focus-visible:shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.15)]',
+          'data-[state=open]:border-[rgb(var(--accent-rgb)/0.55)] data-[state=open]:bg-ink/[0.07] disabled:opacity-50',
           size === 'md' ? 'h-9 rounded-[10px] px-[11px]' : 'h-8 rounded-[9px] px-2.5 text-[12.5px]',
           mono && 'font-mono text-[12.5px]',
           !label && className,
@@ -89,8 +89,8 @@ export function Select({
           collisionPadding={12}
           onCloseAutoFocus={onCloseAutoFocus}
           className={cn(
-            'z-50 max-h-[min(320px,var(--radix-select-content-available-height))] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border border-white/10',
-            'bg-[rgb(22_27_39/0.96)] text-[13px] text-fg shadow-[0_24px_48px_-16px_rgb(0_0_0/0.75),inset_0_1px_0_rgb(255_255_255/0.06)]',
+            'z-50 max-h-[min(320px,var(--radix-select-content-available-height))] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border border-line-strong',
+            'bg-popover/96 text-[13px] text-fg shadow-listbox',
             'origin-[var(--radix-select-content-transform-origin)] data-[state=closed]:pointer-events-none data-[state=closed]:animate-popover-out data-[state=open]:animate-popover-in',
           )}
         >
@@ -105,7 +105,7 @@ export function Select({
                 disabled={option.disabled}
                 className={cn(
                   'relative flex h-8 cursor-default items-center gap-2.5 rounded-lg pr-8 pl-2.5 outline-none select-none',
-                  'transition-colors duration-100 data-[highlighted]:bg-white/[0.08] active:bg-white/[0.12]',
+                  'transition-colors duration-100 data-[highlighted]:bg-ink/[0.08] active:bg-fill-pressed',
                   'data-[state=checked]:text-[var(--accent-text)] data-[disabled]:opacity-40',
                   mono && 'font-mono text-[12.5px]',
                 )}

@@ -28,7 +28,13 @@ const GENERATE: GenerateOptions = {
 };
 
 /** The passphrase meter's colours, by zxcvbn score. */
-const SEGMENT_COLORS = ['#FF6B6B', '#FF6B6B', '#FFB547', '#5EEAD4', '#14B8A6'];
+const SEGMENT_COLORS = [
+  'var(--color-strength-1)',
+  'var(--color-strength-1)',
+  'var(--color-strength-2)',
+  'var(--color-strength-3)',
+  'var(--color-strength-4)',
+];
 
 interface HostPasswordDialogProps {
   alias: string;
@@ -323,7 +329,7 @@ function StrengthMeter({ score }: { score: number }) {
         {[1, 2, 3, 4].map((segment) => (
           <span
             key={segment}
-            className="h-1 rounded-sm bg-white/10"
+            className="h-1 rounded-sm bg-ink/10"
             style={segment <= Math.max(level, 1) ? { background: color } : undefined}
           />
         ))}

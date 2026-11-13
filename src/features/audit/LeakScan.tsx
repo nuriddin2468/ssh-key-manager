@@ -164,7 +164,7 @@ function Sources({ id, status }: { id: string; status: LeakStatus }) {
   return (
     <fieldset
       id={id}
-      className="m-0 flex min-w-0 flex-col gap-2.5 border-0 border-t border-white/[0.06] p-0 pt-3"
+      className="m-0 flex min-w-0 flex-col gap-2.5 border-0 border-t border-line-soft p-0 pt-3"
     >
       <legend className="sr-only">{t('audit.leaks.sources')}</legend>
       <Checkbox
@@ -203,7 +203,7 @@ function Sources({ id, status }: { id: string; status: LeakStatus }) {
             {folders.map((folder) => (
               <li
                 key={folder}
-                className="inline-flex h-7 max-w-full items-center gap-1 rounded-md border border-white/10 bg-white/[0.06] pr-0.5 pl-2 font-mono text-[11.5px] text-fg-2"
+                className="inline-flex h-7 max-w-full items-center gap-1 rounded-md border border-line-strong bg-fill pr-0.5 pl-2 font-mono text-[11.5px] text-fg-2"
               >
                 <span className="truncate" title={folder}>
                   {displayPath(folder, home)}
@@ -293,7 +293,7 @@ function ScanLine({ status, language }: { status: LeakStatus; language: string }
           aria-valuemax={100}
           aria-valuenow={percent ?? undefined}
           aria-valuetext={text}
-          className="h-1.5 overflow-hidden rounded-full bg-white/[0.08]"
+          className="h-1.5 overflow-hidden rounded-full bg-ink/[0.08]"
         >
           <div
             className={cn(

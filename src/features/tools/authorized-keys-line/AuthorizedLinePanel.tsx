@@ -99,7 +99,7 @@ export function AuthorizedLinePanel() {
             aria-invalid={keyError ? true : undefined}
             aria-describedby={keyError ? `${keyId}-error` : undefined}
             className={cn(
-              'field resize-none rounded-[10px] bg-black/30 px-[11px] py-2 font-mono text-[12px] leading-[18px] break-all text-fg outline-none focus:border-[rgb(var(--accent-rgb)/0.55)] focus:shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.15)]',
+              'field resize-none rounded-[10px] px-[11px] py-2 font-mono text-[12px] leading-[18px] break-all text-fg outline-none focus:border-[rgb(var(--accent-rgb)/0.55)] focus:shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.15)]',
               keyError && 'border-critical-solid/60',
             )}
           />
@@ -186,7 +186,7 @@ export function AuthorizedLinePanel() {
         <code
           aria-live="polite"
           className={cn(
-            'selectable min-h-[44px] rounded-[11px] border border-white/[0.07] bg-terminal px-3 py-2.5 font-mono text-[12px] leading-[1.6] break-all',
+            'selectable min-h-[44px] rounded-[11px] border border-ink/[0.07] bg-terminal px-3 py-2.5 font-mono text-[12px] leading-[1.6] break-all',
             line ? 'text-fg' : 'text-subtle',
           )}
         >

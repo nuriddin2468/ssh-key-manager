@@ -115,7 +115,7 @@ export function SendDialog({ what, name, onStarted }: SendDialogProps) {
               {devices.map((device) => (
                 <li
                   key={device.id}
-                  className="flex items-center gap-3 border-b border-white/[0.06] px-3.5 py-2.5 last:border-b-0"
+                  className="flex items-center gap-3 border-b border-line-soft px-3.5 py-2.5 last:border-b-0"
                 >
                   <Tile tone="slate" size={30}>
                     <Laptop className="size-[15px]" strokeWidth={2} />
@@ -135,7 +135,7 @@ export function SendDialog({ what, name, onStarted }: SendDialogProps) {
               ))}
             </ul>
           ) : (
-            <div className="flex flex-col items-center gap-1.5 rounded-[14px] border border-dashed border-white/[0.14] px-4 py-5 text-center">
+            <div className="flex flex-col items-center gap-1.5 rounded-[14px] border border-dashed border-ink/[0.14] px-4 py-5 text-center">
               <span className="flex items-center gap-2 text-[13px] font-medium text-fg-2">
                 <Radar
                   aria-hidden="true"

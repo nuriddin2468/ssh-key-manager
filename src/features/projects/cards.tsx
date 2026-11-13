@@ -386,7 +386,7 @@ function Row({
     <Tag
       className={cn(
         'flex min-h-11 items-center gap-2.5 px-1 py-1.5',
-        Tag === 'li' && 'border-t border-white/[0.045] first:border-t-0',
+        Tag === 'li' && 'border-t border-ink/[0.045] first:border-t-0',
       )}
     >
       {leading}
@@ -399,7 +399,7 @@ function Row({
             onClick={open.onOpen}
             className={cn(
               text,
-              '-my-0.5 block max-w-full rounded py-0.5 text-left decoration-white/40 underline-offset-[3px] outline-none hover:underline focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]',
+              '-my-0.5 block max-w-full rounded py-0.5 text-left decoration-ink/40 underline-offset-[3px] outline-none hover:underline focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]',
             )}
           >
             {title}
@@ -433,7 +433,7 @@ function Monogram({ text, className }: { text: string; className?: string }) {
     <span
       aria-hidden="true"
       className={cn(
-        'grid size-7 shrink-0 place-items-center rounded-lg bg-white/[0.07] text-[10px] font-bold text-fg-2',
+        'grid size-7 shrink-0 place-items-center rounded-lg bg-ink/[0.07] text-[10px] font-bold text-fg-2',
         className,
       )}
     >
@@ -514,7 +514,9 @@ function useHostsCard(
   const section = t('nav.hosts');
   return {
     id: 'hosts',
-    icon: <Server className="size-3.5 text-[#7DD3FC]" strokeWidth={2.2} />,
+    icon: (
+      <Server data-section="hosts" className="size-3.5 text-[var(--accent-fg)]" strokeWidth={2.2} />
+    ),
     title: t('projects.cards.hosts'),
     count: hosts.length,
     rows: hosts.map((alias) => {
@@ -666,7 +668,13 @@ function useHostsFileCard(
   ];
   return {
     id: 'hostsFile',
-    icon: <Network className="size-3.5 text-[#A5B4FC]" strokeWidth={2.2} />,
+    icon: (
+      <Network
+        data-section="hostsFile"
+        className="size-3.5 text-[var(--accent-fg)]"
+        strokeWidth={2.2}
+      />
+    ),
     title: t('projects.cards.hostsFile'),
     count: names.length,
     action:
@@ -953,7 +961,13 @@ function useFoldersCard(
       .join(', ');
   return {
     id: 'folders',
-    icon: <FolderOpen className="size-3.5 text-[#86EFAC]" strokeWidth={2.2} />,
+    icon: (
+      <FolderOpen
+        data-section="terminal"
+        className="size-3.5 text-[var(--accent-fg)]"
+        strokeWidth={2.2}
+      />
+    ),
     title: t('projects.cards.folders'),
     count: folders.length,
     rows: folders.map((path) => {
@@ -968,7 +982,7 @@ function useFoldersCard(
         key: path,
         problem: missing || inside.some((place) => place.missing),
         node: (
-          <li className="border-t border-white/[0.045] first:border-t-0">
+          <li className="border-t border-ink/[0.045] first:border-t-0">
             <Row
               as="div"
               mono
@@ -1006,7 +1020,7 @@ function useFoldersCard(
               )}
             </Row>
             {inside.length > 0 ? (
-              <ul className="mb-1 ml-[9px] border-l border-white/[0.07] pl-3">
+              <ul className="mb-1 ml-[9px] border-l border-ink/[0.07] pl-3">
                 {inside.map((place) => (
                   <Row
                     key={place.path}
@@ -1055,8 +1069,8 @@ function StageChip({ env, label, back }: { env: EnvSummary; label: string; back:
       className={cn(
         'pressable inline-flex h-[22px] min-w-12 max-w-[140px] shrink-0 items-center justify-center rounded-full px-2 font-mono text-[11.5px] outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]',
         isProduction(env.name)
-          ? 'bg-[rgb(225_29_72/0.18)] text-[#fecdd3] hover:bg-[rgb(225_29_72/0.28)]'
-          : 'bg-white/[0.06] text-fg-2 hover:bg-white/[0.12]',
+          ? 'bg-production/18 text-production-text hover:bg-production/28'
+          : 'bg-fill text-fg-2 hover:bg-fill-pressed',
       )}
     >
       <span className="truncate">{env.name}</span>
@@ -1241,7 +1255,13 @@ function useEnvironmentsCard(
   });
   return {
     id: 'environments',
-    icon: <Variable className="size-3.5 text-[#D9F99D]" strokeWidth={2.2} />,
+    icon: (
+      <Variable
+        data-section="envs"
+        className="size-3.5 text-[var(--accent-fg)]"
+        strokeWidth={2.2}
+      />
+    ),
     title: t('projects.cards.environments'),
     count: ids.length,
     rows,
@@ -1274,7 +1294,13 @@ function useLoginsCard(
   const section = t('nav.passwords');
   return {
     id: 'logins',
-    icon: <RectangleEllipsis className="size-3.5 text-[#F9A8D4]" strokeWidth={2.2} />,
+    icon: (
+      <RectangleEllipsis
+        data-section="passwords"
+        className="size-3.5 text-[var(--accent-fg)]"
+        strokeWidth={2.2}
+      />
+    ),
     title: t('projects.cards.logins'),
     count: shown.length,
     rows: shown.map((entry) => {
@@ -1334,7 +1360,13 @@ function useKeysCard(
   const section = t('nav.keys');
   return {
     id: 'keys',
-    icon: <KeyRound className="size-3.5 text-[#5EEAD4]" strokeWidth={2.2} />,
+    icon: (
+      <KeyRound
+        data-section="keys"
+        className="size-3.5 text-[var(--accent-fg)]"
+        strokeWidth={2.2}
+      />
+    ),
     title: t('projects.cards.keys'),
     count: keys.length,
     rows: keys.map((fingerprint) => {
@@ -1379,7 +1411,7 @@ function useKeysCard(
               <>
                 {project ? null : <AddToProjectButton member={member} name={key.name} />}
                 {key.inAgent ? (
-                  <span className="inline-flex h-[22px] items-center gap-1.5 rounded-full bg-[rgb(94_234_212/0.1)] px-2 text-[11.5px] text-ok">
+                  <span className="inline-flex h-[22px] items-center gap-1.5 rounded-full bg-ok/10 px-2 text-[11.5px] text-ok">
                     <span aria-hidden="true" className="size-1.5 rounded-full bg-ok" />
                     {t('projects.inAgent')}
                   </span>
@@ -1413,7 +1445,13 @@ function useTunnelsCard(hosts: string[]): CardSpec | null {
   if (mine.length === 0) return null;
   return {
     id: 'tunnels',
-    icon: <ArrowLeftRight className="size-3.5 text-[#67E8F9]" strokeWidth={2.2} />,
+    icon: (
+      <ArrowLeftRight
+        data-section="tools"
+        className="size-3.5 text-[var(--accent-fg)]"
+        strokeWidth={2.2}
+      />
+    ),
     title: t('projects.cards.tunnels'),
     count: mine.length,
     rows: mine.map(({ tunnel, state }) => {
@@ -1478,7 +1516,13 @@ function useFindingsCard(members: Members, library: Library): CardSpec | null {
   if (found.length === 0) return null;
   return {
     id: 'findings',
-    icon: <ShieldCheck className="size-3.5 text-[#FDA4AF]" strokeWidth={2.2} />,
+    icon: (
+      <ShieldCheck
+        data-section="audit"
+        className="size-3.5 text-[var(--accent-fg)]"
+        strokeWidth={2.2}
+      />
+    ),
     title: t('projects.cards.findings'),
     count: found.length,
     action: (

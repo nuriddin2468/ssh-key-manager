@@ -152,7 +152,7 @@ export function PickChip({
         mono && 'font-mono',
         pressed
           ? 'border-[rgb(var(--accent-rgb)/0.5)] bg-[rgb(var(--accent-rgb)/0.14)] text-[var(--accent-text)]'
-          : 'border-white/10 bg-white/[0.04] text-fg-2 hover:bg-white/[0.08]',
+          : 'border-line-strong bg-ink/[0.04] text-fg-2 hover:bg-ink/[0.08]',
       )}
     >
       {label}

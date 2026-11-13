@@ -68,7 +68,7 @@ export function MoreSection({ form, set, hosts, hostId }: MoreSectionProps) {
         aria-expanded={expanded}
         aria-controls={expanded ? panelId : undefined}
         onClick={() => setOpen(!expanded)}
-        className="pressable-soft flex min-w-0 items-center gap-2.5 rounded-[14px] border border-white/[0.08] bg-white/[0.03] px-3.5 py-3 text-left text-fg-2 hover:bg-white/[0.05]"
+        className="pressable-soft flex min-w-0 items-center gap-2.5 rounded-[14px] border border-line bg-fill-subtle px-3.5 py-3 text-left text-fg-2 hover:bg-ink/[0.05]"
       >
         <ChevronRight
           aria-hidden="true"

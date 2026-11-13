@@ -54,7 +54,7 @@ export function RawConfigDialog({ onDone }: { onDone: () => void }) {
             autoCapitalize="off"
             autoCorrect="off"
             wrap="off"
-            className="field h-[420px] resize-none rounded-[14px] bg-black/40 p-3.5 font-mono text-[12.5px] leading-[20px] text-fg outline-none focus:border-[rgb(var(--accent-rgb)/0.55)]"
+            className="field h-[420px] resize-none rounded-[14px] p-3.5 font-mono text-[12.5px] leading-[20px] text-fg outline-none focus:border-[rgb(var(--accent-rgb)/0.55)]"
           />
         )}
       </DialogBody>

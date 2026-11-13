@@ -24,7 +24,7 @@ export function Segmented<T extends string>({
         aria-labelledby={id}
         value={value}
         onValueChange={(next) => onValueChange(next as T)}
-        className="grid auto-cols-fr grid-flow-col gap-1 rounded-[10px] border border-white/[0.08] bg-black/25 p-[3px]"
+        className="grid auto-cols-fr grid-flow-col gap-1 rounded-[10px] border border-line bg-shade/25 p-[3px]"
       >
         {options.map((option) => (
           <RadioGroup.Item
@@ -33,7 +33,7 @@ export function Segmented<T extends string>({
             className={cn(
               'pressable h-7 rounded-[7px] px-2.5 text-[12.5px] font-medium whitespace-nowrap',
               value === option.value
-                ? 'bg-white/[0.12] text-fg shadow-[0_1px_2px_rgb(0_0_0/0.4)]'
+                ? 'bg-fill-pressed text-fg shadow-segment'
                 : 'text-muted hover:text-fg',
             )}
           >

@@ -44,7 +44,7 @@ export function TextField({
         )}
       >
         {prefix ? (
-          <span className="flex h-full items-center border-r border-white/[0.08] bg-white/[0.04] pr-2 pl-[11px] font-mono text-[12px] text-subtle">
+          <span className="flex h-full items-center border-r border-line bg-ink/[0.04] pr-2 pl-[11px] font-mono text-[12px] text-subtle">
             {prefix}
           </span>
         ) : null}

@@ -59,7 +59,7 @@ export function PasswordGenerator({ onUse }: { onUse: (password: string) => void
           sideOffset={8}
           collisionPadding={12}
           aria-label={t('passwords.generator')}
-          className="z-50 w-[320px] origin-[var(--radix-popover-content-transform-origin)] rounded-2xl border border-white/10 bg-[rgb(22_27_39/0.97)] text-fg shadow-[0_24px_48px_-16px_rgb(0_0_0/0.75),inset_0_1px_0_rgb(255_255_255/0.06)] backdrop-blur-xl data-[state=closed]:animate-popover-out data-[state=open]:animate-popover-in"
+          className="z-50 w-[320px] origin-[var(--radix-popover-content-transform-origin)] rounded-2xl border border-line-strong bg-popover/97 text-fg shadow-listbox backdrop-blur-xl data-[state=closed]:animate-popover-out data-[state=open]:animate-popover-in"
         >
           {open ? (
             <GeneratorPanel
@@ -111,7 +111,7 @@ function GeneratorPanel({ onUse }: { onUse: (password: string) => void }) {
         aria-label={t('passwords.modeLabel')}
         value={mode}
         onValueChange={(value) => setMode(value as Mode)}
-        className="grid grid-cols-2 gap-1 rounded-[10px] border border-white/[0.08] bg-black/25 p-[3px]"
+        className="grid grid-cols-2 gap-1 rounded-[10px] border border-line bg-shade/25 p-[3px]"
       >
         {(['password', 'passphrase'] as const).map((value) => (
           <RadioGroup.Item
@@ -120,7 +120,7 @@ function GeneratorPanel({ onUse }: { onUse: (password: string) => void }) {
             className={cn(
               'pressable h-7 rounded-[7px] text-[12.5px] font-medium',
               mode === value
-                ? 'bg-white/[0.12] text-fg shadow-[0_1px_2px_rgb(0_0_0/0.4)]'
+                ? 'bg-fill-pressed text-fg shadow-segment'
                 : 'text-muted hover:text-fg',
             )}
           >
@@ -130,7 +130,7 @@ function GeneratorPanel({ onUse }: { onUse: (password: string) => void }) {
       </RadioGroup.Root>
 
       <div className="flex flex-col gap-2">
-        <div className="flex min-h-[52px] items-center gap-2 rounded-xl border border-white/[0.08] bg-black/35 py-2 pr-1.5 pl-3">
+        <div className="flex min-h-[52px] items-center gap-2 rounded-xl border border-line bg-shade/35 py-2 pr-1.5 pl-3">
           <span className="sr-only">{t('passwords.preview')}: </span>
           <span className="selectable min-w-0 flex-1 font-mono text-[13px] leading-[19px] [overflow-wrap:anywhere] text-fg">
             {preview || ' '}

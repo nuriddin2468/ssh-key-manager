@@ -2,15 +2,19 @@ import type { ReactNode } from 'react';
 import { cn } from '@/lib/cn';
 
 const tones = {
-  neutral: 'border-white/10 bg-white/[0.05] text-fg-2',
+  neutral: 'border-line-strong bg-ink/[0.05] text-fg-2',
   accent:
     'border-[rgb(var(--accent-rgb)/0.35)] bg-[rgb(var(--accent-rgb)/0.14)] text-[var(--accent-text)]',
   warning: 'border-warning-solid/35 bg-warning-solid/10 text-warning',
   critical: 'border-critical-solid/35 bg-critical-solid/10 text-critical',
   info: 'border-info-solid/30 bg-info-solid/12 text-info',
-  violet: 'border-violet-400/30 bg-violet-400/12 text-violet-200',
-  cyan: 'border-cyan-400/30 bg-cyan-400/12 text-cyan-200',
+  // Another section's colour (the agent's, the tools'), from `SECTION` below.
+  violet:
+    'border-[rgb(var(--accent-rgb)/0.3)] bg-[rgb(var(--accent-rgb)/0.12)] text-[var(--accent-text)]',
+  cyan: 'border-[rgb(var(--accent-rgb)/0.3)] bg-[rgb(var(--accent-rgb)/0.12)] text-[var(--accent-text)]',
 } as const;
+
+const SECTION: Partial<Record<keyof typeof tones, string>> = { violet: 'agent', cyan: 'tools' };
 
 export type BadgeTone = keyof typeof tones;
 
@@ -31,6 +35,7 @@ export function Badge({
 }: BadgeProps) {
   return (
     <span
+      data-section={SECTION[tone]}
       className={cn(
         'inline-flex h-[22px] shrink-0 items-center whitespace-nowrap border px-2 text-[11px] font-medium',
         pill ? 'h-[18px] rounded-full px-[7px] text-[10.5px] font-semibold' : 'rounded-md',

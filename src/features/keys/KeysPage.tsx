@@ -152,7 +152,7 @@ export function KeysPage({ keyId }: { keyId?: string }) {
                     <div
                       className={cn(
                         GRID,
-                        'sticky top-0 z-[1] h-[38px] items-center border-b border-white/[0.07] bg-[rgb(14_18_27/0.97)] px-[18px] text-[11.5px] font-medium tracking-[0.02em] text-subtle',
+                        'sticky top-0 z-[1] h-[38px] items-center border-b border-ink/[0.07] bg-sticky/97 px-[18px] text-[11.5px] font-medium tracking-[0.02em] text-subtle',
                       )}
                     >
                       <span>{t('keys.colName')}</span>
@@ -185,7 +185,7 @@ export function KeysPage({ keyId }: { keyId?: string }) {
                   </div>
                 </div>
                 {keys.data && keys.data.skipped.length > 0 ? (
-                  <p className="border-t border-white/[0.06] px-[18px] py-2.5 text-[12px] text-subtle">
+                  <p className="border-t border-line-soft px-[18px] py-2.5 text-[12px] text-subtle">
                     {t('keys.skipped', { count: keys.data.skipped.length })}
                   </p>
                 ) : null}
@@ -220,8 +220,8 @@ function KeyRow({ keyView: key, selected, attention, onSelect }: KeyRowProps) {
       onClick={onSelect}
       className={cn(
         GRID,
-        'pressable-soft min-h-[58px] w-full items-center rounded-xl px-3 py-2 text-left active:bg-white/[0.06]',
-        selected ? 'selected-row' : 'hover:bg-white/[0.04]',
+        'pressable-soft min-h-[58px] w-full items-center rounded-xl px-3 py-2 text-left active:bg-fill',
+        selected ? 'selected-row' : 'hover:bg-ink/[0.04]',
       )}
     >
       <span className="flex min-w-0 items-center gap-3">
@@ -262,11 +262,12 @@ function KeyRow({ keyView: key, selected, attention, onSelect }: KeyRowProps) {
           <>
             <Cpu
               role="img"
+              data-section="agent"
               aria-label={key.inAgent ? t('keys.statusUnlocked') : t('keys.statusLocked')}
               className={cn(
                 'size-4',
                 key.inAgent
-                  ? 'text-violet-300 drop-shadow-[0_0_6px_rgb(167_139_250/0.7)]'
+                  ? 'text-[var(--accent-fg)] drop-shadow-[0_0_6px_rgb(var(--accent-rgb)/0.7)]'
                   : 'text-faint',
               )}
               strokeWidth={1.75}

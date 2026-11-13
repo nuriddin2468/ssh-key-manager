@@ -18,7 +18,7 @@ export function Chip({ label, count, pressed, onClick }: ChipProps) {
         'pressable inline-flex h-[30px] items-center gap-1.5 rounded-full border px-3 text-[12.5px] font-medium',
         pressed
           ? 'border-[rgb(var(--accent-rgb)/0.45)] bg-[rgb(var(--accent-rgb)/0.14)] text-[var(--accent-text)]'
-          : 'border-white/[0.09] bg-white/[0.04] text-fg-2 hover:bg-white/[0.07]',
+          : 'border-ink/[0.09] bg-ink/[0.04] text-fg-2 hover:bg-ink/[0.07]',
       )}
     >
       {label}

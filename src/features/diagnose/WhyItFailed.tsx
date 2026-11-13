@@ -271,7 +271,7 @@ export function WhyItFailed({
               aria-label={t('diagnose.output')}
               // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be reachable by keyboard
               tabIndex={0}
-              className="max-h-40 w-full overflow-auto rounded-[11px] border border-white/[0.07] bg-black/30 px-3 py-2"
+              className="max-h-40 w-full overflow-auto rounded-[11px] border border-ink/[0.07] bg-well px-3 py-2"
             >
               <pre className="selectable font-mono text-[11.5px] leading-[17px] whitespace-pre-wrap text-fg-2">
                 {diagnosis.lines.join('\n')}

@@ -230,3 +230,31 @@ describe('wiping a secret this user sent', () => {
     await waitFor(() => expect(api.chatRevoke).toHaveBeenLastCalledWith('Ym9i', secret.id, false));
   });
 });
+
+describe('a chat kept of a removed computer', () => {
+  const variables: ChatEntry = {
+    ...secret,
+    body: {
+      kind: 'variables',
+      label: 'shop · staging',
+      expires: new Date(Date.now() + 3_000_000).toISOString(),
+      gone: null,
+      variables: [{ name: 'API_KEY', secret: true, value: null, risky: false }],
+    },
+  };
+  const gone = { ...bob, online: false, removed: true };
+
+  it('offers no adding of its variables, which could not be', () => {
+    wrap(<Bubble peer={gone} entry={variables} onAddVariables={() => undefined} />);
+    expect(screen.queryByRole('button', { name: /environment/ })).not.toBeInTheDocument();
+  });
+
+  it('still wipes what this user sent, here', async () => {
+    api.chatRevoke.mockResolvedValue(undefined);
+    const mine: ChatEntry = { ...variables, mine: true, delivery: { state: 'delivered' } };
+    wrap(<Bubble peer={gone} entry={mine} onAddVariables={() => undefined} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Wipe here only' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Wipe here' }));
+    await waitFor(() => expect(api.chatRevoke).toHaveBeenCalledWith('Ym9i', secret.id, false));
+  });
+});

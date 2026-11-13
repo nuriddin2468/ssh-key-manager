@@ -129,7 +129,9 @@ export function MyDevices({ status }: { status: NearbyStatus | undefined }) {
                         <MessageSquare aria-hidden="true" className="size-3.5" strokeWidth={2} />
                       }
                       aria-label={t('nearby.chat.messageTo', { name: device.name })}
-                      onClick={() => navigate({ page: 'nearby', tab: 'chats', chat: device.key })}
+                      onClick={() =>
+                        navigate({ page: 'nearby', tab: 'chats', chat: device.key, compose: true })
+                      }
                     >
                       {t('nearby.chat.message')}
                     </Button>

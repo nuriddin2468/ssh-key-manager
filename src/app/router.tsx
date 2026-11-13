@@ -38,8 +38,11 @@ export type Route =
   | { page: 'envs'; envId?: string; view?: 'files'; project?: string; back?: string }
   /** `connect` starts a session to that alias; `nonce` makes each request a new one. */
   | { page: 'terminal'; connect?: string; nonce?: number }
-  /** `tab: 'chats'` shows the chats; `chat` opens the one with that device key. */
-  | { page: 'nearby'; tab?: 'chats'; chat?: string }
+  /**
+   * `tab: 'chats'` shows the chats; `chat` opens the one with that device
+   * key, and `compose` puts the focus in its composer (a Message button).
+   */
+  | { page: 'nearby'; tab?: 'chats'; chat?: string; compose?: boolean }
   /** `tool` opens one of the Tools page's tools (src/features/tools). */
   | { page: 'tools'; tool?: string }
   | { page: 'settings' };

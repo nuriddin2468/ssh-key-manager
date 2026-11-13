@@ -30,7 +30,14 @@ import { VariablesDialog } from './VariablesDialog';
 export const CHATS_PANEL = 'nearby-panel-chats';
 
 /** Chats: the list of computers on the left, the conversation on the right. */
-export function ChatsView({ chat }: { chat: string | undefined }) {
+export function ChatsView({
+  chat,
+  compose = false,
+}: {
+  chat: string | undefined;
+  /** Opened by a Message button: the composer takes the focus. */
+  compose?: boolean;
+}) {
   const { t } = useTranslation();
   const dialogs = useDialogs();
   const vault = useVaultStatus().data?.state;
@@ -91,7 +98,11 @@ export function ChatsView({ chat }: { chat: string | undefined }) {
         className="glass-raised relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl"
       >
         {open ? (
-          <Conversation key={open.key} peer={open} focus={picked === open.key} />
+          <Conversation
+            key={open.key}
+            peer={open}
+            focus={picked === open.key || (compose && chat === open.key)}
+          />
         ) : (
           <EmptyState
             className="my-auto"

@@ -30,7 +30,7 @@ import { ItemCard } from '../ItemCard';
 import { secondsUntil, soon, useChatAction, useNow } from './model';
 
 interface BubbleProps {
-  peer: { key: string; name: string; online: boolean };
+  peer: { key: string; name: string; online: boolean; removed?: boolean };
   entry: ChatEntry;
   /** Opens the review that adds received variables to an environment. */
   onAddVariables: (id: string) => void;
@@ -260,15 +260,24 @@ function Expiry({ expires }: { expires: string }) {
   const now = useNow();
   const seconds = secondsUntil(expires, now);
   return (
-    <Badge tone={soon(expires, now) ? 'warning' : 'neutral'}>
-      {t('nearby.chat.secret.expiresIn', {
-        time: formatDuration(Math.max(60, seconds), i18n.language),
-      })}
-    </Badge>
+    // Off the log's live region: a ticking count isn't read out every minute.
+    <span aria-live="off">
+      <Badge tone={soon(expires, now) ? 'warning' : 'neutral'}>
+        {t('nearby.chat.secret.expiresIn', {
+          time: formatDuration(Math.max(60, seconds), i18n.language),
+        })}
+      </Badge>
+    </span>
   );
 }
 
-function Wipe({ peer, id }: { peer: { key: string; name: string; online: boolean }; id: string }) {
+function Wipe({
+  peer,
+  id,
+}: {
+  peer: { key: string; name: string; online: boolean; removed?: boolean };
+  id: string;
+}) {
   const { t } = useTranslation();
   const [asking, setAsking] = useState(false);
   // Online, it is wiped on both computers or not at all; offline, here only.
@@ -311,7 +320,7 @@ function SecretBody({
   expires,
   gone,
 }: {
-  peer: { key: string; name: string; online: boolean };
+  peer: { key: string; name: string; online: boolean; removed?: boolean };
   entry: ChatEntry;
   label: string;
   expires: string | null;
@@ -362,7 +371,7 @@ function VariablesBody({
   entry,
   onAdd,
 }: {
-  peer: { key: string; name: string; online: boolean };
+  peer: { key: string; name: string; online: boolean; removed?: boolean };
   entry: ChatEntry;
   onAdd: () => void;
 }) {
@@ -418,7 +427,8 @@ function VariablesBody({
           {expires ? <Expiry expires={expires} /> : null}
           {entry.mine ? (
             <Wipe peer={peer} id={entry.id} />
-          ) : (
+          ) : peer.removed ? null : (
+            // A removed computer's variables are kept to read, not added.
             <Button size="sm" variant="soft" onClick={onAdd}>
               {t('nearby.chat.variables.add')}
             </Button>
@@ -433,7 +443,7 @@ function CardBody({
   peer,
   entry,
 }: {
-  peer: { key: string; name: string; online: boolean };
+  peer: { key: string; name: string; online: boolean; removed?: boolean };
   entry: ChatEntry;
 }) {
   const { t } = useTranslation();

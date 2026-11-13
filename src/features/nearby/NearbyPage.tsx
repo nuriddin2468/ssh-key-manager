@@ -54,6 +54,7 @@ export function NearbyPage() {
   const { route, navigate } = useRouter();
   const tab = route.page === 'nearby' ? (route.tab ?? 'computers') : 'computers';
   const chat = route.page === 'nearby' ? route.chat : undefined;
+  const compose = route.page === 'nearby' && route.compose === true;
   const chats = useChatList();
   const unread = (chats.data?.chats ?? []).reduce((sum, item) => sum + item.unread, 0);
   // Online for chats while Nearby is open, on either tab.
@@ -128,7 +129,7 @@ export function NearbyPage() {
       {tab === 'chats' ? (
         <PageBody className="overflow-hidden">
           <div id={CHATS_PANEL} role="tabpanel" className="flex min-h-0 flex-1 flex-col">
-            <ChatsView chat={chat} />
+            <ChatsView chat={chat} compose={compose} />
           </div>
         </PageBody>
       ) : (
@@ -376,7 +377,12 @@ export function NearbyPage() {
                           }
                           aria-label={t('nearby.chat.messageTo', { name: contact.name })}
                           onClick={() =>
-                            navigate({ page: 'nearby', tab: 'chats', chat: contact.key })
+                            navigate({
+                              page: 'nearby',
+                              tab: 'chats',
+                              chat: contact.key,
+                              compose: true,
+                            })
                           }
                         >
                           {t('nearby.chat.message')}

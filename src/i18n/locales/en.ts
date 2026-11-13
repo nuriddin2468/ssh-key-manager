@@ -386,7 +386,7 @@ const en = {
         wipeHere: 'Wipe here only',
         wipeHereTitle: 'Wipe it on this computer?',
         wipeHereText:
-          'The value goes from this chat now. {{name}} is offline, so its copy goes when its term ends.',
+          'The value goes from this chat now. The copy on {{name}} goes when its term ends.',
         wipeHereConfirm: 'Wipe here',
         hidden: 'hidden',
         label: 'Secret',

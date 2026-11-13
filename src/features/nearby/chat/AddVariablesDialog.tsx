@@ -123,7 +123,12 @@ export function AddVariablesDialog({ peer, id, onDone }: AddVariablesDialogProps
                   checked={picked.has(variable.name)}
                   disabled={variable.change === 'same'}
                   onCheckedChange={(on) => toggle(variable.name, on)}
-                  label={<span className="font-mono text-[12.5px]">{variable.name}</span>}
+                  label={
+                    // A name may be long (255 characters): cut, whole in the title.
+                    <span title={variable.name} className="block truncate font-mono text-[12.5px]">
+                      {variable.name}
+                    </span>
+                  }
                 />
                 {variable.risky ? (
                   <Badge tone="warning">

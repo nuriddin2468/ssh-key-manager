@@ -393,7 +393,7 @@ const uz = {
         wipeHere: 'Faqat shu yerda oʻchirish',
         wipeHereTitle: 'Shu kompyuterda oʻchirilsinmi?',
         wipeHereText:
-          'Qiymat hozir bu chatdan oʻchadi. {{name}} oflayn, shuning uchun undagi nusxa muddati tugaganda oʻchadi.',
+          'Qiymat hozir bu chatdan oʻchadi. {{name}} kompyuteridagi nusxa muddati tugaganda oʻchadi.',
         wipeHereConfirm: 'Shu yerda oʻchirish',
         hidden: 'yashirin',
         label: 'Maxfiy qiymat',

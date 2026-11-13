@@ -280,9 +280,13 @@ Why not the vault file itself:
   they see one custom data item they ignore and keep (as `sshkm.device.*` and
   `sshkm.own.key` today).
 
-So the history is per device by construction: the files never leave this computer, the
-vault transfer to a new computer doesn't take them, and the own-device sync must skip
-the `sshkm.chat.` custom data (the `vault-sync` work is told so). An older version opening
+So the history is per device by construction: the files never leave this computer and
+the vault transfer to a new computer doesn't take them. The own-device sync of vault
+entries keeps database-level custom data per computer unless it is a contact, a device or
+a project (`sshkm.contact.`, `sshkm.device.`, `sshkm.project.`), so `sshkm.chat.*` never
+syncs without a marker of its own. A vault moved to a new computer carries the old
+computer's chat key, which is harmless: it is named after the old computer's device key,
+and the files it opens stayed there. An older version opening
 the vault never looks into `chats/`. A copy of the vault restored from before the chat
 key existed can't open the files: the app says once that older history can't be read and
 starts again.

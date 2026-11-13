@@ -65,7 +65,8 @@ real `~/.ssh`. Its modules:
     key derived from the master password (Argon2id, 128 MiB) and, optionally, under a
     random device key kept in the OS credential store for Touch ID / Windows Hello.
     Losing or damaging it loses nothing: the recovery key opens the database and sets
-    a new master password. Master password checks run one at a time, and after a few
+    a new master password (a damaged file is kept aside; one from a newer app version is
+    left alone). Master password checks run one at a time, and after a few
     wrong ones in a row the next waits a little (`vault/attempts.rs`).
   - Entry summaries and details never contain a password or 2FA secret; those are
     read one at a time.

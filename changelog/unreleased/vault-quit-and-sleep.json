@@ -1,6 +1,6 @@
 {
   "kind": "security",
-  "en": "Passwords: quitting the app clears a copied password the clipboard still holds, locking when idle counts the time the computer slept, and a new recovery key leaves the screen when the vault locks.",
-  "ru": "Пароли: при выходе из приложения скопированный пароль, если он ещё в буфере обмена, стирается, «Блокировать при бездействии» учитывает время сна компьютера, а новый ключ восстановления исчезает с экрана, когда хранилище блокируется.",
-  "uz": "Parollar: ilovadan chiqilganda hali buferda turgan nusxalangan parol tozalanadi, «Faoliyat boʻlmasa qulflash» kompyuter uxlagan vaqtni ham hisoblaydi, yangi tiklash kaliti esa ombor qulflanganda ekrandan ketadi."
+  "en": "Passwords: quitting the app clears a copied password the clipboard still holds, locking when idle counts the time the computer slept, and a new recovery key leaves the screen when the vault locks, then comes back after unlocking until you confirm it's saved.",
+  "ru": "Пароли: при выходе из приложения скопированный пароль, если он ещё в буфере обмена, стирается, «Блокировать при бездействии» учитывает время сна компьютера, а новый ключ восстановления исчезает с экрана, когда хранилище блокируется, и возвращается после разблокировки, пока вы не подтвердите, что сохранили его.",
+  "uz": "Parollar: ilovadan chiqilganda hali buferda turgan nusxalangan parol tozalanadi, «Faoliyat boʻlmasa qulflash» kompyuter uxlagan vaqtni ham hisoblaydi, yangi tiklash kaliti esa ombor qulflanganda ekrandan ketadi va siz uni saqlaganingizni tasdiqlamaguningizcha ombor ochilgandan keyin yana chiqadi."
 }

@@ -26,7 +26,9 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     key derived with Argon2id (128 MiB, 3 passes). There is no way back without the
     master password or the recovery key. Losing or damaging `vault.keys` loses
     nothing: the lock screen then asks for the recovery key, which opens the database
-    alone and writes a new `vault.keys`.
+    alone and writes a new `vault.keys` (a damaged one is kept next to it, as
+    `vault.keys.damaged-<time>`). A `vault.keys` written by a newer version of the app
+    is left alone: the app asks to be updated instead of offering recovery.
   - Master password checks run one at a time, in whichever window or for whichever
     action they are made (unlocking; exporting, a new master password or recovery key,
     device unlock, adding an own device), and so do attempts with the recovery key or a
@@ -63,12 +65,10 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     over key slots changed elsewhere is refused.
   - Key derivation settings read from `vault.keys` or a `.kdbx` header (memory, passes
     and lanes; each lane is a thread started for every quarter of every pass) are
-    capped before use, so a tampered file can't make unlocking run for hours. Before
-    the KeePass reader sees a file, every number in its header is checked to have its
-    size, and KeePass 1 (`.kdb`) files are refused, so a damaged or tampered file is
-    refused instead of stopping the app. A vault file replaced by one its key doesn't
-    open locks the vault; a file that doesn't open isn't decrypted again until it
-    changes.
+    capped before use, so a tampered file can't make unlocking run for hours. A
+    KeePass file's header is validated strictly before the file is parsed, and KeePass 1
+    (`.kdb`) files are refused. A vault file replaced by one its key doesn't open locks
+    the vault; a file that doesn't open isn't decrypted again until it changes.
   - The screen lock is noticed on macOS and Windows. On Linux it is noticed through
     systemd-logind: the session's `Lock` signal (which `loginctl lock-session` sends)
     and its `LockedHint` (which GNOME, KDE, Cinnamon, MATE, Xfce and light-locker set);
@@ -76,7 +76,10 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     neither, such as swaylock or i3lock started from a key binding, isn't noticed:
     there the vault locks after inactivity or sleep only.
   - A new recovery key on the screen (after making the vault, or in Settings) goes
-    when the vault locks.
+    when the vault locks. Until you confirm it's saved, it is shown again after the
+    next unlock: the app keeps only a note of the vault's id meanwhile and reads the key
+    from the unlocked vault, whose password it is. Only the app sets that note, when it
+    makes a key; the page can only clear it.
   - A 2FA secret the app can't make codes for (HOTP, a period of 0 or over 5 minutes,
     fewer than 6 or more than 10 digits), from an import, a contact or a KeePass file,
     is refused or kept as unreadable instead of crashing the app.

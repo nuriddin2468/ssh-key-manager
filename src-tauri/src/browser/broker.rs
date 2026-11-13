@@ -36,7 +36,8 @@
 //!   extension asks the user first. A browser may change [`MAX_CHANGES`]
 //!   logins a minute, so whoever holds its keys can't clear out a site's
 //!   logins at once, and the browsers' changes back the vault up at most once
-//!   per [`BACKUP_EVERY`], so they can't push the older backups out.
+//!   per [`BACKUP_EVERY`], so a burst of them doesn't push the older backups
+//!   out (a day of them would; entry history keeps what was changed).
 //! - A browser changes its keys now and then ([`Action::Rekey`]), at most
 //!   [`MAX_REKEYS`] times a minute. Its old keys are kept, retired; a
 //!   request sealed with one after that shows that someone else holds a
@@ -771,7 +772,7 @@ impl Broker {
 
     /// Writes a browser's change to logins. The first such change in
     /// [`BACKUP_EVERY`] backs the vault up first, later ones don't, so that
-    /// a burst of changes from a browser can't push the older backups out.
+    /// a burst of changes from a browser doesn't push the older backups out.
     /// What a browser changes stays in the entry's history or the recycle bin
     /// anyway.
     fn write_logins<T>(

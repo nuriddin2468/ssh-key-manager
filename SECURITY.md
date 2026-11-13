@@ -477,7 +477,9 @@ Settings then asks to move the app to Applications.
   the browser. The extension asks the user before it removes one. A browser may save,
   update, change or remove at most ten logins a minute, so a program holding its keys
   can't clear out a site's logins at once. Changes from the browsers back the vault up
-  at most once an hour, so they can't push the older backups out either. An app from
+  at most once an hour, so a burst of them doesn't push the older backups out; keeping
+  on for a day would, but the entry's history and the recycle bin still hold what was
+  changed. An app from
   before these questions can't read them and answers `invalid`, which the extension
   shows as "update the app".
 - One more question needs no pairing and carries nothing from the vault: whether two

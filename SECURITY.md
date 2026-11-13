@@ -24,10 +24,23 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     The master password does not encrypt the database directly: it opens a copy of
     the recovery key kept in `vault.keys`, encrypted with XChaCha20-Poly1305 under a
     key derived with Argon2id (128 MiB, 3 passes). There is no way back without the
-    master password or the recovery key.
+    master password or the recovery key. Losing or damaging `vault.keys` loses
+    nothing: the lock screen then asks for the recovery key, which opens the database
+    alone and writes a new `vault.keys` (a damaged one is kept next to it, as
+    `vault.keys.damaged-<time>`). A `vault.keys` written by a newer version of the app
+    is left alone: the app asks to be updated instead of offering recovery.
+  - Master password checks run one at a time, in whichever window or for whichever
+    action they are made (unlocking; exporting, a new master password or recovery key,
+    device unlock, adding an own device), and so do attempts with the recovery key or a
+    KeePass file's password. After three wrong ones in a row, the next attempt is
+    refused until a wait has passed: 1 second, doubling up to 30 seconds; a right one
+    resets the count. The count is kept in memory and starts again with the app. It
+    slows guessing through the app; someone with a copy of `vault.keys` is slowed only
+    by Argon2id.
   - While unlocked, the decrypted database is held only by the Rust process and is
-    dropped when the vault locks: on request, after inactivity, after sleep, and
-    optionally when the window is minimised or closed. With **Settings → Background**
+    dropped when the vault locks: on request, after inactivity (time the computer
+    slept counts as inactivity), after sleep, when the screen locks, and optionally
+    when the window is minimised or closed. With **Settings → Background**
     on, closing the window only hides it and the app goes on in the tray (the menu bar
     on macOS), so browser autofill keeps working; the vault then locks by the same
     rules, and the tray menu shows whether it is unlocked and locks it. Showing an
@@ -39,7 +52,7 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - Copying a password, a 2FA code or the recovery key goes from Rust straight to the
     clipboard, marked so clipboard history (and Windows' cloud clipboard) skip it, and
     is cleared after 30 seconds by default if nothing else was copied. Locking the vault
-    clears it at once.
+    or quitting the app clears it at once.
   - The secret generator on the Tools page makes its passwords, tokens and keys in Rust
     from the operating system's random number generator, as the vault does. It shows
     the value it made; copying it, or a `.env` line, an `export` or a connection URL
@@ -52,7 +65,22 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     over key slots changed elsewhere is refused.
   - Key derivation settings read from `vault.keys` or a `.kdbx` header (memory, passes
     and lanes; each lane is a thread started for every quarter of every pass) are
-    capped before use, so a tampered file can't make unlocking run for hours.
+    capped before use, so a tampered file can't make unlocking run for hours. A
+    KeePass file's header is validated strictly before the file is parsed, and KeePass 1
+    (`.kdb`) files are refused. A vault file replaced by one its key doesn't open locks
+    the vault; a file that doesn't open isn't decrypted again until it changes.
+  - The screen lock is noticed on macOS and Windows. On Linux it is noticed through
+    systemd-logind: the session's `Lock` signal (which `loginctl lock-session` sends)
+    and its `LockedHint` (which GNOME, KDE, Cinnamon, MATE, Xfce and light-locker set);
+    without logind, through the desktop's screensaver service. A locker that tells
+    neither, such as swaylock or i3lock started from a key binding, isn't noticed:
+    there the vault locks after inactivity or sleep only.
+  - A new recovery key on the screen (after making the vault, or in Settings) goes
+    when the vault locks. Until you confirm it's saved, the app reminds you after each
+    unlock, and keeps only a note of the vault's id meanwhile. Only the app sets that
+    note, when it makes a key; the page can only clear it. The key is shown again only
+    when you ask and say yes in a system dialog, every time: then it is read from the
+    unlocked vault, whose password it is.
   - A 2FA secret the app can't make codes for (HOTP, a period of 0 or over 5 minutes,
     fewer than 6 or more than 10 digits), from an import, a contact or a KeePass file,
     is refused or kept as unreadable instead of crashing the app.

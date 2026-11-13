@@ -655,6 +655,7 @@ const en = {
       'The vault was changed on another computer at the same time. Its version is kept, and your change was saved as a separate copy.',
     vault_locked: 'The vault is locked. Unlock it and try again.',
     cancelled: 'Cancelled.',
+    too_many_attempts: 'Too many failed attempts. Wait a moment and try again.',
     unknown: 'Unexpected error.',
   },
   keys: {
@@ -2181,6 +2182,13 @@ const en = {
     meta_one: '{{count}} entry',
     meta_other: '{{count}} entries',
     loadFailed: 'Couldn’t open the vault',
+    keysTooNew: 'A newer version of SSH Key Manager changed this vault. Update the app to open it.',
+    unsavedKeyTitle: 'Your new recovery key isn’t saved yet',
+    unsavedKeyText: 'The vault locked before you confirmed you saved it.',
+    unsavedKeyCardText:
+      'The vault locked before you confirmed you saved it. Show it again and save it: if you forget the master password, it’s the only way back in.',
+    unsavedKeyShow: 'Show key',
+    unsavedKeyLater: 'Later',
     createTitle: 'Keep passwords next to your keys',
     createText: 'Server passwords, key passphrases and website logins in one encrypted vault.',
     pointFile: 'An encrypted KeePass file on this computer.',

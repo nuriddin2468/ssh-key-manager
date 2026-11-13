@@ -74,8 +74,10 @@ real `~/.ssh`. Its modules:
   - `vault.keys` holds key slots: the secret encrypted with XChaCha20-Poly1305 under a
     key derived from the master password (Argon2id, 128 MiB) and, optionally, under a
     random device key kept in the OS credential store for Touch ID / Windows Hello.
-    Losing it loses nothing: the recovery key opens the database and sets a new
-    master password.
+    Losing or damaging it loses nothing: the recovery key opens the database and sets
+    a new master password (a damaged file is kept aside; one from a newer app version is
+    left alone). Master password checks run one at a time, and after a few
+    wrong ones in a row the next waits a little (`vault/attempts.rs`).
   - Entry summaries and details never contain a password or 2FA secret; those are
     read one at a time.
   - `breach` checks passwords against Have I Been Pwned with k-anonymity: it makes
@@ -265,9 +267,9 @@ translates.
 - **Watcher.** Watches `~/.ssh` and the hosts file so changes made in a terminal appear
   immediately.
 - **Vault runtime.** The unlocked vault lives only in the Rust process. A timer locks
-  it after inactivity or sleep; each lock emits `vault-locked`. Copied passwords go
-  from Rust to the clipboard, marked to stay out of clipboard history, and are
-  cleared after a while.
+  it after inactivity (time asleep counts) or sleep; each lock emits `vault-locked`.
+  Copied passwords go from Rust to the clipboard, marked to stay out of clipboard
+  history, and are cleared after a while, when the vault locks and when the app quits.
 - **Breach check.** `commands/audit_checks.rs`, off until the user turns it on. The
   vault audit starts it in the background for passwords without a result; it asks
   `api.pwnedpasswords.com` for one range at a time (reqwest, the updater's TLS), and

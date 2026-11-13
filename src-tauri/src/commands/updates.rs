@@ -137,7 +137,8 @@ pub async fn update_install(
                     let _ = progress.send(percent);
                 }
             },
-            || {},
+            // Windows quits into the installer without the app's exit.
+            || state.vault.on_exit(),
         )
         .await
         .map_err(|e| updater_error(&e))?;

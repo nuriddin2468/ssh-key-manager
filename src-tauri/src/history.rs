@@ -104,6 +104,14 @@ impl Outcome {
         ) || text::says_host_key_failed(output)
         {
             Self::HostKeyUnknown
+        } else if test
+            .prompts
+            .iter()
+            .any(|p| matches!(p.outcome, PromptOutcome::Withheld | PromptOutcome::NotAsked))
+        {
+            // A secret the user chose not to fill in, or wasn't asked about:
+            // no verdict on the host.
+            Self::Failed
         } else if asked(password, PromptOutcome::Repeated) {
             Self::PasswordRejected
         } else if asked(code, PromptOutcome::Missing) {

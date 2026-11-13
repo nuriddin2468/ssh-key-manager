@@ -35,7 +35,10 @@ real `~/.ssh`. Its modules:
   - `install` writes the file with administrator rights; see SECURITY.md.
 - `agent`: a small synchronous client for the ssh-agent protocol.
   - Connects through a Unix socket (`SSH_AUTH_SOCK`), or on Windows a named pipe:
-    `SSH_AUTH_SOCK` if it names one, else the OpenSSH agent's pipe.
+    `SSH_AUTH_SOCK` if it names one, else the OpenSSH agent's pipe. Nothing is sent
+    until the server is known to run as this user or the system: on Unix by the
+    socket's peer credentials (`agent/peer.rs`, through libc), on Windows by the check
+    the app sets.
 - `perms`
   - Unix: checks and fixes file modes. On macOS it also empties a folder's access list
     (`perms/extended_acl.rs`, through the system library), for the private folders
@@ -44,8 +47,8 @@ real `~/.ssh`. Its modules:
     `icacls`. It also creates files meant for plain-text secrets (exports, converted
     keys) with a protected access list already in place, through Win32
     (`perms/private_file.rs`). These two modules, the Unix part of
-    `vault/envs/files/pipes.rs` and the Windows part of `vault/envs/files/folder.rs`
-    are the crate's only `unsafe` code.
+    `vault/envs/files/pipes.rs`, the Windows part of `vault/envs/files/folder.rs` and
+    `agent/peer.rs` (Unix) are the crate's only `unsafe` code.
 - `fsutil`: atomic writes. Files in `~/.ssh` and the app's data folder are written
   through links (`atomic_write`; `atomic_write_private` for a private key, which keeps
   only its owner's permissions); secrets written where the user picks are never written
@@ -292,9 +295,16 @@ translates.
   - One supervisor thread per tunnel that is on runs `ssh -N` with the forward,
     `ExitOnForwardFailure` and `ServerAliveInterval`, its prompts answered by the
     terminal's prompt bridge through an interactive askpass session.
-  - `LogLevel=VERBOSE`'s `Authenticated to …` line tells when signing in is done;
-    `failure` reads why `ssh` stopped. With auto-reconnect a tunnel starts again
+  - `LogLevel=VERBOSE`'s `Authenticated to …` line, read from `ssh`'s own log (a
+    private `-E` file, which servers' banners don't reach), tells when signing in is
+    done; `failure` reads why `ssh` stopped from that log and its stderr. On Windows,
+    where Win32-OpenSSH keeps others from reading that file, there is no log: stderr
+    tells, and nothing is offered for saving. With auto-reconnect a tunnel starts again
     after a growing wait, unless what stopped it needs the user.
+  - Through a program that may run another `ssh` (a `ProxyCommand` of the host or a
+    `ProxyJump` hop, a `LocalCommand`, a `KnownHostsCommand`), `askpass::fill` asks in
+    a native dialog before each secret is filled in, for tunnels, the terminal and
+    `run_ssh` alike.
   - Every change goes to the page as `tunnels-changed`, and to the tray menu. Tunnels
     stop when the app quits.
 - **Quick search.** `src-tauri/src/quick/`: a system-wide shortcut

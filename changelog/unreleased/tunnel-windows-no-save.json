@@ -1,0 +1,6 @@
+{
+  "kind": "notice",
+  "en": "On Windows, tunnels no longer offer to save a password or passphrase you type, as the terminal there doesn't: the app can't tell for sure that signing in worked.",
+  "ru": "В Windows туннели больше не предлагают сохранить введённый пароль или парольную фразу, как и терминал там: приложение не может точно знать, что вход удался.",
+  "uz": "Windows da tunnellar endi kiritilgan parol yoki parol iborasini saqlashni taklif qilmaydi, u yerdagi terminal kabi: ilova kirish muvaffaqiyatli boʻlganini aniq bila olmaydi."
+}

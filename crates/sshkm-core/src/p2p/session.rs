@@ -144,6 +144,20 @@ fn finish<S>(stream: S, handshake: snow::HandshakeState, initiator: bool) -> Res
     })
 }
 
+impl<S> Session<S> {
+    /// The same session over `f(stream)`: e.g. the socket again, once the
+    /// first steps under a [`super::deadline::Deadline`] are done.
+    pub fn map_stream<T>(self, f: impl FnOnce(S) -> T) -> Session<T> {
+        Session {
+            stream: f(self.stream),
+            noise: self.noise,
+            remote: self.remote,
+            hash: self.hash,
+            initiator: self.initiator,
+        }
+    }
+}
+
 impl<S: Read + Write> Session<S> {
     /// The peer's device key, proven in the handshake.
     pub fn remote(&self) -> PeerKey {

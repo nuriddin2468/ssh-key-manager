@@ -8,12 +8,9 @@
 //! servers and jump hosts print; only the server itself, which is told the
 //! new key anyway, could fake a line of it, and that only about itself.
 
-use std::fs::{self, OpenOptions};
-use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
-use rand_core::{OsRng, RngCore};
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
@@ -23,7 +20,7 @@ use super::vault_hosts::saved_secrets;
 use super::{Shared, blocking};
 use crate::askpass::{AskedPrompt, Secrets};
 use crate::error::{AppError, AppResult};
-use crate::process::Output;
+use crate::process::{LogFile, Output};
 use crate::state::AppState;
 
 /// Whether a host let the user in with one key.
@@ -87,7 +84,7 @@ fn key_login(
         .clone()
         .ok_or_else(|| AppError::invalid(format!("{} has no fingerprint", key.name)))?;
     let log = LogFile::create()?;
-    let log_path = log.0.to_string_lossy().into_owned();
+    let log_path = log.path().to_string_lossy().into_owned();
     // `ssh` expands `%` tokens in an identity path.
     let identity = path.to_string_lossy().replace('%', "%%");
     let mut options = vec![
@@ -195,40 +192,6 @@ fn names(described: &str, path: &str, fingerprint: &str) -> bool {
         || described == path
         || described.starts_with(&format!("{path} "))
         || described.ends_with(&format!(" {path}"))
-}
-
-/// A new, empty file only the user can read, for `ssh -E`; removed once
-/// dropped.
-struct LogFile(PathBuf);
-
-impl LogFile {
-    fn create() -> AppResult<Self> {
-        let dir = std::env::temp_dir();
-        loop {
-            let path = dir.join(format!("sshkm-ssh-{:016x}.log", OsRng.next_u64()));
-            let mut options = OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-            match options.open(&path) {
-                Ok(_) => return Ok(Self(path)),
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(e.into()),
-            }
-        }
-    }
-
-    fn read(&self) -> String {
-        fs::read(&self.0)
-            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-            .unwrap_or_default()
-    }
-}
-
-impl Drop for LogFile {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
 }
 
 #[cfg(test)]
@@ -380,21 +343,5 @@ mod tests {
         assert_eq!(debug_message("debug3: hello\r"), Some("hello"));
         assert_eq!(debug_message("debugging: no"), None);
         assert_eq!(debug_message("Permission denied"), None);
-    }
-
-    #[test]
-    fn log_files_are_private_and_removed() {
-        let log = LogFile::create().unwrap();
-        let path = log.0.clone();
-        fs::write(&path, "debug1: x\n").unwrap();
-        assert_eq!(log.read(), "debug1: x\n");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = fs::metadata(&path).unwrap().permissions().mode();
-            assert_eq!(mode & 0o777, 0o600);
-        }
-        drop(log);
-        assert!(!path.exists());
     }
 }

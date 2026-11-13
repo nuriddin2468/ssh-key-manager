@@ -1,0 +1,6 @@
+{
+  "kind": "notice",
+  "en": "Saving a tunnel that listens on all addresses, or a remote tunnel, now asks first in a system dialog that says who can connect and what they reach. Renaming a tunnel or turning auto-reconnect on or off doesn't ask again.",
+  "ru": "Сохранение туннеля, который слушает на всех адресах, или удалённого туннеля теперь сначала спрашивает в системном окне, кто сможет подключиться и куда попадёт. Переименование туннеля или смена автопереподключения не спрашивает снова.",
+  "uz": "Barcha manzillarda tinglaydigan tunnel yoki masofaviy tunnelni saqlash endi avval tizim oynasida kim ulana olishi va qayerga yetishini aytib soʻraydi. Tunnel nomini oʻzgartirish yoki avtomatik qayta ulanishni yoqish-oʻchirish qayta soʻramaydi."
+}

@@ -19,6 +19,7 @@ use sshkm_core::ErrorCode;
 use sshkm_core::chat::{Body, Conversation, Entry, Line, Outcome};
 use sshkm_core::p2p::chat::{ChatFrame, RateLimit, Refusal, new_id};
 use sshkm_core::p2p::contact::{self, ContactKey};
+use sshkm_core::p2p::deadline::Deadline;
 use sshkm_core::p2p::protocol::{CHAT, Item, ItemSummary, VERSION, features};
 use sshkm_core::p2p::session::{Reader, Writer};
 use sshkm_core::p2p::{self, Message, PeerKey, Session};
@@ -102,12 +103,11 @@ impl Nearby {
         let identity = self.identity()?;
         let me = identity.public();
         for address in addresses {
-            let Ok(mut stream) = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) else {
+            let Ok(stream) = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) else {
                 continue;
             };
-            let _ = stream.set_read_timeout(Some(KNOCK_TIMEOUT));
-            let _ = stream.set_write_timeout(Some(KNOCK_TIMEOUT));
-            let deadline = Deadline::arm(&stream, KNOCK_TIMEOUT);
+            // As for one coming in: one deadline for the first steps.
+            let mut stream = Deadline::new(stream, KNOCK_TIMEOUT);
             let Ok(prologue) = contact::knock(&mut stream, &key, peer) else {
                 continue;
             };
@@ -117,9 +117,7 @@ impl Nearby {
             if session.remote() != *peer {
                 continue;
             }
-            let started = self.start_link(session, *peer, me, me);
-            deadline.disarm();
-            match started {
+            match self.start_link(session, *peer, me, me) {
                 Ok(linked) => return Ok(linked),
                 Err(error) => log::warn!("nearby: a chat link didn't start: {error}"),
             }
@@ -128,7 +126,7 @@ impl Nearby {
     }
 
     /// A connection to the chat port: a contact's knock, or nothing.
-    pub(super) fn chat_incoming(self: &Arc<Self>, mut stream: TcpStream) {
+    pub(super) fn chat_incoming(self: &Arc<Self>, stream: TcpStream) {
         let address = stream.peer_addr().ok().map(|address| address.ip());
         {
             let mut chats = self.chats();
@@ -141,14 +139,12 @@ impl Nearby {
                 *chats.knocking_by.entry(ip).or_default() += 1;
             }
         }
-        // One deadline for the knock, the handshake and the Hellos: bytes
-        // that trickle in don't keep a place at the knock.
-        let deadline = Deadline::arm(&stream, KNOCK_TIMEOUT);
         let result = (|| -> AppResult<()> {
             // A listener's socket hands on its non-blocking mode on some systems.
             stream.set_nonblocking(false)?;
-            stream.set_read_timeout(Some(KNOCK_TIMEOUT))?;
-            stream.set_write_timeout(Some(KNOCK_TIMEOUT))?;
+            // One deadline for the knock, the handshake and the Hellos: bytes
+            // that trickle in don't keep a place at the knock.
+            let mut stream = Deadline::new(stream, KNOCK_TIMEOUT);
             let identity = self.identity()?;
             let me = identity.public();
             let known: Vec<(PeerKey, Arc<ContactKey>)> = self
@@ -192,7 +188,6 @@ impl Nearby {
             self.start_link(session, peer, me, peer)?;
             Ok(())
         })();
-        deadline.disarm();
         if let Err(error) = result {
             log::debug!("nearby: a chat connection ended early: {error}");
         }
@@ -218,7 +213,7 @@ impl Nearby {
     /// and what waited for a receipt goes again.
     fn start_link(
         self: &Arc<Self>,
-        mut session: Session<TcpStream>,
+        mut session: Session<Deadline>,
         peer: PeerKey,
         me: PeerKey,
         initiator: PeerKey,
@@ -243,6 +238,8 @@ impl Nearby {
         if version != VERSION || !known || !theirs.iter().any(|feature| feature == CHAT) {
             return Err(AppError::invalid("the other computer doesn't chat"));
         }
+        // Past the first steps: the socket's own timeouts from here on.
+        let session = session.map_stream(Deadline::into_inner);
         session.stream().set_read_timeout(Some(DEAD_AFTER))?;
         session.stream().set_write_timeout(Some(WRITE_TIMEOUT))?;
         let (reader, writer) = session.split()?;
@@ -725,32 +722,6 @@ impl Nearby {
     }
 }
 
-/// A deadline for a connection: once it passes, the socket is shut down,
-/// whatever read or write waits on it, unless the deadline was disarmed.
-struct Deadline {
-    done: Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl Deadline {
-    fn arm(stream: &TcpStream, after: Duration) -> Self {
-        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        if let Ok(stream) = stream.try_clone() {
-            let flag = Arc::clone(&done);
-            thread::spawn(move || {
-                thread::sleep(after);
-                if !flag.load(Ordering::SeqCst) {
-                    let _ = stream.shutdown(std::net::Shutdown::Both);
-                }
-            });
-        }
-        Self { done }
-    }
-
-    fn disarm(&self) {
-        self.done.store(true, Ordering::SeqCst);
-    }
-}
-
 /// Counts one frame from `peer` in `limits` at `now`; `false` once it sent
 /// too many.
 fn spend(limits: &mut HashMap<PeerKey, RateLimit>, peer: PeerKey, now: Instant) -> bool {
@@ -833,25 +804,5 @@ mod tests {
         ];
         assert_eq!(oldest(links.into_iter()), Some(b));
         assert_eq!(oldest(std::iter::empty()), None);
-    }
-
-    #[test]
-    fn a_deadline_shuts_a_slow_connection() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-        let (mut server, _) = listener.accept().unwrap();
-        let deadline = Deadline::arm(&server, Duration::from_millis(100));
-        let started = Instant::now();
-        // The peer sends nothing; the read ends when the deadline passes,
-        // long before any per-read timeout would.
-        server
-            .set_read_timeout(Some(Duration::from_secs(10)))
-            .unwrap();
-        let mut byte = [0; 1];
-        let read = std::io::Read::read(&mut server, &mut byte);
-        assert!(matches!(read, Ok(0) | Err(_)));
-        assert!(started.elapsed() < Duration::from_secs(5));
-        deadline.disarm();
-        drop(client);
     }
 }

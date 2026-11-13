@@ -9,12 +9,14 @@
 //! - [`contact`]: the key two paired devices share, and how a chat's
 //!   presence and knock use it.
 //! - [`chat`]: the frames of a chat session.
+//! - [`deadline`]: one deadline for a connection's first steps.
 //!
 //! Finding devices and opening sockets is the app's business: nothing here
 //! touches the network, so the tests run sessions over in-memory pipes.
 
 pub mod chat;
 pub mod contact;
+pub mod deadline;
 pub mod identity;
 pub mod own;
 pub mod protocol;

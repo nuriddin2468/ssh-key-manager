@@ -7,7 +7,7 @@ import { SEVERITY_COLORS, SEVERITY_ORDER } from './model';
 
 const RADIUS = 52;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
-const OK_COLOR = '#5EEAD4';
+const OK_COLOR = 'var(--color-ok)';
 
 /**
  * The hero's look follows the most serious open finding: red only for a
@@ -15,13 +15,13 @@ const OK_COLOR = '#5EEAD4';
  */
 const TONES = {
   critical: {
-    box: 'border-critical-solid/25 bg-[linear-gradient(135deg,rgb(255_107_107/0.16),rgb(255_255_255/0.03)_62%)]',
+    box: 'border-critical-solid/25 bg-[linear-gradient(135deg,color-mix(in_srgb,var(--color-critical-solid)_16%,transparent),var(--color-fill-subtle)_62%)]',
   },
   warning: {
-    box: 'border-warning-solid/25 bg-[linear-gradient(135deg,rgb(255_181_71/0.14),rgb(255_255_255/0.03)_62%)]',
+    box: 'border-warning-solid/25 bg-[linear-gradient(135deg,color-mix(in_srgb,var(--color-warning-solid)_14%,transparent),var(--color-fill-subtle)_62%)]',
   },
   clear: {
-    box: 'border-ok/20 bg-[linear-gradient(135deg,rgb(94_234_212/0.12),rgb(255_255_255/0.03)_62%)]',
+    box: 'border-ok/20 bg-[linear-gradient(135deg,color-mix(in_srgb,var(--color-ok)_12%,transparent),var(--color-fill-subtle)_62%)]',
   },
 } as const;
 
@@ -89,7 +89,7 @@ export function AuditSummary({
       aria-labelledby="audit-title"
       data-tone={tone}
       className={cn(
-        'flex flex-wrap items-center gap-[26px] rounded-[20px] border px-[26px] py-[22px] shadow-[inset_0_1px_0_rgb(255_255_255/0.06)] transition-[background,border-color] duration-500',
+        'flex flex-wrap items-center gap-[26px] rounded-[20px] border px-[26px] py-[22px] shadow-[inset_0_1px_0_var(--color-sheen)] transition-[background,border-color] duration-500',
         TONES[tone].box,
       )}
     >
@@ -112,7 +112,7 @@ export function AuditSummary({
             cy="68"
             r={RADIUS}
             fill="none"
-            stroke="rgb(255 255 255 / 0.07)"
+            className="stroke-ink/[0.07]"
             strokeWidth="12"
           />
           {open === 0 ? (
@@ -121,7 +121,7 @@ export function AuditSummary({
               cy="68"
               r={RADIUS}
               fill="none"
-              stroke={OK_COLOR}
+              style={{ stroke: OK_COLOR }}
               strokeWidth="12"
               opacity="0.85"
             />
@@ -134,7 +134,7 @@ export function AuditSummary({
                   cy="68"
                   r={RADIUS}
                   fill="none"
-                  stroke={SEVERITY_COLORS[segment.severity]}
+                  style={{ stroke: SEVERITY_COLORS[segment.severity] }}
                   strokeWidth="12"
                   strokeLinecap="round"
                   strokeDasharray={`${segment.dash.toFixed(2)} ${CIRCUMFERENCE.toFixed(2)}`}

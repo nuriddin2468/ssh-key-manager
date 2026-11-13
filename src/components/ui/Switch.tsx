@@ -41,14 +41,16 @@ export function Switch({ className, ...props }: ComponentProps<typeof RSwitch.Ro
   return (
     <RSwitch.Root
       className={cn(
-        'group relative h-[22px] w-[38px] shrink-0 rounded-full shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] transition-colors duration-150 disabled:opacity-50',
-        'bg-white/10 data-[state=checked]:bg-[linear-gradient(135deg,var(--accent-1),var(--accent-2))]',
+        'group relative h-[22px] w-[38px] shrink-0 rounded-full shadow-[inset_0_0_0_1px_var(--color-line-strong)] transition-colors duration-150 disabled:opacity-50',
+        // Off: an outlined track and a grey knob in the light theme, 3:1 (WCAG 1.4.11).
+        'bg-switch-off data-[state=unchecked]:shadow-[inset_0_0_0_1px_var(--color-switch-line)]',
+        'data-[state=checked]:bg-[linear-gradient(135deg,var(--accent-1),var(--accent-2))]',
         className,
       )}
       {...props}
     >
       {/* While pressed the knob stretches toward the other side, like macOS. */}
-      <RSwitch.Thumb className="block h-4 w-4 translate-x-[3px] rounded-full bg-white shadow-[0_2px_4px_rgb(0_0_0/0.35)] transition-[translate,width] duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)] group-active:w-5 data-[state=checked]:translate-x-[19px] group-active:data-[state=checked]:translate-x-[15px]" />
+      <RSwitch.Thumb className="block h-4 w-4 translate-x-[3px] rounded-full bg-knob-off shadow-thumb transition-[translate,width] duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)] group-active:w-5 data-[state=checked]:translate-x-[19px] data-[state=checked]:bg-knob group-active:data-[state=checked]:translate-x-[15px]" />
     </RSwitch.Root>
   );
 }
@@ -67,16 +69,17 @@ export function MixedSwitch({
     <RCheckbox.Root
       checked={checked === 'mixed' ? 'indeterminate' : checked}
       className={cn(
-        'group relative h-[22px] w-[38px] shrink-0 rounded-full shadow-[inset_0_0_0_1px_rgb(255_255_255/0.1)] transition-colors duration-150 disabled:opacity-50',
-        'bg-white/10 data-[state=checked]:bg-[linear-gradient(135deg,var(--accent-1),var(--accent-2))]',
-        'data-[state=indeterminate]:bg-[linear-gradient(90deg,rgb(var(--accent-rgb)/0.55),rgb(255_255_255/0.1))]',
+        'group relative h-[22px] w-[38px] shrink-0 rounded-full shadow-[inset_0_0_0_1px_var(--color-line-strong)] transition-colors duration-150 disabled:opacity-50',
+        'bg-switch-off data-[state=unchecked]:shadow-[inset_0_0_0_1px_var(--color-switch-line)]',
+        'data-[state=checked]:bg-[linear-gradient(135deg,var(--accent-1),var(--accent-2))]',
+        'data-[state=indeterminate]:bg-[linear-gradient(90deg,rgb(var(--accent-rgb)/0.55),var(--color-line-strong))]',
         className,
       )}
       {...props}
     >
       <span
         aria-hidden="true"
-        className="block h-4 w-4 translate-x-[3px] rounded-full bg-white shadow-[0_2px_4px_rgb(0_0_0/0.35)] transition-[translate,width] duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)] group-active:w-5 group-data-[state=checked]:translate-x-[19px] group-data-[state=indeterminate]:translate-x-[11px] group-active:group-data-[state=checked]:translate-x-[15px]"
+        className="block h-4 w-4 translate-x-[3px] rounded-full bg-knob-off shadow-thumb transition-[translate,width] duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)] group-active:w-5 group-data-[state=checked]:bg-knob group-data-[state=indeterminate]:bg-knob group-data-[state=checked]:translate-x-[19px] group-data-[state=indeterminate]:translate-x-[11px] group-active:group-data-[state=checked]:translate-x-[15px]"
       />
     </RCheckbox.Root>
   );

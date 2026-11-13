@@ -16,7 +16,13 @@ interface PassphraseFieldsProps {
   label?: string;
 }
 
-const SEGMENT_COLORS = ['', '#FF6B6B', '#FFB547', '#5EEAD4', '#14B8A6'];
+const SEGMENT_COLORS = [
+  '',
+  'var(--color-strength-1)',
+  'var(--color-strength-2)',
+  'var(--color-strength-3)',
+  'var(--color-strength-4)',
+];
 
 /** New passphrase + repeat, with a strength meter and match check. */
 export function PassphraseFields({
@@ -51,14 +57,14 @@ export function PassphraseFields({
               {[1, 2, 3, 4].map((segment) => (
                 <span
                   key={segment}
-                  className="h-1 rounded-sm bg-white/10"
+                  className="h-1 rounded-sm bg-ink/10"
                   style={segment <= strength ? { background: SEGMENT_COLORS[strength] } : undefined}
                 />
               ))}
             </div>
             <span
               className="text-[12px] font-medium"
-              style={{ color: SEGMENT_COLORS[strength] || '#FF9B9B' }}
+              style={{ color: SEGMENT_COLORS[strength] || 'var(--color-critical)' }}
             >
               {t(`generate.strength${strength}`)}
             </span>

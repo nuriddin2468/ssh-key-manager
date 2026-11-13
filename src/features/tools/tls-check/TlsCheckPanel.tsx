@@ -148,7 +148,7 @@ function TlsResult({ report, host, port }: { report: TlsReport; host: string; po
           },
         ]}
       />
-      <section className="flex flex-col gap-2 border-t border-white/[0.06] pt-3">
+      <section className="flex flex-col gap-2 border-t border-line-soft pt-3">
         <h3 className="text-[12px] font-semibold tracking-[0.02em] text-subtle">
           {t('toolNetwork.tls.chain')}
         </h3>
@@ -182,7 +182,7 @@ function CertCard({ cert, role }: { cert: CertSummary; role: 'server' | 'interme
       .catch((error: unknown) => toastError(t, error));
   };
   return (
-    <li className="flex flex-col gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] p-3">
+    <li className="flex flex-col gap-2 rounded-xl border border-line bg-fill-subtle p-3">
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone={role === 'server' ? 'accent' : 'neutral'} pill>
           {t(`toolNetwork.tls.roles.${role}`)}

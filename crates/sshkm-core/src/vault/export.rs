@@ -156,8 +156,10 @@ fn is_plain_number(cell: &str) -> bool {
             .all(|c| c.is_ascii_digit() || matches!(c, ' ' | '.' | '-' | '(' | ')'))
 }
 
-/// `target` with symbolic links resolved, refused if it is one of the
-/// vault's own files, a folder, or inside `ssh_dir`.
+/// `target` itself, the path to write, refused if it or the file a link
+/// there leads to is one of the vault's own files or a folder, or if it is
+/// inside `ssh_dir` ([`fsutil::is_within`]). The write replaces a link at
+/// `target` rather than going through it ([`write_private`]).
 pub(super) fn checked_target(target: &Path, paths: &VaultPaths, ssh_dir: &Path) -> Result<PathBuf> {
     if !target.is_absolute() || target.file_name().is_none() {
         return Err(Error::invalid(format!(
@@ -169,7 +171,7 @@ pub(super) fn checked_target(target: &Path, paths: &VaultPaths, ssh_dir: &Path) 
     if !parent.is_dir() {
         return Err(Error::NotFound(parent.display().to_string()));
     }
-    let real = resolve(target);
+    let real = fsutil::real_path(target);
     if real.is_dir() {
         return Err(Error::invalid(format!("{} is a folder", target.display())));
     }
@@ -182,20 +184,12 @@ pub(super) fn checked_target(target: &Path, paths: &VaultPaths, ssh_dir: &Path) 
             "an export never replaces the vault's own files",
         ));
     }
-    let inside_ssh = match FileId::of(ssh_dir) {
-        // Every folder the file would be in, as the file system sees it.
-        Some(ssh) => [target, &real]
-            .into_iter()
-            .flat_map(|path| path.ancestors().skip(1))
-            .any(|folder| FileId::of(folder).as_ref() == Some(&ssh)),
-        None => real.starts_with(resolve(ssh_dir)),
-    };
-    if inside_ssh {
+    if fsutil::is_within(target, ssh_dir) {
         return Err(Error::invalid(
             "an export is never written into the SSH folder",
         ));
     }
-    Ok(real)
+    Ok(target.to_path_buf())
 }
 
 /// Which file or folder a path leads to, after links: the device and inode
@@ -237,40 +231,15 @@ impl FileId {
     }
 }
 
-/// The path with symbolic links resolved, for a file that may not exist yet:
-/// the file itself if it exists, else its folder.
-pub(super) fn resolve(path: &Path) -> PathBuf {
-    if let Ok(real) = fs::canonicalize(path) {
-        return real;
-    }
-    match (path.parent(), path.file_name()) {
-        (Some(parent), Some(name)) => {
-            fs::canonicalize(parent).map_or_else(|_| path.to_path_buf(), |dir| dir.join(name))
-        }
-        _ => path.to_path_buf(),
-    }
-}
-
-/// Writes atomically with mode 0600, also when replacing an existing file
-/// (whose mode is tightened first, as the write keeps it). On Windows, where
-/// modes mean nothing, the temporary file is created with an access list
-/// for nobody but the user, SYSTEM and Administrators, as for a private key,
-/// before anything is written to it; a drive that can't keep one (FAT,
+/// Writes an export to `path` ([`checked_target`]) in a new file only this
+/// user can open, renamed onto `path` itself ([`fsutil::write_private`]):
+/// mode 0600 from the first byte, whatever was there before; on Windows an
+/// access list for nobody but the user, SYSTEM and Administrators, as for a
+/// private key, before anything is written. A link at `path` is replaced,
+/// never written through; a drive that can't keep the access list (FAT,
 /// exFAT, some network shares) is refused and nothing is left behind.
 pub(super) fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    #[cfg(windows)]
-    {
-        fsutil::atomic_write_private(path, bytes)
-    }
-    #[cfg(not(windows))]
-    {
-        match fs::symlink_metadata(path) {
-            Ok(_) => fsutil::set_mode(path, 0o600)?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(Error::io(e, path)),
-        }
-        fsutil::atomic_write(path, bytes, 0o600)
-    }
+    fsutil::write_private(path, bytes, true).map(drop)
 }
 
 fn csv_error(error: &csv::Error) -> Error {
@@ -308,6 +277,45 @@ mod tests {
         ] {
             assert_eq!(*neutralize(cell), cell);
         }
+    }
+
+    /// An export at a path that is a link to another file replaces the
+    /// link with a private file of its own: the file the link led to, in
+    /// someone else's folder, gets nothing and keeps its mode.
+    #[cfg(unix)]
+    #[test]
+    fn exports_replace_a_link_rather_than_write_through_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let dir = tempfile::tempdir().unwrap();
+        let master = SecretString::from("master".to_owned());
+        let paths = VaultPaths::new(dir.path().join("vault.kdbx"));
+        let (vault, _) = Vault::create(&paths, &master).unwrap();
+        let ssh = dir.path().join(".ssh");
+        fs::create_dir(&ssh).unwrap();
+        let theirs = dir.path().join("theirs");
+        let shared = dir.path().join("shared");
+        fs::create_dir(&theirs).unwrap();
+        fs::create_dir(&shared).unwrap();
+        let collect = theirs.join("collect");
+        fs::write(&collect, "").unwrap();
+        fs::set_permissions(&collect, fs::Permissions::from_mode(0o666)).unwrap();
+
+        let csv = shared.join("passwords.csv");
+        std::os::unix::fs::symlink(&collect, &csv).unwrap();
+        vault.export_csv(&master, &csv, &ssh).unwrap();
+        let copy = shared.join("vault-copy.kdbx");
+        std::os::unix::fs::symlink(&collect, &copy).unwrap();
+        vault.export_kdbx(&master, &copy, &ssh).unwrap();
+
+        assert_eq!(fs::read(&collect).unwrap(), b"");
+        assert_eq!(mode(&collect), 0o666);
+        for written in [&csv, &copy] {
+            assert!(fs::symlink_metadata(written).unwrap().is_file());
+            assert_eq!(mode(written), 0o600);
+        }
+        assert!(fs::read_to_string(&csv).unwrap().starts_with("\"Group\""));
+        assert_eq!(fs::read(&copy).unwrap(), fs::read(&paths.database).unwrap());
     }
 
     #[cfg(unix)]

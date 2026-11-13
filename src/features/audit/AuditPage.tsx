@@ -352,7 +352,7 @@ export function AuditPage() {
                 </div>
 
                 {inView.length === 0 && !lockedRowShown ? (
-                  <p className="flex items-center gap-2 rounded-xl border border-ok/25 bg-ok/[0.08] px-3 py-2.5 text-[12.5px] text-teal-200">
+                  <p className="flex items-center gap-2 rounded-xl border border-ok/25 bg-ok/[0.08] px-3 py-2.5 text-[12.5px] text-ok-strong">
                     <ShieldCheck aria-hidden="true" className="size-4" strokeWidth={2} />
                     {t('audit.nothingHere')}
                   </p>

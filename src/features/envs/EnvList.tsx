@@ -153,13 +153,13 @@ export function EnvList({
         })}
       </div>
       {trash.length > 0 ? (
-        <div className="border-t border-white/[0.06] p-2">
+        <div className="border-t border-line-soft p-2">
           <button
             type="button"
             aria-expanded={trashOpen}
             aria-controls={trashId}
             onClick={() => setTrashOpen((open) => !open)}
-            className="pressable-soft flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12.5px] text-muted hover:bg-white/[0.04] hover:text-fg"
+            className="pressable-soft flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12.5px] text-muted hover:bg-ink/[0.04] hover:text-fg"
           >
             <ChevronRight
               aria-hidden="true"
@@ -211,9 +211,9 @@ function EnvRow({ env, selected, label, part, inPart = false, onSelect }: EnvRow
       aria-current={selected ? 'true' : undefined}
       onClick={onSelect}
       className={cn(
-        'pressable-soft flex min-h-[46px] w-full items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-left active:bg-white/[0.06]',
+        'pressable-soft flex min-h-[46px] w-full items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-left active:bg-fill',
         inPart && 'pl-[30px]',
-        selected ? 'selected-row' : 'hover:bg-white/[0.04]',
+        selected ? 'selected-row' : 'hover:bg-ink/[0.04]',
       )}
     >
       <span

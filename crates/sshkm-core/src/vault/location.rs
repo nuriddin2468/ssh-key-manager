@@ -14,7 +14,6 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 
 use super::envs::files::{CloudRoots, CloudService};
-use super::export::resolve;
 use super::{MAX_DATABASE_SIZE, Vault, VaultPaths, read_database};
 use crate::{Error, Result, fsutil};
 
@@ -30,14 +29,14 @@ pub fn cloud_service(paths: &VaultPaths, roots: &CloudRoots) -> Option<CloudServ
     let folder = paths.database.parent()?;
     roots
         .service(folder)
-        .or_else(|| roots.service(&resolve(folder)))
+        .or_else(|| roots.service(&fsutil::real_path(folder)))
 }
 
 /// Copies the database and, if there is one, the key slots file from `from`
 /// to `to`, and checks the copies byte for byte. Refuses if either target
 /// file exists or `to` is where the vault already is.
 pub fn copy_files(from: &VaultPaths, to: &VaultPaths) -> Result<()> {
-    if resolve(&from.database) == resolve(&to.database) {
+    if fsutil::real_path(&from.database) == fsutil::real_path(&to.database) {
         return Err(Error::invalid("the vault is already there"));
     }
     let folder = to.database.parent().unwrap_or(&to.database);
@@ -91,13 +90,11 @@ pub fn remove_files(paths: &VaultPaths) -> Result<()> {
 }
 
 /// Checks that `path` is a KeePass database (KDBX 3 or 4) this app can open,
-/// before switching to it.
+/// before switching to it. Anything but a regular file is refused before
+/// it is read, without waiting on a pipe ([`fsutil::open_regular`]).
 pub fn check_database(path: &Path) -> Result<()> {
-    let mut file = fs::File::open(path).map_err(|e| Error::io(e, path))?;
+    let mut file = fsutil::open_regular(path)?;
     let meta = file.metadata().map_err(|e| Error::io(e, path))?;
-    if !meta.is_file() {
-        return Err(Error::invalid(format!("{} is not a file", path.display())));
-    }
     if meta.len() > MAX_DATABASE_SIZE {
         return Err(Error::Parse(format!("{} is too large", path.display())));
     }
@@ -253,5 +250,37 @@ mod tests {
             check_database(&dir.path().join("missing.kdbx")).unwrap_err(),
             Error::NotFound(_)
         ));
+        assert!(matches!(
+            check_database(dir.path()).unwrap_err(),
+            Error::InvalidInput(_)
+        ));
+    }
+
+    /// A pipe is refused at once, not waited on until something writes.
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_is_refused_without_waiting() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipe = dir.path().join("vault.kdbx");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&pipe)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let (done, finished) = std::sync::mpsc::channel();
+        let path = pipe.clone();
+        std::thread::spawn(move || {
+            let _ = done.send(check_database(&path).map_err(|e| e.code()));
+        });
+        let result = finished.recv_timeout(std::time::Duration::from_secs(5));
+        if result.is_err() {
+            // Lets the stuck thread go.
+            use std::os::unix::fs::OpenOptionsExt;
+            let _ = fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&pipe);
+        }
+        assert_eq!(result, Ok(Err(crate::ErrorCode::InvalidInput)));
     }
 }

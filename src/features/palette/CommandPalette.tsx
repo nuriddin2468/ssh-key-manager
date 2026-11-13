@@ -412,7 +412,7 @@ function PaletteDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <RDialog.Portal>
-      <RDialog.Overlay className="fixed inset-0 z-40 bg-[rgb(4_6_11/0.62)] data-[state=open]:animate-fade-in" />
+      <RDialog.Overlay className="fixed inset-0 z-40 bg-scrim data-[state=open]:animate-fade-in" />
       <div className="pointer-events-none fixed inset-0 z-50 flex justify-center px-4 pt-[12vh] pb-4">
         <RDialog.Content
           data-section={route.page}
@@ -432,7 +432,7 @@ function PaletteDialog({ onClose }: { onClose: () => void }) {
             chosen.current = null;
             item?.run();
           }}
-          className="pointer-events-auto relative flex h-fit max-h-[min(560px,calc(100vh-12vh-16px))] w-full max-w-[640px] flex-col overflow-clip rounded-[22px] border border-white/10 bg-[linear-gradient(180deg,rgb(26_31_46/0.98),rgb(15_18_28/0.98))] text-fg shadow-[0_40px_80px_-24px_rgb(0_0_0/0.8),inset_0_1px_0_rgb(255_255_255/0.06)] outline-none data-[state=open]:animate-dialog-in"
+          className="pointer-events-auto relative flex h-fit max-h-[min(560px,calc(100vh-12vh-16px))] w-full max-w-[640px] flex-col overflow-clip rounded-[22px] border border-line-strong dialog-surface [--dialog-alpha:98%] text-fg shadow-dialog outline-none data-[state=open]:animate-dialog-in"
         >
           <RDialog.Title className="sr-only">{t('palette.title')}</RDialog.Title>
           <RDialog.Description className="sr-only">{t('palette.description')}</RDialog.Description>

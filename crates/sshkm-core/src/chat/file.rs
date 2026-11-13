@@ -10,11 +10,14 @@
 //!
 //! [`Vault::chat_key`]: crate::vault::Vault::chat_key
 
+use std::collections::BTreeMap;
+
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use rand_core::{OsRng, RngCore};
+use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
@@ -26,6 +29,8 @@ const MAGIC: &[u8] = b"sshkm-chat\x01";
 const NONCE_LEN: usize = 24;
 const KEY_LABEL: &[u8] = b"sshkm chat file";
 const NAME_LABEL: &[u8] = b"sshkm chat file name";
+/// What the index's key is derived with: never a device key (32 bytes).
+const INDEX_LABEL: &[u8] = b"sshkm chat index";
 /// The extension of a conversation's file.
 pub const EXTENSION: &str = "chat";
 
@@ -55,18 +60,7 @@ pub fn seal(
     conversation: &mut Conversation,
 ) -> Result<Vec<u8>> {
     let json = conversation.to_json()?;
-    let mut nonce = [0; NONCE_LEN];
-    OsRng.fill_bytes(&mut nonce);
-    let sealed = cipher(chat_key, peer)
-        .encrypt(
-            &XNonce::from(nonce),
-            Payload {
-                msg: &json,
-                aad: &aad(me, peer),
-            },
-        )
-        .map_err(|_| Error::invalid("encryption failed"))?;
-    Ok([MAGIC, &nonce, &sealed].concat())
+    seal_bytes(&cipher(chat_key, peer.as_bytes()), &aad(me, peer), &json)
 }
 
 /// The conversation a file holds; fails for another conversation's file,
@@ -77,6 +71,57 @@ pub fn open(
     peer: &PeerKey,
     bytes: &[u8],
 ) -> Result<Conversation> {
+    let json = open_bytes(&cipher(chat_key, peer.as_bytes()), &aad(me, peer), bytes)?;
+    serde_json::from_slice(&json).map_err(|e| Error::Parse(format!("chat file: {e}")))
+}
+
+/// The conversations this computer keeps, by the other device's key: its
+/// name and whether it is one of the user's devices. Kept so that a
+/// conversation is found again (and its values still go at their term)
+/// after its contact was removed: a file's name says nothing of whose it is.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Index {
+    #[serde(default)]
+    pub peers: BTreeMap<String, IndexEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexEntry {
+    pub name: String,
+    #[serde(default)]
+    pub own: bool,
+}
+
+/// The index's file name, without its extension; never a conversation's,
+/// whose names are 32 hex digits.
+pub const INDEX_STEM: &str = "index";
+
+/// The index's file, sealed with its own key derived from the chat key.
+pub fn seal_index(chat_key: &[u8; 32], me: &PeerKey, index: &Index) -> Result<Vec<u8>> {
+    let json = Zeroizing::new(
+        serde_json::to_vec(index).map_err(|e| Error::Parse(format!("chat index: {e}")))?,
+    );
+    seal_bytes(&cipher(chat_key, INDEX_LABEL), &index_aad(me), &json)
+}
+
+/// The index a file holds; fails for a conversation's file or another key.
+pub fn open_index(chat_key: &[u8; 32], me: &PeerKey, bytes: &[u8]) -> Result<Index> {
+    let json = open_bytes(&cipher(chat_key, INDEX_LABEL), &index_aad(me), bytes)?;
+    serde_json::from_slice(&json).map_err(|e| Error::Parse(format!("chat index: {e}")))
+}
+
+fn seal_bytes(cipher: &XChaCha20Poly1305, aad: &[u8], plain: &[u8]) -> Result<Vec<u8>> {
+    let mut nonce = [0; NONCE_LEN];
+    OsRng.fill_bytes(&mut nonce);
+    let sealed = cipher
+        .encrypt(&XNonce::from(nonce), Payload { msg: plain, aad })
+        .map_err(|_| Error::invalid("encryption failed"))?;
+    Ok([MAGIC, &nonce, &sealed].concat())
+}
+
+fn open_bytes(cipher: &XChaCha20Poly1305, aad: &[u8], bytes: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
     let rest = bytes
         .strip_prefix(MAGIC)
         .ok_or_else(|| Error::Parse("not a chat file of this version".into()))?;
@@ -87,26 +132,24 @@ pub fn open(
     let nonce: [u8; NONCE_LEN] = nonce
         .try_into()
         .map_err(|_| Error::Parse("a chat file cut short".into()))?;
-    let json = Zeroizing::new(
-        cipher(chat_key, peer)
-            .decrypt(
-                &XNonce::from(nonce),
-                Payload {
-                    msg: sealed,
-                    aad: &aad(me, peer),
-                },
-            )
-            .map_err(|_| Error::Parse("the chat file doesn't open with this key".into()))?,
-    );
-    serde_json::from_slice(&json).map_err(|e| Error::Parse(format!("chat file: {e}")))
+    cipher
+        .decrypt(&XNonce::from(nonce), Payload { msg: sealed, aad })
+        .map(Zeroizing::new)
+        .map_err(|_| Error::Parse("the chat file doesn't open with this key".into()))
 }
 
-fn cipher(chat_key: &[u8; 32], peer: &PeerKey) -> XChaCha20Poly1305 {
+/// The cipher of one file: its key derived from the chat key and `info`
+/// (the other device's key, or the index's label).
+fn cipher(chat_key: &[u8; 32], info: &[u8]) -> XChaCha20Poly1305 {
     let mut key = Zeroizing::new([0; 32]);
     Hkdf::<Sha256>::new(Some(KEY_LABEL), chat_key)
-        .expand(peer.as_bytes(), key.as_mut())
+        .expand(info, key.as_mut())
         .unwrap_or_else(|_| unreachable!("32 bytes is a valid length"));
     XChaCha20Poly1305::new((&*key).into())
+}
+
+fn index_aad(me: &PeerKey) -> Vec<u8> {
+    [MAGIC, me.as_bytes(), INDEX_LABEL].concat()
 }
 
 fn aad(me: &PeerKey, peer: &PeerKey) -> Vec<u8> {
@@ -168,6 +211,37 @@ mod tests {
         assert!(open(&key, &me, &peer, b"{}").is_err(), "not sealed");
         // A fresh nonce each time.
         assert_ne!(seal(&key, &me, &peer, &mut chat).unwrap(), bytes);
+    }
+
+    #[test]
+    fn the_index_opens_only_as_the_index() {
+        let key = [3; 32];
+        let (me, peer) = (
+            Identity::generate().unwrap().public(),
+            Identity::generate().unwrap().public(),
+        );
+        let mut index = Index::default();
+        index.peers.insert(
+            peer.to_string(),
+            IndexEntry {
+                name: "ThinkPad Bob".into(),
+                own: false,
+            },
+        );
+        let bytes = seal_index(&key, &me, &index).unwrap();
+        assert!(!bytes.windows(8).any(|window| window == b"ThinkPad"));
+        assert_eq!(open_index(&key, &me, &bytes).unwrap(), index);
+        assert!(open_index(&[4; 32], &me, &bytes).is_err(), "another key");
+        assert!(
+            open(&key, &me, &peer, &bytes).is_err(),
+            "not a conversation"
+        );
+        let mut chat = conversation();
+        let file = seal(&key, &me, &peer, &mut chat).unwrap();
+        assert!(
+            open_index(&key, &me, &file).is_err(),
+            "a conversation isn't the index"
+        );
     }
 
     #[test]

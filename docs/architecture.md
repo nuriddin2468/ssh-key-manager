@@ -92,7 +92,8 @@ real `~/.ssh`. Its modules:
 - `browser`: what the browser extension may see of the vault.
   - `origin` matches a login's address to a page: the same registrable domain (Public
     Suffix List), exactly; `https` logins stay off `http` pages; ports must agree.
-  - `channel` pairs a browser (P-256 ECDH, HKDF-SHA-256) and seals every later message
+  - `channel` pairs a browser (P-256 ECDH, HKDF-SHA-256; the extension commits to its
+    key first, and the six-digit code covers both keys) and seals every later message
     with AES-256-GCM, using only what WebCrypto offers. `channel-vectors.json` is shared
     with the extension's tests so both sides compute the same bytes.
   - `protocol` is the JSON. Paired browsers live in the vault's custom data. One
@@ -221,7 +222,8 @@ translates.
     or a native dialog (`browser/prompt.rs`); the yes lasts for the vault runtime's
     session, which ends when the vault is locked by hand, the screen locks or the
     computer sleeps. Each browser's keys change daily; the retired ones stay in the
-    vault, so a request sealed with a copy of them revokes the pairing.
+    vault, so a request sealed with a copy of them revokes the pairing (as does one
+    sealed with new keys that a second key change replaced before their first use).
 - **Nearby.** `src-tauri/src/nearby/`.
   - Announces the device with mDNS for ten minutes when asked, and browses for
     others while the Nearby page is open (`mdns-sd`).
@@ -317,14 +319,16 @@ translates.
 - The background script is the only part that talks to the app for pages, and names each
   page by the origin the browser reports for the sending frame.
 - The content script finds login fields, shows the saved logins in a menu in a closed
-  shadow root (on a plain `div` popover, so a page can't define the element), fills the
+  shadow root (on a plain `div` popover, so a page can't define the element; titles and
+  usernames are CSS generated content, which find-in-page doesn't search), fills the
   one picked and passes sent login forms to the background, which offers to save them in
   a banner on the next page (naming only the site, if that page is another site's). It
   reacts only to trusted events, opens the menu only on the user's own click, Tab or
   Down Arrow (and over a password already filled in, only on Down Arrow), and passes on
   only logins whose password the user typed (or the extension
   filled) and that the user sent. A menu item or banner button counts only once the
-  surface has been shown, uncovered and untouched by the page, for half a second.
+  surface has been shown, uncovered, unscaled and untouched by the page, for half a
+  second.
 - The popup shows the connection state and can turn off the browser's own password
   suggestions (the optional `privacy` permission); the connect page pairs the browser.
   Keys stay in IndexedDB as non-extractable WebCrypto keys.

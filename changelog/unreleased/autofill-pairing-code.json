@@ -1,0 +1,6 @@
+{
+  "kind": "notice",
+  "en": "Connecting a browser now takes the latest SSH Key Manager and the latest browser extension: the code you compare covers the keys of both. Browsers already connected keep working.",
+  "ru": "Для подключения браузера теперь нужны последние версии SSH Key Manager и расширения: сравниваемый код охватывает ключи обеих сторон. Уже подключённые браузеры продолжают работать.",
+  "uz": "Brauzerni ulash uchun endi SSH Key Manager va kengaytmaning soʻnggi versiyalari kerak: solishtiriladigan kod ikkala tomonning kalitlarini qamrab oladi. Allaqachon ulangan brauzerlar ishlashda davom etadi."
+}

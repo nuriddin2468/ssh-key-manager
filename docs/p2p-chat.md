@@ -350,6 +350,31 @@ Two known bugs come with that code:
 - **A whole environment** can still go as a card (§2). It is permanent, and its values go
   only after the receiver accepts.
 
+### Asked natively
+
+A script in the page must not be able to send the vault's secrets away or
+put received data into the vault on its own. So these steps wait for a
+**system dialog the page can't answer** (`confirm::require`, with its
+one-second rule), which names what goes and to or from whom. Every name in
+it that came from elsewhere is shown with its control and invisible
+characters as `<U+…>`.
+
+- **Sending variables:** "Send these values?", with the environment, the
+  names and the other computer.
+- **Offering a login or an environment** as a card, before even the summary
+  goes. Hosts, hosts file groups and public keys hold no secret and aren't
+  asked about.
+- **Accepting a login or an environment** that goes into the vault. A host
+  that settings would let in to this computer is asked about inside
+  `items::store`, as for any Nearby item.
+- **Adding received variables to an environment**, listing the names, the
+  values they replace and the names that change how programs start.
+
+Texts and secrets the user types in the composer go without a dialog: the
+page has them already. The page never picks a peer or an address: contacts
+come from the vault, addresses from the backend's own browsing, and a send
+goes only to a contact the backend recognised online.
+
 ## 4. Storage
 
 ### Where

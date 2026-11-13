@@ -1,8 +1,9 @@
 // What the extension draws on a page: the menu of saved logins under a login
 // field, the "Save login?" banner, and the "Couldn't sign in?" banner. Each lives in a closed shadow root on
 // an element of its own, so the page's styles can't reach in and its scripts
-// can't read the logins listed. The look follows the app: its dark popover
-// surface, the Passwords section's pink accent and its type sizes.
+// can't read the logins listed. The look follows the app: its popover
+// surface, dark or light as the browser is, the Passwords section's pink
+// accent and its type sizes.
 //
 // A choice in them counts only when the user could see what they chose:
 // not in the first moments after the surface appeared or moved (a page
@@ -16,20 +17,43 @@ import { loginName, t } from '../shared/i18n';
 const STYLE = `
 :host { all: initial; }
 * { box-sizing: border-box; }
+/* The colours, dark as the app; light when the browser is (src/styles/app.css). */
+.panel {
+  --fg: #f2f4f8; --fg-2: #c9cfda; --muted: #a7b0c0; --subtle: #8892a6;
+  --icon: #fbcfe8; --accent-fg: #f9a8d4; --accent-rgb: 244 114 182;
+  --warning: #ffc266; --ok: #5eead4;
+  --critical: #ff9b9b; --critical-hover: #ffb4b4; --critical-rgb: 255 107 107;
+  --ink: 255 255 255;
+  --panel-from: #1a1f2e; --panel-to: #0f121c; --field-bg: rgb(255 255 255 / 0.05);
+  --panel-shadow: 0 24px 48px -16px rgb(0 0 0 / 0.7), inset 0 1px 0 rgb(255 255 255 / 0.06);
+  --scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  .panel {
+    --fg: #0f1420; --fg-2: #2a3242; --muted: #4b5567; --subtle: #5d6779;
+    --icon: #be185d; --accent-fg: #be185d; --accent-rgb: 219 39 119;
+    --warning: #93500a; --ok: #0f766e;
+    --critical: #b42318; --critical-hover: #912018; --critical-rgb: 217 45 32;
+    --ink: 15 23 42;
+    --panel-from: #ffffff; --panel-to: #f8f9fb; --field-bg: #ffffff;
+    --panel-shadow: 0 16px 40px -12px rgb(15 23 42 / 0.25), 0 2px 6px rgb(15 23 42 / 0.08);
+    --scheme: light;
+  }
+}
 .panel {
   font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
-  color: #f2f4f8;
-  background: linear-gradient(180deg, #1a1f2e, #0f121c);
-  border: 1px solid rgb(255 255 255 / 0.1);
+  color: var(--fg);
+  background: linear-gradient(180deg, var(--panel-from), var(--panel-to));
+  border: 1px solid rgb(var(--ink) / 0.1);
   border-radius: 12px;
-  box-shadow: 0 24px 48px -16px rgb(0 0 0 / 0.7), inset 0 1px 0 rgb(255 255 255 / 0.06);
-  color-scheme: dark;
+  box-shadow: var(--panel-shadow);
+  color-scheme: var(--scheme);
   -webkit-font-smoothing: antialiased;
 }
 .head {
   display: flex; align-items: center; gap: 7px;
   padding: 8px 12px 6px;
-  font-size: 11px; font-weight: 600; letter-spacing: 0.02em; color: #8892a6;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.02em; color: var(--subtle);
 }
 .logo {
   display: grid; place-items: center; flex: none;
@@ -44,16 +68,16 @@ const STYLE = `
   display: flex; align-items: center; gap: 10px;
   width: 100%; padding: 7px 8px; border-radius: 8px; cursor: pointer;
 }
-.item:hover { background: rgb(255 255 255 / 0.06); }
-.item:focus-visible { background: rgb(244 114 182 / 0.16); outline: 2px solid #f9a8d4; outline-offset: -2px; }
+.item:hover { background: rgb(var(--ink) / 0.06); }
+.item:focus-visible { background: rgb(var(--accent-rgb) / 0.16); outline: 2px solid var(--accent-fg); outline-offset: -2px; }
 .lines { display: flex; flex-direction: column; min-width: 0; }
 .title, .user { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.title { font-weight: 600; color: #f2f4f8; }
-.user { font-size: 12px; color: #a7b0c0; }
-.user.none { font-style: italic; color: #8892a6; }
-.item:hover .user.none, .item:focus-visible .user.none { color: #a7b0c0; }
-.icon { flex: none; width: 16px; height: 16px; color: #fbcfe8; }
-.notice { margin: 0; padding: 2px 12px 10px; font-size: 12.5px; line-height: 18px; color: #c9cfda; }
+.title { font-weight: 600; color: var(--fg); }
+.user { font-size: 12px; color: var(--muted); }
+.user.none { font-style: italic; color: var(--subtle); }
+.item:hover .user.none, .item:focus-visible .user.none { color: var(--muted); }
+.icon { flex: none; width: 16px; height: 16px; color: var(--icon); }
+.notice { margin: 0; padding: 2px 12px 10px; font-size: 12.5px; line-height: 18px; color: var(--fg-2); }
 .banner { width: min(340px, calc(100vw - 32px)); padding: 14px 14px 12px; }
 .sr-only {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
@@ -64,52 +88,52 @@ const STYLE = `
 .banner .logo svg { width: 15px; height: 15px; }
 .banner h2 {
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
-  height: 38px; margin: 1px 0 2px; font-size: 14px; line-height: 19px; font-weight: 600; color: #f2f4f8; overflow-wrap: anywhere;
+  height: 38px; margin: 1px 0 2px; font-size: 14px; line-height: 19px; font-weight: 600; color: var(--fg); overflow-wrap: anywhere;
 }
 .banner h2.short { height: auto; margin-bottom: 4px; }
 .banner .text { flex: 1; min-width: 0; }
 .banner .input {
   appearance: none; box-sizing: border-box; display: block; width: 100%;
   height: 30px; margin: 4px 0 0; padding: 0 9px; border-radius: 8px;
-  font: 12.5px/28px ui-monospace, "Geist Mono", Menlo, monospace; color: #f2f4f8;
-  background: rgb(255 255 255 / 0.05); border: 1px solid rgb(255 255 255 / 0.14);
-  outline: none; caret-color: #f9a8d4;
+  font: 12.5px/28px ui-monospace, "Geist Mono", Menlo, monospace; color: var(--fg);
+  background: var(--field-bg); border: 1px solid rgb(var(--ink) / 0.14);
+  outline: none; caret-color: var(--accent-fg);
 }
 .banner .input::placeholder {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
-  color: #8892a6; opacity: 1;
+  color: var(--subtle); opacity: 1;
 }
-.banner .input:hover { border-color: rgb(255 255 255 / 0.22); }
-.banner .input:focus { border-color: #f9a8d4; box-shadow: 0 0 0 3px rgb(244 114 182 / 0.22); }
+.banner .input:hover { border-color: rgb(var(--ink) / 0.22); }
+.banner .input:focus { border-color: var(--accent-fg); box-shadow: 0 0 0 3px rgb(var(--accent-rgb) / 0.22); }
 .banner .input:disabled { opacity: 0.6; }
-.status { margin: 10px 0 0; font-size: 12.5px; line-height: 18px; color: #ffc266; }
-.status.ok { color: #5eead4; }
+.status { margin: 10px 0 0; font-size: 12.5px; line-height: 18px; color: var(--warning); }
+.status.ok { color: var(--ok); }
 .status:empty { display: none; }
 .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .btn {
   all: unset; box-sizing: border-box;
   display: inline-flex; align-items: center; justify-content: center;
   height: 30px; padding: 0 12px; border-radius: 8px;
-  font-size: 12.5px; font-weight: 500; color: #c9cfda; cursor: pointer;
+  font-size: 12.5px; font-weight: 500; color: var(--fg-2); cursor: pointer;
 }
-.btn:hover { background: rgb(255 255 255 / 0.06); color: #f2f4f8; }
+.btn:hover { background: rgb(var(--ink) / 0.06); color: var(--fg); }
 .btn.primary {
   background: linear-gradient(135deg, #f9a8d4, #ec4899); color: #3f0a24; font-weight: 600;
-  box-shadow: 0 8px 20px -8px rgb(244 114 182 / 0.75), inset 0 1px 0 rgb(255 255 255 / 0.5);
+  box-shadow: 0 8px 20px -8px rgb(var(--accent-rgb) / 0.75), inset 0 1px 0 rgb(255 255 255 / 0.5);
 }
 .btn.primary:hover { filter: brightness(1.1); }
-.btn.danger { color: #ff9b9b; }
-.btn.danger:hover { background: rgb(255 107 107 / 0.12); color: #ffb4b4; }
-.banner .detail { margin: 0; font-size: 12.5px; line-height: 18px; color: #c9cfda; overflow-wrap: anywhere; }
-.btn:focus-visible { outline: 2px solid #f9a8d4; outline-offset: 2px; }
+.btn.danger { color: var(--critical); }
+.btn.danger:hover { background: rgb(var(--critical-rgb) / 0.12); color: var(--critical-hover); }
+.banner .detail { margin: 0; font-size: 12.5px; line-height: 18px; color: var(--fg-2); overflow-wrap: anywhere; }
+.btn:focus-visible { outline: 2px solid var(--accent-fg); outline-offset: 2px; }
 .btn[aria-busy="true"] { opacity: 0.6; pointer-events: none; }
 .close {
   all: unset; box-sizing: border-box; flex: none;
   display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px;
-  color: #8892a6; cursor: pointer;
+  color: var(--subtle); cursor: pointer;
 }
-.close:hover { background: rgb(255 255 255 / 0.06); color: #f2f4f8; }
-.close:focus-visible { outline: 2px solid #f9a8d4; }
+.close:hover { background: rgb(var(--ink) / 0.06); color: var(--fg); }
+.close:focus-visible { outline: 2px solid var(--accent-fg); }
 .close svg { width: 14px; height: 14px; }
 
 `;

@@ -57,7 +57,7 @@ export function BreachSwitch({ layout }: { layout: 'card' | 'settings' }) {
         'flex items-start gap-3',
         layout === 'settings'
           ? 'min-h-[52px] px-4 py-2.5'
-          : 'mt-1.5 border-t border-white/[0.06] px-1 pt-3 pb-0.5',
+          : 'mt-1.5 border-t border-line-soft px-1 pt-3 pb-0.5',
       )}
     >
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">

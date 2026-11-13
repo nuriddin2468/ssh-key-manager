@@ -54,8 +54,13 @@ export function HostResolution({ form }: { form: HostForm }) {
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2">
-      <Network aria-hidden="true" className="size-4 shrink-0 text-indigo-300" strokeWidth={1.9} />
+    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 rounded-xl border border-line bg-fill-subtle px-3 py-2">
+      <Network
+        aria-hidden="true"
+        data-hue="hostsFile"
+        className="size-4 shrink-0 text-[var(--accent-fg)]"
+        strokeWidth={1.9}
+      />
       <span aria-live="polite" className="selectable min-w-0 flex-1 text-[12.5px] text-fg-2">
         {text}
       </span>

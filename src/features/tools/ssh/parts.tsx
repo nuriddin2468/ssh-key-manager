@@ -69,7 +69,7 @@ export function OutputBox({ text, className }: { text: string; className?: strin
   return (
     <pre
       className={cn(
-        'selectable max-h-48 overflow-auto rounded-[11px] border border-white/[0.07] bg-terminal px-3 py-2.5 font-mono text-[11.5px] leading-[1.55] whitespace-pre-wrap break-all text-fg-2',
+        'selectable max-h-48 overflow-auto rounded-[11px] border border-ink/[0.07] bg-terminal px-3 py-2.5 font-mono text-[11.5px] leading-[1.55] whitespace-pre-wrap break-all text-fg-2',
         className,
       )}
     >

@@ -514,6 +514,8 @@ function withHistory(check: (args: Record<string, unknown>) => unknown) {
 }
 
 const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
+  // The windows' own light or dark look; a browser has none to set.
+  set_appearance: () => null,
   ...vaultHandlers,
   ...vaultLinkHandlers({ keys: () => keys, hosts, agent: agentLoaded }),
   ...vaultFilesHandlers,

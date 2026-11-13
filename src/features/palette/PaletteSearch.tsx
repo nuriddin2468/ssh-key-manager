@@ -106,7 +106,7 @@ export function PaletteSearch({
   let index = -1;
   return (
     <div className={cn('flex min-h-0 flex-col', className)}>
-      <div className="flex h-[52px] shrink-0 items-center gap-3 border-b border-white/[0.07] px-4">
+      <div className="flex h-[52px] shrink-0 items-center gap-3 border-b border-ink/[0.07] px-4">
         {icon ?? (
           <Search aria-hidden="true" className="size-[18px] shrink-0 text-subtle" strokeWidth={2} />
         )}
@@ -198,7 +198,7 @@ export function PaletteSearch({
         {t('palette.count', { count: rows.length })}
       </p>
 
-      <footer className="flex h-9 shrink-0 items-center gap-3.5 border-t border-white/[0.07] px-4 text-[11.5px] text-subtle">
+      <footer className="flex h-9 shrink-0 items-center gap-3.5 border-t border-ink/[0.07] px-4 text-[11.5px] text-subtle">
         <span className="flex items-center gap-1.5">
           <Kbd>↑</Kbd>
           <Kbd>↓</Kbd>
@@ -248,7 +248,7 @@ function Row({ id, item, positions, active, busy, onHover, onRun }: RowProps) {
       onClick={onRun}
       className={cn(
         'flex h-10 min-w-0 shrink-0 items-center gap-2.5 rounded-[10px] px-2.5',
-        active ? 'selected-row' : 'hover:bg-white/[0.04]',
+        active ? 'selected-row' : 'hover:bg-ink/[0.04]',
       )}
     >
       <Tile tone={item.tone} size={26}>

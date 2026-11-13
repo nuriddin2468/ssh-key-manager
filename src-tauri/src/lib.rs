@@ -1,5 +1,6 @@
 //! SSH Key Manager desktop app: Tauri commands over [`sshkm_core`].
 
+mod appearance;
 pub mod askpass;
 mod autostart;
 pub mod browser;
@@ -89,6 +90,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             lock_on_minimize(window, event);
             tray::on_window_event(window, event);
+            appearance::on_window_event(window, event);
         })
         // A reloaded page has lost its terminals' channels: end the sessions.
         .on_page_load(|webview, payload| {
@@ -100,6 +102,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             confirm::set_ui_language,
+            appearance::set_appearance,
             commands::environment::get_environment,
             commands::keys::list_keys,
             commands::keys::generate_key,
@@ -432,6 +435,10 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let hosts_file = hosts_file::system_path();
     let data_dir = app.path().app_data_dir()?;
     let backup_dir = data_dir.join("backups");
+    // What a crash cut short may have left a secret in a temporary file.
+    for dir in [&paths.dir, &data_dir, &backup_dir] {
+        sshkm_core::fsutil::sweep_abandoned_temps(dir);
+    }
     watcher::start(app.handle(), &paths.dir, &hosts_file);
     commands::agent::check_agent_pipes();
     let bridge = Arc::new(browser::Bridge::new(&data_dir));
@@ -463,6 +470,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "macos")]
     menu::install(app)?;
     let background = tray::Background::install(app.handle(), &data_dir);
+    appearance::install(app.handle(), &data_dir);
     show_main_window(app, background.enabled());
     app.manage(background);
     app.manage(quick::Quick::install(app.handle(), &data_dir));

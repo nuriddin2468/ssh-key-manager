@@ -22,6 +22,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result};
 
+#[cfg(target_os = "macos")]
+pub(crate) mod extended_acl;
 #[cfg(windows)]
 mod private_file;
 

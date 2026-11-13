@@ -39,12 +39,12 @@ export function TextField({
       </label>
       <div
         className={cn(
-          'field flex h-9 items-center overflow-hidden rounded-[10px] transition-colors focus-within:border-[rgb(var(--accent-rgb)/0.55)] focus-within:shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.15)]',
+          'field flex h-9 items-center overflow-hidden rounded-[10px] transition-colors focus-within:border-[rgb(var(--accent-rgb)/var(--edge-alpha))] focus-within:shadow-[0_0_0_3px_rgb(var(--accent-rgb)/0.15)]',
           error && 'border-critical-solid/60',
         )}
       >
         {prefix ? (
-          <span className="flex h-full items-center border-r border-white/[0.08] bg-white/[0.04] pr-2 pl-[11px] font-mono text-[12px] text-subtle">
+          <span className="flex h-full items-center border-r border-line bg-ink/[0.04] pr-2 pl-[11px] font-mono text-[12px] text-subtle">
             {prefix}
           </span>
         ) : null}

@@ -43,7 +43,7 @@ export function BackupsDialog({ onDone }: { onDone: () => void }) {
             {(backups.data ?? []).map((backup) => (
               <li
                 key={backup.path}
-                className="flex items-center gap-3 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2"
+                className="flex items-center gap-3 rounded-xl border border-line bg-fill-subtle px-3 py-2"
               >
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="font-medium">{format(backup.saved)}</span>

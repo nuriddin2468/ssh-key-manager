@@ -60,12 +60,12 @@ export function ProjectChip({
     />
   );
   return (
-    <span className="inline-flex h-[22px] max-w-[180px] shrink-0 items-center gap-1.5 rounded-full bg-white/[0.06] pr-1 pl-2 text-[11.5px] text-fg-2">
+    <span className="inline-flex h-[22px] max-w-[180px] shrink-0 items-center gap-1.5 rounded-full bg-fill pr-1 pl-2 text-[11.5px] text-fg-2">
       {onOpen ? (
         <button
           type="button"
           onClick={onOpen}
-          className="flex min-w-0 items-center gap-1.5 rounded-full outline-none hover:text-fg focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]"
+          className="flex min-w-0 items-center gap-1.5 rounded-full outline-none hover:text-fg focus-visible:ring-2 focus-visible:ring-[rgb(var(--focus-rgb)/var(--ring-alpha))]"
         >
           {dot}
           <span className="truncate">{project.name}</span>
@@ -82,7 +82,7 @@ export function ProjectChip({
           onClick={onRemove}
           aria-label={t('projects.removeFrom', { name: project.name })}
           title={t('projects.removeFrom', { name: project.name })}
-          className="grid size-4 place-items-center rounded-full text-subtle outline-none hover:bg-white/10 hover:text-fg focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]"
+          className="grid size-4 place-items-center rounded-full text-subtle outline-none hover:bg-ink/10 hover:text-fg focus-visible:ring-2 focus-visible:ring-[rgb(var(--focus-rgb)/var(--ring-alpha))]"
         >
           <X className="size-3" strokeWidth={2.4} />
         </button>
@@ -121,8 +121,8 @@ export function ColorPicker({
             aria-label={t(`projects.colors.${color}`)}
             title={t(`projects.colors.${color}`)}
             className={cn(
-              'size-6 rounded-[7px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-white/80 focus-visible:ring-offset-2 focus-visible:ring-offset-[#151a26]',
-              'data-[state=checked]:ring-2 data-[state=checked]:ring-white data-[state=checked]:ring-offset-2 data-[state=checked]:ring-offset-[#151a26]',
+              'size-6 rounded-[7px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ink/80 focus-visible:ring-offset-2 focus-visible:ring-offset-popover',
+              'data-[state=checked]:ring-2 data-[state=checked]:ring-ink data-[state=checked]:ring-offset-2 data-[state=checked]:ring-offset-popover',
             )}
             style={{ background: `linear-gradient(140deg, ${from}, ${to})` }}
           />

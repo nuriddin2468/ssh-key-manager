@@ -33,7 +33,6 @@ use serde::{Deserialize, Serialize};
 use sshkm_core::{ErrorCode, fsutil};
 use sshkm_os::focus::Previous;
 use tauri::plugin::TauriPlugin;
-use tauri::window::Color;
 use tauri::{
     AppHandle, Emitter, LogicalPosition, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
     Wry,
@@ -52,8 +51,6 @@ pub const ARG: &str = "--quick-search";
 const PAGE: &str = "quick.html";
 const WIDTH: f64 = 620.0;
 const HEIGHT: f64 = 420.0;
-/// The main window's background, so the window doesn't flash white.
-const BACKGROUND: Color = Color(0x0A, 0x0D, 0x14, 0xFF);
 const SETTINGS_FILE: &str = "quick.json";
 
 /// The app the user was in when the window opened.
@@ -245,8 +242,8 @@ fn build(app: &AppHandle) {
         .skip_taskbar(true)
         .center()
         .focused(true)
-        .theme(Some(tauri::Theme::Dark))
-        .background_color(BACKGROUND)
+        .theme(crate::appearance::theme(app))
+        .background_color(crate::appearance::background(app))
         .build();
     match built {
         Ok(window) => {

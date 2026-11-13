@@ -12,6 +12,7 @@ use std::path::Path;
 /// search window (`capabilities/quick.json`) only what it lists and does.
 const COMMANDS: &[&str] = &[
     "set_ui_language",
+    "set_appearance",
     "get_environment",
     "list_keys",
     "generate_key",

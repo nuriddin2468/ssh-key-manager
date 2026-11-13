@@ -109,7 +109,7 @@ export function FileStateLine({ envId, label, onOpen }: FileStateLineProps) {
       aria-label={t('envs.files.line.open', { env: label, state: line.text })}
       onClick={onOpen}
       className={cn(
-        '-my-0.5 inline-flex max-w-full items-center gap-1.5 rounded py-0.5 text-left decoration-current/40 underline-offset-[3px] outline-none hover:underline focus-visible:ring-2 focus-visible:ring-[rgb(var(--accent-rgb)/0.6)]',
+        '-my-0.5 inline-flex max-w-full items-center gap-1.5 rounded py-0.5 text-left decoration-current/40 underline-offset-[3px] outline-none hover:underline focus-visible:ring-2 focus-visible:ring-[rgb(var(--focus-rgb)/var(--ring-alpha))]',
         TEXT[line.tone],
       )}
     >

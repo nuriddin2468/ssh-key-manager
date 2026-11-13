@@ -9,10 +9,13 @@ import '@/i18n';
 import '@/styles/app.css';
 import { queryClient } from '@/api/queries';
 import { platform } from '@/lib/platform';
+import { startTheme } from '@/lib/theme';
 import { QuickWindow } from './QuickWindow';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('#root is missing from quick.html');
+
+startTheme();
 
 if (!import.meta.env.DEV) {
   window.addEventListener('contextmenu', (event) => {

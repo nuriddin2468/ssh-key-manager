@@ -411,7 +411,7 @@ export function HostEditor({ host, hosts, onClose }: HostEditorProps) {
       >
         <div
           aria-hidden="true"
-          className="soft-glow absolute -top-[215px] -right-[165px] h-[430px] w-[530px] [--glow-color:rgb(37_99_235/0.32)]"
+          className="soft-glow absolute -top-[215px] -right-[165px] h-[430px] w-[530px] [--glow-color:var(--glow-strong)]"
         />
         <div ref={header} className="relative flex items-center gap-3 px-5 pt-[18px] pb-3.5">
           <Tile tone={mono.tone} size={44}>
@@ -625,7 +625,7 @@ export function HostEditor({ host, hosts, onClose }: HostEditorProps) {
         </div>
 
         {!readOnly ? (
-          <footer className="relative flex flex-wrap items-center justify-end gap-2.5 border-t border-white/[0.07] px-5 py-3">
+          <footer className="relative flex flex-wrap items-center justify-end gap-2.5 border-t border-ink/[0.07] px-5 py-3">
             {dirty ? (
               <span className="mr-auto inline-flex items-center gap-2 text-[12.5px] text-warning">
                 <span aria-hidden="true" className="size-[7px] rounded-full bg-warning" />

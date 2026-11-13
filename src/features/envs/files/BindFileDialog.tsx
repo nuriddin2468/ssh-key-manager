@@ -317,7 +317,7 @@ export function BindFileDialog({ env, bound, onDone }: BindFileDialogProps) {
                         'pressable inline-flex h-[26px] items-center rounded-md border px-2 font-mono text-[11.5px] disabled:opacity-40',
                         trimmed === name
                           ? 'border-[rgb(var(--accent-rgb)/0.45)] bg-[rgb(var(--accent-rgb)/0.14)] text-[var(--accent-text)]'
-                          : 'border-white/10 bg-white/[0.04] text-fg-2 hover:bg-white/[0.08]',
+                          : 'border-line-strong bg-ink/[0.04] text-fg-2 hover:bg-ink/[0.08]',
                       )}
                     >
                       {name}

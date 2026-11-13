@@ -19,6 +19,7 @@ import type { SecretField } from '@/bindings/SecretField';
 import type { Strength } from '@/bindings/Strength';
 import type { VaultSettings } from '@/bindings/VaultSettings';
 import type { VaultStatus } from '@/bindings/VaultStatus';
+import { hostEntry as pickHostEntry } from '@/features/hosts/model';
 
 const DATA = '/Users/dev/Library/Application Support/uz.sshkm.app';
 const RECOVERY_KEY = '7K3M-Q9TB-X2HD-4WNF-8RJC-ZP6V-1GYS-5MAE-0QK7-T3XB-N9HD-2WFR-8JCZ';
@@ -238,10 +239,13 @@ function strength(password: string): Strength {
 /** `alias#keyId` of the keys installed on mock servers this session. */
 const installed = new Set<string>();
 
+/** The entry for `alias`'s password, as the backend picks it: the one made first. */
 function hostEntry(alias: string): MockEntry | undefined {
-  return entries.find(
-    (e) => !e.detail.inTrash && e.detail.kind === 'host' && e.detail.host === alias,
+  const first = pickHostEntry(
+    entries.map((e) => e.detail),
+    alias,
   );
+  return first && entries.find((e) => e.detail === first);
 }
 
 /**

@@ -747,6 +747,7 @@ mod tests {
                 host_name: "10.0.4.12".into(),
                 port: 22,
                 proxy_jump: None,
+                host_keys: vec!["SHA256:76vvbGumhP/HpDH4tlyySHWs5hgRZJHr2wQ7hSDwRK8".into()],
             }),
         );
         let stream = TcpStream::connect(address).unwrap();

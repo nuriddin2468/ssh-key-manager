@@ -1,7 +1,9 @@
 // A host's password in the vault: entries of kind `host` name the `Host`
-// alias they belong to. The backend picks the first entry outside the
-// recycle bin whose alias is the one `ssh` is run with, in the order
-// `vault_entries` lists them, and so does this.
+// alias they belong to. Of the entries outside the recycle bin whose alias
+// is the one `ssh` is run with, the backend (`host_entry` in
+// `commands/vault_hosts.rs`) picks the one made first, one without a time
+// counting as older still, then by id; and so does this. Titles don't
+// decide, so an entry made later never takes the place of one made before.
 
 import type { TFunction } from 'i18next';
 import { useVaultEntries, useVaultStatus } from '@/api/queries';
@@ -11,7 +13,7 @@ import type { EntryInput } from '@/bindings/EntryInput';
 import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { HostEntry } from '@/bindings/HostEntry';
 import { AppError } from '@/lib/ipc';
-import type { HostForm } from './model';
+import { type HostForm, hostEntry } from './model';
 
 /** The names `ssh` can be run with for this block: none for patterns and `Match`. */
 export function hostAliases(host: HostEntry): string[] {
@@ -25,7 +27,7 @@ export function findHostEntry(
   aliases: readonly string[],
 ): { alias: string; entry: EntrySummary } | undefined {
   for (const alias of aliases) {
-    const entry = entries?.find((e) => e.kind === 'host' && !e.inTrash && e.host === alias);
+    const entry = hostEntry(entries ?? [], alias);
     if (entry) return { alias, entry };
   }
   return undefined;

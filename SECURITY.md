@@ -1078,23 +1078,27 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   goes only if the sender ticks it; a key's passphrase never goes.
 - **A server's password is for the server it was sent for.** It goes with the alias
   and where that alias leads on the sender's computer (account, host name, port and
-  jump hosts, as `ssh -G` works them out), all of it in the summary. The receiver
-  saves it for one of its own aliases only if `ssh -G` says that alias leads to the
-  same place (the alias it was sent for, or another, such as the host received with
-  it under a number); otherwise it saves it as a login for no host, so the terminal
-  never gives it, or its 2FA code, to another server. A version whose `Hello` doesn't
-  name this (`server-password/1`) would bind it to the alias whatever that leads to
-  there, so it gets the password for no host. When two entries are for the same
-  alias, the one made first is used, so a received entry never takes the place of
-  one the vault had.
+  jump hosts, as `ssh -G` works them out, and the fingerprints of the server keys its
+  `known_hosts` files trust for it), all of it in the summary. The receiver saves it
+  for one of its own aliases only if `ssh -G` says that alias leads to the same
+  place and its own `known_hosts` files trust one of those keys for it (the alias it
+  was sent for, or another, such as the host received with it under a number): the
+  same name on two networks is two servers. Otherwise it saves it as a login for no
+  host, so the terminal never gives it, or its 2FA code, to another server. A version
+  whose `Hello` doesn't name this (`server-password/1`) would bind it to the alias
+  whatever that leads to there, so it gets the password for no host. When two
+  entries are for the same alias, the one made first is used, by the terminal and by
+  the Hosts page alike, so a received entry never takes the place of one the vault
+  had.
 - **An environment arrives as a new one.** Its summary names the project, the
   environment, how many variables (and secrets) it has and the first three names;
   the values go only after the other user accepts. The receiver checks every name
   (variable names are letters, digits and `_`), refuses control characters other
   than line breaks and tabs in values, and takes at most 1000 variables and 384 KiB.
   Names and notes may hold no line or paragraph separator (U+2028, U+2029, U+0085)
-  and no invisible or direction-changing character, which some programs reading an
-  exported file would take for another line. Variables that make a shell or a
+  and no invisible or direction-changing character but the joiners emoji and some
+  scripts need (U+200C, U+200D): some programs reading an exported file would take
+  them for another line. Variables that make a shell or a
   program run code (the list under "Run in terminal") may be sent: the sender's
   system dialog names them as such. Where a whole environment arrives, nothing lets
   its user pick them one by one, so they are left out of it, and the app names the

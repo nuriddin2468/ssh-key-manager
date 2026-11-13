@@ -286,20 +286,33 @@ pub struct Server {
     pub port: u16,
     /// The jump hosts the connection goes through (`ProxyJump`), if any.
     pub proxy_jump: Option<String>,
+    /// The `SHA256:…` fingerprints of the server keys `known_hosts` trusts
+    /// for it there: a name says little (two networks may each have a
+    /// `db`), a key says which server it is.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_keys: Vec<String>,
 }
+
+/// Most server keys a [`Server`] names.
+const MAX_SERVER_KEYS: usize = 16;
 
 impl Server {
     /// Whether `other` is the same account on the same server, reached the
-    /// same way.
+    /// same way: the same names and port, and a server key both trust.
+    /// Without one in common, it can't be told, so it is not.
     pub fn same(&self, other: &Self) -> bool {
         self.user == other.user
             && self.host_name.eq_ignore_ascii_case(&other.host_name)
             && self.port == other.port
             && self.proxy_jump == other.proxy_jump
+            && self
+                .host_keys
+                .iter()
+                .any(|key| other.host_keys.contains(key))
     }
 
     /// Fails unless every name is made of name characters (see
-    /// [`Item::check`]) and the port is one.
+    /// [`Item::check`]), the port is one, and the keys are fingerprints.
     pub fn check(&self) -> Result<()> {
         name(&self.user, "._-")?;
         name(&self.host_name, ".-_:")?;
@@ -307,7 +320,21 @@ impl Server {
             return Err(Error::invalid("port 0"));
         }
         if let Some(proxy_jump) = &self.proxy_jump {
-            name(proxy_jump, ".-_:@,")?;
+            // `ssh -G` writes a numeric one as `[10.0.0.1]:22`.
+            name(proxy_jump, ".-_:@,[]")?;
+        }
+        if self.host_keys.len() > MAX_SERVER_KEYS
+            || !self.host_keys.iter().all(|key| {
+                key.strip_prefix("SHA256:").is_some_and(|hash| {
+                    !hash.is_empty()
+                        && hash.len() <= 64
+                        && hash
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='))
+                })
+            })
+        {
+            return Err(Error::invalid("not the fingerprints of server keys"));
         }
         Ok(())
     }
@@ -366,7 +393,7 @@ pub enum ItemSummary {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         host: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        server: Option<Server>,
+        server: Option<Box<Server>>,
     },
     #[serde(rename_all = "camelCase")]
     Host {
@@ -456,17 +483,14 @@ impl Item {
             } => {
                 // A host without where it leads is saved for none, so the
                 // summary names none either, as an older version's does.
-                let (host, server) = match (host, server) {
-                    (Some(host), Some(server)) => (Some(host.clone()), Some(server.clone())),
-                    _ => (None, None),
-                };
+                let (host, server) = host.clone().zip(server.clone()).unzip();
                 ItemSummary::Password {
                     title: title.clone(),
                     username: username.clone(),
                     url: url.clone(),
                     otp: otp.is_some(),
                     host,
-                    server,
+                    server: server.map(Box::new),
                 }
             }
             Self::Host {
@@ -826,7 +850,10 @@ pub(crate) fn text(value: &str, multiline: bool) -> Result<()> {
 /// the text around ([`is_invisible`]).
 fn plain(value: &str, multiline: bool) -> Result<()> {
     text(value, multiline)?;
-    if value.chars().any(is_invisible) {
+    // Joiners neither break lines nor turn text around, and emoji
+    // sequences and Persian text need them.
+    let joiner = |c: char| matches!(c, '\u{200C}' | '\u{200D}');
+    if value.chars().any(|c| is_invisible(c) && !joiner(c)) {
         return Err(Error::invalid(
             "a name or note has invisible or line-breaking characters",
         ));
@@ -1077,6 +1104,7 @@ mod tests {
             host_name: "10.0.4.12".into(),
             port: 22,
             proxy_jump: None,
+            host_keys: vec!["SHA256:76vvbGumhP/HpDH4tlyySHWs5hgRZJHr2wQ7hSDwRK8".into()],
         }
     }
 
@@ -1103,7 +1131,10 @@ mod tests {
         else {
             unreachable!()
         };
-        assert_eq!((host.as_deref(), to), (Some("prod"), Some(server())));
+        assert_eq!(
+            (host.as_deref(), to.as_deref()),
+            (Some("prod"), Some(&server()))
+        );
         // Another server is another summary: the payload must be what was
         // offered.
         let mut elsewhere = server();
@@ -1116,6 +1147,24 @@ mod tests {
         let mut louder = server();
         louder.host_name = "10.0.4.12".to_uppercase();
         assert!(server().same(&louder));
+        // The same names on two networks are two servers unless a key
+        // trusted for it is the same; no key says nothing.
+        let mut other_key = server();
+        other_key.host_keys = vec!["SHA256:Q0RyTWFzRnJvbUFub3RoZXJTZXJ2ZXI".into()];
+        assert!(!server().same(&other_key));
+        let mut keyless = server();
+        keyless.host_keys.clear();
+        assert!(!server().same(&keyless) && !keyless.same(&keyless));
+        let mut both = other_key.clone();
+        both.host_keys.extend(server().host_keys);
+        assert!(server().same(&both));
+        // A numeric jump host as `ssh -G` writes it.
+        let mut jump = server();
+        jump.proxy_jump = Some("[10.0.0.1]:22".into());
+        assert!(jump.check().is_ok());
+        let mut odd = server();
+        odd.host_keys = vec!["MD5:aa:bb".into()];
+        assert!(odd.check().is_err());
 
         // Without where it leads (as older versions send it), it names no
         // host: it is saved for none, and its summary is an older one's.
@@ -1473,6 +1522,13 @@ mod tests {
         }
         assert!(!with(
             &|_, vars| vars[0].note = "rotated monthly \u{2714}\u{FE0F}".into()
+        ));
+        // Joiners: an emoji sequence, Persian text.
+        assert!(!with(
+            &|_, vars| vars[0].note = "by \u{1F469}\u{200D}\u{1F4BB}".into()
+        ));
+        assert!(!with(
+            &|name, _| *name = "\u{0645}\u{06CC}\u{200C}\u{0634}\u{0648}\u{062F}".into()
         ));
         assert!(with(&|_, vars| {
             for (index, var) in vars.iter_mut().enumerate() {

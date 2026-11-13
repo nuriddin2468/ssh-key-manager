@@ -8,4 +8,10 @@ export type Server = { user: string, hostName: string, port: number,
 /**
  * The jump hosts the connection goes through (`ProxyJump`), if any.
  */
-proxyJump: string | null, };
+proxyJump: string | null, 
+/**
+ * The `SHA256:…` fingerprints of the server keys `known_hosts` trusts
+ * for it there: a name says little (two networks may each have a
+ * `db`), a key says which server it is.
+ */
+hostKeys?: Array<string>, };

@@ -27,7 +27,7 @@ use ssh_key::{HashAlg, PublicKey};
 use sshkm_core::config::{HostEdit, HostEntry, HostKind, HostOption, Risk, SshConfig};
 use sshkm_core::hosts_file::{HostsChange, HostsEntryEdit, HostsFile, is_system_name};
 use sshkm_core::keys;
-use sshkm_core::known_hosts::KnownHosts;
+use sshkm_core::known_hosts::{KnownHosts, fingerprint};
 use sshkm_core::p2p::protocol::{EnvVariable, HostKey, HostsEntry, Item, ItemSummary, Server};
 use sshkm_core::paths::{SshPaths, expand_tilde_in};
 use sshkm_core::sync::host_keys::trusted_in;
@@ -175,7 +175,7 @@ pub fn build(state: &AppState, app: &AppHandle, request: &SendRequest) -> AppRes
             })
         })?,
     };
-    let item = with_server(item);
+    let item = with_server(&state.paths, item);
     item.check()
         .map_err(|error| AppError::invalid(format!("it can't be sent as it is: {error}")))?;
     Ok(item)
@@ -184,7 +184,7 @@ pub fn build(state: &AppState, app: &AppHandle, request: &SendRequest) -> AppRes
 /// `item`, and if it is a server's password, where its alias leads here,
 /// which the receiver holds against its own hosts. Without that, it goes
 /// for no host, so no version binds it to a name that leads elsewhere there.
-fn with_server(item: Item) -> Item {
+fn with_server(paths: &SshPaths, item: Item) -> Item {
     match item {
         Item::Password {
             host: Some(alias),
@@ -196,7 +196,7 @@ fn with_server(item: Item) -> Item {
             otp,
             ..
         } => {
-            let server = resolve_server(&alias);
+            let server = resolve_server(paths, &alias);
             Item::Password {
                 host: server.is_some().then_some(alias),
                 server,
@@ -363,14 +363,38 @@ fn without_code_running(variables: &[EnvVariable]) -> (Vec<envs::EnvVariable>, V
     )
 }
 
-/// Saves a password from another computer as a new entry: for a host here
-/// only if it leads where the sender's did, since the terminal gives the
-/// password, and the 2FA code, to the server the alias leads to here.
+/// Saves a password from another computer as a new entry
+/// ([`received_login`]).
 fn store_password(
     state: &AppState,
     app: &AppHandle,
     item: &Item,
 ) -> Result<Stored, PairingFailure> {
+    let config = SshConfig::load(&state.paths.config).ok();
+    let input = received_login(item, config.as_ref(), |alias| {
+        resolve_server(&state.paths, alias)
+    })
+    .ok_or(PairingFailure::Broken)?;
+    state
+        .vault
+        .change(app, &state.backup_dir, |vault| Ok(vault.add_entry(&input)?))
+        .map_err(|error| match error.code() {
+            ErrorCode::VaultLocked => PairingFailure::VaultLocked,
+            _ => PairingFailure::NotSaved,
+        })?;
+    Ok(Stored::named(&input.title))
+}
+
+/// The entry a password from another computer becomes: for a host of
+/// `config` only if it leads where the sender's did ([`bind`], `resolve`
+/// being `ssh -G` with the keys trusted here), since the terminal gives the
+/// password, and the 2FA code, to the server the alias leads to here; else
+/// a login for no host. `None` for another kind of item.
+fn received_login(
+    item: &Item,
+    config: Option<&SshConfig>,
+    resolve: impl Fn(&str) -> Option<Server>,
+) -> Option<EntryInput> {
     let Item::Password {
         title,
         username,
@@ -382,15 +406,13 @@ fn store_password(
         server,
     } = item
     else {
-        return Err(PairingFailure::Broken);
+        return None;
     };
-    let host = match (host, server) {
-        (Some(alias), Some(server)) => SshConfig::load(&state.paths.config)
-            .ok()
-            .and_then(|config| bind(&config, alias, server, resolve_server)),
+    let host = match (host, server, config) {
+        (Some(alias), Some(server), Some(config)) => bind(config, alias, server, resolve),
         _ => None,
     };
-    let input = EntryInput {
+    Some(EntryInput {
         title: title.clone(),
         username: username.clone(),
         password: Some(SecretString::from(password.clone())),
@@ -404,15 +426,7 @@ fn store_password(
         },
         host,
         key_fingerprint: None,
-    };
-    state
-        .vault
-        .change(app, &state.backup_dir, |vault| Ok(vault.add_entry(&input)?))
-        .map_err(|error| match error.code() {
-            ErrorCode::VaultLocked => PairingFailure::VaultLocked,
-            _ => PairingFailure::NotSaved,
-        })?;
-    Ok(Stored::named(title))
+    })
 }
 
 /// A received group as the change the Hosts file page shows, checked the
@@ -795,18 +809,40 @@ pub(super) fn trusted_elsewhere(paths: &SshPaths) -> Vec<KnownHosts> {
 }
 
 /// Where `alias` leads, as `ssh -G` works it out with this computer's
-/// configuration; `None` if it can't, or if a name in it is not one a
+/// configuration, with the server keys the `known_hosts` files at `paths`
+/// trust for it; `None` if it can't, or if a name in it is not one a
 /// [`Server`] may have.
-fn resolve_server(alias: &str) -> Option<Server> {
+fn resolve_server(paths: &SshPaths, alias: &str) -> Option<Server> {
     let output = crate::process::run("ssh", &["-G", "--", alias], Duration::from_secs(10)).ok()?;
     if !output.success {
         return None;
     }
-    parse_server(&output.stdout)
+    let (mut server, key_name) = parse_server(&output.stdout)?;
+    let mut files = trusted_elsewhere(paths);
+    files.extend(KnownHosts::load(&paths.known_hosts).ok());
+    server.host_keys = trusted_keys(&files, &key_name, server.port);
+    server.check().is_ok().then_some(server)
 }
 
-/// A [`Server`] from `ssh -G` output: one `keyword value` per line.
-fn parse_server(text: &str) -> Option<Server> {
+/// The `SHA256:…` fingerprints of the plain keys `files` trust for `host`
+/// on `port`, each once.
+fn trusted_keys(files: &[KnownHosts], host: &str, port: u16) -> Vec<String> {
+    let mut keys: Vec<String> = Vec::new();
+    for (_, key) in files.iter().flat_map(|file| file.keys_for(host, port)) {
+        if let Some(fingerprint) = fingerprint(&key)
+            && !keys.contains(&fingerprint)
+        {
+            keys.push(fingerprint);
+        }
+    }
+    keys.truncate(16);
+    keys
+}
+
+/// A [`Server`] from `ssh -G` output (one `keyword value` per line), and
+/// the name `known_hosts` knows it by: its `HostKeyAlias`, else its host
+/// name. Its keys are not in there.
+fn parse_server(text: &str) -> Option<(Server, String)> {
     let value = |key: &str| {
         text.lines().find_map(|line| {
             let (k, v) = line.split_once(' ')?;
@@ -818,8 +854,12 @@ fn parse_server(text: &str) -> Option<Server> {
         host_name: value("hostname")?,
         port: value("port")?.parse().ok()?,
         proxy_jump: value("proxyjump").filter(|jump| jump != "none"),
+        host_keys: Vec::new(),
     };
-    server.check().is_ok().then_some(server)
+    let key_name = value("hostkeyalias")
+        .filter(|alias| alias != "none")
+        .unwrap_or_else(|| server.host_name.clone());
+    server.check().is_ok().then_some((server, key_name))
 }
 
 /// The alias a server's password from another computer is saved for:
@@ -1177,12 +1217,16 @@ mod tests {
         assert_eq!(known.keys_for("192.168.1.66", 22), ed25519(KEY_THEIRS));
     }
 
+    /// A key trusted for the server here and there.
+    const SAME_KEY: &str = "SHA256:76vvbGumhP/HpDH4tlyySHWs5hgRZJHr2wQ7hSDwRK8";
+
     fn server(user: &str, host_name: &str, port: u16) -> Server {
         Server {
             user: user.into(),
             host_name: host_name.into(),
             port,
             proxy_jump: None,
+            host_keys: vec![SAME_KEY.into()],
         }
     }
 
@@ -1223,6 +1267,87 @@ mod tests {
         assert_eq!(bind(&config, "prod", &theirs, |_| None), None);
     }
 
+    /// `db` on two networks, through search domains or a VPN, is two
+    /// servers: the same name says nothing, a key both trust does.
+    #[test]
+    fn the_same_name_on_another_network_is_another_server() {
+        let config = SshConfig::parse("Host db\n  HostName db\n");
+        let theirs = server("deploy", "db", 22);
+        let here = |keys: Vec<String>| {
+            move |_: &str| {
+                Some(Server {
+                    host_keys: keys.clone(),
+                    ..server("deploy", "db", 22)
+                })
+            }
+        };
+        let other = "SHA256:T3RoZXJTZXJ2ZXJLZXlGaW5nZXJwcmludA".to_owned();
+        assert_eq!(
+            bind(&config, "db", &theirs, here(vec![other.clone()])),
+            None
+        );
+        assert_eq!(bind(&config, "db", &theirs, here(Vec::new())), None);
+        // The sender trusts no key for it: nothing to hold it against.
+        let keyless = Server {
+            host_keys: Vec::new(),
+            ..server("deploy", "db", 22)
+        };
+        assert_eq!(
+            bind(&config, "db", &keyless, here(vec![SAME_KEY.into()])),
+            None
+        );
+        assert_eq!(
+            bind(&config, "db", &theirs, here(vec![other, SAME_KEY.into()])).as_deref(),
+            Some("db")
+        );
+    }
+
+    fn login(host: Option<&str>, server: Option<Server>) -> Item {
+        Item::Password {
+            title: "prod DB".into(),
+            username: "deploy".into(),
+            password: "s3cret".into(),
+            url: "https://db.example.com".into(),
+            notes: "notes".into(),
+            otp: Some("otpauth://totp/x?secret=JBSWY3DP".into()),
+            host: host.map(str::to_owned),
+            server,
+        }
+    }
+
+    #[test]
+    fn a_received_password_becomes_a_hosts_only_where_it_leads_there() {
+        let config = SshConfig::parse("Host prod\n  HostName 10.0.4.12\n");
+        let resolve = |alias: &str| (alias == "prod").then(|| server("deploy", "10.0.4.12", 22));
+        let entry = |item: &Item, config: Option<&SshConfig>| {
+            let input = received_login(item, config, resolve).unwrap();
+            (input.kind, input.host)
+        };
+        let bound = login(Some("prod"), Some(server("deploy", "10.0.4.12", 22)));
+        assert_eq!(
+            entry(&bound, Some(&config)),
+            (EntryKind::Host, Some("prod".into()))
+        );
+        let input = received_login(&bound, Some(&config), resolve).unwrap();
+        assert_eq!(input.password.unwrap().expose_secret(), "s3cret");
+        assert_eq!(
+            input.otp.unwrap().expose_secret(),
+            "otpauth://totp/x?secret=JBSWY3DP"
+        );
+        assert_eq!(
+            (input.title.as_str(), input.notes.as_str()),
+            ("prod DB", "notes")
+        );
+        // Elsewhere, without where it leads (an older sender), or without a
+        // config: a login for no host.
+        let elsewhere = login(Some("prod"), Some(server("deploy", "203.0.113.9", 22)));
+        for item in [&elsewhere, &login(Some("prod"), None), &login(None, None)] {
+            assert_eq!(entry(item, Some(&config)), (EntryKind::Login, None));
+        }
+        assert_eq!(entry(&bound, None), (EntryKind::Login, None));
+        assert!(received_login(&Item::Unknown, Some(&config), resolve).is_none());
+    }
+
     #[test]
     fn a_received_environment_keeps_its_variables_but_those_that_run_code() {
         let var = |name: &str, value: &str| EnvVariable {
@@ -1246,23 +1371,43 @@ mod tests {
 
     #[test]
     fn reads_where_an_alias_leads_from_ssh() {
+        let keyless = |user: &str, host: &str, port: u16| Server {
+            host_keys: Vec::new(),
+            ..server(user, host, port)
+        };
         let output = "user deploy\nhostname 10.0.4.12\nport 2222\nproxyjump bastion\n\
                       identityfile ~/.ssh/id_ed25519\n";
         assert_eq!(
             parse_server(output),
-            Some(Server {
-                proxy_jump: Some("bastion".into()),
-                ..server("deploy", "10.0.4.12", 2222)
-            })
+            Some((
+                Server {
+                    proxy_jump: Some("bastion".into()),
+                    ..keyless("deploy", "10.0.4.12", 2222)
+                },
+                "10.0.4.12".to_owned()
+            ))
         );
-        let plain = "user deploy\nhostname 10.0.4.12\nport 22\nproxyjump none\n";
-        assert_eq!(parse_server(plain), Some(server("deploy", "10.0.4.12", 22)));
+        let plain = "user deploy\nhostname 10.0.4.12\nport 22\nproxyjump none\n\
+                     hostkeyalias db.internal\n";
+        assert_eq!(
+            parse_server(plain),
+            Some((keyless("deploy", "10.0.4.12", 22), "db.internal".to_owned()))
+        );
         assert_eq!(parse_server("user deploy\nport 22\n"), None);
         assert_eq!(
             parse_server("user a b\nhostname h\nport 22\n"),
             None,
             "not a name"
         );
+        // The keys come from the known_hosts files `ssh` reads.
+        let files = [
+            KnownHosts::parse(&format!("[10.0.4.12]:2222 ssh-ed25519 {KEY_HERE}\n")),
+            KnownHosts::parse(&format!(
+                "[10.0.4.12]:2222 ssh-ed25519 {KEY_HERE}\n10.0.4.12 ssh-ed25519 {KEY_THEIRS}\n"
+            )),
+        ];
+        assert_eq!(trusted_keys(&files, "10.0.4.12", 2222), [SAME_KEY]);
+        assert_eq!(trusted_keys(&files, "10.0.4.13", 22), Vec::<String>::new());
     }
 
     #[test]

@@ -309,7 +309,7 @@ export function SwitchToKeyDialog({
                     ? 'bg-[linear-gradient(90deg,var(--accent-1),var(--accent-2))]'
                     : i === index
                       ? 'bg-[rgb(var(--accent-rgb)/0.45)]'
-                      : 'bg-white/10',
+                      : 'bg-ink/10',
                 )}
               />
             ))}
@@ -586,7 +586,7 @@ function KeyStep({
               data-key={key.id}
               className={cn(
                 'pressable-soft flex w-full items-center gap-[11px] rounded-[10px] px-2.5 py-2 text-left',
-                key.id === selected?.id ? 'selected-row' : 'hover:bg-white/[0.04]',
+                key.id === selected?.id ? 'selected-row' : 'hover:bg-ink/[0.04]',
               )}
             >
               <Tile tone={keyTone(key)} size={30}>

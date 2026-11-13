@@ -121,14 +121,17 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - Exports: the file is chosen in a system dialog the app opens itself, and both
     exports need the master password. The KeePass copy stays encrypted (it opens with
     the recovery key). The CSV export is plain text: it is readable only by you from the
-    moment it is created (mode 0600; on Windows the file is created with an access list
-    for you, SYSTEM and Administrators only, and no one else can open it while it is
-    written). On a drive that can't keep such an access list (FAT or exFAT USB sticks,
-    some network drives) both exports are refused and nothing is written. It is never
-    written into `~/.ssh` or over the vault's own files (compared by file identity, so
-    links and firmlinks don't get around it), and cells that a spreadsheet would run as
-    a formula are defused, except passwords. Files to import are also picked in a
-    system dialog. Imported CSV files can be moved to the Trash right after import.
+    moment it is created (mode 0600 whatever file it replaces, never that file's mode;
+    on Windows the file is created with an access list for you, SYSTEM and
+    Administrators only, and no one else can open it while it is written). Both are
+    written as a new file renamed onto the path you picked, so a link there is
+    replaced, never written through. On a drive that can't keep such an access list
+    (FAT or exFAT USB sticks, some network drives) both exports are refused and nothing
+    is written. It is never written into `~/.ssh` or over the vault's own files
+    (compared by file identity, so links and firmlinks don't get around it), and cells
+    that a spreadsheet would run as a formula are defused, except passwords. Files to
+    import are also picked in a system dialog. Imported CSV files can be moved to the
+    Trash right after import.
   - Secret environments (the **Environments** page) are entries of the same vault:
     one per environment, in the group `Environments/<project>`, with a custom field
     per variable; a secret variable's field is protected like a password. Lists,
@@ -144,8 +147,9 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - Exporting an environment writes it in plain text (`.env`, JSON, YAML, shell
     `export` lines, a Docker env file, or a Kubernetes Secret, whose base64 hides
     nothing), to a file picked in a system save dialog, with the same protections as
-    the CSV export: mode 0600 (or the private access list on Windows), never in
-    `~/.ssh`, never over the vault's files. Shell lines quote every value in `'…'`,
+    the CSV export: mode 0600 (or the private access list on Windows), a link at the
+    path replaced rather than written through, never in `~/.ssh`, never over the
+    vault's files. Shell lines quote every value in `'…'`,
     so sourcing the file runs nothing a value holds. When the file would be inside a
     Git working tree that doesn't ignore it (`git check-ignore`; without `git`, any
     working tree counts), nothing is written until you confirm in the app.
@@ -249,7 +253,12 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     meanwhile, and a native confirmation for lines that say which server gets access.
   - The key converter decrypts keys in Rust only; the page sees fingerprints and the
     public key. Converted keys go into `~/.ssh` only as new files (0600), or where you
-    pick in a system save dialog, never over a file in `~/.ssh`. New passphrases use
+    pick in a system save dialog, as the CSV export is written: readable only by you
+    from the first byte (mode 0600 whatever file it replaces, or the private access
+    list on Windows, where a drive that can't keep one is refused), renamed onto the
+    path itself so a link there is replaced, never written through. A converted key is
+    never saved over a file in `~/.ssh`, compared by file identity, so a link or `..`
+    in the path doesn't get around it. New passphrases use
     the formats' strong options (OpenSSH bcrypt, PuTTY v3 Argon2id, PKCS#8 PBES2 with
     PBKDF2-SHA256 and AES-256); PEM, whose encryption is one round of MD5, is written
     only without a passphrase, and the app says so. The key derivation settings a file
@@ -397,8 +406,31 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
   - CI checks the Rust dependencies with `cargo deny`: known advisories, crates from
     anywhere but crates.io, and licenses the app can't be shipped with (`deny.toml`).
 - **Standard files only.** The app edits the OpenSSH files in place.
-  - Writes are atomic (temp file plus rename), keep the file's permissions, and follow
-    symlinks.
+  - Writes are atomic: a temporary file next to the file, flushed to disk and renamed
+    over it. What they keep depends on the file:
+    - `config`, `known_hosts` and the app's own data files keep their permissions and
+      follow symlinks, so a `~/.ssh/config` that links into a dotfiles repository
+      stays a link and the repository file is updated.
+    - A private key rewritten in place (a passphrase added, changed or removed)
+      follows a symlink too, but keeps only its owner's permissions: a key others could
+      read becomes 0600 (a 0400 key stays 0400); on Windows it gets the private access
+      list as it is created.
+    - Secrets written where you pick (vault and environment exports, converted keys)
+      and managed `.env` files never follow a link at their path and never take the
+      mode of a file they replace: a new file, readable only by you from its first
+      byte, is renamed onto the path itself.
+    - On macOS a folder's access list can hand entries down to what is made in it, and
+      macOS checks them before the mode. A file the app makes for you alone (mode 0600
+      or stricter), and a level-3 `.env` pipe, is therefore made in a new folder of its
+      own next to where it goes (mode 0700, its access list emptied before anything is
+      made in it) and then renamed into place, so it never carries such an entry, not
+      even for the moment before its contents are written.
+    - A temporary file a crash leaves behind is removed: in `~/.ssh` and the app's
+      data folder at the next start, next to an export or converted key at the next
+      write to that file.
+  - Files the app reads (keys, `config`, `known_hosts`, a vault to switch to) are read
+    only if they are regular files: a pipe or a device is refused without waiting for
+    anything to be written to it (`/dev/null` reads as empty).
   - `config` and `known_hosts` are backed up before every write. An edit is tied to the
     version of the file it was made on and refused if the file changed meanwhile.
   - A change that adds or alters a directive that runs a program, loads a library,

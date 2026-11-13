@@ -24,10 +24,10 @@ export function UpdateToast({ version, releases, onShowNotes, onLater }: UpdateT
   const security = changes.some((change) => change.kind === 'security');
   const notice = changes.some((change) => change.kind === 'notice');
   return (
-    <div className="flex w-[var(--width)] flex-col gap-3 rounded-xl border border-white/10 p-4">
+    <div className="flex w-[var(--width)] flex-col gap-3 rounded-xl border border-line-strong p-4">
       <div className="flex gap-3">
         <Tile tone="teal" size={32}>
-          <Download aria-hidden="true" className="size-4 text-white" strokeWidth={2.25} />
+          <Download aria-hidden="true" className="size-4 text-on-solid" strokeWidth={2.25} />
         </Tile>
         <div className="flex min-w-0 flex-col gap-0.5">
           <span className="font-semibold">{t('updates.available', { version })}</span>

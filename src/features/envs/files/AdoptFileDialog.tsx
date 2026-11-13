@@ -309,7 +309,7 @@ export function AdoptFileDialog({ found, onDone }: AdoptFileDialogProps) {
                       </thead>
                       <tbody>
                         {data.variables.map((variable) => (
-                          <tr key={variable.name} className="h-[42px] border-t border-white/[0.05]">
+                          <tr key={variable.name} className="h-[42px] border-t border-ink/[0.05]">
                             <td
                               className="truncate pl-3.5 pr-3 font-mono text-[12.5px]"
                               title={variable.name}

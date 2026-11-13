@@ -107,7 +107,7 @@ export function ConnectionBuilder({
         />
       </div>
       <div className="flex flex-wrap items-center gap-2.5">
-        <code className="selectable min-w-0 flex-1 rounded-xl border border-white/[0.08] bg-black/35 px-3 py-2 font-mono text-[12.5px] leading-[19px] text-fg [overflow-wrap:anywhere]">
+        <code className="selectable min-w-0 flex-1 rounded-xl border border-line bg-shade/35 px-3 py-2 font-mono text-[12.5px] leading-[19px] text-fg [overflow-wrap:anywhere]">
           {url || ' '}
         </code>
         <Button

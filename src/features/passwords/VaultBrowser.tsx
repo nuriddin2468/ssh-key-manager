@@ -259,7 +259,7 @@ export function VaultBrowser({ entryId }: { entryId?: string }) {
                     <div
                       className={cn(
                         GRID,
-                        'sticky top-0 z-[1] h-[38px] items-center border-b border-white/[0.07] bg-[rgb(14_18_27/0.92)] px-[18px] text-[11.5px] font-medium tracking-[0.02em] text-subtle backdrop-blur',
+                        'sticky top-0 z-[1] h-[38px] items-center border-b border-ink/[0.07] bg-sticky/92 px-[18px] text-[11.5px] font-medium tracking-[0.02em] text-subtle backdrop-blur',
                       )}
                     >
                       <span>{t('passwords.colName')}</span>
@@ -361,7 +361,9 @@ function EntryRow({ entry, selected, onSelect }: EntryRowProps) {
   const mark = avatar(entry.title);
   const link =
     entry.kind === 'host' && entry.host ? (
-      <span className="truncate font-mono text-[12px] text-blue-200">{entry.host}</span>
+      <span data-hue="hosts" className="truncate font-mono text-[12px] text-[var(--accent-text)]">
+        {entry.host}
+      </span>
     ) : entry.kind === 'key' && entry.keyFingerprint ? (
       <span className="truncate font-mono text-[12px] text-muted">
         {shortFingerprint(entry.keyFingerprint)}
@@ -380,8 +382,8 @@ function EntryRow({ entry, selected, onSelect }: EntryRowProps) {
       onClick={onSelect}
       className={cn(
         GRID,
-        'pressable-soft min-h-[54px] w-full items-center rounded-xl px-3 py-2 text-left active:bg-white/[0.06]',
-        selected ? 'selected-row' : 'hover:bg-white/[0.04]',
+        'pressable-soft min-h-[54px] w-full items-center rounded-xl px-3 py-2 text-left active:bg-fill',
+        selected ? 'selected-row' : 'hover:bg-ink/[0.04]',
       )}
     >
       <span className="flex min-w-0 items-center gap-3">

@@ -19,7 +19,7 @@ export function Tooltip({ content, shortcut, side = 'bottom', children }: Toolti
         <RTooltip.Content
           side={side}
           sideOffset={6}
-          className="z-50 flex items-center gap-2 rounded-md border border-white/10 bg-popover px-2 py-1 text-[12px] text-fg shadow-xl shadow-black/40 data-[state=delayed-open]:animate-fade-in"
+          className="z-50 flex items-center gap-2 rounded-md border border-line-strong bg-popover px-2 py-1 text-[12px] text-fg shadow-xl shadow-shade/40 data-[state=delayed-open]:animate-fade-in"
         >
           {content}
           {shortcut ? <Kbd>{shortcut}</Kbd> : null}

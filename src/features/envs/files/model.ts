@@ -36,7 +36,7 @@ export const TONE_CLASSES: Record<StateTone, { text: string; tile: string }> = {
     text: 'text-critical',
     tile: 'border-critical-solid/30 bg-critical-solid/12 text-critical',
   },
-  neutral: { text: 'text-muted', tile: 'border-white/10 bg-white/[0.05] text-muted' },
+  neutral: { text: 'text-muted', tile: 'border-line-strong bg-ink/[0.05] text-muted' },
 };
 
 const LOOK: Record<FileState['type'], { tone: StateTone; icon: LucideIcon }> = {

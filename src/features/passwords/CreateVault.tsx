@@ -65,7 +65,7 @@ export function CreateVault() {
       title={t('passwords.createTitle')}
       text={t('passwords.createText')}
     >
-      <ul className="flex flex-col gap-2 border-b border-white/[0.07] pb-4">
+      <ul className="flex flex-col gap-2 border-b border-ink/[0.07] pb-4">
         {points.map(({ icon: Icon, text }) => (
           <li key={text} className="flex items-center gap-2.5 text-[12.5px] text-fg-2">
             <Icon

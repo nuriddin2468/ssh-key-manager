@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { click, fireTrusted, press, type } from './test/user';
 import './content';
 
@@ -54,6 +54,16 @@ function loginForm(
   form.addEventListener('submit', (event) => event.preventDefault());
   return { form, user, pass };
 }
+
+// Once loaded, the content script looks whether a sign-in sent before came
+// back as an empty sign-in form: it asks the background (`signInCheck`) 700 ms
+// later, whichever test is running then. Let that look happen before the
+// tests, which check what each sends. The background has nothing to warn of
+// here, so the later looks ask nothing.
+beforeAll(async () => {
+  await vi.waitFor(() => expect(kinds()).toContain('signInCheck'), { timeout: 5000 });
+  world.sent.length = 0;
+});
 
 afterEach(() => {
   (document.activeElement as HTMLElement | null)?.blur();

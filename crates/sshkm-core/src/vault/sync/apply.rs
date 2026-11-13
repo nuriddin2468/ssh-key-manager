@@ -357,7 +357,8 @@ impl Vault {
     }
 
     /// A string field of an item in a conflict, as this side (`theirs`
-    /// false) or the other has it: for the user who asked to see it.
+    /// false) or the other has it: for the user who asked to see it. Never
+    /// a 2FA secret ([`crate::vault::is_otp_field`]).
     pub fn sync_value(
         &self,
         peer: &PeerVault,
@@ -368,6 +369,10 @@ impl Vault {
         let name = field
             .strip_prefix("s:")
             .ok_or_else(|| Error::invalid("not a text field"))?;
+        // A 2FA secret is never shown, in any of the forms it is kept in.
+        if crate::vault::is_otp_field(name) {
+            return Err(Error::invalid("a 2FA secret is never shown"));
+        }
         let uuid = Uuid::parse_str(id).map_err(|_| Error::invalid("not an entry"))?;
         let db = if theirs { &peer.db } else { &self.db };
         if !theirs && super::model::local_set(db).contains(&uuid) {

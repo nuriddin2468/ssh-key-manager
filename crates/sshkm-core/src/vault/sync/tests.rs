@@ -1095,6 +1095,17 @@ fn a_conflict_value_is_shown_only_when_asked_for_one_field() {
         ("mine".into(), "theirs".into())
     );
     assert!(a.vault.sync_value(&peer, &id, "a:file", true).is_err());
+    for field in [
+        "s:otp",
+        "s:TOTP Seed",
+        "s:TimeOtp-Secret-Base32",
+        "s:HmacOtp-Secret",
+    ] {
+        assert!(
+            a.vault.sync_value(&peer, &id, field, true).is_err(),
+            "{field}"
+        );
+    }
 }
 
 /// A project `Shop` with the folder `shop` on both sides, and an

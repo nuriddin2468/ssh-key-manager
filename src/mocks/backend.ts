@@ -20,6 +20,7 @@ import type { VaultAudit } from '@/bindings/VaultAudit';
 import { auditChecksHandlers, configSettingsFindings } from './auditChecks';
 import { backgroundHandlers } from './background';
 import { browserHandlers } from './browser';
+import { chatHandlers } from './chat';
 import { diagnosed, diagnoseHandlers, diagnoseHostSpecs } from './diagnose';
 import { envFilesHandlers } from './envFiles';
 import { envsHandlers } from './envs';
@@ -540,6 +541,7 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
     },
   }),
   ...nearbyHandlers,
+  ...chatHandlers,
   ...shellHistoryHandlers(hosts),
   ...historyHandlers,
   ...leaksHandlers,

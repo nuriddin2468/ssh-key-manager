@@ -15,6 +15,13 @@
 //! `Hello`; older ones ignore it. The rest of those conversations (adding a
 //! device, moving the vault, a sync) only ever goes to a peer that sent it.
 //!
+//! Everything newer is named in the `Hello`'s `features` ([`FEATURES`]):
+//! a message, a chat frame or an item that needs a feature only goes to a
+//! peer that named it, and [`VERSION`] stays 1. A message, item or summary
+//! of a kind this version doesn't know parses as `Unknown`, so that the
+//! conversation can end with "the other app needs the new version" instead
+//! of breaking.
+//!
 //! [`Session::pairing_code`]: super::Session::pairing_code
 
 use std::collections::BTreeMap;
@@ -26,6 +33,7 @@ use ssh_key::{HashAlg, PublicKey};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use zeroize::Zeroizing;
 
+use super::chat::ChatFrame;
 use crate::hosts_file::{is_system_name, is_valid_name};
 use crate::keys::validate_file_name;
 use crate::sync::Manifest;
@@ -37,6 +45,22 @@ pub const VERSION: u32 = 1;
 pub const MAX_MESSAGE: usize = 1024 * 1024;
 /// Longest device name, in characters.
 pub const MAX_NAME: usize = 64;
+
+/// Chats ([`super::chat`]).
+pub const CHAT: &str = "chat/1";
+/// An environment in Personal without a part, whose empty project label
+/// older versions refuse.
+pub const PERSONAL_ENV: &str = "personal-env/1";
+/// What this version can do beyond version 1, as its `Hello` says.
+pub const FEATURES: &[&str] = &[CHAT, PERSONAL_ENV];
+
+/// [`FEATURES`], as a `Hello` carries them.
+pub fn features() -> Vec<String> {
+    FEATURES
+        .iter()
+        .map(|feature| (*feature).to_owned())
+        .collect()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -52,6 +76,10 @@ pub enum Message {
         /// before them send nothing.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         own: Option<Own>,
+        /// What the sender can do beyond version 1 ([`FEATURES`]); versions
+        /// before features send nothing.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        features: Vec<String>,
     },
     /// The initiator's commitment to its pairing nonce: the SHA-256 of it,
     /// in base64.
@@ -64,8 +92,14 @@ pub enum Message {
     Confirm { matched: bool },
     /// The connecting side offers an item.
     Offer { item: ItemSummary },
-    /// The other user accepted the offer, or turned it down.
-    Reply { accepted: bool },
+    /// The other user accepted the offer, or turned it down; with
+    /// `unsupported`, this version can't take what was offered. Versions
+    /// before it send no `unsupported` and read a plain no.
+    Reply {
+        accepted: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        unsupported: bool,
+    },
     /// The item offered, after the other user accepted it.
     Payload { item: Item },
     /// Whether the receiver saved the item.
@@ -93,6 +127,20 @@ pub enum Message {
         hashes: BTreeMap<String, String>,
         deferred: u32,
     },
+    /// A frame of a chat session; only to a peer whose `Hello` named
+    /// [`CHAT`].
+    Chat { frame: ChatFrame },
+    /// A message of a kind a later version sends: never sent.
+    #[serde(other)]
+    Unknown,
+}
+
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde passes a reference"
+)]
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// What a side says about the user's own devices in its `Hello`.
@@ -212,6 +260,9 @@ pub enum Item {
         notes: String,
         variables: Vec<EnvVariable>,
     },
+    /// An item of a kind a later version sends: never saved.
+    #[serde(other)]
+    Unknown,
 }
 
 /// One variable of an [`Item::Environment`].
@@ -302,6 +353,19 @@ pub enum ItemSummary {
         /// The first few variables' names.
         names: Vec<String>,
     },
+    /// An item of a kind a later version sends.
+    #[serde(other)]
+    Unknown,
+}
+
+impl ItemSummary {
+    /// The feature ([`FEATURES`]) a peer needs to take the item, if any.
+    pub fn requires(&self) -> Option<&'static str> {
+        match self {
+            Self::Environment { project, .. } if project.is_empty() => Some(PERSONAL_ENV),
+            _ => None,
+        }
+    }
 }
 
 /// Most host keys one host may bring.
@@ -320,7 +384,7 @@ const MAX_GROUP_NAME: usize = 64;
 const SUMMARY_NAMES: usize = 3;
 /// Most bytes of names, values and notes one environment may bring, so its
 /// message stays under [`MAX_MESSAGE`] even with every character escaped.
-const MAX_ENVIRONMENT_BYTES: usize = 384 * 1024;
+pub(crate) const MAX_ENVIRONMENT_BYTES: usize = 384 * 1024;
 
 impl Item {
     pub fn summary(&self) -> ItemSummary {
@@ -411,7 +475,14 @@ impl Item {
                     .map(|var| var.name.clone())
                     .collect(),
             },
+            Self::Unknown => ItemSummary::Unknown,
         }
+    }
+
+    /// The feature ([`FEATURES`]) a peer needs to take the item, if any:
+    /// it is never offered to a peer that didn't name it.
+    pub fn requires(&self) -> Option<&'static str> {
+        self.summary().requires()
     }
 
     /// Fails unless every field is something the receiver may save: no
@@ -489,21 +560,30 @@ impl Item {
                 notes,
                 variables,
             } => check_environment(project, name, notes, variables),
+            Self::Unknown => Err(Error::Unsupported(
+                "an item of a kind this version doesn't know".into(),
+            )),
         }
     }
 }
 
 /// See [`Item::check`]: names a project, an environment and a variable may
 /// have, values without control characters other than line breaks and tabs,
-/// and a size that fits one message.
+/// and a size that fits one message. The project label is empty for an
+/// environment in Personal without a part.
 fn check_environment(
     project: &str,
     name: &str,
     notes: &str,
     variables: &[EnvVariable],
 ) -> Result<()> {
-    for label in [project, name] {
-        if label.trim().is_empty() || label.chars().count() > MAX_NAME || label.contains('/') {
+    for (label, may_be_empty) in [(project, true), (name, false)] {
+        let blank = if may_be_empty && label.is_empty() {
+            false
+        } else {
+            label.trim().is_empty()
+        };
+        if blank || label.chars().count() > MAX_NAME || label.contains('/') {
             return Err(Error::invalid(format!("not a name: {label:?}")));
         }
         text(label, false)?;
@@ -604,7 +684,9 @@ impl fmt::Debug for Item {
     }
 }
 
-fn text(value: &str, multiline: bool) -> Result<()> {
+/// Fails if `value` is longer than a field may be or has control characters
+/// (but line breaks and tabs, with `multiline`).
+pub(crate) fn text(value: &str, multiline: bool) -> Result<()> {
     if value.len() > MAX_FIELD {
         return Err(Error::invalid("a value is too long"));
     }
@@ -654,6 +736,7 @@ mod tests {
             name: "MacBook".into(),
             known: false,
             own: None,
+            features: Vec::new(),
         };
         let json = serde_json::to_string(&hello).unwrap();
         assert_eq!(
@@ -661,7 +744,10 @@ mod tests {
             r#"{"type":"hello","version":1,"name":"MacBook","known":false}"#
         );
         assert_eq!(serde_json::from_str::<Message>(&json).unwrap(), hello);
-        assert!(serde_json::from_str::<Message>(r#"{"type":"other"}"#).is_err());
+        assert_eq!(
+            serde_json::from_str::<Message>(r#"{"type":"other"}"#).unwrap(),
+            Message::Unknown
+        );
     }
 
     /// The `Hello` of a version before own devices, as it parses here, and
@@ -688,6 +774,7 @@ mod tests {
                     proof: "cHJvb2Y=".into(),
                 },
             }),
+            features: Vec::new(),
         };
         let json = serde_json::to_string(&hello).unwrap();
         assert_eq!(
@@ -708,6 +795,99 @@ mod tests {
         };
         assert_eq!(own.intent, Some(Intent::Other));
         assert_eq!(own.vault, VaultState::Missing);
+    }
+
+    #[test]
+    fn features_get_along_with_older_versions() {
+        let hello = Message::Hello {
+            version: VERSION,
+            name: "MacBook".into(),
+            known: true,
+            own: None,
+            features: features(),
+        };
+        let json = serde_json::to_string(&hello).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"hello","version":1,"name":"MacBook","known":true,"features":["chat/1","personal-env/1"]}"#
+        );
+        assert_eq!(serde_json::from_str::<Message>(&json).unwrap(), hello);
+        // An older version reads it as it always did, and its Hello has none.
+        let OldMessage::Hello { known, .. } = serde_json::from_str(&json).unwrap();
+        assert!(known);
+        let older = r#"{"type":"hello","version":1,"name":"x","known":false}"#;
+        let Message::Hello { features, .. } = serde_json::from_str(older).unwrap() else {
+            panic!("not a hello")
+        };
+        assert_eq!(features, Vec::<String>::new());
+        // A plain no, as older versions send and read it.
+        let no = Message::Reply {
+            accepted: false,
+            unsupported: false,
+        };
+        assert_eq!(
+            serde_json::to_string(&no).unwrap(),
+            r#"{"type":"reply","accepted":false}"#
+        );
+        let unsupported: Message =
+            serde_json::from_str(r#"{"type":"reply","accepted":false,"unsupported":true}"#)
+                .unwrap();
+        assert_eq!(
+            unsupported,
+            Message::Reply {
+                accepted: false,
+                unsupported: true
+            }
+        );
+    }
+
+    #[test]
+    fn kinds_of_later_versions_parse_as_unknown() {
+        assert_eq!(
+            serde_json::from_str::<Message>(r#"{"type":"teleport","to":"mars"}"#).unwrap(),
+            Message::Unknown
+        );
+        let offer: Message = serde_json::from_str(
+            r#"{"type":"offer","item":{"type":"project","name":"shop","hosts":3}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            offer,
+            Message::Offer {
+                item: ItemSummary::Unknown
+            }
+        );
+        let payload: Message =
+            serde_json::from_str(r#"{"type":"payload","item":{"type":"project","name":"shop"}}"#)
+                .unwrap();
+        let Message::Payload { item } = payload else {
+            panic!("not a payload")
+        };
+        assert_eq!(item, Item::Unknown);
+        assert!(item.check().is_err());
+        assert_eq!(item.summary(), ItemSummary::Unknown);
+        // Known kinds still fail when they are broken.
+        assert!(serde_json::from_str::<Message>(r#"{"type":"offer"}"#).is_err());
+    }
+
+    #[test]
+    fn an_environment_in_personal_without_a_part_needs_a_feature() {
+        let mut item = environment();
+        assert_eq!(item.requires(), None);
+        if let Item::Environment { project, .. } = &mut item {
+            project.clear();
+        }
+        assert!(item.check().is_ok(), "an empty project label is Personal");
+        assert_eq!(item.requires(), Some(PERSONAL_ENV));
+        assert_eq!(item.summary().requires(), Some(PERSONAL_ENV));
+        assert!(FEATURES.contains(&PERSONAL_ENV));
+        if let Item::Environment { project, .. } = &mut item {
+            *project = "  ".into();
+        }
+        assert!(
+            item.check().is_err(),
+            "a project label of spaces is not one"
+        );
     }
 
     #[test]

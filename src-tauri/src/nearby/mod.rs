@@ -7,6 +7,8 @@
 //!   It announces nothing otherwise, but to the user's own devices
 //!   ([`presence`]).
 //! - **Looking.** While the Nearby page is open, the app browses for others.
+//! - **Chats.** While Nearby is open, with contacts and the user's devices
+//!   online too ([`chat`]); outside the one conversation at a time below.
 //! - **Conversations.** One at a time, started from either side: a Noise
 //!   session ([`sshkm_core::p2p`]), then [`pairing::conversation`]: pairing
 //!   and sending, adding one of the user's devices ([`own`]), or a sync
@@ -18,6 +20,7 @@
 //! `nearby.json` in the app's data folder. The UI follows [`CHANGED_EVENT`],
 //! which carries the whole [`NearbyStatus`].
 
+pub mod chat;
 pub mod items;
 pub mod own;
 pub mod pairing;
@@ -197,6 +200,7 @@ pub struct Nearby {
     app: OnceLock<AppHandle>,
     next_id: AtomicU32,
     inner: Mutex<Inner>,
+    chats: chat::Chats,
 }
 
 #[derive(Default)]
@@ -311,6 +315,7 @@ impl Nearby {
                 settings,
                 ..Inner::default()
             }),
+            chats: chat::Chats::default(),
         }
     }
 
@@ -319,6 +324,7 @@ impl Nearby {
     pub fn attach(self: &Arc<Self>, app: AppHandle) {
         let _ = self.app.set(app);
         Arc::clone(self).watch_presence();
+        Arc::clone(self).watch_chats();
     }
 
     pub fn status(&self) -> NearbyStatus {

@@ -132,8 +132,17 @@ pub async fn nearby_devices(nearby: State<'_, SharedNearby>) -> AppResult<Vec<My
 
 /// Removes one of the user's devices.
 #[tauri::command]
-pub async fn nearby_remove_device(nearby: State<'_, SharedNearby>, key: String) -> AppResult<()> {
-    on_nearby(&nearby, move |nearby| nearby.remove_device(&key)).await
+pub async fn nearby_remove_device(
+    nearby: State<'_, SharedNearby>,
+    key: String,
+    delete_chat: Option<bool>,
+) -> AppResult<()> {
+    on_nearby(&nearby, move |nearby| {
+        nearby.remove_device(&key)?;
+        nearby.chat_forget(&key, delete_chat.unwrap_or(false));
+        Ok(())
+    })
+    .await
 }
 
 /// Whether this computer is announced to the user's devices while the
@@ -193,13 +202,18 @@ pub async fn nearby_contacts(app: AppHandle, state: State<'_, Shared>) -> AppRes
 pub async fn nearby_remove_contact(
     app: AppHandle,
     state: State<'_, Shared>,
+    nearby: State<'_, SharedNearby>,
     key: String,
+    delete_chat: Option<bool>,
 ) -> AppResult<()> {
+    let nearby = Arc::clone(&nearby);
     blocking(&state, move |state| {
         let removed = state.vault.change(&app, &state.backup_dir, |vault| {
             Ok(vault.remove_contact(&key))
         })?;
         if removed {
+            // Its chat link closes now, and the chat goes if the user said so.
+            nearby.chat_forget(&key, delete_chat.unwrap_or(false));
             Ok(())
         } else {
             Err(AppError::not_found("that device is not a contact"))

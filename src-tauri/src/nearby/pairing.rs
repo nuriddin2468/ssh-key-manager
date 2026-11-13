@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use sshkm_core::p2p::protocol::{
-    Intent, Item, ItemSummary, Own, SecretText, VERSION, VaultState, clean_name,
+    Intent, Item, ItemSummary, Own, SecretText, VERSION, VaultState, clean_name, features,
 };
 use sshkm_core::p2p::{Message, PeerKey, Session};
 use zeroize::Zeroizing;
@@ -184,6 +184,12 @@ pub enum PairingFailure {
     VaultLocked,
     /// The other device runs a version of the app that pairs differently.
     Version,
+    /// The other device sent something this version doesn't know: this app
+    /// needs the new version.
+    Unsupported,
+    /// The other device can't take what this side sends: its app needs the
+    /// new version.
+    PeerUnsupported,
     /// The connection broke or the other side broke the protocol.
     Broken,
     /// The other user turned down the item this side offered.
@@ -319,11 +325,11 @@ pub fn conversation(
         Err(reason) => return PairingPhase::Failed { reason },
     };
     match (met, purpose) {
-        (Met::Contacts(_, known), Some(Purpose::Send { item, to })) => {
-            transfer::send(session, side, item, known.as_deref(), to)
+        (Met::Contacts(_, known, features), Some(Purpose::Send { item, to })) => {
+            transfer::send(session, side, item, known.as_deref(), to, &features)
         }
-        (Met::Contacts(end, _), Some(_)) => end,
-        (Met::Contacts(end, _), None) => transfer::receive(session, side).unwrap_or(end),
+        (Met::Contacts(end, ..), Some(_)) => end,
+        (Met::Contacts(end, ..), None) => transfer::receive(session, side).unwrap_or(end),
         (Met::AddDevice { peer, name, joins }, _) => own::add(session, side, peer, &name, joins),
         (Met::Sync { peer }, _) => sync::run(session, side, peer),
     }
@@ -332,8 +338,8 @@ pub fn conversation(
 /// How two sides met.
 enum Met {
     /// As contacts: `Paired` or `Known`, with the name this side kept for
-    /// the other before, if it knew it.
-    Contacts(PairingPhase, Option<String>),
+    /// the other before, if it knew it, and what the other can do.
+    Contacts(PairingPhase, Option<String>, Vec<String>),
     /// To make one the other's device; with `joins`, the side that
     /// answered gets the vault.
     AddDevice {
@@ -363,20 +369,15 @@ fn meet(
             name: side.name(),
             known: known.is_some(),
             own: mine.clone(),
+            features: features(),
         })
         .map_err(|_| PairingFailure::Broken)?;
-    let Message::Hello {
-        version,
+    let Hello {
         name,
         known: they_know,
         own: theirs,
-    } = session.recv().map_err(broken)?
-    else {
-        return Err(PairingFailure::Broken);
-    };
-    if version != VERSION {
-        return Err(PairingFailure::Version);
-    }
+        features: their_features,
+    } = their_hello(session)?;
     let announced = Some(clean_name(&name)).filter(|name| !name.is_empty());
     let peer_name = announced.clone().unwrap_or_else(|| "?".to_owned());
     // A device this side knows goes by the name it keeps for it, since any
@@ -392,14 +393,14 @@ fn meet(
 
     let Some(intent) = intent else {
         if known.is_some() && they_know {
-            return Ok(Met::Contacts(PairingPhase::Known, known));
+            return Ok(Met::Contacts(PairingPhase::Known, known, their_features));
         }
         compare_codes(session, side, peer.as_deref())?;
         // A device known here already stays as it is, name and all.
         if known.is_none() {
             side.save(peer_key, &peer_name)?;
         }
-        return Ok(Met::Contacts(PairingPhase::Paired, known));
+        return Ok(Met::Contacts(PairingPhase::Paired, known, their_features));
     };
     let (Some(mine), Some(theirs)) = (mine, theirs) else {
         return Err(PairingFailure::Version);
@@ -452,6 +453,35 @@ fn meet(
             }
         }
         Intent::Other => Err(PairingFailure::Version),
+    }
+}
+
+/// The other side's `Hello`.
+struct Hello {
+    name: String,
+    known: bool,
+    own: Option<Own>,
+    features: Vec<String>,
+}
+
+/// Reads the other side's `Hello`, of this version.
+fn their_hello(session: &mut Session<TcpStream>) -> Result<Hello, PairingFailure> {
+    match session.recv().map_err(broken)? {
+        Message::Hello {
+            version,
+            name,
+            known,
+            own,
+            features,
+        } if version == VERSION => Ok(Hello {
+            name,
+            known,
+            own,
+            features,
+        }),
+        Message::Hello { .. } => Err(PairingFailure::Version),
+        Message::Unknown => Err(PairingFailure::Unsupported),
+        _ => Err(PairingFailure::Broken),
     }
 }
 

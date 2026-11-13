@@ -95,6 +95,22 @@ const MAX_PATH: usize = 1024;
 /// never gets values.
 const TEMPLATE_WORDS: [&str; 6] = ["example", "sample", "template", "dist", "defaults", "tmpl"];
 
+/// Whether this system serves pipes in folders ([`pipes::SUPPORTED`]);
+/// a test can make it say no, as on Windows.
+pub(crate) fn pipes_supported() -> bool {
+    #[cfg(test)]
+    if NO_PIPES.with(std::cell::Cell::get) {
+        return false;
+    }
+    pipes::SUPPORTED
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Set in a test to act as a system without pipes in folders.
+    pub(crate) static NO_PIPES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Where an environment is used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1130,7 +1146,7 @@ impl Vault {
         if now == level {
             return Ok(false);
         }
-        if level == FileLevel::Virtual && !pipes::SUPPORTED {
+        if level == FileLevel::Virtual && !pipes_supported() {
             return Err(unsupported());
         }
         if level == FileLevel::Always && kind_of(&entry) == EnvKind::Remote {
@@ -1170,7 +1186,7 @@ impl Vault {
                 "a remote environment has a file only while the vault is unlocked, or a virtual one",
             ));
         }
-        if level == FileLevel::Virtual && !pipes::SUPPORTED {
+        if level == FileLevel::Virtual && !pipes_supported() {
             return Err(unsupported());
         }
         let owner = self
@@ -1914,7 +1930,7 @@ impl Vault {
                 let location = disk::display(&bound.file, ctx);
                 let reason = if bound.in_trash {
                     Some(InactiveReason::InTrash)
-                } else if bound.level == FileLevel::Virtual && !pipes::SUPPORTED {
+                } else if bound.level == FileLevel::Virtual && !pipes_supported() {
                     Some(InactiveReason::Unsupported)
                 } else if bound.kind == EnvKind::Remote && bound.level == FileLevel::Always {
                     Some(InactiveReason::Remote)

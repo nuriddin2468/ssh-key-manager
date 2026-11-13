@@ -35,6 +35,7 @@ mod own_devices;
 pub mod projects;
 mod recovery;
 mod slots;
+pub mod sync;
 #[cfg(test)]
 mod tests;
 
@@ -53,7 +54,7 @@ pub use self::breach::{
     BreachCache, BreachQuery, MAX_RANGE_BYTES, PADDING_HEADER, RANGE_URL, RangePrefix,
 };
 pub use self::browsers::{BrowserKeys, KeysUsed, PairedBrowser};
-pub use self::contacts::Contact;
+pub use self::contacts::{Contact, ContactRecord, MAX_CONTACTS};
 pub use self::generator::{
     GenerateOptions, Generated, SecretPreset, Strength, TokenEncoding, UuidVersion, generate,
     generate_preset, strength,
@@ -62,7 +63,7 @@ pub use self::import::{
     BrowserFamily, BrowserKeyStore, BrowserLogins, BrowserProfile, BrowserReadError, CsvFormat,
     ImportComparison, ImportOutcome, ImportPreview, ImportRow, SafeStorage, browser_profiles,
 };
-pub use self::location::{check_database, copy_files, remove_files};
+pub use self::location::{check_database, cloud_service, copy_files, remove_files};
 pub use self::own_devices::{DeviceRecord, MAX_RECORDS, OwnDevice, check_records};
 use self::slots::KeySlots;
 use crate::{Error, Result, fsutil};

@@ -9,7 +9,7 @@ never values), a change only one side made goes across, a change both made diffe
 is the user's choice, risky changes and more than 5 deletions need a yes on each device,
 and two different vaults are never merged.
 
-Status: design for review. Nothing here is built yet.
+Status: approved on 2026-11-13 with the five decisions at the end accepted as written.
 
 ## What syncs and what never does
 
@@ -48,6 +48,15 @@ made, a file is written only inside a folder of a project that holds the environ
 through a link, and a binding naming a file the app never writes is refused
 (`RefusedReason::Name`). This is what happens today when two computers share the vault file
 through a cloud folder; P2P sync behaves the same.
+
+**Protection never drops on receive.** `sshkm.env.files` is one custom data item, so one
+field: an environment's kind and its bindings, each at its level, always come from one
+device together, never half from each. A binding that arrives on a computer that can't
+honour its level never becomes a file of a lower level there: a level-3 binding on Windows
+stays unwritten and is reported as `Inactive { Unsupported }`, a level-1 binding of a
+remote environment as `Inactive { Remote }`, and a list of a level a version doesn't know
+is kept without being read (`FilesData::rest`), so it writes nothing. The UI shows the
+reason, as for any inactive file.
 
 **The local marker.** Custom data `sshkm.local` (any value naming what it is) on an entry
 or a group means: this computer's own. The vault copy never carries it, a sync never
@@ -213,7 +222,10 @@ environment that refers to it ends with the same value. On top of that:
 
 `sshkm.contact.<key>` records get `modified` and, on removal, a tombstone `{modified,
 removed}` instead of disappearing, so a sync doesn't bring a removed contact back. Two
-records merge as the one changed last; pairing again after a removal wins. Older versions
+records merge as the one changed last; pairing again after a removal wins. A contact is a
+device, keyed by its device key: the same device paired on both computers separately, under
+two names, merges into one record (the name of the later pairing) without asking. Records
+never conflict. Older versions
 skip a tombstone (it lacks `name`) and keep an extra field when they read a live record.
 
 ## Risky changes and deletions
@@ -410,7 +422,13 @@ Core:
   sides, a conflict, a deletion, an environment with a shared value, an attachment), copies
   exchanged and applied both ways through `VaultCopy` bytes, then both files reopened: the
   same entries, `agree` digests equal, a second sync changes nothing;
-- contacts: tombstones, last change wins, older-version parsing.
+- contacts: tombstones, last change wins, older-version parsing; one device paired on both
+  computers under two names merges into one record without a conflict;
+- protection: a level-3 binding synced to a side without pipes writes nothing and reports
+  `Unsupported`; a level-1 binding synced onto a remote environment writes nothing;
+- the local marker (the contract with `p2p-chat`): a local-marked group with entries inside
+  is not in the copy and is untouched on both sides after a sync, also when the other side
+  sends an item with its UUID.
 
 App (`script.rs`): entry sync between two new versions; with an older peer (hosts only);
 with a cloud vault on either side; a conflict decided on the side that connected; seven

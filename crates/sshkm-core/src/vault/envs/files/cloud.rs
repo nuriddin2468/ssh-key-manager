@@ -17,10 +17,10 @@
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A cloud service that copies a folder.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
 pub enum CloudService {
@@ -28,7 +28,9 @@ pub enum CloudService {
     Dropbox,
     OneDrive,
     GoogleDrive,
-    /// Another service of macOS's `~/Library/CloudStorage`.
+    /// Another service of macOS's `~/Library/CloudStorage`, or one a later
+    /// version knows.
+    #[serde(other)]
     Other,
 }
 

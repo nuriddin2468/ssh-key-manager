@@ -29,6 +29,7 @@ use zeroize::Zeroizing;
 use crate::hosts_file::{is_system_name, is_valid_name};
 use crate::keys::validate_file_name;
 use crate::sync::Manifest;
+use crate::vault::envs::files::CloudService;
 use crate::{Error, Result};
 
 /// Version of the protocol; a peer that speaks another one is turned away.
@@ -86,13 +87,37 @@ pub enum Message {
     Decisions {
         initiator: Vec<String>,
         responder: Vec<String>,
+        /// The same for the vault's entries and groups, when both sides
+        /// sync them ([`EntrySync::On`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vault: Option<VaultDecisions>,
     },
     /// What the sender has after a sync, as the SHA-256 of each item, and
     /// how many changes it put off for its own user to confirm.
     Applied {
         hashes: BTreeMap<String, String>,
         deferred: u32,
+        /// The digest of each of the vault's entries and groups, when both
+        /// sides sync them.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        vault: BTreeMap<String, String>,
     },
+    /// The sender's copy of the vault ([`crate::vault::Vault::sync_copy`]),
+    /// in base64; sent only when both sides said [`EntrySync::On`].
+    VaultCopy { database: SecretText },
+}
+
+/// What the initiator's user chose for each of the vault's conflicts, by
+/// item id.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultDecisions {
+    /// The initiator's version stays.
+    #[serde(default)]
+    pub initiator: Vec<String>,
+    /// The responder's version stays.
+    #[serde(default)]
+    pub responder: Vec<String>,
 }
 
 /// What a side says about the user's own devices in its `Hello`.
@@ -104,6 +129,35 @@ pub struct Own {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent: Option<Intent>,
     pub vault: VaultState,
+    /// Whether it syncs the vault's entries; versions before entry sync
+    /// send nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entries: Option<EntrySync>,
+}
+
+/// What a side says about syncing the vault's entries. Entries sync only
+/// when both say [`Self::On`], in the lower of their versions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum EntrySync {
+    /// It syncs them, speaking this version of the exchange.
+    On { version: u32 },
+    /// It could, but its vault is in a cloud folder, which keeps the file
+    /// in step on the user's computers.
+    Cloud { service: CloudService },
+    /// Something a later version says: no entry sync.
+    #[serde(other)]
+    Other,
+}
+
+impl EntrySync {
+    /// The version both sides speak, if both sync entries.
+    pub fn agreed(mine: Option<Self>, theirs: Option<Self>) -> Option<u32> {
+        match (mine?, theirs?) {
+            (Self::On { version: a }, Self::On { version: b }) => Some(a.min(b)).filter(|v| *v > 0),
+            _ => None,
+        }
+    }
 }
 
 /// Why the side that connected came.
@@ -687,6 +741,7 @@ mod tests {
                 vault: VaultState::Open {
                     proof: "cHJvb2Y=".into(),
                 },
+                entries: None,
             }),
         };
         let json = serde_json::to_string(&hello).unwrap();
@@ -708,6 +763,98 @@ mod tests {
         };
         assert_eq!(own.intent, Some(Intent::Other));
         assert_eq!(own.vault, VaultState::Missing);
+    }
+
+    #[test]
+    fn entry_sync_is_announced_and_older_versions_ignore_it() {
+        /// `Own` as a version before entry sync reads it.
+        #[derive(Deserialize)]
+        struct OldOwn {
+            vault: VaultState,
+        }
+        let own = Own {
+            intent: Some(Intent::Sync),
+            vault: VaultState::Locked,
+            entries: Some(EntrySync::On { version: 1 }),
+        };
+        let json = serde_json::to_string(&own).unwrap();
+        assert_eq!(
+            json,
+            r#"{"intent":"sync","vault":{"state":"locked"},"entries":{"state":"on","version":1}}"#
+        );
+        assert_eq!(serde_json::from_str::<Own>(&json).unwrap(), own);
+        assert_eq!(
+            serde_json::from_str::<OldOwn>(&json).unwrap().vault,
+            VaultState::Locked
+        );
+        let cloud: Own = serde_json::from_str(
+            r#"{"vault":{"state":"locked"},"entries":{"state":"cloud","service":"iCloudDrive"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            cloud.entries,
+            Some(EntrySync::Cloud {
+                service: CloudService::ICloudDrive
+            })
+        );
+        let later: Own = serde_json::from_str(
+            r#"{"vault":{"state":"locked"},"entries":{"state":"merged","how":2}}"#,
+        )
+        .unwrap();
+        assert_eq!(later.entries, Some(EntrySync::Other));
+        let unknown: Own = serde_json::from_str(
+            r#"{"vault":{"state":"locked"},"entries":{"state":"cloud","service":"box"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            unknown.entries,
+            Some(EntrySync::Cloud {
+                service: CloudService::Other
+            })
+        );
+
+        let on = |version| Some(EntrySync::On { version });
+        assert_eq!(EntrySync::agreed(on(1), on(3)), Some(1));
+        assert_eq!(EntrySync::agreed(on(1), None), None);
+        assert_eq!(EntrySync::agreed(on(1), later.entries), None);
+        assert_eq!(EntrySync::agreed(on(1), cloud.entries), None);
+        assert_eq!(EntrySync::agreed(on(0), on(1)), None);
+    }
+
+    #[test]
+    fn sync_messages_keep_older_peers_reading() {
+        let decisions = Message::Decisions {
+            initiator: vec!["prod".into()],
+            responder: Vec::new(),
+            vault: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&decisions).unwrap(),
+            r#"{"type":"decisions","initiator":["prod"],"responder":[]}"#
+        );
+        let applied = Message::Applied {
+            hashes: BTreeMap::new(),
+            deferred: 0,
+            vault: BTreeMap::new(),
+        };
+        assert_eq!(
+            serde_json::to_string(&applied).unwrap(),
+            r#"{"type":"applied","hashes":{},"deferred":0}"#
+        );
+        let with_vault = Message::Decisions {
+            initiator: Vec::new(),
+            responder: Vec::new(),
+            vault: Some(VaultDecisions {
+                initiator: vec!["a".into()],
+                responder: vec!["b".into()],
+            }),
+        };
+        let json = serde_json::to_string(&with_vault).unwrap();
+        assert_eq!(serde_json::from_str::<Message>(&json).unwrap(), with_vault);
+        let copy = Message::VaultCopy {
+            database: SecretText::new("A3mimmf7S7U="),
+        };
+        assert!(!format!("{copy:?}").contains("A3mimmf7S7U="));
     }
 
     #[test]

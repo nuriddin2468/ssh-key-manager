@@ -59,7 +59,7 @@ const MAX_NAME: usize = 255;
 /// The group under the root that holds the environments.
 pub const GROUP: &str = "Environments";
 /// Custom data that marks an entry as an environment.
-const MARKER: &str = "sshkm.env";
+pub(super) const MARKER: &str = "sshkm.env";
 /// Custom data with an environment's part of its project; without it, the
 /// part is its KeePass group's name.
 pub const PART: &str = "sshkm.env.part";
@@ -290,6 +290,42 @@ struct StoredVar {
     name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     note: String,
+}
+
+/// Whether a variable of this name makes programs load code or run a
+/// command they otherwise wouldn't, once it is in a shell's environment or
+/// a `.env` file: the dynamic loader's (`LD_*`, `DYLD_*`), interpreters'
+/// startup and module paths, shells' startup files, Git's and ssh's
+/// commands, and `PATH`. Such a variable that comes from another device is
+/// a risky change, which the user allows in a system dialog.
+pub fn risky_variable(name: &str) -> bool {
+    const EXACT: [&str; 22] = [
+        "PATH",
+        "NODE_OPTIONS",
+        "NODE_PATH",
+        "PYTHONPATH",
+        "PYTHONSTARTUP",
+        "PYTHONHOME",
+        "PERL5OPT",
+        "PERL5LIB",
+        "PERLLIB",
+        "RUBYOPT",
+        "RUBYLIB",
+        "BASH_ENV",
+        "ENV",
+        "ZDOTDIR",
+        "PROMPT_COMMAND",
+        "GIT_SSH",
+        "GIT_SSH_COMMAND",
+        "GIT_EXEC_PATH",
+        "SSH_ASKPASS",
+        "JAVA_TOOL_OPTIONS",
+        "_JAVA_OPTIONS",
+        "JDK_JAVA_OPTIONS",
+    ];
+    const PREFIXES: [&str; 4] = ["LD_", "DYLD_", "GIT_CONFIG_", "DOTNET_STARTUP_HOOKS"];
+    let name = name.strip_prefix(ESCAPE).unwrap_or(name);
+    EXACT.contains(&name) || PREFIXES.iter().any(|prefix| name.starts_with(prefix))
 }
 
 /// A variable name: ASCII letters, digits and `_`, not starting with a
@@ -1264,40 +1300,45 @@ impl Vault {
     /// KeePass does on saving: an editor saving a managed file often would
     /// otherwise add a full copy each time.
     pub(super) fn settle_history(&mut self, entry_id: keepass::db::EntryId, added: bool) {
-        let max = match self.db.meta.history_max_items {
-            None => Some(10),
-            Some(max) if max < 0 => None,
-            Some(max) => Some(usize::try_from(max).unwrap_or(usize::MAX)),
-        };
-        let Some(mut entry) = self.db.entry_mut(entry_id) else {
-            return;
-        };
-        let Some(before) = entry.history.as_ref().map(|h| h.get_entries().clone()) else {
-            return;
-        };
-        let mut versions = before.clone();
-        if added && !versions.is_empty() {
-            let kept = versions.remove(0);
-            versions.push(kept);
-        }
-        // Stable: of two made the same second, the later in place stays
-        // later.
-        versions.sort_by_key(|version| version.times.last_modification);
-        if let Some(max) = max
-            && versions.len() > max
-        {
-            versions.drain(..versions.len() - max);
-        }
-        if versions == before {
-            return;
-        }
-        let mut settled = keepass::db::History::default();
-        // Each one added goes in front.
-        for version in versions.into_iter().rev() {
-            settled.add_entry(version);
-        }
-        entry.history = Some(settled);
+        settle_versions(&mut self.db, entry_id, added);
     }
+}
+
+/// [`Vault::settle_history`] on a database.
+pub(super) fn settle_versions(db: &mut Database, entry_id: keepass::db::EntryId, added: bool) {
+    let max = match db.meta.history_max_items {
+        None => Some(10),
+        Some(max) if max < 0 => None,
+        Some(max) => Some(usize::try_from(max).unwrap_or(usize::MAX)),
+    };
+    let Some(mut entry) = db.entry_mut(entry_id) else {
+        return;
+    };
+    let Some(before) = entry.history.as_ref().map(|h| h.get_entries().clone()) else {
+        return;
+    };
+    let mut versions = before.clone();
+    if added && !versions.is_empty() {
+        let kept = versions.remove(0);
+        versions.push(kept);
+    }
+    // Stable: of two made the same second, the later in place stays
+    // later.
+    versions.sort_by_key(|version| version.times.last_modification);
+    if let Some(max) = max
+        && versions.len() > max
+    {
+        versions.drain(..versions.len() - max);
+    }
+    if versions == before {
+        return;
+    }
+    let mut settled = keepass::db::History::default();
+    // Each one added goes in front.
+    for version in versions.into_iter().rev() {
+        settled.add_entry(version);
+    }
+    entry.history = Some(settled);
 }
 
 /// An entry's earlier versions, newest first by when each was made; of two

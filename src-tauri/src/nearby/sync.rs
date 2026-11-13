@@ -193,6 +193,7 @@ fn talk(
         hosts,
         devices: local.devices.clone(),
         projects: local.projects.clone(),
+        contacts: Vec::new(),
     };
     let _ = session.stream().set_read_timeout(Some(STEP_TIMEOUT));
     let Message::Manifest { manifest: theirs } = swap(
@@ -255,11 +256,13 @@ fn talk(
     let Message::Applied {
         hashes: their_hashes,
         deferred: deferred_there,
+        ..
     } = swap(
         session,
         &Message::Applied {
             hashes: digests(&after),
             deferred: summary.deferred,
+            vault: BTreeMap::new(),
         },
     )?
     else {
@@ -311,6 +314,7 @@ fn settle(
             .send(&Message::Decisions {
                 initiator: decisions.mine.clone(),
                 responder: decisions.theirs.clone(),
+                vault: None,
             })
             .map_err(|_| PairingFailure::Broken)?;
         side.show(None, &PairingPhase::Syncing);
@@ -323,6 +327,7 @@ fn settle(
     let Message::Decisions {
         initiator: theirs_stay,
         responder: mine_stay,
+        ..
     } = session.recv().map_err(broken)?
     else {
         return Err(PairingFailure::Broken);

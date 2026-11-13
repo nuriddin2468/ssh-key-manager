@@ -13,6 +13,7 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
+use super::envs::files::{CloudRoots, CloudService};
 use super::export::resolve;
 use super::{MAX_DATABASE_SIZE, Vault, VaultPaths, read_database};
 use crate::{Error, Result, fsutil};
@@ -21,6 +22,16 @@ use crate::{Error, Result, fsutil};
 const KDBX_SIGNATURE: [u8; 8] = [0x03, 0xD9, 0xA2, 0x9A, 0x67, 0xFB, 0x4B, 0xB5];
 /// The same for the old KeePass 1 format, which isn't supported.
 const KDB_SIGNATURE: [u8; 8] = [0x03, 0xD9, 0xA2, 0x9A, 0x65, 0xFB, 0x4B, 0xB5];
+
+/// The cloud service whose folder holds the vault's database, if one does
+/// ([`CloudRoots::detect`]): the service then keeps the file in step on the
+/// user's computers, and own devices don't sync its entries themselves.
+pub fn cloud_service(paths: &VaultPaths, roots: &CloudRoots) -> Option<CloudService> {
+    let folder = paths.database.parent()?;
+    roots
+        .service(folder)
+        .or_else(|| roots.service(&resolve(folder)))
+}
 
 /// Copies the database and, if there is one, the key slots file from `from`
 /// to `to`, and checks the copies byte for byte. Refuses if either target
@@ -125,6 +136,18 @@ mod tests {
 
     fn s(text: &str) -> SecretString {
         SecretString::from(text.to_owned())
+    }
+
+    #[test]
+    fn a_vault_in_a_cloud_folder_names_its_service() {
+        let dir = tempfile::tempdir().unwrap();
+        let dropbox = dir.path().join("Dropbox");
+        fs::create_dir(&dropbox).unwrap();
+        let roots = CloudRoots::new(vec![(dropbox.clone(), CloudService::Dropbox)]);
+        let inside = VaultPaths::new(dropbox.join("vaults").join("vault.kdbx"));
+        assert_eq!(cloud_service(&inside, &roots), Some(CloudService::Dropbox));
+        let outside = VaultPaths::new(dir.path().join("vault.kdbx"));
+        assert_eq!(cloud_service(&outside, &roots), None);
     }
 
     #[test]

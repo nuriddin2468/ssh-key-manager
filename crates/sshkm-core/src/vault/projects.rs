@@ -1300,7 +1300,7 @@ impl Vault {
     /// record knows is the user's and stays. Other tags stay as they are.
     /// First, logins tagged with a project in KeePassXC join it
     /// ([`Self::adopt_tagged_logins`]).
-    fn sync_tags(&mut self) -> bool {
+    pub(super) fn sync_tags(&mut self) -> bool {
         self.adopt_tagged_logins();
         let adopted = self.adopt_environments();
         let settled = self.settle_holds();

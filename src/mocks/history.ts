@@ -40,6 +40,7 @@ const CHECK_OUTCOME: Record<ReturnType<typeof explain>['kind'], ConnectionOutcom
   passphraseMissing: 'passphraseMissing',
   otherAccount: 'failed',
   notFilled: 'failed',
+  fillLimited: 'failed',
   keysRejected: 'keysRejected',
   commandFailed: 'failed',
   failed: 'failed',

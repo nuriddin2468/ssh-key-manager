@@ -38,6 +38,8 @@ export type Explanation =
    * user chose not to fill in a saved password, code or passphrase.
    */
   | { kind: 'notFilled' }
+  /** Such a secret wasn't filled in because the app had asked about the host too often. */
+  | { kind: 'fillLimited' }
   /** The server turned down every key and no password was given. */
   | { kind: 'keysRejected' }
   /** Signed in, but the command run afterwards failed. */
@@ -65,6 +67,7 @@ export function explain(run: SshRun): Explanation {
     return { kind: 'hostKeyUnknown' };
   }
   if (run.prompts.some((p) => p.outcome === 'withheld')) return { kind: 'notFilled' };
+  if (run.prompts.some((p) => p.outcome === 'notAsked')) return { kind: 'fillLimited' };
   if (find('password', 'repeated')) return { kind: 'passwordRejected', code };
   if (find('oneTimeCode', 'missing')) return { kind: 'otpMissing' };
   if (find('oneTimeCode', 'repeated')) return { kind: 'otpRejected' };
@@ -207,6 +210,8 @@ export function loginMessage(
       };
     case 'notFilled':
       return { tone: 'error', title: 'notFilled', detail: 'notFilledHint' };
+    case 'fillLimited':
+      return { tone: 'error', title: 'fillLimited', detail: 'fillLimitedHint' };
     case 'otherAccount':
       return {
         tone: 'error',

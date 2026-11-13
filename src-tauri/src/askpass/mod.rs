@@ -57,7 +57,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rand_core::{OsRng, RngCore};
 use serde::Serialize;
@@ -148,10 +148,22 @@ pub struct Ask<'a> {
 /// Asks the user before a saved secret answers a prompt that came through
 /// a program that may run another `ssh` (see
 /// [`Connection::through_command`]). Set with [`Session::confirm_fills`].
-pub trait FillCheck: Send + Sync + 'static {
+pub trait FillCheck: Send + Sync {
     /// Whether the saved secret may answer `prompt`. May block while the
     /// user answers.
-    fn allow(&self, prompt: &Prompt) -> bool;
+    fn allow(&self, prompt: &Prompt) -> Filling;
+}
+
+/// What became of the question whether to fill in a secret.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Filling {
+    /// The user said to fill it in.
+    Allowed,
+    /// The user said not to.
+    Declined,
+    /// The user wasn't asked (too many questions lately, or the app can't
+    /// show one), so it isn't filled in.
+    NotAsked,
 }
 
 /// How the `ssh` a session serves connects, as far as telling its own
@@ -405,6 +417,9 @@ pub enum PromptOutcome {
     /// program that may run another `ssh` (see
     /// [`Connection::through_command`]).
     Withheld,
+    /// A secret was saved, but the user wasn't asked whether to fill it in
+    /// (asked about the host too often in the last minute), so it wasn't.
+    NotAsked,
     /// The same secret was asked for again after it was given: the server
     /// rejected it.
     Repeated,
@@ -519,8 +534,18 @@ impl Session {
     /// Asks `check` before a saved secret answers a prompt through a
     /// program that may run another `ssh` (see [`Ask::confirm_fill`]).
     /// Without it, such a prompt gets no saved secret.
-    pub fn confirm_fills(&self, check: impl FillCheck) {
+    pub fn confirm_fills(&self, check: impl FillCheck + 'static) {
         self.state.log().fill_check = Some(Arc::new(check));
+    }
+
+    /// How long the user has spent on this session's fill-in questions so
+    /// far, the one open now included: time a run's timeout doesn't count.
+    pub fn time_asking(&self) -> Duration {
+        let log = self.state.log();
+        log.time_asking
+            + log
+                .asking_since
+                .map_or(Duration::ZERO, |since| since.elapsed())
     }
 
     /// The environment `ssh` needs to use this session, as set by
@@ -677,6 +702,10 @@ struct Log {
     account: Option<PromptAccount>,
     connection: Connection,
     fill_check: Option<Arc<dyn FillCheck>>,
+    /// A fill-in question open since then, and the time spent on those
+    /// answered (see [`Session::time_asking`]).
+    asking_since: Option<Instant>,
+    time_asking: Duration,
     /// How often each secret was given, by prompt kind (and key for
     /// passphrases, text for other prompts).
     given: HashMap<(PromptKind, String), u32>,
@@ -712,12 +741,16 @@ impl SessionState {
             (foreign, unverified, given, fill_check)
         };
 
+        let timed = fill_check.as_deref().map(|check| Timed {
+            check,
+            session: self,
+        });
         let ask = Ask {
             prompt: &prompt,
             foreign,
             unverified,
             given,
-            confirm_fill: fill_check.as_deref(),
+            confirm_fill: timed.as_ref().map(|timed| timed as &dyn FillCheck),
         };
         let (outcome, answer) = match &self.answerer {
             Answerer::Batch(responder) => batch_rules(responder.as_ref(), &ask),
@@ -732,6 +765,24 @@ impl SessionState {
     }
 }
 
+/// A session's [`FillCheck`], keeping the time the user spends on it.
+struct Timed<'a> {
+    check: &'a dyn FillCheck,
+    session: &'a SessionState,
+}
+
+impl FillCheck for Timed<'_> {
+    fn allow(&self, prompt: &Prompt) -> Filling {
+        let since = Instant::now();
+        self.session.log().asking_since = Some(since);
+        let filling = self.check.allow(prompt);
+        let mut log = self.session.log();
+        log.asking_since = None;
+        log.time_asking += since.elapsed();
+        filling
+    }
+}
+
 /// A batch session: yes/no questions get "no"; other accounts, prompts the
 /// session cannot vouch for and repeated secrets get nothing; the responder
 /// is asked only about the rest. Through a program that may run another
@@ -742,13 +793,11 @@ fn batch_rules(responder: &dyn Responder, ask: &Ask<'_>) -> (PromptOutcome, Answ
     } else if let Some(check) = ask.confirm_fill {
         // Asked only when there is a secret to give.
         match responder.respond(ask.prompt) {
-            Reply::Secret(secret) if non_empty(&secret) => {
-                if check.allow(ask.prompt) {
-                    (PromptOutcome::Answered, Answer::Text(secret))
-                } else {
-                    (PromptOutcome::Withheld, Answer::Refuse)
-                }
-            }
+            Reply::Secret(secret) if non_empty(&secret) => match check.allow(ask.prompt) {
+                Filling::Allowed => (PromptOutcome::Answered, Answer::Text(secret)),
+                Filling::Declined => (PromptOutcome::Withheld, Answer::Refuse),
+                Filling::NotAsked => (PromptOutcome::NotAsked, Answer::Refuse),
+            },
             _ => (PromptOutcome::Missing, Answer::Refuse),
         }
     } else if ask.foreign {
@@ -1236,26 +1285,26 @@ mod tests {
     /// Answers the fill-in question with `yes`, and keeps the prompts it was
     /// asked about.
     struct Fill {
-        yes: bool,
+        answer: Filling,
         asked: Arc<Mutex<Vec<String>>>,
     }
 
     impl FillCheck for Fill {
-        fn allow(&self, prompt: &Prompt) -> bool {
+        fn allow(&self, prompt: &Prompt) -> Filling {
             self.asked
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .push(prompt.text.clone());
-            self.yes
+            self.answer
         }
     }
 
-    /// A session through a `ProxyCommand` whose fill-in question gets `yes`;
-    /// the prompts the question was asked about.
+    /// A session through a `ProxyCommand` whose fill-in question gets
+    /// `answer`; the prompts the question was asked about.
     fn through_command(
         server: &Server,
         version: &str,
-        yes: bool,
+        answer: Filling,
         secrets: Secrets,
     ) -> (Session, Arc<Mutex<Vec<String>>>) {
         let session = server.session(secrets);
@@ -1263,7 +1312,7 @@ mod tests {
         session.expect_connection(Connection::new(Some(version), true, true).through_command(true));
         let asked = Arc::new(Mutex::new(Vec::new()));
         session.confirm_fills(Fill {
-            yes,
+            answer,
             asked: Arc::clone(&asked),
         });
         (session, asked)
@@ -1277,7 +1326,7 @@ mod tests {
     #[test]
     fn through_a_proxy_command_each_saved_secret_is_asked_about() {
         let server = server();
-        let (session, asked) = through_command(&server, "OpenSSH_9.9p1", true, saved());
+        let (session, asked) = through_command(&server, "OpenSSH_9.9p1", Filling::Allowed, saved());
         let passphrase = format!("Enter passphrase for key '{KEY}': ");
         for (text, given) in [
             ("(alice@target.example) Password: ", "target-password"),
@@ -1306,7 +1355,8 @@ mod tests {
     #[test]
     fn a_no_fills_in_nothing_and_says_so() {
         let server = server();
-        let (session, asked) = through_command(&server, "OpenSSH_9.9p1", false, saved());
+        let (session, asked) =
+            through_command(&server, "OpenSSH_9.9p1", Filling::Declined, saved());
         assert_eq!(
             ask_session(&server, &session, "(alice@target.example) Password: "),
             None
@@ -1314,8 +1364,21 @@ mod tests {
         assert_eq!(asked.lock().unwrap().len(), 1);
         assert_eq!(session.asked()[0].outcome, PromptOutcome::Withheld);
 
+        // Not asked (too many questions lately): its own outcome.
+        let (session, _) = through_command(&server, "OpenSSH_9.9p1", Filling::NotAsked, saved());
+        assert_eq!(
+            ask_session(&server, &session, "(alice@target.example) Password: "),
+            None
+        );
+        assert_eq!(session.asked()[0].outcome, PromptOutcome::NotAsked);
+
         // Nothing saved: nothing to ask about.
-        let (session, asked) = through_command(&server, "OpenSSH_9.9p1", true, Secrets::default());
+        let (session, asked) = through_command(
+            &server,
+            "OpenSSH_9.9p1",
+            Filling::Allowed,
+            Secrets::default(),
+        );
         assert_eq!(
             ask_session(&server, &session, "(alice@target.example) Password: "),
             None
@@ -1324,10 +1387,37 @@ mod tests {
         assert_eq!(session.asked()[0].outcome, PromptOutcome::Missing);
     }
 
+    /// Answers after `wait`, as a user taking their time.
+    struct Slow(Duration);
+
+    impl FillCheck for Slow {
+        fn allow(&self, _prompt: &Prompt) -> Filling {
+            std::thread::sleep(self.0);
+            Filling::Allowed
+        }
+    }
+
+    #[test]
+    fn time_spent_on_the_question_is_kept() {
+        let server = server();
+        let session = server.session(saved());
+        session.expect_account(PromptAccount::new("alice", "target.example"));
+        session.expect_connection(
+            Connection::new(Some("OpenSSH_9.9p1"), true, true).through_command(true),
+        );
+        session.confirm_fills(Slow(Duration::from_millis(300)));
+        assert_eq!(session.time_asking(), Duration::ZERO);
+        assert_eq!(
+            ask_session(&server, &session, "(alice@target.example) Password: ").as_deref(),
+            Some("target-password")
+        );
+        assert!(session.time_asking() >= Duration::from_millis(300));
+    }
+
     #[test]
     fn prompts_that_are_not_the_hosts_never_reach_the_question() {
         let server = server();
-        let (session, asked) = through_command(&server, "OpenSSH_9.9p1", true, saved());
+        let (session, asked) = through_command(&server, "OpenSSH_9.9p1", Filling::Allowed, saved());
         // A jump host's own account, host keys and other yes/no questions,
         // and text the session can't tell anything about.
         assert_eq!(
@@ -1362,7 +1452,7 @@ mod tests {
 
         // Before OpenSSH 8.5 a proxied prompt can't be told apart at all:
         // refused without a question, as before.
-        let (session, asked) = through_command(&server, "OpenSSH_8.4p1", true, saved());
+        let (session, asked) = through_command(&server, "OpenSSH_8.4p1", Filling::Allowed, saved());
         assert_eq!(
             ask_session(&server, &session, "alice@target.example's password: "),
             None

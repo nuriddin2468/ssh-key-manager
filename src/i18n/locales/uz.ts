@@ -1290,6 +1290,9 @@ const uz = {
         notFilled: 'Siz «Kiritmaslik»ni tanladingiz, shuning uchun hech narsa yuborilmadi.',
         notFilledHint:
           'Bu xostga boshqa ssh ni ishga tushirishi mumkin boʻlgan dastur orqali ulaniladi, shuning uchun ilova har bir saqlangan parol, 2FA kodi yoki parol iborasidan oldin soʻraydi. Qayta urinib koʻring va shu xostga kirayotgan boʻlsangiz, «Kiritish»ni tanlang.',
+        fillLimited:
+          'Hech narsa kiritilmadi: ilova bu xost haqida soʻnggi bir daqiqada 3 marta soʻragan edi.',
+        fillLimitedHint: 'Bir daqiqa kutib, qayta urinib koʻring.',
         otherAccount: '{{account}} oʻz parolini soʻradi.',
         otherAccountHint:
           'Saqlangan parollar faqat shu xostga beriladi, oraliq xostga hech qachon. Oraliq xostga kalit bilan kiring.',

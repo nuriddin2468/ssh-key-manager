@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use tauri::AppHandle;
 
-use super::{Connection, FillCheck, Prompt, PromptKind, Session};
+use super::{Connection, FillCheck, Filling, Prompt, PromptKind, Session};
 use crate::confirm::{self, Localized};
 use crate::process;
 
@@ -346,17 +346,21 @@ fn buttons() -> (Localized, Localized) {
 }
 
 impl FillCheck for FillDialog {
-    fn allow(&self, prompt: &Prompt) -> bool {
+    fn allow(&self, prompt: &Prompt) -> Filling {
         let Some(app) = APP.get() else {
-            return false;
+            return Filling::NotAsked;
         };
         if !LIMIT.take(&self.alias, Instant::now()) {
             log::info!("askpass: too many fill-in questions for one host; not filling in");
-            return false;
+            return Filling::NotAsked;
         }
         let (title, body) = self.texts(prompt);
         let (fill, keep) = buttons();
-        confirm::ask_default_no(app, &title, &body, &fill, &keep)
+        if confirm::ask_default_no(app, &title, &body, &fill, &keep) {
+            Filling::Allowed
+        } else {
+            Filling::Declined
+        }
     }
 }
 
@@ -636,7 +640,7 @@ mod tests {
     fn without_the_app_nothing_is_filled_in() {
         let prompt = Prompt::parse("alice@10.0.0.5's password: ", "");
         if APP.get().is_none() {
-            assert!(!dialog().allow(&prompt));
+            assert_eq!(dialog().allow(&prompt), Filling::NotAsked);
         }
     }
 }

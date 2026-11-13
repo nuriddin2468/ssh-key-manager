@@ -35,7 +35,7 @@ use super::types::{
     FailReason, Failure, PasswordWhy, PromptAnswer, PromptAsk, PromptClosedReason, PromptRequest,
     SaveOffer, SavedTarget, SignIn, Source, TerminalEvent,
 };
-use crate::askpass::{Ask, FillCheck, Interactive, PromptKind, Reply};
+use crate::askpass::{Ask, FillCheck, Filling, Interactive, PromptKind, Reply};
 pub use crate::error::{AppError, AppResult};
 
 /// How long a prompt waits for the user.
@@ -318,7 +318,9 @@ impl Bridge {
             // A new answer replaces one given before for the same thing:
             // that one was wrong.
             state.to_save.retain(|(t, _)| *t != target);
-            if wanted {
+            // Whatever the answer says: a session that can't tell signing in
+            // for sure saves nothing (the offer is none there already).
+            if wanted && self.options.can_save {
                 state.to_save.push((target, value.clone()));
             }
         }
@@ -442,7 +444,7 @@ impl Bridge {
             PromptKind::Passphrase { key } => (self.store.passphrase(key)?, Secret::Passphrase),
             _ => return None,
         };
-        if !check.allow(ask.prompt) {
+        if check.allow(ask.prompt) != Filling::Allowed {
             return None;
         }
         let mut state = self.lock();
@@ -786,9 +788,13 @@ mod tests {
     }
 
     impl FillCheck for FillAnswer {
-        fn allow(&self, _prompt: &Prompt) -> bool {
+        fn allow(&self, _prompt: &Prompt) -> Filling {
             self.shown.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            self.yes
+            if self.yes {
+                Filling::Allowed
+            } else {
+                Filling::Declined
+            }
         }
     }
 
@@ -1522,6 +1528,32 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, TerminalEvent::Saved { .. }))
         );
+    }
+
+    /// A tunnel on Windows reads signing in from output a server can fake:
+    /// even an answer that asks to be saved, and a sign-in, save nothing.
+    #[test]
+    fn where_saving_isnt_offered_an_answer_asking_for_it_saves_nothing() {
+        let h = harness(
+            FakeStore {
+                offer: Some(SaveOffer::Update),
+                ..FakeStore::default()
+            },
+            Options {
+                can_save: false,
+                ..Options::default()
+            },
+        );
+        h.ask(PASSWORD, 0, false, typed("pw", true));
+        h.ask(
+            "Enter passphrase for key '/home/u/.ssh/id_ed25519': ",
+            0,
+            false,
+            typed("pp", true),
+        );
+        h.bridge.signed_in();
+        h.bridge.save_answers();
+        assert!(h.saved.lock().unwrap().is_empty());
     }
 
     #[test]

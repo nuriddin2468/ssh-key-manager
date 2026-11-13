@@ -307,7 +307,9 @@ pub fn run_ssh(
         .args(options)
         .args(["-T", "--", alias])
         .args(remote);
-    let output = process::run_command(&mut command, input, timeout)?;
+    // The time the user spends on a fill-in question is not the run's.
+    let output =
+        process::run_command_pausing(&mut command, input, timeout, || session.time_asking())?;
     Ok(SshRun {
         output,
         prompts: session.asked(),

@@ -111,6 +111,17 @@ pub fn run_command(
     input: Option<Vec<u8>>,
     timeout: Duration,
 ) -> std::io::Result<Output> {
+    run_command_pausing(command, input, timeout, || Duration::ZERO)
+}
+
+/// [`run_command`], with the time `paused` reports (the user answering a
+/// question the run waits on) left out of `timeout`.
+pub fn run_command_pausing(
+    command: &mut Command,
+    input: Option<Vec<u8>>,
+    timeout: Duration,
+    paused: impl Fn() -> Duration,
+) -> std::io::Result<Output> {
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     if input.is_some() {
         command.stdin(Stdio::piped());
@@ -133,7 +144,7 @@ pub fn run_command(
         if let Some(status) = child.try_wait()? {
             break Some(status);
         }
-        if started.elapsed() >= timeout {
+        if started.elapsed() >= timeout + paused() {
             timed_out = true;
             let _ = child.kill();
             break child.wait().ok();
@@ -375,6 +386,24 @@ mod tests {
         assert!(output.success);
         assert_eq!(output.stdout.len(), KEEP);
         assert!(output.stdout.ends_with("y\ndone\n"));
+    }
+
+    /// The time a run waits on the user doesn't count.
+    #[cfg(unix)]
+    #[test]
+    fn a_paused_run_gets_its_time() {
+        let mut sleeping = command("/bin/sh");
+        sleeping.args(["-c", "sleep 1; echo done"]);
+        let output = run_command_pausing(&mut sleeping, None, Duration::from_millis(200), || {
+            Duration::from_secs(5)
+        })
+        .unwrap();
+        assert!(output.success && !output.timed_out);
+        assert_eq!(output.stdout, "done\n");
+        let mut sleeping = command("/bin/sh");
+        sleeping.args(["-c", "sleep 1; echo done"]);
+        let output = run_command(&mut sleeping, None, Duration::from_millis(200)).unwrap();
+        assert!(output.timed_out);
     }
 
     #[test]

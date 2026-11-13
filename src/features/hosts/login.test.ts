@@ -70,6 +70,14 @@ describe('explain', () => {
     });
     const passphrase = prompt({ type: 'passphrase', key: '/home/u/.ssh/id' }, 'withheld');
     expect(explain(run(false, [passphrase], DENIED))).toEqual({ kind: 'notFilled' });
+    // Not asked at all: too many questions about the host lately.
+    const limited = run(false, [password('notAsked')], DENIED);
+    expect(explain(limited)).toEqual({ kind: 'fillLimited' });
+    expect(loginMessage(limited, 'vaultTest')).toEqual({
+      tone: 'error',
+      title: 'fillLimited',
+      detail: 'fillLimitedHint',
+    });
   });
 
   it('sees an untrusted host key from the prompt or from what ssh printed', () => {

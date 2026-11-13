@@ -107,9 +107,10 @@ impl Outcome {
         } else if test
             .prompts
             .iter()
-            .any(|p| p.outcome == PromptOutcome::Withheld)
+            .any(|p| matches!(p.outcome, PromptOutcome::Withheld | PromptOutcome::NotAsked))
         {
-            // The user chose not to fill in a secret: no verdict on the host.
+            // A secret the user chose not to fill in, or wasn't asked about:
+            // no verdict on the host.
             Self::Failed
         } else if asked(password, PromptOutcome::Repeated) {
             Self::PasswordRejected

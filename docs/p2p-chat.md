@@ -407,7 +407,11 @@ sealed with a key that only the unlocked vault holds:
 - **Sealing.** Each file is XChaCha20-Poly1305 (`chacha20poly1305`, already a dependency)
   over the conversation's JSON, with a fresh random nonce on every write. The associated
   data is this device's and the contact's keys, so a file can't be passed off as another
-  conversation. Writes are atomic and gathered: at most one per second per conversation.
+  conversation. Writes are atomic and gathered: at most one per second per conversation,
+  and one writer at a time, so a late write never lands over a newer one or brings back a
+  chat deleted meanwhile. A message's receipt goes only once it is on disk, and is sent
+  off the thread that wrote it: a contact that doesn't read holds up only its own link,
+  which closes once a send has waited a minute.
 - **The chat key** is 32 random bytes in the vault's database-level custom data,
   `sshkm.chat.<this device's key>`, made on first use. The file key is derived from it
   per conversation (HKDF).
@@ -469,10 +473,14 @@ So the history is per device by construction: the files never leave this compute
   - its tag leaves the announcement, its knocks fail, and an open session closes at once;
   - the remove dialog asks whether to delete the chat too (ticked);
   - a chat that is kept stays readable without a composer, and its secrets still expire;
+    its name comes from a sealed index, `chats/index.chat`. Only a missing index is an
+    empty one: one that can't be read for a moment (another program holds it) isn't
+    written over until it is read, and one the chat key doesn't open is kept aside;
   - a contact removed by another computer through a synced vault leaves its file hidden
     until the user deletes chats.
 - **Locking** drops the decrypted history from memory, closes sessions and stops the
-  announcement.
+  announcement at once, from the lock itself rather than the next look at chats. An
+  announcement made while going offline is taken back.
 - **System copies.** Deleting and expiry remove values from the app's files. Copies the
   system made of the encrypted file before (Time Machine, disk snapshots) stay as safe as
   the vault itself. `SECURITY.md` says so.

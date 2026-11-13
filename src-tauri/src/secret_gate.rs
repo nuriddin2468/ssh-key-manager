@@ -7,16 +7,22 @@
 //!
 //! - an environment's secret values going into a shell's environment or into
 //!   a file the app writes ([`confirm_env_secrets`]): asked once per
-//!   environment and use while the vault stays unlocked;
+//!   environment and use while the vault stays unlocked; and before a shell
+//!   gets variables that make it or the programs it starts run code
+//!   (`PATH`, `NODE_OPTIONS`, `GIT_SSH_COMMAND`…), secret or not, listed
+//!   with their values and asked again once they change;
 //! - single secrets shown on the page or copied to the clipboard
 //!   ([`take_secret`]): ten in a row are free, then one every six minutes;
 //!   each one past that is asked for.
 
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::sync::{Mutex, MutexGuard, Once, PoisonError};
 use std::time::{Duration, Instant};
 
+use sha2::{Digest, Sha256};
 use sshkm_core::vault::envs::{self, EnvFile};
+use sshkm_core::{ExposeSecret, SecretString};
 use tauri::{AppHandle, Listener};
 
 use crate::confirm::{self, Localized};
@@ -64,14 +70,26 @@ pub fn confirm_env_secrets(
     env: &str,
     to: &EnvUse<'_>,
 ) -> AppResult<()> {
-    let (label, secrets) = state.vault.with(app, |vault| {
+    let (label, secrets, code) = state.vault.with(app, |vault| {
         let summary = vault.environment(env)?.summary;
+        // In a shell, the variables that make it, or a program it starts,
+        // run code are named with their values, secret or not.
+        let code: Vec<CodeVar> = match to {
+            EnvUse::Shell => vault
+                .env_variables(env)?
+                .into_iter()
+                .filter(|var| envs::runs_code(&var.name))
+                .map(|var| (var.name, var.value))
+                .collect(),
+            EnvUse::File(_) => Vec::new(),
+        };
         Ok((
             envs::label(Some(&vault.env_label(&summary)), &summary.name),
             summary.secret_count,
+            code,
         ))
     })?;
-    if secrets == 0 {
+    if secrets == 0 && code.is_empty() {
         return Ok(());
     }
     WATCH_LOCK.call_once(|| {
@@ -79,11 +97,16 @@ pub fn confirm_env_secrets(
             app.listen_any(event, |_| let_out().forget());
         }
     });
-    let key = to.key(env);
+    // Asked again once those variables changed, names or values.
+    let key = code_key(&to.key(env), &code);
     let Some(asked) = let_out().ask(&key) else {
         return Ok(());
     };
-    let (title, body, approve) = env_question(&label, secrets, to);
+    let (title, body, approve) = if code.is_empty() {
+        env_question(&label, secrets, to)
+    } else {
+        code_question(&label, secrets, &code)
+    };
     confirm::require(app, &title, &body, &approve)?;
     let_out().record(&key, asked);
     Ok(())
@@ -161,6 +184,132 @@ fn env_question(label: &str, secrets: u32, to: &EnvUse<'_>) -> (Localized, Local
             )
         }
     }
+}
+
+/// A variable that makes a shell, or a program it starts, run code
+/// ([`envs::runs_code`]): its name and value.
+type CodeVar = (String, SecretString);
+
+/// Most such variables a dialog lists.
+const SHOWN_CODE_VARS: usize = 12;
+/// Longest value a dialog shows whole; a longer one shows its start and
+/// its end.
+const SHOWN_VALUE: usize = 160;
+
+/// `key`, and if the environment has variables that run code, a SHA-256 of
+/// their names and values: a yes to them holds until they change. Kept in
+/// memory only, like the answers.
+fn code_key(key: &str, code: &[CodeVar]) -> String {
+    if code.is_empty() {
+        return key.to_owned();
+    }
+    let mut hash = Sha256::new();
+    for (name, value) in code {
+        hash.update(name.as_bytes());
+        hash.update([0]);
+        hash.update(value.expose_secret().as_bytes());
+        hash.update([0]);
+    }
+    let digest = hash.finalize();
+    let mut key = format!("{key}:code:");
+    for byte in digest {
+        let _ = write!(key, "{byte:02x}");
+    }
+    key
+}
+
+/// A value as the dialog shows it ([`confirm::shown`]): whole up to
+/// [`SHOWN_VALUE`] characters, else its start and its end, with how many
+/// characters are left out between them.
+fn shown_value(value: &str) -> String {
+    let count = value.chars().count();
+    if count <= SHOWN_VALUE {
+        return confirm::shown(value, SHOWN_VALUE);
+    }
+    let (head, tail) = (SHOWN_VALUE * 2 / 3, SHOWN_VALUE / 3);
+    let start: String = value.chars().take(head).collect();
+    let end: String = value.chars().skip(count - tail).collect();
+    format!(
+        "{}… (+{}) …{}",
+        confirm::shown(&start, head),
+        count - head - tail,
+        confirm::shown(&end, tail)
+    )
+}
+
+/// The dialog before a shell gets an environment with variables that make
+/// it, or the programs it starts, run code (`code`): they are listed with
+/// their values, so a user who didn't set them, or doesn't know them, can
+/// say no.
+fn code_question(label: &str, secrets: u32, code: &[CodeVar]) -> (Localized, Localized, Localized) {
+    let env = confirm::shown(label, 120);
+    let lines: Vec<String> = code
+        .iter()
+        .take(SHOWN_CODE_VARS)
+        .map(|(name, value)| {
+            format!(
+                "• {}={}",
+                confirm::shown(name, 80),
+                shown_value(value.expose_secret())
+            )
+        })
+        .collect();
+    let more = code.len().saturating_sub(SHOWN_CODE_VARS);
+    let list = |more_text: String| {
+        let mut all = lines.clone();
+        if more > 0 {
+            all.push(more_text);
+        }
+        all.join("\n")
+    };
+    let (en, ru, uz) = (
+        list(format!("…and {more} more")),
+        list(format!("…и ещё {more}")),
+        list(format!("…va yana {more} ta")),
+    );
+    let (en_secrets, ru_secrets, uz_secrets) = match secrets {
+        0 => (String::new(), String::new(), String::new()),
+        1 => (
+            ", including 1 secret value".to_owned(),
+            "; секретных среди них: 1".to_owned(),
+            ", ulardan 1 tasi maxfiy".to_owned(),
+        ),
+        n => (
+            format!(", including {n} secret values"),
+            format!("; секретных среди них: {n}"),
+            format!(", ulardan {n} tasi maxfiy"),
+        ),
+    };
+    (
+        Localized::new(
+            "Open a terminal with variables that run code?",
+            "Открыть терминал с переменными, которые запускают код?",
+            "Terminal kod ishga tushiradigan oʻzgaruvchilar bilan ochilsinmi?",
+        ),
+        Localized::new(
+            format!(
+                "The shell gets the variables of “{env}”{en_secrets}. These make the shell, or \
+                 programs it starts, run code:\n\n{en}\n\nYou won’t be asked again for this \
+                 environment until the vault locks or these change. Continue only if you \
+                 opened this terminal yourself and trust these values."
+            ),
+            format!(
+                "Оболочка получит переменные окружения «{env}»{ru_secrets}. Эти переменные \
+                 заставляют оболочку или запущенные из неё программы выполнять код:\n\n{ru}\n\n\
+                 Для этого окружения вопрос не повторится, пока хранилище не заблокируется или \
+                 эти значения не изменятся. Продолжайте, только если этот терминал открыли вы и \
+                 вы доверяете этим значениям."
+            ),
+            format!(
+                "Shell «{env}» muhitining oʻzgaruvchilarini oladi{uz_secrets}. Bu \
+                 oʻzgaruvchilar shell yoki undan ishga tushgan dasturlarni kod bajarishga majbur \
+                 qiladi:\n\n{uz}\n\nOmbor qulflanmaguncha yoki bu qiymatlar oʻzgarmaguncha bu \
+                 muhit uchun qayta soʻralmaydi. Bu terminalni oʻzingiz ochgan va bu qiymatlarga \
+                 ishonsangizgina davom eting."
+            ),
+        ),
+        Localized::new("Open terminal", "Открыть терминал", "Terminalni ochish"),
+    )
 }
 
 /// What was let out, and how many times the answers were forgotten, so a
@@ -476,6 +625,88 @@ mod tests {
         assert!(
             body.en
                 .contains("“prod<U+000A><U+000A>You were asked already<U+202E>”")
+        );
+    }
+
+    fn code(vars: &[(&str, &str)]) -> Vec<CodeVar> {
+        vars.iter()
+            .map(|(name, value)| ((*name).to_owned(), SecretString::from(*value)))
+            .collect()
+    }
+
+    #[test]
+    fn variables_that_run_code_are_listed_with_their_values() {
+        let vars = code(&[
+            ("NODE_OPTIONS", "--max-old-space-size=4096"),
+            ("PROMPT_COMMAND", "curl x\n|sh\u{202E}"),
+        ]);
+        let (title, body, _) = code_question("Shop · prod", 0, &vars);
+        assert_eq!(title.en, "Open a terminal with variables that run code?");
+        assert!(
+            body.en
+                .starts_with("The shell gets the variables of “Shop · prod”. ")
+        );
+        assert!(
+            body.en
+                .contains("• NODE_OPTIONS=--max-old-space-size=4096\n")
+        );
+        // Nothing in a value can add lines or turn the text around.
+        assert!(
+            body.en
+                .contains("• PROMPT_COMMAND=curl x<U+000A>|sh<U+202E>\n")
+        );
+        assert!(body.ru.contains("NODE_OPTIONS=--max-old-space-size=4096"));
+        assert!(body.uz.contains("NODE_OPTIONS=--max-old-space-size=4096"));
+        let (_, body, _) = code_question("Shop · prod", 2, &vars);
+        assert!(
+            body.en
+                .contains("“Shop · prod”, including 2 secret values. These make")
+        );
+
+        // A long value shows its start and its end.
+        let long = format!("--require {}/x.js", "a".repeat(400));
+        let shown = shown_value(&long);
+        assert!(shown.starts_with("--require aaa"), "{shown}");
+        assert!(shown.ends_with("aaa/x.js"), "{shown}");
+        assert!(shown.contains("… (+"), "{shown}");
+        assert!(shown.chars().count() < SHOWN_VALUE + 20, "{shown}");
+        assert_eq!(shown_value("short"), "short");
+
+        // Only so many are listed.
+        let many: Vec<CodeVar> = (0..15)
+            .map(|n| (format!("GIT_CONFIG_KEY_{n}"), SecretString::from("x")))
+            .collect();
+        let (_, body, _) = code_question("dev", 0, &many);
+        assert!(body.en.contains("…and 3 more"));
+        assert!(!body.en.contains("GIT_CONFIG_KEY_14"));
+    }
+
+    #[test]
+    fn a_yes_to_variables_that_run_code_holds_until_they_change() {
+        let shell = EnvUse::Shell.key("env-1");
+        let before = code(&[("NODE_OPTIONS", "--max-old-space-size=4096")]);
+        assert_eq!(code_key(&shell, &[]), shell);
+        let again = code(&[("NODE_OPTIONS", "--max-old-space-size=4096")]);
+        assert_eq!(code_key(&shell, &before), code_key(&shell, &again));
+        let mut let_out = LetOut::new();
+        let asked = let_out.ask(&code_key(&shell, &before)).unwrap();
+        let_out.record(&code_key(&shell, &before), asked);
+        assert!(let_out.ask(&code_key(&shell, &before)).is_none());
+        // Another value, another name, or one more: asked again.
+        for changed in [
+            code(&[("NODE_OPTIONS", "--require ./x.js")]),
+            code(&[("NODE_PATH", "--max-old-space-size=4096")]),
+            code(&[
+                ("NODE_OPTIONS", "--max-old-space-size=4096"),
+                ("BASH_ENV", "~/.x"),
+            ]),
+        ] {
+            assert!(let_out.ask(&code_key(&shell, &changed)).is_some());
+        }
+        // Names and values can't run into each other.
+        assert_ne!(
+            code_key(&shell, &code(&[("AB", "C")])),
+            code_key(&shell, &code(&[("A", "BC")]))
         );
     }
 

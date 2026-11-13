@@ -54,7 +54,7 @@ use serde::{Deserialize, Serialize};
 use sshkm_core::config::SshConfig;
 use sshkm_core::known_hosts::KnownHosts;
 use sshkm_core::p2p::deadline::Deadline;
-use sshkm_core::p2p::protocol::{Intent, Item, ItemSummary, SecretText, VaultState, clean_name};
+use sshkm_core::p2p::protocol::{Intent, Item, SecretText, VaultState, clean_name};
 use sshkm_core::p2p::{self, Identity, PeerKey, Session};
 use sshkm_core::sync::Hasher;
 use sshkm_core::sync::host_keys;
@@ -66,7 +66,7 @@ use time::format_description::well_known::Rfc3339;
 use zeroize::Zeroizing;
 
 use self::items::{ReceivedGroup, SendRequest};
-use self::pairing::{PairingFailure, PairingPhase, Purpose, Side, conversation};
+use self::pairing::{PairingFailure, PairingPhase, Purpose, Side, Stored, conversation};
 pub use self::presence::OWN_SERVICE_TYPE;
 use self::presence::{OwnFound, Presence};
 use self::sync::{RiskyChange, SyncDecisions, SyncLocal, SyncState, SyncWrite};
@@ -1556,7 +1556,7 @@ impl Side for AppSide<'_> {
         self.nearby.changed();
     }
 
-    fn store(&self, item: &Item) -> Result<(String, bool), PairingFailure> {
+    fn store(&self, item: &Item) -> Result<Stored, PairingFailure> {
         let peer = self
             .nearby
             .slot(self.id)
@@ -1614,7 +1614,7 @@ impl Side for AppSide<'_> {
         self.nearby.broke_off();
     }
 
-    fn allow_send(&self, item: &ItemSummary) -> bool {
+    fn allow_send(&self, item: &Item) -> bool {
         let Ok((_, app)) = self.context() else {
             return false;
         };
@@ -1625,7 +1625,7 @@ impl Side for AppSide<'_> {
             .and_then(|slot| slot.view.peer.clone())
             .unwrap_or_default();
         // The dialog a chat asks in before the same item leaves.
-        chat::prompt::send_item(&peer, item).is_none_or(|prompt| {
+        prompt::send_item(&peer, item).is_none_or(|prompt| {
             crate::confirm::require(app, &prompt.title, &prompt.body, &prompt.approve).is_ok()
         })
     }
@@ -1954,8 +1954,8 @@ mod tests {
 
     const WAIT: Duration = Duration::from_millis(10);
 
-    fn login() -> ItemSummary {
-        ItemSummary::Password {
+    fn login() -> p2p::protocol::ItemSummary {
+        p2p::protocol::ItemSummary::Password {
             title: "Router".into(),
             username: "admin".into(),
             url: String::new(),
@@ -2103,6 +2103,7 @@ mod tests {
                 item: login(),
                 name: "Router".into(),
                 keys_differ: false,
+                left_out: Vec::new(),
             },
         ];
         for phase in finished {

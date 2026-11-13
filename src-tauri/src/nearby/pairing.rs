@@ -94,6 +94,9 @@ pub enum PairingPhase {
         /// A host came with server keys other than the ones this computer
         /// has for it; this computer's are kept.
         keys_differ: bool,
+        /// An environment's variables left out, as they make programs run
+        /// code; the user adds them by hand if they trust them.
+        left_out: Vec<String>,
     },
     /// The other computer becomes one of the user's devices once this user
     /// confirms, with Touch ID or the master password. With `vault`, it
@@ -223,9 +226,9 @@ pub trait Side {
     /// The user's answer if one comes within `wait`; `Err(Cancelled)` once
     /// the user cancelled.
     fn answer(&self, wait: Duration) -> Result<Option<bool>, PairingFailure>;
-    /// Saves an item the user accepted, checked against what was offered.
-    /// Returns its name and whether a host's keys differ from the ones here.
-    fn store(&self, item: &Item) -> Result<(String, bool), PairingFailure>;
+    /// Saves an item the user accepted, checked against what was offered,
+    /// and says what became of it.
+    fn store(&self, item: &Item) -> Result<Stored, PairingFailure>;
 
     /// What this side's `Hello` says about its vault in the session with
     /// handshake `hash`; `None` leaves own devices out of it.
@@ -295,7 +298,7 @@ pub trait Side {
     /// Whether this user allows, in a system dialog that a script in the
     /// page can't answer, sending `item`, which holds a secret, to the
     /// other side.
-    fn allow_send(&self, _item: &ItemSummary) -> bool {
+    fn allow_send(&self, _item: &Item) -> bool {
         false
     }
     /// The other side hung up after this side gave it what it needs to work
@@ -311,6 +314,29 @@ pub trait Side {
     /// the computer that adds it.
     fn allow_added(&self) -> bool {
         false
+    }
+}
+
+/// What became of an item saved here.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Stored {
+    /// Its name here: the entry's title, the host's alias (with a number if
+    /// it is taken), the key's file name, the environment's label.
+    pub name: String,
+    /// A host came with server keys other than the ones trusted here, which
+    /// are kept.
+    pub keys_differ: bool,
+    /// An environment's variables left out, as they make programs run code.
+    pub left_out: Vec<String>,
+}
+
+impl Stored {
+    /// Saved as `name`, as it came.
+    pub fn named(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
     }
 }
 

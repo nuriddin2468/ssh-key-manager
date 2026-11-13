@@ -102,7 +102,7 @@ describe('PairingDialog', () => {
 
   it('closes after an item was received, from the header too', async () => {
     show({
-      ...sending({ type: 'received', item: login, name: 'Router', keysDiffer: false }),
+      ...sending({ type: 'received', item: login, name: 'Router', keysDiffer: false, leftOut: [] }),
       outgoing: false,
     });
     const dialog = await screen.findByRole('dialog', { name: 'From iMac' });
@@ -158,6 +158,33 @@ describe('PairingDialog', () => {
     ).toBeInTheDocument();
     expect(
       within(dialog).getByText(/used only for a host here that leads to the same server/),
+    ).toBeInTheDocument();
+  });
+
+  it('names the variables of a received environment it left out', async () => {
+    const environment: ItemSummary = {
+      type: 'environment',
+      project: 'Shop',
+      name: 'dev',
+      variables: 3,
+      secrets: 1,
+      names: ['PORT', 'NODE_OPTIONS', 'BASH_ENV'],
+    };
+    show({
+      ...sending({
+        type: 'received',
+        item: environment,
+        name: 'Shop · dev',
+        keysDiffer: false,
+        leftOut: ['NODE_OPTIONS', 'BASH_ENV'],
+      }),
+      outgoing: false,
+    });
+    const dialog = await screen.findByRole('dialog', { name: 'From iMac' });
+    expect(
+      within(dialog).getByText(
+        'Left out, as they make programs run code: NODE_OPTIONS, BASH_ENV. Add them to the environment yourself if you trust them.',
+      ),
     ).toBeInTheDocument();
   });
 

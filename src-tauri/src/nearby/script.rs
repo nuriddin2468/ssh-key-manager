@@ -19,7 +19,7 @@ use sshkm_core::vault::DeviceRecord;
 use sshkm_core::vault::projects::ProjectRecord;
 use zeroize::Zeroizing;
 
-use super::pairing::{PairingFailure, PairingPhase, Purpose, Side, conversation};
+use super::pairing::{PairingFailure, PairingPhase, Purpose, Side, Stored, conversation};
 use super::sync::{RiskyChange, SyncDecisions, SyncLocal, SyncState, SyncWrite};
 
 /// The vault a script has.
@@ -204,7 +204,7 @@ impl Side for Script {
         *last = answer;
         answer.map(Some).ok_or(PairingFailure::Cancelled)
     }
-    fn store(&self, item: &Item) -> Result<(String, bool), PairingFailure> {
+    fn store(&self, item: &Item) -> Result<Stored, PairingFailure> {
         if let Some(failure) = self.store_fails {
             return Err(failure);
         }
@@ -217,7 +217,11 @@ impl Side for Script {
             | Item::Environment { name, .. } => name.clone(),
             Item::Unknown => return Err(PairingFailure::Unsupported),
         };
-        Ok((name, false))
+        // As the app: an environment's variables that run code stay out.
+        Ok(Stored {
+            left_out: item.code_running(),
+            ..Stored::named(name)
+        })
     }
 
     fn vault(&self, hash: &[u8], initiator: bool) -> Option<VaultState> {
@@ -307,8 +311,8 @@ impl Side for Script {
         self.asked_risky.lock().unwrap().extend_from_slice(changes);
         self.allows_risky
     }
-    fn allow_send(&self, item: &ItemSummary) -> bool {
-        self.asked_to_send.lock().unwrap().push(item.clone());
+    fn allow_send(&self, item: &Item) -> bool {
+        self.asked_to_send.lock().unwrap().push(item.summary());
         self.allows_send
     }
     fn broke_off(&self) {

@@ -250,6 +250,18 @@ export function PairingDialog() {
                 {t('nearby.send.keysDiffer')}
               </p>
             ) : null}
+            {phase.type === 'received' && phase.leftOut.length > 0 ? (
+              <p className="flex gap-2.5 rounded-xl border border-warning-solid/30 bg-warning-solid/[0.09] px-3 py-2.5 text-[12.5px] leading-[18px] text-fg-2">
+                <AlertTriangle
+                  aria-hidden="true"
+                  className="mt-0.5 size-4 shrink-0 text-warning"
+                  strokeWidth={2}
+                />
+                <span className="[overflow-wrap:anywhere]">
+                  {t('nearby.send.leftOut', { names: phase.leftOut.join(', ') })}
+                </span>
+              </p>
+            ) : null}
             {phase.type === 'authorize' ? (
               <AuthorizeStep id={current.id} peer={peer} vault={phase.vault} />
             ) : null}

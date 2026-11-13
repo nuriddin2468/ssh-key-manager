@@ -78,9 +78,7 @@ pub fn send(
     // A secret goes only after this user's yes in a system dialog that
     // names the device it goes to: what the page says (that the codes
     // match, which device was picked) is never enough for one.
-    if matches!(item, Item::Password { .. } | Item::Environment { .. })
-        && !side.allow_send(&summary)
-    {
+    if matches!(item, Item::Password { .. } | Item::Environment { .. }) && !side.allow_send(item) {
         return PairingPhase::Failed {
             reason: PairingFailure::Cancelled,
         };
@@ -185,12 +183,13 @@ pub fn receive(session: &mut Session<TcpStream>, side: &impl Side) -> Option<Pai
             return Err(PairingFailure::Broken);
         }
         match side.store(&item) {
-            Ok((name, keys_differ)) => {
+            Ok(stored) => {
                 let _ = session.send(&Message::Received { saved: true });
                 Ok(PairingPhase::Received {
                     item: summary.clone(),
-                    name,
-                    keys_differ,
+                    name: stored.name,
+                    keys_differ: stored.keys_differ,
+                    left_out: stored.left_out,
                 })
             }
             Err(reason) => {
@@ -282,6 +281,7 @@ mod tests {
                 item: summary,
                 name: "prod DB".into(),
                 keys_differ: false,
+                left_out: Vec::new(),
             }
         );
         assert_eq!(*right.stored.lock().unwrap(), [password()]);
@@ -508,6 +508,35 @@ mod tests {
         let ((left_end, left), _) = run(left, right, Some(&host()));
         assert!(matches!(left_end, PairingPhase::Sent { .. }));
         assert!(left.asked_to_send.lock().unwrap().is_empty());
+    }
+
+    /// Nothing at the receiving end lets its user pick an environment's
+    /// variables one by one, so those that make programs run code are left
+    /// out there, and named; the sender's dialog names them too.
+    #[test]
+    fn variables_that_run_code_are_named_where_an_environment_arrives() {
+        let var = |name: &str| sshkm_core::p2p::protocol::EnvVariable {
+            name: name.into(),
+            value: "x".into(),
+            secret: false,
+            note: String::new(),
+        };
+        let item = Item::Environment {
+            project: "shop".into(),
+            name: "dev".into(),
+            notes: String::new(),
+            variables: vec![var("PORT"), var("NODE_OPTIONS"), var("BASH_ENV")],
+        };
+        let mut left = Script::new("alice", Some(true));
+        left.knows = true;
+        let mut right = Script::new("bob", Some(true));
+        right.knows = true;
+        let ((left_end, _), (right_end, _)) = run(left, right, Some(&item));
+        assert!(matches!(left_end, PairingPhase::Sent { .. }));
+        let PairingPhase::Received { left_out, .. } = right_end else {
+            panic!("not received: {right_end:?}")
+        };
+        assert_eq!(left_out, ["NODE_OPTIONS", "BASH_ENV"]);
     }
 
     #[test]

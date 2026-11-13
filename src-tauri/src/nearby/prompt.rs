@@ -1,15 +1,66 @@
 //! The texts of the system dialogs Nearby asks in besides those of chats
 //! ([`super::chat::prompt`], whose dialog for sending a secret a pairing's
-//! send asks too): adding a device (on either computer), and saving a host
-//! that settings here would give access to this computer. They are built
-//! here, never by the page, and every name in them that came from somewhere
-//! else (a device name, an alias, an address) is passed through [`shown`].
+//! send asks too, naming the variables that run code): adding a device (on
+//! either computer), and saving a host that settings here would give access
+//! to this computer. They are built here, never by the page, and every name
+//! in them that came from somewhere else (a device name, an alias, an
+//! address) is passed through [`shown`].
+
+use std::fmt::Write as _;
+
+use sshkm_core::p2p::protocol::Item;
 
 use super::chat::prompt::{Prompt, shown};
 use crate::confirm::Localized;
 
 /// Most settings a dialog lists.
 const SHOWN_LINES: usize = 8;
+/// Most variable names a dialog lists.
+const SHOWN_NAMES: usize = 12;
+
+/// The dialog before `item` leaves for `peer` (the one chats ask in), if it
+/// holds a secret, naming the variables among it that make programs run
+/// code.
+pub fn send_item(peer: &str, item: &Item) -> Option<Prompt> {
+    super::chat::prompt::send_item(peer, &item.summary())
+        .map(|prompt| naming_code_running(prompt, &item.code_running()))
+}
+
+/// `prompt`, which sends variables, saying which of them (`names`) make
+/// programs run code wherever they are set.
+pub fn naming_code_running(mut prompt: Prompt, names: &[String]) -> Prompt {
+    if names.is_empty() {
+        return prompt;
+    }
+    let first: Vec<String> = names.iter().take(SHOWN_NAMES).map(|n| shown(n)).collect();
+    let more = names.len().saturating_sub(SHOWN_NAMES);
+    let joined = |more_text: String| {
+        let mut list = first.clone();
+        if more > 0 {
+            list.push(more_text);
+        }
+        list.join(", ")
+    };
+    let en = joined(format!("and {more} more"));
+    let ru = joined(format!("и ещё {more}"));
+    let uz = joined(format!("va yana {more} ta"));
+    let _ = write!(
+        prompt.body.en,
+        "\n\nThese make programs run code wherever they are set: {en}. The other computer \
+         leaves them out unless its user picks them."
+    );
+    let _ = write!(
+        prompt.body.ru,
+        "\n\nЭти переменные заставляют программы выполнять код везде, где они заданы: {ru}. \
+         Другой компьютер не добавит их, если там их не выберут."
+    );
+    let _ = write!(
+        prompt.body.uz,
+        "\n\nBu oʻzgaruvchilar qayerda berilsa, dasturlarni kod bajarishga majbur qiladi: \
+         {uz}. Boshqa kompyuter ularni u yerda tanlanmasa qoʻshmaydi."
+    );
+    prompt
+}
 
 /// A pairing code as both screens show it: `123 456`.
 pub fn code(code: &str) -> String {
@@ -248,6 +299,48 @@ mod tests {
                 .en
                 .contains("“Mac<U+2028>Book”, showing the code 654 321")
         );
+    }
+
+    #[test]
+    fn sending_names_the_variables_that_run_code() {
+        let var = |name: &str| sshkm_core::p2p::protocol::EnvVariable {
+            name: name.into(),
+            value: "x".into(),
+            secret: false,
+            note: String::new(),
+        };
+        let item = Item::Environment {
+            project: "Shop".into(),
+            name: "dev".into(),
+            notes: String::new(),
+            variables: vec![var("PORT"), var("NODE_OPTIONS"), var("path")],
+        };
+        let prompt = send_item("Carol", &item).unwrap();
+        assert!(
+            prompt.body.en.contains(
+                "These make programs run code wherever they are set: NODE_OPTIONS, path."
+            )
+        );
+        assert!(prompt.body.ru.contains("NODE_OPTIONS, path"));
+        assert!(prompt.body.uz.contains("NODE_OPTIONS, path"));
+        // None among them: the dialog as chats have it.
+        let plain = Item::Environment {
+            project: "Shop".into(),
+            name: "dev".into(),
+            notes: String::new(),
+            variables: vec![var("PORT")],
+        };
+        assert!(
+            !send_item("Carol", &plain)
+                .unwrap()
+                .body
+                .en
+                .contains("run code")
+        );
+        let many: Vec<String> = (0..14).map(|n| format!("GIT_CONFIG_KEY_{n}")).collect();
+        let empty = super::super::chat::prompt::send_variables("Carol", "dev", &many);
+        let prompt = naming_code_running(empty, &many);
+        assert!(prompt.body.en.contains("GIT_CONFIG_KEY_11, and 2 more."));
     }
 
     #[test]

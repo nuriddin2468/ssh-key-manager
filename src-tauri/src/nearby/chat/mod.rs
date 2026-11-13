@@ -158,6 +158,9 @@ pub enum EntryView {
         keys_differ: bool,
         /// A hosts file group waits on the Hosts file page under this id.
         group: Option<u32>,
+        /// An environment's variables left out here, as they make programs
+        /// run code.
+        left_out: Vec<String>,
     },
     Line {
         line: Line,
@@ -1070,10 +1073,14 @@ impl Nearby {
             return Err(AppError::invalid("no variables picked"));
         }
         let picked: Vec<String> = variables.iter().map(|var| var.name.clone()).collect();
-        self.ask(&prompt::send_variables(
-            &self.peer_name(&peer),
-            &label,
-            &picked,
+        let risky: Vec<String> = picked
+            .iter()
+            .filter(|name| risky_variable(name))
+            .cloned()
+            .collect();
+        self.ask(&super::prompt::naming_code_running(
+            prompt::send_variables(&self.peer_name(&peer), &label, &picked),
+            &risky,
         ))?;
         let frame = ChatFrame::Variables {
             id: new_id(),
@@ -1104,7 +1111,7 @@ impl Nearby {
             ));
         }
         let summary = item.summary();
-        if let Some(prompt) = prompt::send_item(&self.peer_name(&peer), &summary) {
+        if let Some(prompt) = super::prompt::send_item(&self.peer_name(&peer), &item) {
             self.ask(&prompt)?;
         }
         let id = new_id();
@@ -1732,6 +1739,7 @@ fn entry_of(frame: &ChatFrame, mine: bool, now: i64) -> Option<Entry> {
                 name: None,
                 keys_differ: false,
                 group: None,
+                left_out: Vec::new(),
             },
         ),
         _ => return None,
@@ -1946,12 +1954,14 @@ fn view(entry: &Entry) -> ChatEntry {
             name,
             keys_differ,
             group,
+            left_out,
         } => EntryView::Card {
             item: item.clone(),
             outcome: *outcome,
             name: name.clone(),
             keys_differ: *keys_differ,
             group: *group,
+            left_out: left_out.clone(),
         },
         Body::Line { line } => EntryView::Line { line: *line },
     };
@@ -2119,6 +2129,7 @@ mod tests {
                 name: None,
                 keys_differ: false,
                 group: None,
+                left_out: Vec::new(),
             },
             delivery: Delivery::Received,
         }

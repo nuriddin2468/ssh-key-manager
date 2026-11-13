@@ -553,6 +553,20 @@ impl Item {
         self.summary().requires()
     }
 
+    /// The names of an environment's variables that make a shell, or a
+    /// program it starts, run code ([`crate::vault::envs::runs_code`]):
+    /// named in the dialog that sends it, left out where it arrives.
+    pub fn code_running(&self) -> Vec<String> {
+        match self {
+            Self::Environment { variables, .. } => variables
+                .iter()
+                .filter(|var| crate::vault::envs::runs_code(&var.name))
+                .map(|var| var.name.clone())
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// The item as it goes to a peer whose `Hello` named `features`: a
     /// server's password to one without [`SERVER_PASSWORD`] goes for no
     /// host, since it would bind it to the alias whatever that leads to
@@ -673,13 +687,12 @@ impl Item {
 }
 
 /// See [`Item::check`]: names a project, an environment and a variable may
-/// have, none of them a variable that makes a shell or a program run code
-/// ([`runs_code`]); names and notes without control, invisible or
-/// direction-changing characters, and values without control characters
-/// other than line breaks and tabs; and a size that fits one message. The
-/// project label is empty for an environment in Personal without a part.
-///
-/// [`runs_code`]: crate::vault::envs::runs_code
+/// have; names and notes without control, invisible or direction-changing
+/// characters, and values without control characters other than line
+/// breaks and tabs; and a size that fits one message. The project label is
+/// empty for an environment in Personal without a part. A variable that
+/// makes programs run code may come ([`Item::code_running`]): the receiver
+/// leaves it out, and says so.
 fn check_environment(
     project: &str,
     name: &str,
@@ -706,12 +719,6 @@ fn check_environment(
         if !crate::vault::envs::is_valid_name(&var.name) {
             return Err(Error::invalid(format!(
                 "not a variable name: {:?}",
-                var.name
-            )));
-        }
-        if crate::vault::envs::runs_code(&var.name) {
-            return Err(Error::invalid(format!(
-                "{} makes programs run code, so it is not sent",
                 var.name
             )));
         }
@@ -1483,27 +1490,18 @@ mod tests {
     }
 
     #[test]
-    fn variables_that_make_programs_run_code_never_travel() {
-        for name in [
-            "BASH_ENV",
-            "PROMPT_COMMAND",
-            "LD_PRELOAD",
-            "GIT_SSH_COMMAND",
-            "path",
-        ] {
-            let mut item = environment();
-            if let Item::Environment { variables, .. } = &mut item {
-                variables[1].name = name.into();
-            }
-            assert!(item.check().is_err(), "{name}");
-        }
-        // Their look-alikes do.
+    fn variables_that_make_programs_run_code_travel_named_as_such() {
         let mut item = environment();
+        assert_eq!(item.code_running(), Vec::<String>::new());
         if let Item::Environment { variables, .. } = &mut item {
-            variables[1].name = "DATABASE_PATH".into();
-            variables[2].name = "GITHUB_TOKEN".into();
+            variables[1].name = "NODE_OPTIONS".into();
+            variables[2].name = "path".into();
+            variables[3].name = "GIT_AUTHOR_NAME".into();
         }
+        // Nothing refuses them: a project may rely on them.
         assert!(item.check().is_ok());
+        assert_eq!(item.code_running(), ["NODE_OPTIONS", "path"]);
+        assert_eq!(host().code_running(), Vec::<String>::new());
     }
 
     #[test]

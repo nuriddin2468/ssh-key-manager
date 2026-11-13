@@ -1,6 +1,6 @@
 {
   "kind": "security",
-  "en": "Nearby: a received server password is used only for a host here that leads to the same server, a received environment can't bring variables that make a shell run code, and a received server key is never added for a host your system's known_hosts already trusts.",
-  "ru": "«Рядом»: полученный пароль сервера используется только для хоста здесь, который ведёт на тот же сервер, полученное окружение не может принести переменные, из-за которых оболочка запускает код, а полученный ключ сервера не добавляется для хоста, которому уже доверяет системный known_hosts.",
-  "uz": "«Yaqin atrofda»: olingan server paroli faqat shu yerdagi xuddi shu serverga olib boradigan xost uchun ishlatiladi, olingan muhit shellni kod ishga tushirishga majbur qiladigan oʻzgaruvchilarni olib kela olmaydi, olingan server kaliti esa tizim known_hosts ishonadigan xostga qoʻshilmaydi."
+  "en": "Nearby: a received server password is used only for a host here that leads to the same server, variables that make programs run code are left out of a received environment and named, and a received server key is never added for a host your system's known_hosts already trusts.",
+  "ru": "«Рядом»: полученный пароль сервера используется только для хоста здесь, который ведёт на тот же сервер, переменные, из-за которых программы выполняют код, не добавляются в полученное окружение и перечисляются, а полученный ключ сервера не добавляется для хоста, которому уже доверяет системный known_hosts.",
+  "uz": "«Yaqin atrofda»: olingan server paroli faqat shu yerdagi xuddi shu serverga olib boradigan xost uchun ishlatiladi, dasturlarni kod bajarishga majbur qiladigan oʻzgaruvchilar olingan muhitga qoʻshilmaydi va nomlari koʻrsatiladi, olingan server kaliti esa tizim known_hosts ishonadigan xostga qoʻshilmaydi."
 }

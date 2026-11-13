@@ -573,6 +573,8 @@ const en = {
       receivedKey: 'Saved in Keys as “{{name}}”.',
       keysDiffer:
         'The server key they sent differs from the one this computer has. Yours is kept; compare them with “Check host key” before you connect.',
+      leftOut:
+        'Left out, as they make programs run code: {{names}}. Add them to the environment yourself if you trust them.',
       decline: 'Decline',
       accept: 'Accept',
       openHosts: 'Open Hosts',

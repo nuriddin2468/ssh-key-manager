@@ -601,6 +601,7 @@ export const nearbyHandlers: Record<string, (args: Record<string, unknown>) => u
                 item,
                 name: receivedName(item, peer),
                 keysDiffer: false,
+                leftOut: [],
               },
             }
           : { phase: { type: 'failed', reason: 'turned' } },

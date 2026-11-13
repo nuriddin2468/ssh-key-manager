@@ -304,20 +304,23 @@ SSH Key Manager handles private keys, so its design keeps the attack surface sma
     environment and how many of its values are secret. It asks once per environment
     until the vault locks: a script in the page could type into a shell that already
     holds them, so asking for every shell would add clicks, not protection.
-  - An environment's values are data, never code, wherever they came from, so a shell
-    started with them (here or in a project's terminal) never gets a variable that
-    would make it, or a program it starts, run code it names: shell startup files and
-    prompts (`BASH_ENV`, `ENV`,
-    `ZDOTDIR`, `HOME`, `XDG_CONFIG_HOME`, `PS0`–`PS4`, `PROMPT_COMMAND`, zsh's
-    `PROMPT`/`RPROMPT`/`RPS1`…, `SHELLOPTS`, `BASH_FUNC_…`, `FPATH`, `PATH`, `IFS`,
-    `MAILPATH`), the dynamic linker (`LD_…`, `DYLD_…`), Git (every `GIT_…`), pagers,
+  - Some variables make a shell, or a program it starts, run code they name: shell
+    startup files and prompts (`BASH_ENV`, `ENV`, `ZDOTDIR`, `HOME`, `XDG_CONFIG_HOME`,
+    `PS0`–`PS4`, `PROMPT_COMMAND`, zsh's `PROMPT`/`RPROMPT`/`RPS1`…, `SHELLOPTS`,
+    `BASH_FUNC_…`, `FPATH`, `PATH`, `IFS`, `MAILPATH`), the dynamic linker (`LD_…`,
+    `DYLD_…`), Git (every `GIT_…` but `GIT_AUTHOR_…` and `GIT_COMMITTER_…`), pagers,
     editors and password prompts other tools start (`PAGER`, `LESS`, `LESSOPEN`,
     `EDITOR`, `VISUAL`, `BROWSER`, `SSH_ASKPASS`…), code a runtime loads before any
-    script (`NODE_OPTIONS`, `PYTHONSTARTUP`, `PYTHONPATH`, `PERL5OPT`, `RUBYOPT`,
-    `JAVA_TOOL_OPTIONS`, `DOTNET_STARTUP_HOOKS`…) and on Windows `COMSPEC`, `PATHEXT`
-    and `PSModulePath`, in any case. The full list is in
-    `crates/sshkm-core/src/vault/envs/startup.rs`. Set such a variable in the shell
-    yourself if you need it.
+    script or where it looks for it (`NODE_OPTIONS`, `NODE_PATH`, `PYTHONSTARTUP`,
+    `PYTHONPATH`, `PERL5OPT`, `RUBYOPT`, `JAVA_TOOL_OPTIONS`, `DOTNET_STARTUP_HOOKS`…)
+    and on Windows `COMSPEC`, `PATHEXT` and `PSModulePath`, in any case. The one list
+    is in `crates/sshkm-core/src/vault/envs/startup.rs`. A shell still gets every
+    variable of the environment, since projects rely on some of them
+    (`NODE_OPTIONS=--max-old-space-size=…`); but when there is one of these, secret or
+    not, the system dialog before the shell starts lists them with their values (a
+    long value by its start and its end, every character that could hide something
+    shown as `<U+…>`), and asks again once their names or values change. Importing a
+    `.env` file keeps them.
 - **Answering `ssh` prompts.** To log in with a password or one-time code, the app acts
   as `ssh`'s askpass program.
   - The secret goes over a local socket only this user can reach (a private 0700
@@ -1091,9 +1094,12 @@ TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
   than line breaks and tabs in values, and takes at most 1000 variables and 384 KiB.
   Names and notes may hold no line or paragraph separator (U+2028, U+2029, U+0085)
   and no invisible or direction-changing character, which some programs reading an
-  exported file would take for another line. An environment with a variable that
-  makes a shell or a program run code (the list under "Run in terminal") is never
-  sent, nor taken.
+  exported file would take for another line. Variables that make a shell or a
+  program run code (the list under "Run in terminal") may be sent: the sender's
+  system dialog names them as such. Where a whole environment arrives, nothing lets
+  its user pick them one by one, so they are left out of it, and the app names the
+  ones it left out; variables added from a chat show them flagged and not picked,
+  and the system dialog before they are added names the ones picked.
   It is saved as a new environment: one of the same name in that project gets a
   number (`prod 2`), so a sender can never replace or add to an environment the
   receiver has.

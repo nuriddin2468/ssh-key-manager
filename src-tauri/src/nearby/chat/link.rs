@@ -666,10 +666,9 @@ impl Nearby {
         let saved = if item.summary() == summary && item.check().is_ok() {
             let group = self.next_id.fetch_add(1, Ordering::SeqCst);
             super::items::store(self, group, name.as_deref(), item)
-                .map(|(name, keys_differ)| {
+                .map(|stored| {
                     (
-                        name,
-                        keys_differ,
+                        stored,
                         matches!(item, Item::HostsGroup { .. }).then_some(group),
                     )
                 })
@@ -685,6 +684,7 @@ impl Nearby {
                         name,
                         keys_differ,
                         group,
+                        left_out,
                         ..
                     },
                 mine: false,
@@ -692,10 +692,11 @@ impl Nearby {
             }) = chat.get_mut(id)
             {
                 match &saved {
-                    Some((saved_as, differ, waiting)) => {
+                    Some((stored, waiting)) => {
                         *outcome = Outcome::Saved;
-                        *name = Some(saved_as.clone());
-                        *keys_differ = *differ;
+                        *name = Some(stored.name.clone());
+                        *keys_differ = stored.keys_differ;
+                        left_out.clone_from(&stored.left_out);
                         *group = *waiting;
                     }
                     None => *outcome = Outcome::NotSaved,

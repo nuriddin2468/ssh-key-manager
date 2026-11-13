@@ -115,6 +115,7 @@ function seed(): ChatEntry[] {
         outcome: 'waiting',
         name: null,
         keysDiffer: false,
+        leftOut: [],
         group: null,
       },
     },
@@ -294,6 +295,7 @@ export const chatHandlers: Record<string, (args: Record<string, unknown>) => unk
       outcome: 'waiting',
       name: null,
       keysDiffer: false,
+      leftOut: [],
       group: null,
     });
     const card = item.entries.at(-1);

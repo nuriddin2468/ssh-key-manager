@@ -34,7 +34,9 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
-use sshkm_app_lib::nearby::pairing::{PairingFailure, PairingPhase, Purpose, Side, conversation};
+use sshkm_app_lib::nearby::pairing::{
+    PairingFailure, PairingPhase, Purpose, Side, Stored, conversation,
+};
 use sshkm_app_lib::nearby::sync::{SyncLocal, SyncState, SyncWrite};
 use sshkm_app_lib::nearby::{BASE_LABEL, OWN_SERVICE_TYPE, SERVICE_TYPE};
 use sshkm_core::config::SshConfig;
@@ -135,7 +137,7 @@ impl Side for Terminal {
         Ok(Some(line.trim().eq_ignore_ascii_case("y")))
     }
 
-    fn store(&self, item: &Item) -> Result<(String, bool), PairingFailure> {
+    fn store(&self, item: &Item) -> Result<Stored, PairingFailure> {
         match item {
             Item::Password {
                 title,
@@ -153,7 +155,7 @@ impl Side for Terminal {
                         ""
                     }
                 );
-                Ok((title.clone(), false))
+                Ok(Stored::named(title.clone()))
             }
             Item::Host {
                 alias, host_keys, ..
@@ -166,7 +168,7 @@ impl Side for Terminal {
                     },
                     host_keys.len()
                 );
-                Ok((alias.clone(), false))
+                Ok(Stored::named(alias.clone()))
             }
             Item::HostsGroup { name, entries } => {
                 println!("Got the hosts file group \"{name}\":");
@@ -183,11 +185,11 @@ impl Side for Terminal {
                             .unwrap_or_default()
                     );
                 }
-                Ok((name.clone(), false))
+                Ok(Stored::named(name.clone()))
             }
             Item::PublicKey { name, key } => {
                 println!("Got the public key {name}: {key}");
-                Ok((name.clone(), false))
+                Ok(Stored::named(name.clone()))
             }
             Item::Environment {
                 project,
@@ -201,7 +203,7 @@ impl Side for Terminal {
                     let secret = if var.secret { " (secret)" } else { "" };
                     println!("  {}{secret}", var.name);
                 }
-                Ok((format!("{project} / {name}"), false))
+                Ok(Stored::named(format!("{project} / {name}")))
             }
             Item::Unknown => Err(PairingFailure::Unsupported),
         }
@@ -238,7 +240,7 @@ impl Side for Terminal {
 
     /// The app asks in a system dialog; here, the sample was chosen with
     /// `--send` when the example started.
-    fn allow_send(&self, _item: &ItemSummary) -> bool {
+    fn allow_send(&self, _item: &Item) -> bool {
         true
     }
 

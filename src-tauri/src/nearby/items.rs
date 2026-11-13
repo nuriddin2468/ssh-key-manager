@@ -35,7 +35,7 @@ use sshkm_core::vault::{EntryInput, EntryKind, SecretField, envs};
 use sshkm_core::{ErrorCode, ExposeSecret, SecretString, fsutil};
 use tauri::AppHandle;
 
-use super::pairing::PairingFailure;
+use super::pairing::{PairingFailure, Stored};
 use super::{Nearby, prompt};
 use crate::commands::keys::find_key;
 use crate::confirm;
@@ -248,15 +248,14 @@ fn hosts_group(path: &Path, name: &str) -> AppResult<Item> {
 }
 
 /// Saves an item the user accepted, which came with pairing `id` from
-/// `peer`. Returns the name it got and whether a host's keys differ from the
-/// ones this computer has for it. A hosts file group waits in `nearby` for
-/// the user to save it.
+/// `peer`, and says what became of it. A hosts file group waits in `nearby`
+/// for the user to save it.
 pub fn store(
     nearby: &Nearby,
     id: u32,
     peer: Option<&str>,
     item: &Item,
-) -> Result<(String, bool), PairingFailure> {
+) -> Result<Stored, PairingFailure> {
     let state = nearby.state().map_err(|_| PairingFailure::Broken)?;
     let app = nearby.app().map_err(|_| PairingFailure::Broken)?;
     let not_saved = |error: AppError| {
@@ -282,6 +281,10 @@ pub fn store(
                 &global_known_hosts(),
                 allow,
             )
+            .map(|(alias, keys_differ)| Stored {
+                keys_differ,
+                ..Stored::named(alias)
+            })
             .map_err(|error| match error.code() {
                 ErrorCode::Cancelled => PairingFailure::Turned,
                 _ => not_saved(error),
@@ -291,34 +294,9 @@ pub fn store(
             let group =
                 group_draft(&state.hosts_file, id, peer, name, entries).map_err(not_saved)?;
             nearby.keep_group(group);
-            Ok((name.clone(), false))
+            Ok(Stored::named(name))
         }
-        Item::Environment {
-            project,
-            name,
-            notes,
-            variables,
-        } => {
-            let variables: Vec<envs::EnvVariable> = variables
-                .iter()
-                .map(|var| envs::EnvVariable {
-                    name: var.name.clone(),
-                    value: SecretString::from(var.value.as_str()),
-                    secret: var.secret,
-                    note: var.note.clone(),
-                })
-                .collect();
-            let (_, name) = state
-                .vault
-                .change(app, &state.backup_dir, |vault| {
-                    Ok(vault.add_received_environment(project, name, notes, &variables)?)
-                })
-                .map_err(|error| match error.code() {
-                    ErrorCode::VaultLocked => PairingFailure::VaultLocked,
-                    _ => PairingFailure::NotSaved,
-                })?;
-            Ok((envs::label(Some(project), &name), false))
-        }
+        Item::Environment { .. } => store_environment(&state, app, item),
         Item::PublicKey { name, key } => {
             let name = save_key(
                 &state.paths.dir,
@@ -328,10 +306,61 @@ pub fn store(
                 |fp| nearby.remember_key(fp),
             )
             .map_err(not_saved)?;
-            Ok((name, false))
+            Ok(Stored::named(name))
         }
         Item::Unknown => Err(PairingFailure::Unsupported),
     }
+}
+
+/// Saves an environment from another computer as a new one, without the
+/// variables that make programs run code ([`envs::runs_code`]): nothing
+/// here lets the user pick them, so they are left out, and named as such.
+fn store_environment(
+    state: &AppState,
+    app: &AppHandle,
+    item: &Item,
+) -> Result<Stored, PairingFailure> {
+    let Item::Environment {
+        project,
+        name,
+        notes,
+        variables,
+    } = item
+    else {
+        return Err(PairingFailure::Broken);
+    };
+    let (variables, left_out) = without_code_running(variables);
+    let (_, name) = state
+        .vault
+        .change(app, &state.backup_dir, |vault| {
+            Ok(vault.add_received_environment(project, name, notes, &variables)?)
+        })
+        .map_err(|error| match error.code() {
+            ErrorCode::VaultLocked => PairingFailure::VaultLocked,
+            _ => PairingFailure::NotSaved,
+        })?;
+    Ok(Stored {
+        left_out,
+        ..Stored::named(envs::label(Some(project), &name))
+    })
+}
+
+/// `variables` as the vault keeps them, but those that make programs run
+/// code, whose names come second.
+fn without_code_running(variables: &[EnvVariable]) -> (Vec<envs::EnvVariable>, Vec<String>) {
+    let (code, kept): (Vec<&EnvVariable>, Vec<&EnvVariable>) =
+        variables.iter().partition(|var| envs::runs_code(&var.name));
+    (
+        kept.into_iter()
+            .map(|var| envs::EnvVariable {
+                name: var.name.clone(),
+                value: SecretString::from(var.value.as_str()),
+                secret: var.secret,
+                note: var.note.clone(),
+            })
+            .collect(),
+        code.into_iter().map(|var| var.name.clone()).collect(),
+    )
 }
 
 /// Saves a password from another computer as a new entry: for a host here
@@ -341,7 +370,7 @@ fn store_password(
     state: &AppState,
     app: &AppHandle,
     item: &Item,
-) -> Result<(String, bool), PairingFailure> {
+) -> Result<Stored, PairingFailure> {
     let Item::Password {
         title,
         username,
@@ -383,7 +412,7 @@ fn store_password(
             ErrorCode::VaultLocked => PairingFailure::VaultLocked,
             _ => PairingFailure::NotSaved,
         })?;
-    Ok((title.clone(), false))
+    Ok(Stored::named(title))
 }
 
 /// A received group as the change the Hosts file page shows, checked the
@@ -1192,6 +1221,27 @@ mod tests {
         }
         // Where the config seems to lead is not enough: `ssh -G` decides.
         assert_eq!(bind(&config, "prod", &theirs, |_| None), None);
+    }
+
+    #[test]
+    fn a_received_environment_keeps_its_variables_but_those_that_run_code() {
+        let var = |name: &str, value: &str| EnvVariable {
+            name: name.into(),
+            value: value.into(),
+            secret: true,
+            note: "a note".into(),
+        };
+        let (kept, left_out) = without_code_running(&[
+            var("API_KEY", "s3cret"),
+            var("LD_PRELOAD", "/tmp/x.so"),
+            var("GIT_AUTHOR_NAME", "Alice"),
+            var("NODE_OPTIONS", "--require ./x.js"),
+        ]);
+        let names: Vec<&str> = kept.iter().map(|var| var.name.as_str()).collect();
+        assert_eq!(names, ["API_KEY", "GIT_AUTHOR_NAME"]);
+        assert_eq!(kept[0].value.expose_secret(), "s3cret");
+        assert!(kept[0].secret && kept[0].note == "a note");
+        assert_eq!(left_out, ["LD_PRELOAD", "NODE_OPTIONS"]);
     }
 
     #[test]

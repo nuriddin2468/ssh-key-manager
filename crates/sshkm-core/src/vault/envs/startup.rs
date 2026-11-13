@@ -1,8 +1,12 @@
 //! Variables that make a program run code just by being in its
-//! environment. An environment from someone else never brings one of them
-//! (`p2p::protocol`), and "Run in terminal" never puts one into a shell
-//! (`src-tauri/src/terminal/shells.rs`): the value would run as soon as the
-//! shell starts, shows its prompt, or runs one of the tools listed here.
+//! environment: the value runs as soon as a shell starts, shows its prompt,
+//! or runs one of the tools listed here. Nothing refuses them, since a
+//! project may rely on them (`NODE_OPTIONS=--max-old-space-size=…`), but
+//! they never go anywhere unseen: a shell started with an environment
+//! that has one is opened only after a system dialog that lists them with
+//! their values, one sent to someone else is named as one in the dialog
+//! that sends it, and one received is flagged and left out unless the user
+//! picks it.
 //!
 //! - Shells: a startup file or folder (`BASH_ENV`, `ENV`, `ZDOTDIR`,
 //!   `HOME`, `XDG_CONFIG_HOME`…), a prompt that is expanded each time it is
@@ -12,12 +16,13 @@
 //! - The dynamic linker: every `LD_…` and `DYLD_…` variable.
 //! - Git: every `GIT_…` variable, which covers the programs it starts
 //!   (`GIT_SSH_COMMAND`, `GIT_PAGER`, `GIT_EDITOR`…) and the configuration
-//!   it reads (`GIT_CONFIG_…`, `GIT_DIR`).
+//!   it reads (`GIT_CONFIG_…`, `GIT_DIR`), but who a commit is by
+//!   (`GIT_AUTHOR_…`, `GIT_COMMITTER_…`).
 //! - Programs other tools start: pagers (`PAGER`, `LESSOPEN`, `LESS`…),
 //!   editors, browsers and password prompts (`SSH_ASKPASS`…).
-//! - Code a language runtime loads before any script: `NODE_OPTIONS`,
-//!   `PYTHONSTARTUP`, `PYTHONPATH`, `PERL5OPT`, `RUBYOPT`,
-//!   `JAVA_TOOL_OPTIONS`, `DOTNET_STARTUP_HOOKS`…
+//! - Code a language runtime loads before any script, or where it looks for
+//!   it: `NODE_OPTIONS`, `NODE_PATH`, `PYTHONSTARTUP`, `PYTHONPATH`,
+//!   `PERL5OPT`, `RUBYOPT`, `JAVA_TOOL_OPTIONS`, `DOTNET_STARTUP_HOOKS`…
 //! - Windows: `COMSPEC`, `PATHEXT`, `PSModulePath`.
 //!
 //! Names are compared without regard to case, as Windows does.
@@ -68,6 +73,7 @@ const NAMES: &[&str] = &[
     "SUDO_ASKPASS",
     // Language runtimes.
     "NODE_OPTIONS",
+    "NODE_PATH",
     "PYTHONSTARTUP",
     "PYTHONPATH",
     "PYTHONHOME",
@@ -89,12 +95,15 @@ const NAMES: &[&str] = &[
 
 /// Variables whose names start with one of these (in upper case).
 const PREFIXES: &[&str] = &["LD_", "DYLD_", "GIT_", "BASH_FUNC_"];
+/// Of those, the ones that only say who a commit is by.
+const HARMLESS_PREFIXES: &[&str] = &["GIT_AUTHOR_", "GIT_COMMITTER_"];
 
 /// Whether the variable `name` makes a shell, or a program started from
 /// one, run code it names (see the module documentation).
 pub fn runs_code(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
-    NAMES.contains(&upper.as_str()) || PREFIXES.iter().any(|prefix| upper.starts_with(prefix))
+    let has = |prefixes: &[&str]| prefixes.iter().any(|prefix| upper.starts_with(prefix));
+    NAMES.contains(&upper.as_str()) || (has(PREFIXES) && !has(HARMLESS_PREFIXES))
 }
 
 #[cfg(test)]
@@ -116,6 +125,7 @@ mod tests {
             "GIT_CONFIG_COUNT",
             "LESSOPEN",
             "NODE_OPTIONS",
+            "NODE_PATH",
             "PYTHONSTARTUP",
             "PERL5OPT",
             "Path",
@@ -127,6 +137,8 @@ mod tests {
             "DATABASE_URL",
             "API_KEY",
             "GITHUB_TOKEN",
+            "GIT_AUTHOR_NAME",
+            "git_committer_email",
             "NODE_ENV",
             "PORT",
             "HOME_URL",

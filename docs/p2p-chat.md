@@ -350,12 +350,11 @@ Two known bugs come with that code:
     confirm.
   - New names are ticked. Replacing a value the receiver already has is never ticked by
     default. Names that change how programs start are flagged and never ticked by
-    default. The list is one tested function shared with the vault sync,
-    `envs::risky_variable()`: `PATH`, `LD_*`, `DYLD_*`, `NODE_OPTIONS`, `NODE_PATH`,
-    `PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONHOME`, `PERL5OPT`, `PERL5LIB`, `RUBYOPT`,
-    `RUBYLIB`, `BASH_ENV`, `ENV`, `ZDOTDIR`, `PROMPT_COMMAND`, `GIT_SSH`,
-    `GIT_SSH_COMMAND`, `GIT_EXEC_PATH`, `GIT_CONFIG_*`, `SSH_ASKPASS`,
-    `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`, `JDK_JAVA_OPTIONS`, `DOTNET_STARTUP_HOOKS`.
+    default. The list is one tested function shared with the vault sync, Nearby's
+    pairing sends and Run in terminal, `envs::risky_variable()` (the list itself is in
+    `crates/sshkm-core/src/vault/envs/startup.rs`): shell startup files and prompts,
+    `PATH`, `LD_*`, `DYLD_*`, `GIT_*` but who a commit is by, pagers and editors, and
+    what runtimes load first (`NODE_OPTIONS`, `NODE_PATH`, `PYTHONPATH`, …).
   - Nothing is saved without that confirmation.
 - **A whole environment** can still go as a card (§2). It is permanent, and its values go
   only after the receiver accepts.

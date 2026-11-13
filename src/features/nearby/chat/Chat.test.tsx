@@ -129,6 +129,7 @@ describe('a card offered', () => {
         outcome: 'waiting',
         name: null,
         keysDiffer: false,
+        leftOut: [],
         group: null,
       },
     };

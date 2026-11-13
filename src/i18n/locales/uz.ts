@@ -584,6 +584,8 @@ const uz = {
       receivedKey: '«Kalitlar»da «{{name}}» nomi bilan saqlandi.',
       keysDiffer:
         'Yuborilgan server kaliti shu kompyuterdagisidan farq qiladi. Sizniki qoldirildi; ulanishdan oldin ularni «Xost kalitini tekshirish» orqali solishtiring.',
+      leftOut:
+        'Qoʻshilmadi, chunki ular dasturlarni kod bajarishga majbur qiladi: {{names}}. Ularga ishonsangiz, muhitga oʻzingiz qoʻshing.',
       decline: 'Rad etish',
       accept: 'Qabul qilish',
       openHosts: '«Xostlar»ni ochish',

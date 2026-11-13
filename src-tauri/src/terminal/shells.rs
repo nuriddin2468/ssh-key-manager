@@ -21,7 +21,6 @@ use std::path::{Path, PathBuf};
 
 use portable_pty::CommandBuilder;
 use serde::Serialize;
-use sshkm_core::vault::envs;
 use sshkm_core::{ExposeSecret, SecretString};
 
 use crate::error::{AppError, AppResult};
@@ -69,26 +68,11 @@ pub struct Shell {
 }
 
 impl Shell {
-    /// The command that starts it in `cwd` with `vars` in its environment,
-    /// but for those that would make the shell, or a program it starts,
-    /// run code ([`envs::runs_code`]: `BASH_ENV`, `PROMPT_COMMAND`,
-    /// `LD_PRELOAD`, `GIT_SSH_COMMAND`…): an environment's values are
-    /// data, whoever wrote them, and those are left out (see
-    /// [`left_out`]). On macOS and Linux it runs as a login shell, as a
-    /// terminal app starts one, with `SHELL` naming it. WSL gets the
-    /// variables through `WSLENV`: Windows passes no others on to Linux.
+    /// The command that starts it in `cwd` with `vars` in its environment.
+    /// On macOS and Linux it runs as a login shell, as a terminal app starts
+    /// one, with `SHELL` naming it. WSL gets the variables through `WSLENV`:
+    /// Windows passes no others on to Linux.
     pub fn command(&self, vars: &[(String, SecretString)], cwd: &Path) -> CommandBuilder {
-        let left_out = left_out(vars);
-        if !left_out.is_empty() {
-            log::warn!(
-                "terminal: left out of the shell's environment, as they run code: {}",
-                left_out.join(", ")
-            );
-        }
-        let vars: Vec<&(String, SecretString)> = vars
-            .iter()
-            .filter(|(name, _)| !envs::runs_code(name))
-            .collect();
         let mut command = if self.info.kind == ShellKind::Unix {
             // portable-pty starts `$SHELL` of the command's own environment
             // as a login shell (`-zsh` as its argv[0]).
@@ -98,7 +82,7 @@ impl Shell {
             command.args(&self.args);
             command
         };
-        for (name, value) in &vars {
+        for (name, value) in vars {
             command.env(name, value.expose_secret());
         }
         if self.info.kind == ShellKind::Unix {
@@ -114,15 +98,6 @@ impl Shell {
         command.cwd(cwd);
         command
     }
-}
-
-/// The names of `vars` that [`Shell::command`] leaves out of a shell's
-/// environment, as they would make it or a program it starts run code.
-pub fn left_out(vars: &[(String, SecretString)]) -> Vec<&str> {
-    vars.iter()
-        .map(|(name, _)| name.as_str())
-        .filter(|name| envs::runs_code(name))
-        .collect()
 }
 
 /// The shells this computer has, the default first.
@@ -816,49 +791,5 @@ mod tests {
         let command = zsh.command(&vars, Path::new("/tmp"));
         assert!(command.is_default_prog());
         assert_eq!(command.get_env("SHELL").unwrap(), "/bin/zsh");
-    }
-
-    /// An environment's values are data: one that would make the shell, or
-    /// a program it starts, run code never gets into its environment.
-    #[test]
-    fn variables_that_run_code_stay_out_of_the_shell() {
-        let shells = windows(
-            &[r"C:\Windows\System32\wsl.exe"],
-            &WINDOWS_VARS,
-            &["Ubuntu"],
-        );
-        let wsl = shells
-            .iter()
-            .find(|shell| shell.info.kind == ShellKind::Wsl)
-            .unwrap();
-        let var = |name: &str| (name.to_owned(), SecretString::from("$(touch /tmp/x)"));
-        let vars = [
-            var("BASH_ENV"),
-            var("PROMPT_COMMAND"),
-            var("ZDOTDIR"),
-            var("LD_PRELOAD"),
-            var("GIT_SSH_COMMAND"),
-            var("NODE_OPTIONS"),
-            var("API_KEY"),
-        ];
-        assert_eq!(
-            left_out(&vars),
-            [
-                "BASH_ENV",
-                "PROMPT_COMMAND",
-                "ZDOTDIR",
-                "LD_PRELOAD",
-                "GIT_SSH_COMMAND",
-                "NODE_OPTIONS"
-            ]
-        );
-        let command = wsl.command(&vars, Path::new("/home"));
-        for (name, _) in &vars[..6] {
-            assert!(command.get_env(name).is_none(), "{name}");
-        }
-        assert_eq!(command.get_env("API_KEY").unwrap(), "$(touch /tmp/x)");
-        let wslenv = command.get_env("WSLENV").unwrap().to_str().unwrap();
-        assert!(wslenv.ends_with("API_KEY/u"), "{wslenv}");
-        assert!(!wslenv.contains("BASH_ENV"), "{wslenv}");
     }
 }

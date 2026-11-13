@@ -42,7 +42,7 @@ visible window that isn't focused, and during the two minutes (§5).
 
 While online the app:
 
-1. listens on a TCP port of its own (the *chat port*), which takes chats only;
+1. listens on a TCP port of its own (the _chat port_), which takes chats only;
 2. announces it as `_sshkm-chat._tcp` (below);
 3. browses for the same service, to show which contacts are online.
 
@@ -96,7 +96,7 @@ Today anyone who connects to a listening Nearby port learns the device's public 
 which is a stable identifier: the Noise `XX` responder sends it in message 2. The chat
 port doesn't answer the handshake until the caller has shown it is a contact:
 
-1. The side that answers sends 16 random bytes, the *challenge*.
+1. The side that answers sends 16 random bytes, the _challenge_.
 2. The side that connects answers with
    `HMAC-SHA256(K_AB, "sshkm chat knock" ‖ responder's public key ‖ challenge)`, first 16
    bytes.
@@ -181,7 +181,7 @@ Chat brings the first new message types, so this comes first:
   any. Today's items need none, except an environment in Personal without a part (fixed
   below): older receivers refuse its empty project label, so it needs `personal-env/1`.
   An item the peer can't take is refused **before anything is offered**, with the
-  translated "*{name}* can't take this yet: its SSH Key Manager needs updating".
+  translated "_{name}_ can't take this yet: its SSH Key Manager needs updating".
 - **Fallbacks.** `Message`, `Item` and `ItemSummary` get `#[serde(other)] Unknown`, so an
   unknown kind parses instead of failing. Nothing ever sends `Unknown`.
   - `Item::check` refuses it.
@@ -192,9 +192,9 @@ Chat brings the first new message types, so this comes first:
   - An offer of an unknown item is declined with `Reply { accepted: false, unsupported:
     true }`. `unsupported` is a new field, `serde(default)`, ignored by older versions,
     which see a plain decline.
-  - The receiver's user sees "*{name}* sent something this version can't open. Update
+  - The receiver's user sees "_{name}_ sent something this version can't open. Update
     SSH Key Manager to see it."
-  - The sender's user sees "*{name}* can't take this yet: its SSH Key Manager needs
+  - The sender's user sees "_{name}_ can't take this yet: its SSH Key Manager needs
     updating."
   - An unknown message where a known one was due ends the conversation with a new
     `PairingFailure::Unsupported` (translated, same wording), not `Broken`.
@@ -211,23 +211,23 @@ One new message, `Message::Chat { frame: ChatFrame }`, with its own module
 (`p2p::chat`), so `protocol.rs` gains only the variant:
 
 ```json
-{"type":"chat","frame":{"kind":"text","id":"3f9c…(32 hex)","text":"on my way"}}
+{ "type": "chat", "frame": { "kind": "text", "id": "3f9c…(32 hex)", "text": "on my way" } }
 ```
 
-| kind        | fields                                      | answered by          |
-| ----------- | ------------------------------------------- | -------------------- |
-| `text`      | `id`, `text`                                | `delivered`          |
-| `secret`    | `id`, `label`, `value`, `ttl`, `pad`        | `delivered`          |
-| `variables` | `id`, `label`, `variables[]`, `ttl`, `pad`  | `delivered`          |
-| `offer`     | `id`, `item` (an `ItemSummary`)             | `reply`              |
-| `reply`     | `id`, `accepted`, `unsupported`             | `payload` on a yes   |
-| `payload`   | `id`, `item` (an `Item`)                    | `saved`              |
-| `saved`     | `id`, `saved`                               | —                    |
-| `delivered` | `ids` (at most 64)                          | —                    |
-| `refused`   | `id`, `reason` (`tooLarge`, `invalid`, `tooMany`, `unsupported`) | — |
-| `revoke`    | `id`                                        | —                    |
-| `ping`      | `n`                                         | `pong`               |
-| `pong`      | `n`                                         | —                    |
+| kind        | fields                                                           | answered by        |
+| ----------- | ---------------------------------------------------------------- | ------------------ |
+| `text`      | `id`, `text`                                                     | `delivered`        |
+| `secret`    | `id`, `label`, `value`, `ttl`, `pad`                             | `delivered`        |
+| `variables` | `id`, `label`, `variables[]`, `ttl`, `pad`                       | `delivered`        |
+| `offer`     | `id`, `item` (an `ItemSummary`)                                  | `reply`            |
+| `reply`     | `id`, `accepted`, `unsupported`                                  | `payload` on a yes |
+| `payload`   | `id`, `item` (an `Item`)                                         | `saved`            |
+| `saved`     | `id`, `saved`                                                    | —                  |
+| `delivered` | `ids` (at most 64)                                               | —                  |
+| `refused`   | `id`, `reason` (`tooLarge`, `invalid`, `tooMany`, `unsupported`) | —                  |
+| `revoke`    | `id`                                                             | —                  |
+| `ping`      | `n`                                                              | `pong`             |
+| `pong`      | `n`                                                              | —                  |
 
 - **Ids.** Each id is 16 random bytes as 32 lowercase hex digits, made by the sender. A
   receipt, reply, revoke or saved names the id it answers.
@@ -281,18 +281,18 @@ Two known bugs come with that code:
 
 ### Limits
 
-| what                                  | limit                                    |
-| ------------------------------------- | ---------------------------------------- |
-| a frame                               | 1 MiB of JSON (as every message today)   |
-| `text`                                | 16 KiB; line breaks and tabs, no other control characters |
-| `secret` value / label                | 16 KiB / 64 characters, one line         |
-| `variables`                           | the environment rules: valid names, no duplicates, 1000 variables, 384 KiB |
-| `ttl`                                 | 5 minutes to 7 days (the UI offers 1 hour, 1 day, 7 days) |
-| frames received                       | bucket of 30, refilled 2 per second      |
-| offers waiting                        | 3 each way                               |
-| chat sessions                         | 16                                       |
-| connections waiting at the knock      | 8                                        |
-| history per conversation              | 5000 entries or 2 MiB, oldest dropped    |
+| what                             | limit                                                                      |
+| -------------------------------- | -------------------------------------------------------------------------- |
+| a frame                          | 1 MiB of JSON (as every message today)                                     |
+| `text`                           | 16 KiB; line breaks and tabs, no other control characters                  |
+| `secret` value / label           | 16 KiB / 64 characters, one line                                           |
+| `variables`                      | the environment rules: valid names, no duplicates, 1000 variables, 384 KiB |
+| `ttl`                            | 5 minutes to 7 days (the UI offers 1 hour, 1 day, 7 days)                  |
+| frames received                  | bucket of 30, refilled 2 per second                                        |
+| offers waiting                   | 3 each way                                                                 |
+| chat sessions                    | 16                                                                         |
+| connections waiting at the knock | 8                                                                          |
+| history per conversation         | 5000 entries or 2 MiB, oldest dropped                                      |
 
 - **A content rule broken** (too long, a control character, a bad variable name): the
   frame is answered with `refused` and the session goes on; the sender's message shows
@@ -302,7 +302,7 @@ Two known bugs come with that code:
 
 ### A connection lost mid-send
 
-- **Messages.** A message is written to the sender's history first, as *sending*. With no
+- **Messages.** A message is written to the sender's history first, as _sending_. With no
   receipt before the session ends it shows **Not delivered**, with **Send again** while
   the contact is online. It may have arrived after all; sent again under the same id, it
   is not stored twice.
@@ -462,12 +462,12 @@ switch between the two.
 
 **Existing patterns it follows.**
 
-| existing | shared | what it lacks |
-| --- | --- | --- |
-| Environments: `ViewTabs` in the toolbar | two views as a tab list with a count, arrow keys | it is specific to Environments |
-| Environments: `EnvList` + `EnvPane` | a `glass` list of 280/300 px next to a `glass-raised` pane, both `rounded-2xl` | no message stream, no composer |
-| Passwords: `SavedSecret` | masked value, Show / Copy, hides after 30 s, copy through the backend | a value that expires, revoke |
-| Nearby: `ItemCard`, `SendDialog` pickers | the items as cards, what to send | accept / decline inside a stream |
+| existing                                 | shared                                                                         | what it lacks                    |
+| ---------------------------------------- | ------------------------------------------------------------------------------ | -------------------------------- |
+| Environments: `ViewTabs` in the toolbar  | two views as a tab list with a count, arrow keys                               | it is specific to Environments   |
+| Environments: `EnvList` + `EnvPane`      | a `glass` list of 280/300 px next to a `glass-raised` pane, both `rounded-2xl` | no message stream, no composer   |
+| Passwords: `SavedSecret`                 | masked value, Show / Copy, hides after 30 s, copy through the backend          | a value that expires, revoke     |
+| Nearby: `ItemCard`, `SendDialog` pickers | the items as cards, what to send                                               | accept / decline inside a stream |
 
 **Layout.**
 
@@ -499,7 +499,7 @@ switch between the two.
     - Mine: `rgb(var(--accent-rgb)/0.14)`, a border of `accent-rgb/0.35` and
       `--accent-text`, as the accent `Badge`.
     - Theirs: `card` with a `line` border and `fg`.
-  - Under each bubble: the time and delivery state (11 px). *Not delivered* is `critical`,
+  - Under each bubble: the time and delivery state (11 px). _Not delivered_ is `critical`,
     with **Send again** as a link button.
 - **Composer** at the bottom of the pane:
   - an `IconButton` **+** with a `Menu` in two groups: "Hidden, expires" (Secret…,
@@ -511,20 +511,20 @@ switch between the two.
 
 **Components.**
 
-| reuse as is | `Toolbar`, `PageBody`, `Button`, `IconButton`, `Menu`, `Dialog`, `ConfirmDialog`, `Badge`, `EmptyState`, `Spinner`, `ItemCard`, the `SendDialog` pickers, `glass` / `glass-raised` |
-| --- | --- |
-| reuse, generalised | `Tabs` (from `ViewTabs`); the masked value and its 30 s hide from `SavedSecret`, as `MaskedValue` |
+| reuse as is                         | `Toolbar`, `PageBody`, `Button`, `IconButton`, `Menu`, `Dialog`, `ConfirmDialog`, `Badge`, `EmptyState`, `Spinner`, `ItemCard`, the `SendDialog` pickers, `glass` / `glass-raised`  |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| reuse, generalised                  | `Tabs` (from `ViewTabs`); the masked value and its 30 s hide from `SavedSecret`, as `MaskedValue`                                                                                   |
 | new, in `src/features/nearby/chat/` | `ChatList`, `ChatRow`, `Conversation`, `Bubble` (text, secret, variables, card, line), `Composer`, `SecretDialog`, `VariablesDialog`, `AddVariablesDialog`, `Presence` (dot + word) |
 
 **Bubble variants and states.**
 
-| variant | states |
-| --- | --- |
-| text | sending (muted time + clock icon), delivered (check), not delivered (`critical`, Send again) |
-| secret | masked (label, `••••`, Show, Copy, `Badge` "Expires in 50 min"; `warning` tone under 10 min); shown (value in `font-mono`, hides after 30 s); expired / wiped (dashed `line` border, `faint` text "Secret · expired", no actions); mine adds **Wipe now** |
-| variables | names with masked or shown values, count, expiry `Badge`, **Add to an environment…**; expired (names stay, values gone, action gone) |
-| card | `ItemCard` in a bubble; theirs: **Accept** / **Decline**, then saved as "…", declined, ended, can't open (unknown); mine: waiting, accepted, saved, declined, ended (**Send again**) |
-| line | centred 12 px `subtle` text: "Secret wiped by Aziz", "Offer ended", "Paused for a minute: too many messages" |
+| variant   | states                                                                                                                                                                                                                                                    |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| text      | sending (muted time + clock icon), delivered (check), not delivered (`critical`, Send again)                                                                                                                                                              |
+| secret    | masked (label, `••••`, Show, Copy, `Badge` "Expires in 50 min"; `warning` tone under 10 min); shown (value in `font-mono`, hides after 30 s); expired / wiped (dashed `line` border, `faint` text "Secret · expired", no actions); mine adds **Wipe now** |
+| variables | names with masked or shown values, count, expiry `Badge`, **Add to an environment…**; expired (names stay, values gone, action gone)                                                                                                                      |
+| card      | `ItemCard` in a bubble; theirs: **Accept** / **Decline**, then saved as "…", declined, ended, can't open (unknown); mine: waiting, accepted, saved, declined, ended (**Send again**)                                                                      |
+| line      | centred 12 px `subtle` text: "Secret wiped by Aziz", "Offer ended", "Paused for a minute: too many messages"                                                                                                                                              |
 
 **Tokens.** Only semantic ones (light theme): `surface`, `card`, `field`, `fill`,
 `fill-hover`, `line-soft`, `line`, `line-field`, `fg`, `fg-2`, `muted`, `subtle`, `faint`,
@@ -559,36 +559,36 @@ already uses (15 / 14 / 13 / 12.5 / 11 px; `rounded-2xl`, `rounded-xl`, `rounded
 "paired computers", not "contacts". The vault is "the vault". Quotes follow each
 language's convention. Uzbek uses ʻ (U+02BB).
 
-| key | en | ru | uz |
-| --- | --- | --- | --- |
-| tabs | Computers · Chats | Компьютеры · Чаты | Kompyuterlar · Chatlar |
-| online / offline | Online / Offline | Онлайн / Офлайн | Onlayn / Oflayn |
-| online, hint | Online: Nearby is open on that computer now. | Онлайн — на том компьютере сейчас открыто «Рядом». | Onlayn — u kompyuterda hozir «Yaqin atrofda» ochiq. |
-| composer | Message {{name}} | Сообщение для {{name}} | {{name}} uchun xabar |
-| composer, offline | {{name}} is offline. Messages go only while Nearby is open on both computers. | {{name}} офлайн. Сообщения доходят, только пока «Рядом» открыто на обоих компьютерах. | {{name}} oflayn. Xabarlar faqat ikkala kompyuterda «Yaqin atrofda» ochiq boʻlganda yetib boradi. |
-| + groups | Hidden, expires / Saved after they accept | Скрыто, со сроком / Сохранится после принятия | Yashirin, muddatli / Qabul qilingach saqlanadi |
-| secret dialog | Send a secret to {{name}} | Отправить секрет на {{name}} | {{name}} ga maxfiy qiymat yuborish |
-| secret label | What it is (optional) — e.g. staging database password | Что это (необязательно) — например, пароль базы на staging | Bu nima (ixtiyoriy) — masalan, staging bazasi paroli |
-| term | Expires after: 1 hour · 1 day · 7 days | Удалить через: 1 час · 1 день · 7 дней | Oʻchirilish muddati: 1 soat · 1 kun · 7 kun |
-| honesty note | Hidden on both computers and wiped from both chats when it expires. Until then, whoever uses {{name}} can copy it. | Скрыт на обоих компьютерах и стирается из обоих чатов, когда истечёт срок. До этого на {{name}} его могут скопировать. | Ikkala kompyuterda yashirin turadi va muddati tugagach ikkala chatdan oʻchiriladi. Shungacha {{name}} da undan nusxa olish mumkin. |
-| send secret | Send secret | Отправить секрет | Yuborish |
-| secret bubble | Show · Hide · Copy · Expires in {{time}} · Wipe now | Показать · Скрыть · Копировать · Истекает через {{time}} · Стереть сейчас | Koʻrsatish · Yashirish · Nusxalash · {{time}} dan keyin oʻchadi · Hozir oʻchirish |
-| secret gone | Secret · expired / Secret · wiped by {{name}} | Секрет · срок истёк / Секрет · стёрт на {{name}} | Maxfiy qiymat · muddati tugadi / Maxfiy qiymat · {{name}} oʻchirdi |
-| variables bubble | {{count}} variables from {{env}} · Add to an environment… | {{count}} переменных из {{env}} · Добавить в окружение… (plurals) | {{env}} dan {{count}} ta oʻzgaruvchi · Muhitga qoʻshish… |
-| add review | Add variables from {{name}} · To environment · New / Replaces your value / Same as yours · Changes how programs start · Add {{count}} variables | Добавить переменные от {{name}} · В окружение · Новая / Заменит ваше значение / Как у вас · Меняет запуск программ · Добавить {{count}} переменных | {{name}} dan oʻzgaruvchilarni qoʻshish · Qaysi muhitga · Yangi / Qiymatingizni almashtiradi / Siznikidek · Dasturlar ishga tushishini oʻzgartiradi · {{count}} ta oʻzgaruvchini qoʻshish |
-| add note | Nothing is saved until you click Add. | Ничего не сохранится, пока вы не нажмёте «Добавить». | «Qoʻshish»ni bosmaguningizcha hech narsa saqlanmaydi. |
-| delivery | Sending… · Delivered · Not delivered · Send again | Отправляется… · Доставлено · Не доставлено · Отправить снова | Yuborilmoqda… · Yetkazildi · Yetkazilmadi · Qayta yuborish |
-| unsupported, in | {{name}} sent something this version can’t open. Update SSH Key Manager to see it. | {{name}} прислал то, что эта версия не умеет открыть. Обновите SSH Key Manager, чтобы увидеть. | {{name}} bu versiya ocha olmaydigan narsa yubordi. Uni koʻrish uchun SSH Key Manager’ni yangilang. |
-| unsupported, out | {{name}} can’t take this yet: its SSH Key Manager needs updating. | {{name}} пока не может это принять: там нужно обновить SSH Key Manager. | {{name}} buni hali qabul qila olmaydi: undagi SSH Key Manager’ni yangilash kerak. |
-| delete chat | Delete the chat with {{name}}? · Its messages are deleted from this computer. {{name}} keeps its copy. · Delete chat | Удалить чат с {{name}}? · Сообщения удалятся с этого компьютера. На {{name}} копия останется. · Удалить чат | {{name}} bilan chat oʻchirilsinmi? · Xabarlar shu kompyuterdan oʻchiriladi. {{name}} dagi nusxa qoladi. · Chatni oʻchirish |
-| remove contact | Also delete the chat | Удалить и чат | Chatni ham oʻchirish |
-| notification | {{name}} — New message / {{count}} new messages | {{name}} — Новое сообщение / {{count}} новых сообщения (plurals) | {{name}} — Yangi xabar / {{count}} ta yangi xabar |
-| vault locked | Chats are protected by the vault. Unlock it to read and send messages. | Чаты защищены хранилищем. Откройте его, чтобы читать и отправлять сообщения. | Chatlar ombor bilan himoyalangan. Oʻqish va yuborish uchun omborni oching. |
-| no one yet | No one to chat with yet. Pair with a computer on the Computers tab, then chat here. | Пока не с кем переписываться. Подключите компьютер на вкладке «Компьютеры» — и пишите здесь. | Hozircha yozishadigan hech kim yoʻq. «Kompyuterlar» varagʻida kompyuterni ulang, keyin shu yerda yozing. |
-| none open | Pick a computer to chat with. | Выберите, с кем переписываться. | Kim bilan yozishishni tanlang. |
-| empty chat | No messages yet. They’re encrypted and go straight to {{name}} while you’re both online. | Сообщений пока нет. Они шифруются и идут прямо на {{name}}, пока вы оба онлайн. | Hozircha xabar yoʻq. Ular shifrlanadi va ikkalangiz onlayn boʻlganingizda toʻgʻridan-toʻgʻri {{name}} ga boradi. |
-| offer ended | The offer ended before {{name}} answered. · Send again | Предложение истекло, прежде чем {{name}} ответил. · Отправить снова | {{name}} javob berguncha taklif muddati tugadi. · Qayta yuborish |
-| paused | {{name}} sent too much at once. The chat is paused for a minute. | {{name}} прислал слишком много сразу. Чат приостановлен на минуту. | {{name}} birdaniga juda koʻp yubordi. Chat bir daqiqaga toʻxtatildi. |
+| key               | en                                                                                                                                              | ru                                                                                                                                                 | uz                                                                                                                                                                                       |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| tabs              | Computers · Chats                                                                                                                               | Компьютеры · Чаты                                                                                                                                  | Kompyuterlar · Chatlar                                                                                                                                                                   |
+| online / offline  | Online / Offline                                                                                                                                | Онлайн / Офлайн                                                                                                                                    | Onlayn / Oflayn                                                                                                                                                                          |
+| online, hint      | Online: Nearby is open on that computer now.                                                                                                    | Онлайн — на том компьютере сейчас открыто «Рядом».                                                                                                 | Onlayn — u kompyuterda hozir «Yaqin atrofda» ochiq.                                                                                                                                      |
+| composer          | Message {{name}}                                                                                                                                | Сообщение для {{name}}                                                                                                                             | {{name}} uchun xabar                                                                                                                                                                     |
+| composer, offline | {{name}} is offline. Messages go only while Nearby is open on both computers.                                                                   | {{name}} офлайн. Сообщения доходят, только пока «Рядом» открыто на обоих компьютерах.                                                              | {{name}} oflayn. Xabarlar faqat ikkala kompyuterda «Yaqin atrofda» ochiq boʻlganda yetib boradi.                                                                                         |
+| + groups          | Hidden, expires / Saved after they accept                                                                                                       | Скрыто, со сроком / Сохранится после принятия                                                                                                      | Yashirin, muddatli / Qabul qilingach saqlanadi                                                                                                                                           |
+| secret dialog     | Send a secret to {{name}}                                                                                                                       | Отправить секрет на {{name}}                                                                                                                       | {{name}} ga maxfiy qiymat yuborish                                                                                                                                                       |
+| secret label      | What it is (optional) — e.g. staging database password                                                                                          | Что это (необязательно) — например, пароль базы на staging                                                                                         | Bu nima (ixtiyoriy) — masalan, staging bazasi paroli                                                                                                                                     |
+| term              | Expires after: 1 hour · 1 day · 7 days                                                                                                          | Удалить через: 1 час · 1 день · 7 дней                                                                                                             | Oʻchirilish muddati: 1 soat · 1 kun · 7 kun                                                                                                                                              |
+| honesty note      | Hidden on both computers and wiped from both chats when it expires. Until then, whoever uses {{name}} can copy it.                              | Скрыт на обоих компьютерах и стирается из обоих чатов, когда истечёт срок. До этого на {{name}} его могут скопировать.                             | Ikkala kompyuterda yashirin turadi va muddati tugagach ikkala chatdan oʻchiriladi. Shungacha {{name}} da undan nusxa olish mumkin.                                                       |
+| send secret       | Send secret                                                                                                                                     | Отправить секрет                                                                                                                                   | Yuborish                                                                                                                                                                                 |
+| secret bubble     | Show · Hide · Copy · Expires in {{time}} · Wipe now                                                                                             | Показать · Скрыть · Копировать · Истекает через {{time}} · Стереть сейчас                                                                          | Koʻrsatish · Yashirish · Nusxalash · {{time}} dan keyin oʻchadi · Hozir oʻchirish                                                                                                        |
+| secret gone       | Secret · expired / Secret · wiped by {{name}}                                                                                                   | Секрет · срок истёк / Секрет · стёрт на {{name}}                                                                                                   | Maxfiy qiymat · muddati tugadi / Maxfiy qiymat · {{name}} oʻchirdi                                                                                                                       |
+| variables bubble  | {{count}} variables from {{env}} · Add to an environment…                                                                                       | {{count}} переменных из {{env}} · Добавить в окружение… (plurals)                                                                                  | {{env}} dan {{count}} ta oʻzgaruvchi · Muhitga qoʻshish…                                                                                                                                 |
+| add review        | Add variables from {{name}} · To environment · New / Replaces your value / Same as yours · Changes how programs start · Add {{count}} variables | Добавить переменные от {{name}} · В окружение · Новая / Заменит ваше значение / Как у вас · Меняет запуск программ · Добавить {{count}} переменных | {{name}} dan oʻzgaruvchilarni qoʻshish · Qaysi muhitga · Yangi / Qiymatingizni almashtiradi / Siznikidek · Dasturlar ishga tushishini oʻzgartiradi · {{count}} ta oʻzgaruvchini qoʻshish |
+| add note          | Nothing is saved until you click Add.                                                                                                           | Ничего не сохранится, пока вы не нажмёте «Добавить».                                                                                               | «Qoʻshish»ni bosmaguningizcha hech narsa saqlanmaydi.                                                                                                                                    |
+| delivery          | Sending… · Delivered · Not delivered · Send again                                                                                               | Отправляется… · Доставлено · Не доставлено · Отправить снова                                                                                       | Yuborilmoqda… · Yetkazildi · Yetkazilmadi · Qayta yuborish                                                                                                                               |
+| unsupported, in   | {{name}} sent something this version can’t open. Update SSH Key Manager to see it.                                                              | {{name}} прислал то, что эта версия не умеет открыть. Обновите SSH Key Manager, чтобы увидеть.                                                     | {{name}} bu versiya ocha olmaydigan narsa yubordi. Uni koʻrish uchun SSH Key Manager’ni yangilang.                                                                                       |
+| unsupported, out  | {{name}} can’t take this yet: its SSH Key Manager needs updating.                                                                               | {{name}} пока не может это принять: там нужно обновить SSH Key Manager.                                                                            | {{name}} buni hali qabul qila olmaydi: undagi SSH Key Manager’ni yangilash kerak.                                                                                                        |
+| delete chat       | Delete the chat with {{name}}? · Its messages are deleted from this computer. {{name}} keeps its copy. · Delete chat                            | Удалить чат с {{name}}? · Сообщения удалятся с этого компьютера. На {{name}} копия останется. · Удалить чат                                        | {{name}} bilan chat oʻchirilsinmi? · Xabarlar shu kompyuterdan oʻchiriladi. {{name}} dagi nusxa qoladi. · Chatni oʻchirish                                                               |
+| remove contact    | Also delete the chat                                                                                                                            | Удалить и чат                                                                                                                                      | Chatni ham oʻchirish                                                                                                                                                                     |
+| notification      | {{name}} — New message / {{count}} new messages                                                                                                 | {{name}} — Новое сообщение / {{count}} новых сообщения (plurals)                                                                                   | {{name}} — Yangi xabar / {{count}} ta yangi xabar                                                                                                                                        |
+| vault locked      | Chats are protected by the vault. Unlock it to read and send messages.                                                                          | Чаты защищены хранилищем. Откройте его, чтобы читать и отправлять сообщения.                                                                       | Chatlar ombor bilan himoyalangan. Oʻqish va yuborish uchun omborni oching.                                                                                                               |
+| no one yet        | No one to chat with yet. Pair with a computer on the Computers tab, then chat here.                                                             | Пока не с кем переписываться. Подключите компьютер на вкладке «Компьютеры» — и пишите здесь.                                                       | Hozircha yozishadigan hech kim yoʻq. «Kompyuterlar» varagʻida kompyuterni ulang, keyin shu yerda yozing.                                                                                 |
+| none open         | Pick a computer to chat with.                                                                                                                   | Выберите, с кем переписываться.                                                                                                                    | Kim bilan yozishishni tanlang.                                                                                                                                                           |
+| empty chat        | No messages yet. They’re encrypted and go straight to {{name}} while you’re both online.                                                        | Сообщений пока нет. Они шифруются и идут прямо на {{name}}, пока вы оба онлайн.                                                                    | Hozircha xabar yoʻq. Ular shifrlanadi va ikkalangiz onlayn boʻlganingizda toʻgʻridan-toʻgʻri {{name}} ga boradi.                                                                         |
+| offer ended       | The offer ended before {{name}} answered. · Send again                                                                                          | Предложение истекло, прежде чем {{name}} ответил. · Отправить снова                                                                                | {{name}} javob berguncha taklif muddati tugadi. · Qayta yuborish                                                                                                                         |
+| paused            | {{name}} sent too much at once. The chat is paused for a minute.                                                                                | {{name}} прислал слишком много сразу. Чат приостановлен на минуту.                                                                                 | {{name}} birdaniga juda koʻp yubordi. Chat bir daqiqaga toʻxtatildi.                                                                                                                     |
 
 - **Why this wording.** It says what goes where and when, as today's send dialogs do
   ("Nothing secret goes over until…"). The honesty note says plainly that expiry doesn't
@@ -606,16 +606,16 @@ language's convention. Uzbek uses ʻ (U+02BB).
 
 ## 7. Threat model
 
-| who / what | what they can do | what stops it |
-| --- | --- | --- |
-| **Stranger on the LAN** | See announcements, connect to the chat port, spoof an announcement, watch traffic | Random instance names and padded tags tell nothing but "an app with Nearby open, ≤N contacts". A connection gets a random challenge and is closed: no device key, no name. A spoofed announcement fails the knock or the handshake. Traffic is Noise-encrypted; secrets are padded. At most 8 connections wait at the knock. They can always disrupt the network (out of scope). |
-| **Malicious contact** | Flood, send huge or malformed frames, phishing text, risky items or variables, keep a secret | Rate limit, size limits, per-conversation cap, at most 3 offers. Strict checks; an unparseable frame ends the session. Text is plain, never a link or markup; names are the vault's. Items keep today's checks (risky ssh options refused, hosts group via the Hosts file page). Variables are added only after review, risky names flagged and unticked. A term is at most 7 days; the UI says a receiver can copy a secret. |
-| **Replay** | Resend recorded traffic or old frames | Noise: every session has its own keys and nonces; a frame can't be replayed in or across sessions. The knock is bound to a fresh challenge and to the handshake's prologue. A contact resending its own id is dropped as a duplicate. |
-| **Contact impersonation** | Pretend to be a contact | The knock needs the contact key (X25519 of the device keys); the handshake proves the device key; it must be the one that knocked. |
-| **Removed contact** | Keep reaching the user | No tag for it, its knocks fail, its session closes when it is removed. |
-| **Stolen unlocked laptop** | Read history, reveal unexpired secrets, chat as the user | Same as the unlocked vault: auto-lock, lock on sleep; chat traffic never postpones the auto-lock; locking closes chats. Secrets live at most their term. |
-| **Stolen locked laptop / disk image** | Read `chats/` | Encrypted with a key only the unlocked vault has; file names say nothing. Old encrypted copies in system backups are as safe as the vault. |
-| **Older or newer version** | Get chat frames, get an unknown item, break on the vault | Chat frames only to a peer that said `chat`; unknown messages, items and frames parse as `Unknown` and end as "needs the new version", never "Broken"; `sshkm.chat.*` custom data is ignored and kept. |
+| who / what                            | what they can do                                                                             | what stops it                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Stranger on the LAN**               | See announcements, connect to the chat port, spoof an announcement, watch traffic            | Random instance names and padded tags tell nothing but "an app with Nearby open, ≤N contacts". A connection gets a random challenge and is closed: no device key, no name. A spoofed announcement fails the knock or the handshake. Traffic is Noise-encrypted; secrets are padded. At most 8 connections wait at the knock. They can always disrupt the network (out of scope).                                              |
+| **Malicious contact**                 | Flood, send huge or malformed frames, phishing text, risky items or variables, keep a secret | Rate limit, size limits, per-conversation cap, at most 3 offers. Strict checks; an unparseable frame ends the session. Text is plain, never a link or markup; names are the vault's. Items keep today's checks (risky ssh options refused, hosts group via the Hosts file page). Variables are added only after review, risky names flagged and unticked. A term is at most 7 days; the UI says a receiver can copy a secret. |
+| **Replay**                            | Resend recorded traffic or old frames                                                        | Noise: every session has its own keys and nonces; a frame can't be replayed in or across sessions. The knock is bound to a fresh challenge and to the handshake's prologue. A contact resending its own id is dropped as a duplicate.                                                                                                                                                                                         |
+| **Contact impersonation**             | Pretend to be a contact                                                                      | The knock needs the contact key (X25519 of the device keys); the handshake proves the device key; it must be the one that knocked.                                                                                                                                                                                                                                                                                            |
+| **Removed contact**                   | Keep reaching the user                                                                       | No tag for it, its knocks fail, its session closes when it is removed.                                                                                                                                                                                                                                                                                                                                                        |
+| **Stolen unlocked laptop**            | Read history, reveal unexpired secrets, chat as the user                                     | Same as the unlocked vault: auto-lock, lock on sleep; chat traffic never postpones the auto-lock; locking closes chats. Secrets live at most their term.                                                                                                                                                                                                                                                                      |
+| **Stolen locked laptop / disk image** | Read `chats/`                                                                                | Encrypted with a key only the unlocked vault has; file names say nothing. Old encrypted copies in system backups are as safe as the vault.                                                                                                                                                                                                                                                                                    |
+| **Older or newer version**            | Get chat frames, get an unknown item, break on the vault                                     | Chat frames only to a peer that said `chat`; unknown messages, items and frames parse as `Unknown` and end as "needs the new version", never "Broken"; `sshkm.chat.*` custom data is ignored and kept.                                                                                                                                                                                                                        |
 
 ## 8. How it is built
 

@@ -1,4 +1,5 @@
 import {
+  CircleHelp,
   FolderTree,
   KeyRound,
   type LucideIcon,
@@ -88,7 +89,8 @@ export function ItemCard({ item }: { item: ItemSummary }) {
           tone: 'lime',
           Icon: Variable,
           label: t('envs.share.item'),
-          title: `${item.project} / ${item.name}`,
+          // An environment in Personal without a part has no project label.
+          title: item.project ? `${item.project} / ${item.name}` : item.name,
           monoTitle: false,
           details: `${item.names.join(', ')}${item.variables > item.names.length ? ', …' : ''}`,
           badge: (
@@ -98,6 +100,16 @@ export function ItemCard({ item }: { item: ItemSummary }) {
                 : t('envs.counts', { count: item.variables })}
             </Badge>
           ),
+        };
+      case 'unknown':
+        return {
+          tone: 'slate',
+          Icon: CircleHelp,
+          label: t('nearby.item.unknown'),
+          title: t('nearby.item.update'),
+          monoTitle: false,
+          details: '',
+          badge: null,
         };
     }
   })();

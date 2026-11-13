@@ -373,6 +373,8 @@ const uz = {
       entries_one: '{{count}} ta yozuv',
       entries_other: '{{count}} ta yozuv',
       via: '{{jump}} orqali',
+      unknown: 'Qoʻllab-quvvatlanmaydi',
+      update: 'Ochish uchun SSH Key Manager’ni yangilang',
     },
     send: {
       title: '«{{name}}»ni yuborish',
@@ -557,6 +559,10 @@ const uz = {
       timedOut: 'Hech kim oʻz vaqtida javob bermadi.',
       vaultLocked: 'Ombor qulflangan. Uni oching va qayta urinib koʻring.',
       version: 'Boshqa kompyuterdagi ilova boshqacha ulanadi. Ikkalasini ham yangilang.',
+      unsupported:
+        'Boshqa kompyuter bu versiya ocha olmaydigan narsa yubordi. Uni koʻrish uchun SSH Key Manager’ni yangilang.',
+      peerUnsupported:
+        'Boshqa kompyuter buni hali qabul qila olmaydi: undagi SSH Key Manager’ni yangilash kerak.',
       broken: 'Ulanish uzildi. Qayta urinib koʻring.',
       refused: 'Boshqa kompyuterda rad etildi.',
       turned: 'Siz rad etdingiz, shuning uchun hech narsa saqlanmadi.',

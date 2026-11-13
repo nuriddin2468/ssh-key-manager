@@ -50,4 +50,4 @@ variables: number, secrets: number,
 /**
  * The first few variables' names.
  */
-names: Array<string>, };
+names: Array<string>, } | { "type": "unknown" };

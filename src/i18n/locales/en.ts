@@ -367,6 +367,8 @@ const en = {
       entries_one: '{{count}} entry',
       entries_other: '{{count}} entries',
       via: 'via {{jump}}',
+      unknown: 'Not supported',
+      update: 'Update SSH Key Manager to open it',
     },
     send: {
       title: 'Send “{{name}}”',
@@ -546,6 +548,10 @@ const en = {
       timedOut: 'Nobody answered in time.',
       vaultLocked: 'The vault is locked. Unlock it and try again.',
       version: 'The app on the other computer pairs differently. Update both.',
+      unsupported:
+        'The other computer sent something this version can’t open. Update SSH Key Manager to see it.',
+      peerUnsupported:
+        'The other computer can’t take this yet: its SSH Key Manager needs updating.',
       broken: 'The connection broke. Try again.',
       refused: 'The other computer declined it.',
       turned: 'You declined it, so nothing was saved.',

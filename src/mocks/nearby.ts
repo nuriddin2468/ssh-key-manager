@@ -139,6 +139,8 @@ function receivedName(item: ItemSummary, peer: string): string {
         : item.name;
     case 'environment':
       return [item.project, item.name].filter(Boolean).join(' · ');
+    case 'unknown':
+      return '';
   }
 }
 

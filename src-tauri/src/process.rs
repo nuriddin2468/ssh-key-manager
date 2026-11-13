@@ -1,9 +1,8 @@
 //! Running the OpenSSH command-line tools (`ssh -V`, `ssh-keyscan`, `ssh`),
 //! and `git` in a project's working tree.
 
-use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use sshkm_core::fsutil;
@@ -49,23 +48,19 @@ pub fn command(program: &str) -> Command {
 /// outside any. Add the subcommand and its arguments.
 ///
 /// A working tree is a project folder, which may come from anyone (a
-/// clone, an archive, a shared drive), so nothing in it may make Git run a
-/// program. Git is told which repository to read instead of looking for
-/// one, so a folder inside the tree that is laid out like a repository is
-/// never taken for it. It runs no file system monitor and fetches nothing:
-/// not the objects a partial clone left out, over no transport. And it gets
-/// none of the app's own `GIT_*` environment.
+/// clone, an archive, a shared drive, another user), so nothing in it may
+/// make Git run a program. Git finds the repository as it always does, so
+/// its own check that the repository belongs to this user applies
+/// (`safe.directory`), but it never takes a folder laid out like a bare
+/// repository (files of the project, as a clone brings them) for one. It
+/// runs no file system monitor and fetches nothing: no transport is allowed,
+/// whatever the repository's config says, so not even the objects a partial
+/// clone left out. And it gets none of the app's own `GIT_*` environment.
 pub fn git(folder: &Path) -> Option<Command> {
-    // Git for Windows takes `C:\…` but not `\\?\C:\…` (what canonical paths
-    // look like there) for the repository and the working tree.
-    let plain = |path: PathBuf| fsutil::without_verbatim_prefix(path);
-    let folder = plain(folder.to_path_buf());
-    let work_tree =
-        plain(std::path::absolute(sshkm_core::vault::envs::git_work_tree(&folder)?).ok()?);
-    let mut git_dir = OsString::from("--git-dir=");
-    git_dir.push(work_tree.join(".git"));
-    let mut tree = OsString::from("--work-tree=");
-    tree.push(&work_tree);
+    // `C:\…` rather than `\\?\C:\…` (what canonical paths look like on
+    // Windows), which not every tool takes.
+    let folder = fsutil::without_verbatim_prefix(folder.to_path_buf());
+    sshkm_core::vault::envs::git_work_tree(&folder)?;
     let mut command = command("git");
     for (name, _) in std::env::vars_os() {
         if name
@@ -76,12 +71,13 @@ pub fn git(folder: &Path) -> Option<Command> {
             command.env_remove(name);
         }
     }
+    // A repository's own `protocol.<name>.allow` outweighs the
+    // `protocol.allow` given here; this variable outweighs them all.
     command
+        .env("GIT_ALLOW_PROTOCOL", "none")
         .env("GIT_NO_LAZY_FETCH", "1")
         .arg("-C")
         .arg(folder)
-        .arg(git_dir)
-        .arg(tree)
         .args([
             "-c",
             "core.fsmonitor=false",
@@ -226,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn git_asks_the_working_tree_it_was_given() {
+    fn git_takes_no_folder_of_a_project_for_a_repository() {
         if run("git", &["--version"], Duration::from_secs(5)).is_err() {
             return; // No Git here.
         }
@@ -235,11 +231,14 @@ mod tests {
         std::fs::create_dir(&tree).unwrap();
         assert!(git(&tree).is_none());
         plain_git(&tree, &["init", "-q"], None);
-        std::fs::write(tree.join(".gitignore"), ".env\n").unwrap();
+        std::fs::write(tree.join(".gitignore"), "*.log\n").unwrap();
+        assert!(asked(&tree, &["check-ignore", "-q", "--", "app.log"]));
+        assert!(!asked(&tree, &["check-ignore", "-q", "--", ".env"]));
         // A folder of the tree laid out like a repository of its own (files
-        // of the project, as a clone brings them) is not the repository.
+        // of the project, as a clone brings them), whose rules would ignore
+        // `.env`, is never asked.
         let inner = tree.join("inner");
-        for folder in ["objects", "refs"] {
+        for folder in ["objects", "refs", "info"] {
             std::fs::create_dir_all(inner.join(folder)).unwrap();
         }
         std::fs::write(inner.join("HEAD"), "ref: refs/heads/main\n").unwrap();
@@ -248,13 +247,9 @@ mod tests {
             "[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = .\n",
         )
         .unwrap();
+        std::fs::write(inner.join("info").join("exclude"), ".env\n").unwrap();
         std::fs::write(inner.join(".env"), "A=1\n").unwrap();
-        assert!(asked(&inner, &["check-ignore", "-q", "--", ".env"]));
-        assert!(!asked(&inner, &["check-ignore", "-q", "--", "HEAD"]));
-        assert!(!asked(
-            &inner,
-            &["ls-files", "--error-unmatch", "--", ".env"]
-        ));
+        assert!(!asked(&inner, &["check-ignore", "-q", "--", ".env"]));
     }
 
     #[cfg(unix)]
@@ -299,6 +294,8 @@ mod tests {
             ("remote.origin.url", &nowhere.to_string_lossy()),
             ("remote.origin.uploadpack", &program),
             ("core.fsmonitor", &program),
+            ("protocol.allow", "always"),
+            ("protocol.file.allow", "always"),
         ] {
             plain_git(&tree, &["config", key, value], None);
         }
@@ -308,6 +305,11 @@ mod tests {
         asked(&sub, &["ls-files", "-z", "--others", "--exclude-standard"]);
         asked(&sub, &["status", "--porcelain"]);
         assert!(!ran.exists(), "git ran a program the repository named");
+        // Whatever Git's version honours: no transport at all.
+        let command = git(&sub).unwrap();
+        let env: Vec<_> = command.get_envs().collect();
+        assert!(env.contains(&("GIT_ALLOW_PROTOCOL".as_ref(), Some("none".as_ref()))));
+        assert!(env.contains(&("GIT_NO_LAZY_FETCH".as_ref(), Some("1".as_ref()))));
     }
 
     #[cfg(unix)]

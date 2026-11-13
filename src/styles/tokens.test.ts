@@ -22,7 +22,10 @@ const ALLOWED = new Map([
 const HUES =
   'slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose';
 const UTILITY =
-  '(?:bg|text|border(?:-[xytrbl])?|divide|ring|ring-offset|outline|decoration|shadow|inset-shadow|inset-ring|drop-shadow|from|via|to|fill|stroke|caret|accent|placeholder)';
+  '(?:bg|text|text-shadow|border(?:-[xytrblse])?|divide|ring|ring-offset|outline|decoration|shadow|inset-shadow|inset-ring|drop-shadow|from|via|to|fill|stroke|caret|accent|placeholder)';
+/** CSS colour names. Keys like `color:` check only the neutral ones: projects have colours named teal, blue… */
+const NEUTRAL_NAMES = 'white|black|gr[ae]y|silver|whitesmoke|gainsboro|snow|ivory';
+const COLOR_NAMES = `${NEUTRAL_NAMES}|red|green|blue|yellow|orange|purple|pink|navy|teal|maroon|olive|lime|aqua|fuchsia|cyan|magenta|indigo|violet|gold|brown|crimson|coral|salmon|tomato|turquoise`;
 
 const RULES: { name: string; pattern: RegExp; instead: string }[] = [
   {
@@ -32,19 +35,44 @@ const RULES: { name: string; pattern: RegExp; instead: string }[] = [
   },
   {
     name: 'Tailwind palette colour',
-    pattern: new RegExp(`(?<![\\w-])${UTILITY}-(?:${HUES})-\\d{2,3}(?![\\w-])`, 'g'),
+    pattern: new RegExp(
+      `(?<![\\w-])${UTILITY}-(?:${HUES})-\\d{2,3}(?![\\w-])|--color-(?:(?:${HUES})-\\d{2,3}|white|black)(?![\\w-])`,
+      'g',
+    ),
     instead:
-      'a status token, or another section’s accent: data-section="hosts" with text-[var(--accent-text)]',
+      'a status token, or another section’s colours: data-hue="hosts" with text-[var(--accent-text)]',
   },
   {
     name: 'hex colour',
-    pattern: /(?<![\w&/])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})(?![\w-])/g,
+    pattern: /(?<![\w&/])#(?:[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{3,4})(?![\w-])/gi,
     instead: 'a token from src/styles/app.css',
   },
   {
     name: 'colour function',
-    pattern: /(?<![a-zA-Z0-9-])(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch)\((?!\s*var\()/g,
+    pattern: /(?<![a-z0-9-])(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch)\((?!\s*var\()/gi,
     instead: 'a token, or rgb(var(--accent-rgb)/…) for the page’s accent',
+  },
+  {
+    name: 'colour name',
+    pattern: new RegExp(
+      [
+        // In a Tailwind arbitrary value: bg-[white], color-mix(in_srgb,black_20%,…)
+        `(?<=[\\[(,_])(?:${COLOR_NAMES})(?=[\\]),_])`,
+        // An SVG colour attribute: fill="white", stopColor={'black'}
+        `(?<![\\w-])(?:fill|stroke|stopColor|floodColor|lightingColor)=\\{?\\s*['"\`](?:${COLOR_NAMES})['"\`]`,
+        // A style or CSS-in-TS value: color: 'white', background: black
+        `(?<![\\w-])(?:color|background(?:-?color)?|border(?:-?color)?|outline(?:-?color)?|caret(?:-?color)?|fill|stroke)\\s*:\\s*['"\`]?(?:${NEUTRAL_NAMES})(?![\\w-])`,
+      ].join('|'),
+      'gi',
+    ),
+    instead: 'a token from src/styles/app.css',
+  },
+  {
+    name: 'gradient colour as text',
+    pattern:
+      /(?<![\w-])(?:text|fill|stroke|decoration|caret|placeholder|outline)-\[var\(--accent-[12]\)\]/g,
+    instead:
+      'var(--accent-fg) or var(--accent-text): --accent-1 and -2 are the gradient’s, pale in the light theme',
   },
 ];
 
@@ -80,13 +108,26 @@ describe('components', () => {
   });
 
   it('the check catches what it should and lets tokens through', () => {
-    expect(findRaw("'border-white/[0.06] hover:bg-black/30 text-white'")).toHaveLength(3);
-    expect(findRaw("'text-violet-200 bg-blue-400/12'")).toHaveLength(2);
-    expect(findRaw('stroke="#A78BFA" bg-[#06080d] \'rgb(255 255 255 / 0.1)\'')).toHaveLength(3);
-    expect(findRaw('shadow-[0_1px_2px_rgb(0_0_0/0.4)] bg-[hsl(0_0%_100%)]')).toHaveLength(2);
+    const caught = (text: string) => findRaw(text).length;
+    expect(caught("'border-white/[0.06] hover:bg-black/30 text-white'")).toBe(3);
+    expect(caught("'border-s-white/10 border-e-black text-shadow-black/40'")).toBe(3);
+    expect(caught("'text-violet-200 bg-blue-400/12'")).toBe(2);
+    expect(caught("'bg-[var(--color-violet-400)] text-[var(--color-white)]'")).toBe(2);
+    expect(caught('stroke="#A78BFA" bg-[#06080d] \'rgb(255 255 255 / 0.1)\'')).toBe(3);
+    expect(caught("shadow-[0_1px_2px_rgb(0_0_0/0.4)] bg-[hsl(0_0%_100%)] 'RGB(0 0 0)'")).toBe(3);
+    expect(caught('fill="white" stopColor={\'black\'} stroke="red"')).toBe(3);
+    expect(caught("style={{ color: 'white', background: 'black' }}")).toBe(2);
+    expect(caught("'bg-[white] bg-[color-mix(in_srgb,black_20%,transparent)]'")).toBe(2);
+    expect(caught("'text-[var(--accent-1)] fill-[var(--accent-2)]'")).toBe(2);
     expect(
       findRaw(
         "'border-line bg-fill text-on-solid bg-ink/[0.07] bg-[rgb(var(--accent-rgb)/0.1)] url(#glow) text-[var(--accent-text)]'",
+      ),
+    ).toEqual([]);
+    // Not colours: a project's colour name, a gradient of the accent, `transparent`, words.
+    expect(
+      findRaw(
+        "color: 'teal' bg-[linear-gradient(135deg,var(--accent-1),var(--accent-2))] bg-[color-mix(in_srgb,var(--color-ok)_70%,transparent)] 'a white glyph'",
       ),
     ).toEqual([]);
   });

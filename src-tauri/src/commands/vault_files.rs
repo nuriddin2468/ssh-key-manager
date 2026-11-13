@@ -148,6 +148,12 @@ pub async fn vault_import_compare(
     index: u32,
 ) -> AppResult<ImportPasswords> {
     blocking(&state, move |state| {
+        // The vault's password, shown: past a few a minute, each is asked for.
+        crate::secret_gate::take_secret(
+            &app,
+            crate::secret_gate::Taking::Show,
+            &crate::secret_gate::import_password(),
+        )?;
         let path = picked_import()
             .clone()
             .ok_or_else(|| AppError::invalid("choose the file to import again"))?;

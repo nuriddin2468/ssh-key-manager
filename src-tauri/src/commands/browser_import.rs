@@ -181,6 +181,12 @@ pub async fn vault_browser_import_compare(
     index: u32,
 ) -> AppResult<ImportPasswords> {
     blocking(&state, move |state| {
+        // The vault's password, shown: past a few a minute, each is asked for.
+        crate::secret_gate::take_secret(
+            &app,
+            crate::secret_gate::Taking::Show,
+            &crate::secret_gate::import_password(),
+        )?;
         let (read, epoch) = take_fresh()?;
         let result = state.vault.with(&app, |vault| {
             let both = vault.browser_import_compare(&read.logins, index)?;

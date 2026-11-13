@@ -18,6 +18,7 @@ mod menu;
 pub mod nearby;
 mod process;
 pub mod quick;
+mod secret_gate;
 mod state;
 pub mod terminal;
 mod tray;

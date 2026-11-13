@@ -109,6 +109,13 @@ pub async fn envs_files_bind(
 ) -> AppResult<EnvFileStatus> {
     let files = Arc::clone(&files);
     blocking(&state, move |state| {
+        // Secret values go into a file only after a yes in a native dialog.
+        crate::secret_gate::confirm_env_secrets(
+            &app,
+            state,
+            &id,
+            &crate::secret_gate::EnvUse::File(&file),
+        )?;
         let ctx = context(state);
         let file = state.vault.change(&app, &state.backup_dir, |vault| {
             Ok(vault.bind_env_file_at(&id, &file, level, &ctx)?)
@@ -495,6 +502,16 @@ pub async fn envs_files_adopt(
 ) -> AppResult<EnvImported> {
     let files = Arc::clone(&files);
     blocking(&state, move |state| {
+        // An environment's own secret values go into the file only after a
+        // yes in a native dialog.
+        if let ImportTarget::Existing { id } = &target {
+            crate::secret_gate::confirm_env_secrets(
+                &app,
+                state,
+                id,
+                &crate::secret_gate::EnvUse::File(&file),
+            )?;
+        }
         let ctx = context(state);
         let (_, parsed) = state.vault.with(&app, |vault| {
             Ok(vault.unmanaged_env_file(&project, &file, &ctx)?)

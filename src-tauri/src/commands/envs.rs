@@ -291,7 +291,8 @@ pub async fn envs_shared_delete(
     .await
 }
 
-/// One variable's value, for the user to see.
+/// One variable's value, for the user to see. Past a few secret ones a
+/// minute, each is confirmed in a native dialog ([`crate::secret_gate`]).
 #[tauri::command]
 pub async fn envs_reveal(
     app: AppHandle,
@@ -300,6 +301,13 @@ pub async fn envs_reveal(
     name: String,
 ) -> AppResult<String> {
     blocking(&state, move |state| {
+        crate::secret_gate::take_env_value(
+            &app,
+            state,
+            &id,
+            &name,
+            crate::secret_gate::Taking::Show,
+        )?;
         state.vault.with(&app, |vault| {
             Ok(vault.env_value(&id, &name)?.expose_secret().to_owned())
         })
@@ -309,7 +317,7 @@ pub async fn envs_reveal(
 
 /// Copies one variable's value without it passing through the UI. A secret
 /// one is kept out of clipboard history and cleared after a while, like a
-/// password.
+/// password, and counts as shown for [`envs_reveal`]'s limit.
 #[tauri::command]
 pub async fn envs_copy(
     app: AppHandle,
@@ -318,6 +326,13 @@ pub async fn envs_copy(
     name: String,
 ) -> AppResult<CopyResult> {
     blocking(&state, move |state| {
+        crate::secret_gate::take_env_value(
+            &app,
+            state,
+            &id,
+            &name,
+            crate::secret_gate::Taking::Copy,
+        )?;
         let (value, secret) = state.vault.with(&app, |vault| {
             let secret = vault
                 .environment(&id)?
@@ -524,7 +539,7 @@ pub async fn envs_export_anyway(app: AppHandle, state: State<'_, Shared>) -> App
 /// first of the project's folders found here; one in Personal, or with none
 /// here, in the home folder. Output and events arrive on `events`, as for
 /// `terminal_open`. Secret values go in only once the user said yes in a
-/// native dialog ([`super::terminal::confirm_env_secrets`]).
+/// native dialog ([`crate::secret_gate::confirm_env_secrets`]).
 #[tauri::command]
 pub async fn envs_run(
     app: AppHandle,
@@ -537,7 +552,12 @@ pub async fn envs_run(
 ) -> AppResult<TerminalInfo> {
     let shared = Arc::clone(&state);
     blocking(&state, move |state| {
-        super::terminal::confirm_env_secrets(&app, state, &id)?;
+        crate::secret_gate::confirm_env_secrets(
+            &app,
+            state,
+            &id,
+            &crate::secret_gate::EnvUse::Shell,
+        )?;
         let (label, vars, places) = state.vault.with(&app, |vault| {
             let env = vault.environment(&id)?.summary;
             let vars: Vec<(String, SecretString)> = vault

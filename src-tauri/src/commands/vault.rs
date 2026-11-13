@@ -234,6 +234,13 @@ pub async fn vault_reveal(
         return Err(AppError::invalid("only a password can be shown"));
     }
     blocking(&state, move |state| {
+        // Past a few a minute, each is confirmed in a native dialog.
+        crate::secret_gate::take_entry_password(
+            &app,
+            state,
+            &id,
+            crate::secret_gate::Taking::Show,
+        )?;
         state.vault.with(&app, |vault| {
             Ok(vault.secret(&id, field)?.expose_secret().to_owned())
         })
@@ -246,11 +253,25 @@ pub async fn vault_reveal(
 #[tauri::command]
 pub async fn vault_copy(
     app: AppHandle,
+    webview: tauri::Webview,
     state: State<'_, Shared>,
     id: String,
     field: CopyField,
 ) -> AppResult<CopyResult> {
+    // The main window's page drives the terminal, which can read the
+    // clipboard: a password it copies counts as shown for `vault_reveal`'s
+    // limit. (The quick search window can't, and has no window for the
+    // question.)
+    let counted = field == CopyField::Password && webview.label() == "main";
     blocking(&state, move |state| {
+        if counted {
+            crate::secret_gate::take_entry_password(
+                &app,
+                state,
+                &id,
+                crate::secret_gate::Taking::Copy,
+            )?;
+        }
         let (text, secret) = state.vault.with(&app, |vault| {
             Ok(match field {
                 CopyField::Username => (

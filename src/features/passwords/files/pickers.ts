@@ -1,29 +1,19 @@
-// System file dialogs for choosing where the vault lives. The backend
-// confirms what these pick in a native dialog. Files that are read or
-// written for import and export are picked by the backend itself. In
-// `pnpm dev` outside the desktop shell there are no dialogs, so each returns
-// a made-up path the mock backend understands (see src/mocks/vaultFiles.ts).
+// System file dialogs for choosing where the vault lives. The backend opens
+// them and keeps what was picked: moving or switching takes only that path,
+// confirmed in a native dialog. Files that are read or written for import and
+// export are picked by the backend too. In `pnpm dev` outside the desktop
+// shell the mock backend answers with made-up paths (src/mocks/vaultFiles.ts).
 
-import { isTauri } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { api } from '@/api/commands';
 
-const DEV_HOME = '/Users/dev';
-
-interface Filter {
-  name: string;
-  extensions: string[];
+/** A KeePass file to use as the vault; `null` if the dialog was cancelled. */
+export function pickFile(): Promise<string | null> {
+  return api.vaultPickFile();
 }
 
-export async function pickFile(title: string, filter: Filter, devPath: string) {
-  if (!isTauri()) return devPath;
-  const path = await open({ title, multiple: false, directory: false, filters: [filter] });
-  return typeof path === 'string' ? path : null;
-}
-
-export async function pickFolder(title: string) {
-  if (!isTauri()) return `${DEV_HOME}/Library/CloudStorage/Dropbox`;
-  const path = await open({ title, multiple: false, directory: true });
-  return typeof path === 'string' ? path : null;
+/** A folder to move the vault to; `null` if the dialog was cancelled. */
+export function pickFolder(): Promise<string | null> {
+  return api.vaultPickFolder();
 }
 
 /** The last part of a path, on any platform. */

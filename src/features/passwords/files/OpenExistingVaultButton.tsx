@@ -13,8 +13,6 @@ export interface OpenExistingVaultButtonProps
   onOpened?: (location: VaultLocation) => void;
 }
 
-const DEV_KDBX = '/Users/dev/Library/Mobile Documents/com~apple~CloudDocs/vault.kdbx';
-
 /**
  * For the first-run screen: use a vault made on another computer, or any
  * KeePass (`.kdbx`) database, instead of creating one. The page then asks
@@ -42,11 +40,7 @@ export function OpenExistingVaultButton({
 
   const choose = async () => {
     try {
-      const path = await pickFile(
-        t('vaultFiles.location.pickFileTitle'),
-        { name: t('vaultFiles.location.keepassFiles'), extensions: ['kdbx'] },
-        DEV_KDBX,
-      );
+      const path = await pickFile();
       if (path) open.mutate(path);
     } catch (error) {
       toastError(t, error);

@@ -6,7 +6,8 @@ use sshkm_core::config::{HostEdit, HostOption, IdentityUsage, SshConfig};
 use sshkm_core::keys::{self, KeyInfo};
 use sshkm_core::paths::display_path;
 use sshkm_core::{ExposeSecret, SecretString};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
 use super::{Shared, blocking};
 use crate::confirm::{self, Localized};
@@ -201,17 +202,98 @@ pub async fn regenerate_public(state: State<'_, Shared>, key_id: String) -> AppR
     .await
 }
 
+/// Asks for a private key in a system file dialog this side opens, and adds
+/// it to `~/.ssh` under its own name as [`keys::import`] does. `None` when
+/// the dialog was cancelled. The page never names the file.
 #[tauri::command]
-pub async fn import_key(
-    state: State<'_, Shared>,
-    source: String,
-    file_name: Option<String>,
-) -> AppResult<KeyView> {
+pub async fn import_key(app: AppHandle, state: State<'_, Shared>) -> AppResult<Option<KeyView>> {
     blocking(&state, move |state| {
-        let info = keys::import(&state.paths.dir, Path::new(&source), file_name.as_deref())?;
-        find_view(state, &info.id)
+        let title = Localized::new(
+            "Choose a private key to import",
+            "Выберите закрытый ключ для импорта",
+            "Import qilinadigan yopiq kalitni tanlang",
+        );
+        let Some(source) = pick_key_file(&app, &state.paths.home, &title)? else {
+            return Ok(None);
+        };
+        let info = keys::import(&state.paths.dir, &source, None)?;
+        find_view(state, &info.id).map(Some)
     })
     .await
+}
+
+/// A system file dialog for one key file, opened in `folder`; `None` when it
+/// was cancelled.
+pub(crate) fn pick_key_file(
+    app: &AppHandle,
+    folder: &Path,
+    title: &Localized,
+) -> AppResult<Option<PathBuf>> {
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title(title.pick())
+        .set_directory(folder);
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&window);
+    }
+    let Some(picked) = dialog.blocking_pick_file() else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|e| AppError::invalid(format!("not a file path: {e}")))?;
+    if path.is_absolute() {
+        Ok(Some(path))
+    } else {
+        Err(AppError::invalid(format!(
+            "not an absolute path: {}",
+            path.display()
+        )))
+    }
+}
+
+/// Asks in a native dialog before an encrypted key's copy is written out
+/// without a passphrase (the key converter), as removing a key's
+/// passphrase is ([`change_passphrase`]). Fails with `cancelled` on a no.
+pub(crate) fn confirm_unencrypted_copy(
+    app: &AppHandle,
+    source: &Path,
+    target: &Path,
+) -> AppResult<()> {
+    confirm::require(
+        app,
+        &Localized::new(
+            "Save the key without a passphrase?",
+            "Сохранить ключ без парольной фразы?",
+            "Kalit parol iborasisiz saqlansinmi?",
+        ),
+        &unencrypted_copy_body(source, target),
+        &Localized::new(
+            "Save without passphrase",
+            "Сохранить без фразы",
+            "Iborasiz saqlash",
+        ),
+    )
+}
+
+fn unencrypted_copy_body(source: &Path, target: &Path) -> Localized {
+    let source = confirm::shown(&display_path(source), 400);
+    let target = confirm::shown(&display_path(target), 400);
+    Localized::new(
+        format!(
+            "The key {source} is encrypted, but its copy {target} won’t be. Anyone who can \
+             read that file can use the key."
+        ),
+        format!(
+            "Ключ {source} зашифрован, а его копия {target} зашифрована не будет. Любой, кто \
+             может прочитать этот файл, сможет воспользоваться ключом."
+        ),
+        format!(
+            "{source} kaliti shifrlangan, lekin uning {target} nusxasi shifrlanmaydi. Bu \
+             faylni oʻqiy oladigan har kim kalitdan foydalana oladi."
+        ),
+    )
 }
 
 #[tauri::command]
@@ -355,5 +437,20 @@ mod tests {
         // Changing one needs the old passphrase; nothing for nothing is no change.
         assert_eq!(passphrase_change(Some(true), false), Keep);
         assert_eq!(passphrase_change(Some(false), true), Keep);
+    }
+
+    #[test]
+    fn an_unencrypted_copy_names_both_files() {
+        let body = unencrypted_copy_body(
+            Path::new("/keys/server.ppk"),
+            Path::new("/backup/server\u{202E}txt.pem"),
+        );
+        assert!(
+            body.en
+                .contains("The key /keys/server.ppk is encrypted, but its copy")
+        );
+        assert!(body.en.contains("/backup/server<U+202E>txt.pem won’t be"));
+        assert!(body.ru.contains("/keys/server.ppk"));
+        assert!(body.uz.contains("/backup/server<U+202E>txt.pem"));
     }
 }

@@ -60,6 +60,38 @@ impl Localized {
     }
 }
 
+/// `text` from outside the app (a path, a name a file or another program
+/// chose) as a dialog shows it: control characters and invisible or
+/// direction-changing ones as `<U+…>`, so it can neither add lines of its
+/// own nor read differently from what is used, and at most `max` characters,
+/// with how many more there are.
+pub fn shown(text: &str, max: usize) -> String {
+    let mut out = String::with_capacity(text.len());
+    for (i, c) in text.chars().enumerate() {
+        if i == max {
+            let rest = text.chars().count() - max;
+            let _ = write!(out, "… (+{rest})");
+            break;
+        }
+        let invisible = matches!(
+            c,
+            '\u{00AD}'
+                | '\u{061C}'
+                | '\u{180E}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2060}'..='\u{2069}'
+                | '\u{FEFF}'
+        );
+        if c.is_control() || invisible {
+            let _ = write!(out, "<U+{:04X}>", u32::from(c));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Follows the interface's language (`en`, `ru` or `uz`; anything else is
 /// English).
 #[tauri::command]
@@ -330,6 +362,18 @@ mod tests {
             (*yes, Duration::from_millis(*millis))
         });
         (approved, again)
+    }
+
+    #[test]
+    fn outside_text_shows_its_hidden_characters() {
+        assert_eq!(shown("~/Dropbox/Vault", 100), "~/Dropbox/Vault");
+        assert_eq!(
+            shown("/Users/me/Docs\u{202E}txt.kdbx\nCancel", 100),
+            "/Users/me/Docs<U+202E>txt.kdbx<U+000A>Cancel"
+        );
+        assert_eq!(shown("a\u{200B}b\u{FEFF}", 100), "a<U+200B>b<U+FEFF>");
+        assert_eq!(shown("Профиль 1", 100), "Профиль 1");
+        assert_eq!(shown("abcdef", 3), "abc… (+3)");
     }
 
     #[test]

@@ -1,19 +1,19 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions of the main window.",
+  "description": "Permissions of the main window: the app's commands, listening to its events, moving the window by its drag regions (and maximising it on a double click), opening http(s) links in the browser and copying public text. Files are picked in dialogs and shown in the file manager by the app's own commands, never with a path from the page.",
   "windows": ["main"],
   "permissions": [
     "main-window",
-    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
     "core:window:allow-start-dragging",
-    "core:window:allow-toggle-maximize",
-    "opener:allow-reveal-item-in-dir",
+    "core:window:allow-internal-toggle-maximize",
+    "core:webview:allow-internal-toggle-devtools",
     {
       "identifier": "opener:allow-open-url",
       "allow": [{ "url": "http://*" }, { "url": "https://*" }]
     },
-    "clipboard-manager:allow-write-text",
-    "dialog:allow-open"
+    "clipboard-manager:allow-write-text"
   ]
 }

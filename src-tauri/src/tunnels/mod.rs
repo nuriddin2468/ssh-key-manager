@@ -1016,7 +1016,8 @@ mod tests {
         );
         let lines = tail.lines(true);
         assert!(
-            lines.iter().any(|line| line.starts_with("OpenSSH")),
+            // OpenSSH 10 logs its version as a debug line (`debug1: OpenSSH_…`).
+            lines.iter().any(|line| line.contains("OpenSSH_")),
             "{lines:?}"
         );
     }

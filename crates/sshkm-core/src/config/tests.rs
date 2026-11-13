@@ -1177,6 +1177,9 @@ fn listening_for_others_asks() {
         // `ssh` joins the two words with `:`.
         "LocalForward 0.0.0.0 8080:intranet.example:80",
         "LocalForward * 8080:intranet.example:80",
+        // A variable is filled in before the spec is read.
+        "LocalForward ${DISPLAY}8080 intranet.example:80",
+        "DynamicForward ${DISPLAY}1080",
         "LocalForward \"*:8080\" intranet.example:80",
         "LocalForward \\*:8080 intranet.example:80",
         "DynamicForward 0.0.0.0:1080",

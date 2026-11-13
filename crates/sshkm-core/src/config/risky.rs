@@ -405,8 +405,13 @@ fn sends_only_the_locale(pattern: &str) -> bool {
 /// It names one when it has `with_address` fields (4 for a `LocalForward`,
 /// `address:port:host:port`; 2 for a `DynamicForward`). Fewer listen as
 /// `GatewayPorts` says (on loopback by default), or on a socket file only
-/// its owner can use. A spec `ssh` would read otherwise counts.
+/// its owner can use. A spec `ssh` would read otherwise counts, and so does
+/// one with a variable: `ssh` puts its value in before it splits the spec
+/// (`${DISPLAY}8080` is `:0` and `8080`, every address).
 fn listens_beyond_loopback(spec: &str, with_address: usize) -> bool {
+    if spec.contains('$') {
+        return true;
+    }
     let Some(fields) = forward_fields(spec) else {
         return true;
     };

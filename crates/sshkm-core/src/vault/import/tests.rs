@@ -85,6 +85,30 @@ fn bitwarden() {
 }
 
 #[test]
+fn rows_read_from_a_file_print_without_their_secrets() {
+    let parsed = parse(
+        b"Title,Url,Username,Password,OTPAuth,Favorite,Archived,Tags,Notes\n\
+          GitHub,https://github.com,octocat,gh-pass-secret,otpauth://totp/GitHub?secret=JBSWY3DPEHPK3PXP,true,false,dev,Recovery codes 1234-5678\n\
+          Steam,https://store.steampowered.com,gamer,steam-pass,steam://ABCDEFGHIJKLMNOP,false,false,,\n",
+    )
+    .unwrap();
+    let shown = format!("{parsed:?}");
+    assert!(
+        shown.contains("GitHub") && shown.contains("Steam"),
+        "{shown}"
+    );
+    for secret in [
+        "gh-pass-secret",
+        TOTP_SECRET,
+        "1234-5678",
+        "steam-pass",
+        "ABCDEFGHIJKLMNOP",
+    ] {
+        assert!(!shown.contains(secret), "{shown}");
+    }
+}
+
+#[test]
 fn one_password() {
     let fx = Fixture::new();
     let preview = fx.preview(

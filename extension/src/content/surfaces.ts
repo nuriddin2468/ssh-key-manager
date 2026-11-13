@@ -5,11 +5,19 @@
 // surface, dark or light as the browser is, the Passwords section's pink
 // accent and its type sizes.
 //
+// A closed shadow root keeps out the page's scripts, but not find-in-page:
+// `window.find` matches text in it. So what comes from the vault (titles,
+// usernames, other sites' names) is drawn as CSS generated content, which
+// find doesn't search (`drawText`). The menu is as tall whatever it shows,
+// so its size doesn't tell how many logins there are.
+//
 // A choice in them counts only when the user could see what they chose:
 // not in the first moments after the surface appeared or moved (a page
 // could have put it under a click or a key press meant for something else),
-// not where anything covers it, and not after the page restyled, moved or
-// hid the element it lives on, which is in the page's own DOM.
+// not where anything covers it, not after the page restyled, moved or hid
+// the element it lives on, which is in the page's own DOM, and not while it
+// shows smaller or elsewhere than it was put (a page's `zoom` scales even
+// the top layer).
 
 import type { LoginOffer } from '../shared/client';
 import { loginName, t } from '../shared/i18n';
@@ -17,6 +25,7 @@ import { loginName, t } from '../shared/i18n';
 const STYLE = `
 :host { all: initial; }
 * { box-sizing: border-box; }
+[data-text]::before { content: attr(data-text); }
 /* The colours, dark as the app; light when the browser is (src/styles/app.css). */
 .panel {
   --fg: #f2f4f8; --fg-2: #c9cfda; --muted: #a7b0c0; --subtle: #8892a6;
@@ -62,7 +71,11 @@ const STYLE = `
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.32);
 }
 .logo svg { width: 10px; height: 10px; }
-.list { margin: 0; padding: 0 4px 4px; list-style: none; max-height: 264px; overflow-y: auto; }
+.list { margin: 0; padding: 0 4px 4px; list-style: none; overflow-y: auto; }
+.body { display: flex; flex-direction: column; }
+.body > .list { flex: 1; }
+.body.state { justify-content: center; padding-bottom: 8px; }
+.body.state > .list { flex: none; }
 .item {
   all: unset; box-sizing: border-box;
   display: flex; align-items: center; gap: 10px;
@@ -78,7 +91,7 @@ const STYLE = `
 .item:hover .user.none, .item:focus-visible .user.none { color: var(--muted); }
 .icon { flex: none; width: 16px; height: 16px; color: var(--icon); }
 .notice { margin: 0; padding: 2px 12px 10px; font-size: 12.5px; line-height: 18px; color: var(--fg-2); }
-.banner { width: min(340px, calc(100vw - 32px)); padding: 14px 14px 12px; }
+.banner { width: 100%; padding: 14px 14px 12px; }
 .sr-only {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
@@ -140,9 +153,16 @@ const STYLE = `
 
 const SVG = 'http://www.w3.org/2000/svg';
 
-/** The list's tallest height (as in STYLE), and the header and padding above and below it. */
-const LIST_HEIGHT = 264;
+/**
+ * The height of the menu below its header, whatever it shows: two logins
+ * (49 px each), half of a third, which shows there are more to scroll to,
+ * and the list's padding. Less where the window has no room.
+ */
+const BODY_HEIGHT = 126;
+/** The header, and the space kept above and below the menu. */
 const HEAD_HEIGHT = 36;
+/** The banners' width, where the window has room. */
+const BANNER_WIDTH = 340;
 
 function icon(paths: string[], className?: string): SVGSVGElement {
   const svg = document.createElementNS(SVG, 'svg');
@@ -183,6 +203,22 @@ function element<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
+/**
+ * Shows `text` in `node` as CSS generated content rather than as text in
+ * the DOM: a page's `window.find` searches the text of closed shadow roots,
+ * but not generated content. Screen readers read it all the same.
+ */
+export function drawText<T extends Element>(node: T, text: string): T {
+  node.textContent = '';
+  node.setAttribute('data-text', text);
+  return node;
+}
+
+/** What `drawText` put in `node`. */
+export function drawnText(node: Element | null | undefined): string | null {
+  return node?.getAttribute('data-text') ?? null;
+}
+
 function logo(): HTMLElement {
   const box = element('span', 'logo');
   box.append(icon(KEY));
@@ -196,9 +232,42 @@ export const SETTLE_MS = 500;
 /** At most this many returns to the front of the top layer a second; a page that forces more gets no surface. */
 const MAX_FRONTS = 5;
 
+/** How far, in pixels, a surface may show from where it was put. */
+const PLACE_SLACK = 1;
+/** Shorter than this, a surface can't be what the user sees. */
+const MIN_HEIGHT = 24;
+
 interface Point {
   x: number;
   y: number;
+}
+
+/** Where `place` put a surface, in the window's pixels, as far as it said. */
+interface Placement {
+  left?: number;
+  top?: number;
+  width?: number;
+}
+
+/**
+ * How much `element` and its ancestors scale what they hold with CSS
+ * `zoom`. The top layer is no exception.
+ */
+function zoomOf(element: Element): number {
+  const current = (element as Element & { currentCSSZoom?: number }).currentCSSZoom;
+  if (typeof current === 'number') return current > 0 && Number.isFinite(current) ? current : 1;
+  // Browsers before `currentCSSZoom`: each element's own.
+  let zoom = 1;
+  for (let node: Element | null = element; node; node = node.parentElement) {
+    const own = Number.parseFloat(getComputedStyle(node).zoom);
+    if (own > 0 && Number.isFinite(own)) zoom *= own;
+  }
+  return zoom;
+}
+
+function pixels(value: string | undefined): number | undefined {
+  const parsed = value?.endsWith('px') ? Number.parseFloat(value) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 /**
@@ -258,6 +327,7 @@ class Surface {
   /** The `style` attribute `place` wrote, and where it put the host. */
   private written: string | null = null;
   private parent: ParentNode | null = null;
+  private placement: Placement = {};
   /** Whether the host made it into the top layer. */
   private inTopLayer = false;
   /** What IntersectionObserver v2 last said: shown with nothing over it, where it can tell. */
@@ -300,7 +370,10 @@ class Surface {
 
   protected place(styles: Record<string, string>, near: Element | null): void {
     const host = this.host;
-    if (!this.shown) this.seen = null;
+    const appearing = !this.shown;
+    if (appearing) this.seen = null;
+    // Inside an open modal dialog, everything else is inert: join it.
+    const parent = near?.closest('dialog[open]') ?? document.documentElement;
     host.removeAttribute('style');
     const all: Record<string, string> = {
       all: 'initial',
@@ -315,11 +388,18 @@ class Surface {
       display: 'block',
       ...styles,
     };
+    // A `zoom` on the page's root (or the dialog) scales the surface too:
+    // undo it, so that it shows at its size, where it was put.
+    const zoom = zoomOf(parent);
+    if (Math.abs(zoom - 1) > 0.001) all.zoom = String(1 / zoom);
     for (const [name, value] of Object.entries(all))
       host.style.setProperty(name, value, 'important');
     this.written = host.getAttribute('style');
-    // Inside an open modal dialog, everything else is inert: join it.
-    const parent = near?.closest('dialog[open]') ?? document.documentElement;
+    this.placement = {
+      left: pixels(styles.left),
+      top: pixels(styles.top),
+      width: pixels(styles.width),
+    };
     if (host.parentNode !== parent) parent.append(host);
     this.parent = parent;
     this.inTopLayer = false;
@@ -333,20 +413,31 @@ class Surface {
         // Not connected yet, or the page forbids it: stay a fixed element.
       }
     }
-    this.watchVisibility();
+    this.watchVisibility(appearing);
   }
 
-  private watchVisibility(): void {
-    if (!TRACKS_VISIBILITY || this.visibility) return;
-    this.visibility = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          this.seen =
-            (entry as IntersectionObserverEntry & { isVisible?: boolean }).isVisible ?? null;
-        }
-      },
-      { threshold: [0, 1], trackVisibility: true, delay: 100 } as IntersectionObserverInit,
-    );
+  /**
+   * Has IntersectionObserver v2 report on the host. Observed anew each time
+   * the surface appears, so that a report comes even when nothing changed
+   * since the last one.
+   */
+  private watchVisibility(anew: boolean): void {
+    if (!TRACKS_VISIBILITY) return;
+    if (!this.visibility) {
+      this.visibility = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            this.seen =
+              (entry as IntersectionObserverEntry & { isVisible?: boolean }).isVisible ?? null;
+          }
+        },
+        { threshold: [0, 1], trackVisibility: true, delay: 100 } as IntersectionObserverInit,
+      );
+    } else if (anew) {
+      this.visibility.unobserve(this.host);
+    } else {
+      return;
+    }
     this.visibility.observe(this.host);
   }
 
@@ -395,17 +486,50 @@ class Surface {
       is(style.visibility, 'visible') &&
       is(style.transform, 'none') &&
       is(style.filter, 'none') &&
-      is(style.clipPath, 'none')
+      is(style.clipPath, 'none') &&
+      this.atItsPlace()
+    );
+  }
+
+  /**
+   * Whether the host shows unscaled, where and as wide as `place` put it,
+   * whatever might scale it: the page's `zoom` on its root, or anything else.
+   */
+  private atItsPlace(): boolean {
+    const host = this.host;
+    const zoom = (host as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom;
+    if (typeof zoom === 'number' && Math.abs(zoom - 1) > 0.01) return false;
+    // jsdom: no layout to ask.
+    if (typeof host.ownerDocument.elementFromPoint !== 'function') return true;
+    const rect = host.getBoundingClientRect();
+    const near = (at: number, put: number | undefined) =>
+      put === undefined || Math.abs(at - put) <= PLACE_SLACK;
+    const { left, top, width } = this.placement;
+    return (
+      near(rect.left, left) &&
+      near(rect.top, top) &&
+      near(rect.width, width) &&
+      rect.height >= MIN_HEIGHT
     );
   }
 
   /** Whether a real click or key press on `part` counts as the user's choice. */
   protected accepts(event: Event, part: Element): boolean {
-    if (!event.isTrusted || !this.settling.settled || !this.intact()) return false;
+    if (!event.isTrusted || !this.settling.settled) return false;
+    if (!this.intact()) {
+      // Restyled, moved or scaled since it was put: what the user sees isn't
+      // what they'd choose. Shown again, it is put right.
+      this.hide();
+      return false;
+    }
+    // Where the browser tells (Chromium), only while it says nothing covers
+    // the surface or fades it out, its frame included: for a key press as
+    // for a click. A report comes soon after the surface appears, well
+    // within the time it takes to settle.
+    if (this.seen === false || (TRACKS_VISIBILITY && this.seen === null)) return false;
     // A click with the pointer counts where it landed; a key press, on what
     // of the part the window shows.
     if (event instanceof MouseEvent && event.detail > 0) {
-      if (this.seen === false) return false;
       return uncoveredAt(this.host, { x: event.clientX, y: event.clientY });
     }
     return uncovered(this.host, part);
@@ -429,10 +553,15 @@ export interface MenuHandlers {
   onLeave: () => void;
 }
 
-/** The saved logins for a login field, under it. */
+/**
+ * The saved logins for a login field, under it. Its titles and usernames
+ * are drawn (`drawText`), and it is as tall with one login as with many,
+ * locked, or with a notice: the page can measure the element it lives on.
+ */
 export class LoginMenu extends Surface {
   private anchor: HTMLInputElement | null = null;
-  private list: HTMLElement | null = null;
+  /** What shows below the header, as tall whatever it holds. */
+  private body: HTMLElement | null = null;
   /** Where the menu was put last. */
   private placed = '';
   private readonly reposition = () => this.position();
@@ -444,10 +573,9 @@ export class LoginMenu extends Surface {
   showLogins(anchor: HTMLInputElement, logins: LoginOffer[]): void {
     const items = logins.map((login) => {
       const lines = element('span', 'lines');
-      lines.append(element('span', 'title', login.title));
-      const user = element(
-        'span',
-        login.username ? 'user' : 'user none',
+      lines.append(drawText(element('span', 'title'), login.title));
+      const user = drawText(
+        element('span', login.username ? 'user' : 'user none'),
         login.username || t('noUsername'),
       );
       lines.append(user);
@@ -459,16 +587,20 @@ export class LoginMenu extends Surface {
   showLocked(anchor: HTMLInputElement): void {
     const lines = element('span', 'lines');
     lines.append(element('span', 'title', t('menuLocked')));
-    this.render(anchor, [{ lines, icon: icon(LOCK, 'icon'), onChoose: this.handlers.onUnlock }]);
+    this.render(anchor, [{ lines, icon: icon(LOCK, 'icon'), onChoose: this.handlers.onUnlock }], {
+      state: true,
+    });
   }
 
   /** A line of text in place of the logins: waiting for the app, or why nothing was filled. */
   showNotice(anchor: HTMLInputElement, text: string): void {
     const panel = this.panel();
+    const body = element('div', 'body state');
     const notice = element('p', 'notice', text);
     notice.setAttribute('role', 'status');
-    panel.append(notice);
-    this.mount(anchor, panel, null);
+    body.append(notice);
+    panel.append(body);
+    this.mount(anchor, panel, body);
   }
 
   /** Whether the menu shows a notice rather than logins. */
@@ -487,10 +619,10 @@ export class LoginMenu extends Surface {
     return panel;
   }
 
-  private mount(anchor: HTMLInputElement, panel: HTMLElement, list: HTMLElement | null): void {
+  private mount(anchor: HTMLInputElement, panel: HTMLElement, body: HTMLElement): void {
     this.root.append(panel);
     this.anchor = anchor;
-    this.list = list;
+    this.body = body;
     this.placed = '';
     this.position();
     window.addEventListener('scroll', this.reposition, true);
@@ -500,8 +632,10 @@ export class LoginMenu extends Surface {
   private render(
     anchor: HTMLInputElement,
     items: { lines: HTMLElement; icon?: SVGSVGElement; onChoose: () => void }[],
+    { state = false } = {},
   ): void {
     const panel = this.panel();
+    const body = element('div', state ? 'body state' : 'body');
     const list = element('ul', 'list');
     list.setAttribute('role', 'menu');
     list.setAttribute('aria-label', `${t('appName')}: ${t('menuLabel')}`);
@@ -524,11 +658,12 @@ export class LoginMenu extends Surface {
     // The field is the page's, so it can't point at the menu: say it's there.
     const hint = element('p', 'sr-only');
     hint.setAttribute('role', 'status');
-    panel.append(list, hint);
+    body.append(list);
+    panel.append(body, hint);
     setTimeout(() => {
       hint.textContent = t('menuHint');
     }, 50);
-    this.mount(anchor, panel, list);
+    this.mount(anchor, panel, body);
   }
 
   private position(): void {
@@ -545,9 +680,10 @@ export class LoginMenu extends Surface {
     const above = below < 200 && rect.top > below;
     if (above) styles.bottom = `${window.innerHeight - rect.top + 4}px`;
     else styles.top = `${rect.bottom + 4}px`;
-    // The list scrolls within the window, so every login can be reached.
+    // As tall whatever it shows, within the window; the list scrolls, so
+    // every login can be reached.
     const room = (above ? rect.top : below) - 4 - 8 - HEAD_HEIGHT;
-    if (this.list) this.list.style.maxHeight = `${Math.max(64, Math.min(LIST_HEIGHT, room))}px`;
+    if (this.body) this.body.style.height = `${Math.max(64, Math.min(BODY_HEIGHT, room))}px`;
     // A menu that moves may have moved under the pointer: it starts anew.
     const placed = JSON.stringify(styles);
     if (placed !== this.placed) this.settling.restart();
@@ -604,7 +740,7 @@ function bannerParts(root: ShadowRoot, title: string) {
   panel.setAttribute('aria-label', title);
   const row = element('div', 'row');
   const text = element('div', 'text');
-  const heading = element('h2', undefined, title);
+  const heading = drawText(element('h2'), title);
   // A title too long for two lines shows in full on hover.
   heading.title = title;
   text.append(heading);
@@ -628,6 +764,12 @@ function actionButton(label: string, className = 'btn'): HTMLButtonElement {
   return button;
 }
 
+/** Where a banner goes: the top right of the window. */
+function bannerPlace(): Record<string, string> {
+  const width = Math.max(0, Math.min(BANNER_WIDTH, window.innerWidth - 32));
+  return { top: '16px', right: '16px', width: `${width}px` };
+}
+
 export interface SaveOffer {
   id: string;
   /** The page's host, to name it. */
@@ -642,6 +784,12 @@ export interface SaveOffer {
    * or the saved login's title.
    */
   elsewhere?: boolean;
+  /**
+   * The vault named the login (a password change on a form without a
+   * username): its username isn't put in the field, which starts empty and
+   * keeps it unless the user types another.
+   */
+  fromVault?: boolean;
 }
 
 export interface BannerHandlers {
@@ -656,17 +804,20 @@ export interface BannerHandlers {
 /**
  * "Save login for example.com?", at the top right of the page.
  *
- * The page can't read it, but it can measure the element it lives on: the
- * title always takes two lines, so the banner's size doesn't tell whether it
- * offers to save or to update, or the saved login's title.
+ * The page can't read its title (drawn, as `drawText` says), but it can
+ * measure the element it lives on: the title always takes two lines, so the
+ * banner's size doesn't tell whether it offers to save or to update, or the
+ * saved login's title.
  *
  * The username is a field the user can change: a form with only a password
  * sent none, and one remembered from a two-step login's first step may be
- * the wrong one. What they type is for the site's own login, so the page
- * seeing the key presses learns nothing it wasn't told at sign-in; they stop
- * at the banner all the same, so that the page's keyboard shortcuts don't
- * take them. A login typed on another site gets no field: that page isn't to
- * see its username.
+ * the wrong one. It holds only what the user typed on the site, which the
+ * page's `window.find` can match in a field: what they type is for the
+ * site's own login, so the page learns nothing it wasn't told at sign-in.
+ * Key presses in it stop at the banner all the same, so that the page's
+ * keyboard shortcuts don't take them. A username the vault supplied isn't
+ * put in it, and a login typed on another site gets no field: that page
+ * isn't to see its username.
  */
 export class SaveBanner extends Surface {
   constructor(private readonly handlers: BannerHandlers) {
@@ -682,7 +833,7 @@ export class SaveBanner extends Surface {
     let username: HTMLInputElement | null = null;
     if (!offer.elsewhere) {
       username = element('input', 'input');
-      username.value = offer.username;
+      username.value = offer.fromVault ? '' : offer.username;
       username.type = 'text';
       username.autocomplete = 'off';
       username.spellcheck = false;
@@ -703,7 +854,7 @@ export class SaveBanner extends Surface {
     this.root.append(panel);
     // Shown without taking focus: announce it.
     setTimeout(() => {
-      announce.textContent = title;
+      drawText(announce, title);
     }, 50);
 
     const dismiss = (event: Event) => {
@@ -745,7 +896,7 @@ export class SaveBanner extends Surface {
       }
     }
 
-    this.place({ top: '16px', right: '16px' }, document.activeElement);
+    this.place(bannerPlace(), document.activeElement);
     this.settling.restart();
   }
 }
@@ -792,14 +943,15 @@ export class SignInBanner extends Surface {
     // One line, unlike the save banner's, whose height mustn't tell what it offers.
     heading.classList.add('short');
     const name = loginName(login);
-    const detail = element('p', 'detail', t('signInFailedText', { login: name }));
+    const failed = t('signInFailedText', { login: name });
+    const detail = drawText(element('p', 'detail'), failed);
     text.append(detail);
     const remove = actionButton(t('signInRemove'), 'btn danger');
     const update = actionButton(t('update'), 'btn primary');
     actions.append(remove, update);
     this.root.append(panel);
     setTimeout(() => {
-      announce.textContent = `${title} ${detail.textContent}`;
+      drawText(announce, `${title} ${failed}`);
     }, 50);
 
     const finish = () => {
@@ -825,17 +977,18 @@ export class SignInBanner extends Surface {
     remove.addEventListener('click', (event) => {
       if (!this.accepts(event, remove)) return;
       // Ask first, in the banner: the login goes to the recycle bin.
-      detail.textContent = t('moveToBinConfirm', { login: name });
+      const question = t('moveToBinConfirm', { login: name });
+      drawText(detail, question);
       const cancel = actionButton(t('keepLogin'));
       const confirm = actionButton(t('moveToBin'), 'btn danger');
       actions.replaceChildren(cancel, confirm);
-      announce.textContent = detail.textContent;
+      drawText(announce, question);
       // The safe choice has focus: Enter keeps the login.
       cancel.focus();
       this.settling.restart();
       cancel.addEventListener('click', (cancelled) => {
         if (!cancelled.isTrusted) return;
-        detail.textContent = t('signInFailedText', { login: name });
+        drawText(detail, failed);
         actions.replaceChildren(remove, update);
         remove.focus();
       });
@@ -850,7 +1003,7 @@ export class SignInBanner extends Surface {
       });
     });
 
-    this.place({ top: '16px', right: '16px' }, document.activeElement);
+    this.place(bannerPlace(), document.activeElement);
     this.settling.restart();
   }
 

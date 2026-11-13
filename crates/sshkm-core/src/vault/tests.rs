@@ -610,3 +610,249 @@ fn folders_of_keepass_files_show_as_groups() {
     let vault = Vault::recover(&fx.paths, &s("pw"), &s("master")).unwrap();
     assert_eq!(vault.entries()[0].group.as_deref(), Some("Work/Servers"));
 }
+
+#[test]
+fn wrong_master_passwords_in_a_row_make_the_next_attempt_wait() {
+    let fx = Fixture::new();
+    let (vault, _) = Vault::create(&fx.paths, &s("master")).unwrap();
+    for _ in 0..3 {
+        assert!(matches!(
+            Vault::unlock(&fx.paths, &s("guess")),
+            Err(Error::WrongPassphrase)
+        ));
+    }
+    // Right or wrong, nothing is tried until the wait is over, whichever
+    // check asks.
+    for attempt in [
+        Vault::unlock(&fx.paths, &s("master")).map(drop),
+        Vault::unlock(&fx.paths, &s("guess")).map(drop),
+        vault.verify_master_password(&s("master")),
+        Vault::recover(&fx.paths, &s("not the key"), &s("new")).map(drop),
+    ] {
+        assert!(
+            matches!(attempt, Err(Error::TooManyAttempts { .. })),
+            "{attempt:?}"
+        );
+    }
+}
+
+/// A KDBX 3 header with `fields` (id, value), then `payload`.
+fn kdbx3(fields: &[(u8, &[u8])], payload: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![0x03, 0xD9, 0xA2, 0x9A, 0x67, 0xFB, 0x4B, 0xB5, 1, 0, 3, 0];
+    for (id, value) in fields {
+        bytes.push(*id);
+        bytes.extend(u16::try_from(value.len()).unwrap().to_le_bytes());
+        bytes.extend(*value);
+    }
+    bytes.extend([0, 4, 0, 0x0D, 0x0A, 0x0D, 0x0A]);
+    bytes.extend(payload);
+    bytes
+}
+
+/// A whole KDBX 3 file (AES, one AES-KDF round) that no key this test
+/// uses opens. KDBX 3 has no check of the key before the contents.
+fn kdbx3_file() -> Vec<u8> {
+    const AES: [u8; 16] = [
+        0x31, 0xC1, 0xF2, 0xE6, 0xBF, 0x71, 0x43, 0x50, 0xBE, 0x58, 0x05, 0x21, 0x6A, 0xFC, 0x5A,
+        0xFF,
+    ];
+    kdbx3(
+        &[
+            (2, &AES),
+            (3, &0u32.to_le_bytes()),
+            (4, &[1; 32]),
+            (5, &[2; 32]),
+            (6, &1u64.to_le_bytes()),
+            (7, &[3; 16]),
+            (8, &[4; 32]),
+            (9, &[5; 32]),
+            (10, &2u32.to_le_bytes()),
+        ],
+        &[0x55; 64],
+    )
+}
+
+#[test]
+fn the_wrong_key_for_a_kdbx3_file_is_a_wrong_password() {
+    assert!(matches!(
+        check_shared(&kdbx3_file(), &s("anything")),
+        Err(Error::WrongPassphrase)
+    ));
+    // A vault replaced by such a file locks rather than reading it again
+    // and again.
+    let fx = Fixture::new();
+    let (mut vault, _) = Vault::create(&fx.paths, &s("master")).unwrap();
+    std::fs::write(&fx.paths.database, kdbx3_file()).unwrap();
+    assert!(matches!(vault.refresh(), Err(Error::WrongPassphrase)));
+}
+
+#[test]
+fn a_damaged_header_is_refused_without_stopping_the_app() {
+    let fx = Fixture::new();
+    Vault::create(&fx.paths, &s("master")).unwrap();
+    let saved = std::fs::read(&fx.paths.database).unwrap();
+    let dictionary = |kind: u8| {
+        // Version 1.0, one number named `x` with no bytes, the end.
+        let dict = [0x00, 0x01, kind, 1, 0, 0, 0, b'x', 0, 0, 0, 0, 0x00];
+        let mut field = u32::try_from(dict.len()).unwrap().to_le_bytes().to_vec();
+        field.extend(dict);
+        field
+    };
+    for field in [
+        [vec![3], vec![0, 0, 0, 0]].concat(),
+        [vec![12], dictionary(0x0C)].concat(),
+        [vec![11], dictionary(0x0D)].concat(),
+    ] {
+        let mut bytes = saved.clone();
+        bytes.splice(12..12, field);
+        std::fs::write(&fx.paths.database, bytes).unwrap();
+        assert!(matches!(
+            Vault::unlock(&fx.paths, &s("master")),
+            Err(Error::Parse(_))
+        ));
+    }
+    let short = kdbx3(&[(3, &[])], &[]);
+    assert!(matches!(
+        check_shared(&short, &s("anything")),
+        Err(Error::Parse(_))
+    ));
+}
+
+#[test]
+fn a_keepass_1_file_is_refused_before_its_key_is_derived() {
+    let mut kdb = vec![0x03, 0xD9, 0xA2, 0x9A, 0x65, 0xFB, 0x4B, 0xB5];
+    kdb.extend(2u32.to_le_bytes());
+    kdb.extend(0x0003_0002u32.to_le_bytes());
+    kdb.extend([7; 32]);
+    kdb.extend([0; 40]);
+    kdb.extend([9; 32]);
+    // About a minute of key derivation.
+    kdb.extend(u32::MAX.to_le_bytes());
+    kdb.extend([0; 16]);
+    assert!(matches!(
+        check_shared(&kdb, &s("anything")),
+        Err(Error::Unsupported(_))
+    ));
+    let fx = Fixture::new();
+    let (mut vault, _) = Vault::create(&fx.paths, &s("master")).unwrap();
+    std::fs::write(&fx.paths.database, &kdb).unwrap();
+    assert!(matches!(vault.refresh(), Err(Error::Unsupported(_))));
+}
+
+#[test]
+fn a_database_that_does_not_open_is_not_decrypted_again_until_it_changes() {
+    let fx = Fixture::new();
+    let (mut vault, _) = Vault::create(&fx.paths, &s("master")).unwrap();
+    vault.add_entry(&login("GitHub", "hunter2")).unwrap();
+    vault.save(&fx.backups()).unwrap();
+    let saved = std::fs::read(&fx.paths.database).unwrap();
+    // The header, and with it the check of the key, intact and the contents
+    // cut short: a sync client's half-written file.
+    std::fs::write(&fx.paths.database, &saved[..saved.len() - 40]).unwrap();
+    let Err(Error::Parse(first)) = vault.refresh() else {
+        panic!("a cut file opened");
+    };
+    let Err(Error::Parse(again)) = vault.refresh() else {
+        panic!("a cut file opened");
+    };
+    assert_ne!(first, again);
+    assert!(again.contains("once it changes"), "{again}");
+    // Once the file is whole again, it is read.
+    std::fs::write(&fx.paths.database, &saved).unwrap();
+    assert!(!vault.refresh().unwrap());
+    assert_eq!(vault.entries()[0].title, "GitHub");
+}
+
+#[test]
+fn a_damaged_key_slots_file_still_lets_the_recovery_key_in() {
+    let too_large = vec![b' '; 70 * 1024];
+    let damaged: [&[u8]; 4] = [
+        b"{ not json",
+        br#"{"format":"something else","version":1,"vaultId":"x","slots":[]}"#,
+        br#"{"format":"sshkm-vault-keys","version":0,"vaultId":"x","slots":[]}"#,
+        &too_large,
+    ];
+    for keys in damaged {
+        let fx = Fixture::new();
+        let (vault, recovery) = Vault::create(&fx.paths, &s("master")).unwrap();
+        drop(vault);
+        std::fs::write(&fx.paths.keys, keys).unwrap();
+
+        // The lock screen offers the recovery key rather than failing.
+        let files = probe(&fx.paths).unwrap();
+        assert!(files.exists && !files.has_master_password && files.vault_id.is_none());
+        let vault = Vault::recover(&fx.paths, &recovery, &s("new master")).unwrap();
+        drop(vault);
+        assert!(probe(&fx.paths).unwrap().has_master_password);
+        assert!(Vault::unlock(&fx.paths, &s("new master")).is_ok());
+
+        // The damaged file is kept next to the new one.
+        let aside: Vec<_> = std::fs::read_dir(fx.dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("vault.keys.damaged-")
+            })
+            .collect();
+        assert_eq!(aside.len(), 1, "{aside:?}");
+        assert_eq!(std::fs::read(&aside[0]).unwrap(), keys);
+    }
+}
+
+#[test]
+fn a_key_slots_file_from_a_newer_version_is_left_alone() {
+    let fx = Fixture::new();
+    let (vault, recovery) = Vault::create(&fx.paths, &s("master")).unwrap();
+    drop(vault);
+    // A later format may change anything but its format and version.
+    let newer =
+        br#"{"format":"sshkm-vault-keys","version":2,"vaultId":"x","slots":[{"type":"new"}]}"#;
+    std::fs::write(&fx.paths.keys, newer).unwrap();
+
+    // No recovery is offered over it, and none happens.
+    let Err(Error::Unsupported(why)) = probe(&fx.paths) else {
+        panic!("a newer key slots file looked damaged or fine");
+    };
+    assert!(why.contains("newer version"), "{why}");
+    assert!(matches!(
+        Vault::recover(&fx.paths, &recovery, &s("new master")),
+        Err(Error::Unsupported(_))
+    ));
+    assert!(matches!(
+        Vault::unlock(&fx.paths, &s("master")),
+        Err(Error::Unsupported(_))
+    ));
+    assert_eq!(std::fs::read(&fx.paths.keys).unwrap(), newer);
+    assert_eq!(std::fs::read_dir(fx.dir.path()).unwrap().count(), 2);
+}
+
+#[test]
+fn recovery_over_a_damaged_key_slots_file_keeps_one_written_meanwhile() {
+    let fx = Fixture::new();
+    let (vault, recovery) = Vault::create(&fx.paths, &s("master")).unwrap();
+    drop(vault);
+    let good = std::fs::read(&fx.paths.keys).unwrap();
+    std::fs::write(&fx.paths.keys, b"{ not json").unwrap();
+    // Another computer writes a good file between the read and the write:
+    // the write goes through the same check as any other and doesn't
+    // replace it.
+    let mut slots = KeySlots::new();
+    slots.set_password(&recovery, &s("elsewhere")).unwrap();
+    let aside = KeySlots::set_aside(&fx.paths.keys).unwrap();
+    std::fs::write(&fx.paths.keys, &good).unwrap();
+    let mut vault = Vault {
+        paths: fx.paths.clone(),
+        db: Database::new(),
+        secret: duplicate(&recovery),
+        slots: KeySlots::new(),
+        disk_hash: [0; 32],
+        unreadable: None,
+        keys_hash: None,
+    };
+    assert!(matches!(vault.write_slots(slots), Err(Error::Conflict(_))));
+    assert_eq!(std::fs::read(&fx.paths.keys).unwrap(), good);
+    assert!(aside.exists());
+}

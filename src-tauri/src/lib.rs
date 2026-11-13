@@ -19,6 +19,7 @@ mod menu;
 pub mod nearby;
 mod process;
 pub mod quick;
+mod secret_gate;
 mod state;
 pub mod terminal;
 mod tray;
@@ -136,6 +137,7 @@ pub fn run() {
             commands::ssh_tools::tunnel_stop_all,
             commands::ssh_tools::tunnel_export,
             commands::ssh_tools::set_proxy_jump,
+            commands::ssh_tools::key_convert_pick,
             commands::ssh_tools::key_convert_inspect,
             commands::ssh_tools::key_convert_import,
             commands::ssh_tools::key_convert_save,
@@ -223,6 +225,9 @@ pub fn run() {
             commands::vault::vault_strength,
             commands::vault::vault_change_master,
             commands::vault::vault_new_recovery_key,
+            commands::vault::vault_recovery_key_pending,
+            commands::vault::vault_unsaved_recovery_key,
+            commands::vault::vault_recovery_key_saved,
             commands::vault::vault_set_settings,
             commands::vault_hosts::vault_test_connection,
             commands::vault_hosts::vault_install_public_key,
@@ -243,6 +248,8 @@ pub fn run() {
             commands::vault_files::vault_export_csv,
             commands::vault_files::vault_export_kdbx,
             commands::vault_files::vault_location,
+            commands::vault_files::vault_pick_folder,
+            commands::vault_files::vault_pick_file,
             commands::vault_files::vault_move,
             commands::vault_files::vault_use_file,
             commands::vault_files::vault_use_default,
@@ -299,6 +306,7 @@ pub fn run() {
             commands::projects::projects_suggest_in_folder,
             commands::projects::projects_open_terminal,
             commands::projects::projects_reveal_folder,
+            commands::reveal::reveal_place,
             commands::projects::projects_missing_folders,
             commands::projects::projects_places,
             commands::projects::projects_set_part_folder,
@@ -331,6 +339,13 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to start SSH Key Manager")
         .run(|app, event| {
+            // A secret copied from the vault goes with the app, as with a
+            // lock: ⌘Q, Quit in the tray, closing the window, an update.
+            if let RunEvent::Exit = event
+                && let Some(state) = app.try_state::<Shared>()
+            {
+                state.vault.on_exit();
+            }
             // The `.env` files written only while the vault is unlocked go
             // with the app, and so do the pipes of virtual ones.
             if let RunEvent::Exit = event

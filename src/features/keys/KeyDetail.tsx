@@ -1,5 +1,3 @@
-import { isTauri } from '@tauri-apps/api/core';
-import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import {
   AlertOctagon,
   AlertTriangle,
@@ -116,14 +114,8 @@ export function KeyDetail({ keyView: key, findings }: { keyView: KeyView; findin
       toastError(t, error);
     }
   };
-  const reveal = async () => {
-    const path = key.privatePath ?? key.publicPath;
-    if (!path || !isTauri()) return;
-    try {
-      await revealItemInDir(path);
-    } catch (error) {
-      toastError(t, error);
-    }
+  const reveal = () => {
+    api.revealPlace({ kind: 'key', id: key.id }).catch((error: unknown) => toastError(t, error));
   };
 
   const path = key.privatePath ?? key.publicPath ?? '';

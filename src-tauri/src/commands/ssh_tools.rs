@@ -4,20 +4,25 @@
 //! and in [`crate::tunnels`], which runs the tunnels.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use ssh_key::PublicKey;
+use sshkm_core::ExposeSecret;
 use sshkm_core::SecretString;
 use sshkm_core::authorized_keys;
 use sshkm_core::authorized_line::{self, AuthorizedLine, LineOptions};
 use sshkm_core::config::HostKind;
-use sshkm_core::keys::convert::{self, KeyFileFormat, KeyFileInfo};
+use sshkm_core::keys::{
+    self,
+    convert::{self, KeyFileFormat, KeyFileInfo},
+};
 use sshkm_core::tunnels::Tunnel;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use super::config::{config_file, confirm_added, load_at};
-use super::keys::find_view;
+use super::keys::{confirm_unencrypted_copy, find_view, pick_key_file};
 use super::remote::{
     ADDED, COMMAND_ONLY, PRESENT, check_alias, combined, has_line, run_ssh, with_timeout_note,
 };
@@ -26,6 +31,7 @@ use super::{Shared, blocking};
 use crate::askpass::Secrets;
 use crate::confirm::Localized;
 use crate::error::{AppError, AppResult};
+use crate::state::AppState;
 use crate::terminal::types::PromptAnswer;
 use crate::tunnels::{SharedTunnels, TunnelView};
 use crate::types::{ConfigFile, KeyInstall, KeyView};
@@ -186,24 +192,57 @@ pub async fn set_proxy_jump(
 
 // --- Key converter -----------------------------------------------------------
 
+/// The key file picked in the converter's file dialog. Besides the private
+/// keys the app lists in `~/.ssh`, the only file the converter reads
+/// ([`convert_source`]).
+static PICKED_KEY: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Asks for a key file to convert in a system file dialog this side opens,
+/// and returns its path; `None` when the dialog was cancelled.
+#[tauri::command]
+pub async fn key_convert_pick(
+    app: AppHandle,
+    state: State<'_, Shared>,
+) -> AppResult<Option<String>> {
+    blocking(&state, move |state| {
+        let title = Localized::new(
+            "Choose a key file to convert",
+            "Выберите файл ключа для преобразования",
+            "Oʻzgartiriladigan kalit faylini tanlang",
+        );
+        let Some(path) = pick_key_file(&app, &state.paths.home, &title)? else {
+            return Ok(None);
+        };
+        let shown = path.to_string_lossy().into_owned();
+        *picked_key() = Some(path);
+        Ok(Some(shown))
+    })
+    .await
+}
+
 /// What the key file at `path` holds; with `passphrase`, an encrypted key is
-/// opened too (`wrong_passphrase` if it doesn't open).
+/// opened too (`wrong_passphrase` if it doesn't open). `path` is the file
+/// picked in [`key_convert_pick`] or a private key in `~/.ssh`.
 #[tauri::command]
 pub async fn key_convert_inspect(
     state: State<'_, Shared>,
     path: String,
     passphrase: Option<SecretString>,
 ) -> AppResult<KeyFileInfo> {
-    blocking(&state, move |_| {
-        Ok(convert::inspect(Path::new(&path), passphrase.as_ref())?)
+    blocking(&state, move |state| {
+        let source = convert_source(state, &path)?;
+        Ok(convert::inspect(&source, passphrase.as_ref())?)
     })
     .await
 }
 
-/// Converts the key at `path` to the OpenSSH format and adds it to `~/.ssh`
-/// as `file_name` (and `.pub`), as an import does: never over a file.
+/// Converts the key at `path` (as for [`key_convert_inspect`]) to the
+/// OpenSSH format and adds it to `~/.ssh` as `file_name` (and `.pub`), as an
+/// import does: never over a file. An encrypted key added without a new
+/// passphrase is confirmed in a native dialog first.
 #[tauri::command]
 pub async fn key_convert_import(
+    app: AppHandle,
     state: State<'_, Shared>,
     path: String,
     passphrase: Option<SecretString>,
@@ -212,9 +251,15 @@ pub async fn key_convert_import(
     comment: Option<String>,
 ) -> AppResult<KeyView> {
     blocking(&state, move |state| {
+        let source = convert_source(state, &path)?;
+        // A wrong passphrase is reported before anything is asked.
+        let opened = convert::inspect(&source, passphrase.as_ref())?;
+        if drops_passphrase(&opened, new_passphrase.as_ref()) {
+            confirm_unencrypted_copy(&app, &source, &state.paths.dir.join(&file_name))?;
+        }
         let info = convert::import(
             &state.paths.dir,
-            Path::new(&path),
+            &source,
             passphrase.as_ref(),
             &file_name,
             new_passphrase.as_ref(),
@@ -225,9 +270,10 @@ pub async fn key_convert_import(
     .await
 }
 
-/// Converts the key at `path` to `format` and saves it where the user picks
-/// in a system dialog; `None` if it was cancelled. Never over a file in
-/// `~/.ssh`.
+/// Converts the key at `path` (as for [`key_convert_inspect`]) to `format`
+/// and saves it where the user picks in a system dialog; `None` if it was
+/// cancelled. Never over a file in `~/.ssh`. An encrypted key saved without
+/// a passphrase is confirmed in a native dialog first.
 #[tauri::command]
 pub async fn key_convert_save(
     app: AppHandle,
@@ -239,7 +285,8 @@ pub async fn key_convert_save(
     comment: Option<String>,
 ) -> AppResult<Option<String>> {
     blocking(&state, move |state| {
-        let source = Path::new(&path);
+        let source = &convert_source(state, &path)?;
+        let opened = convert::inspect(source, passphrase.as_ref())?;
         // Converted first, so a wrong passphrase shows no dialog.
         let text = convert::convert(
             source,
@@ -251,6 +298,9 @@ pub async fn key_convert_save(
         let Some(target) = pick_target(&app, source, format)? else {
             return Ok(None);
         };
+        if drops_passphrase(&opened, new_passphrase.as_ref()) {
+            confirm_unencrypted_copy(&app, source, &target)?;
+        }
         if let Some(dir) = target.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -320,6 +370,41 @@ fn pick_target(
             ))),
             other => Ok(other),
         })
+}
+
+/// `path` if the converter may read it: the file picked in its dialog, or a
+/// private key the app lists in `~/.ssh`. Any other path the page names is
+/// refused.
+fn convert_source(state: &AppState, path: &str) -> AppResult<PathBuf> {
+    let picked = picked_key().clone();
+    convert_source_in(&state.paths.dir, path, picked.as_deref())
+}
+
+fn convert_source_in(ssh_dir: &Path, path: &str, picked: Option<&Path>) -> AppResult<PathBuf> {
+    let path = PathBuf::from(path);
+    if picked == Some(path.as_path()) {
+        return Ok(path);
+    }
+    let listed = keys::scan(ssh_dir)?
+        .keys
+        .iter()
+        .filter_map(|key| key.private_path.as_deref())
+        .any(|private| Path::new(private) == path);
+    if listed {
+        Ok(path)
+    } else {
+        Err(AppError::invalid("choose the key file again"))
+    }
+}
+
+/// Whether writing out the opened key `opened` with `new_passphrase` leaves
+/// an encrypted key without one.
+fn drops_passphrase(opened: &KeyFileInfo, new_passphrase: Option<&SecretString>) -> bool {
+    opened.encrypted && opened.opened && new_passphrase.is_none_or(|p| p.expose_secret().is_empty())
+}
+
+fn picked_key() -> MutexGuard<'static, Option<PathBuf>> {
+    PICKED_KEY.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 // --- authorized_keys line ----------------------------------------------------
@@ -431,6 +516,65 @@ mod tests {
 
     const KEY: &str =
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHJCszOHaI9X/yGLtjn22f0hO6VPMQDVtctkym6FJH1W a@b";
+
+    #[test]
+    fn the_converter_reads_only_a_picked_file_or_a_key_in_ssh() {
+        let home = tempfile::tempdir().unwrap();
+        let ssh = home.path().join(".ssh");
+        let key = keys::generate(
+            &ssh,
+            &keys::GenerateRequest {
+                algorithm: keys::GenerateAlgorithm::Ed25519,
+                file_name: "id_work".into(),
+                comment: String::new(),
+                passphrase: None,
+            },
+        )
+        .unwrap();
+        let listed = key.private_path.unwrap();
+        let picked = home.path().join("Downloads").join("server.ppk");
+        let elsewhere = home.path().join("other").join("id_other");
+
+        assert_eq!(
+            convert_source_in(&ssh, &listed, None).unwrap(),
+            PathBuf::from(&listed)
+        );
+        let picked_text = picked.to_string_lossy();
+        assert_eq!(
+            convert_source_in(&ssh, &picked_text, Some(&picked)).unwrap(),
+            picked
+        );
+        // A path the page made up, or a file picked before another.
+        for path in [&elsewhere, &picked] {
+            let error =
+                convert_source_in(&ssh, &path.to_string_lossy(), Some(&elsewhere.join("x")))
+                    .unwrap_err();
+            assert_eq!(error.code(), sshkm_core::ErrorCode::InvalidInput);
+        }
+        assert!(convert_source_in(&ssh, &format!("{listed}.pub"), None).is_err());
+    }
+
+    #[test]
+    fn writing_an_encrypted_key_without_a_passphrase_is_confirmed() {
+        let info = |encrypted, opened| KeyFileInfo {
+            format: KeyFileFormat::Openssh,
+            algorithm: None,
+            bits: None,
+            comment: String::new(),
+            encrypted,
+            opened,
+            fingerprints: None,
+            suggested_name: "key".into(),
+        };
+        let new = SecretString::from("new passphrase".to_owned());
+        let empty = SecretString::from(String::new());
+        assert!(drops_passphrase(&info(true, true), None));
+        assert!(drops_passphrase(&info(true, true), Some(&empty)));
+        assert!(!drops_passphrase(&info(true, true), Some(&new)));
+        // Nothing to drop; or not opened, so it can't be written at all.
+        assert!(!drops_passphrase(&info(false, true), None));
+        assert!(!drops_passphrase(&info(true, false), None));
+    }
 
     #[test]
     fn the_install_script_stays_one_quoted_line() {

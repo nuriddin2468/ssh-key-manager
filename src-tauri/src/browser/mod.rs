@@ -74,6 +74,9 @@ pub const PAIRING_EVENT: &str = "browser-pairing";
 pub const CHANGED_EVENT: &str = "browser-changed";
 /// Emitted when the extension asks to unlock the vault.
 pub const UNLOCK_EVENT: &str = "browser-unlock";
+/// Emitted with the browser's name when an extension too old to pair asks
+/// to.
+pub const OUTDATED_EVENT: &str = "browser-outdated";
 
 const SETTINGS_FILE: &str = "browser.json";
 const ENDPOINT_FILE: &str = "browser-endpoint";
@@ -463,7 +466,10 @@ impl Env for TauriEnv {
         state.vault.change(&self.app, &state.backup_dir, work)
     }
 
-    fn write_keys<T>(&self, work: impl FnOnce(&mut Vault) -> AppResult<T>) -> AppResult<T> {
+    fn write_without_backup<T>(
+        &self,
+        work: impl FnOnce(&mut Vault) -> AppResult<T>,
+    ) -> AppResult<T> {
         let state = self.state()?;
         state
             .vault
@@ -475,6 +481,11 @@ impl Env for TauriEnv {
             crate::tray::show_window(&self.app);
         }
         let _ = self.app.emit(PAIRING_EVENT, request);
+    }
+
+    fn outdated_extension(&self, browser: &str) {
+        crate::tray::show_window(&self.app);
+        let _ = self.app.emit(OUTDATED_EVENT, browser);
     }
 
     fn show(&self) {

@@ -198,6 +198,12 @@ fn macos_passwords_decrypt_with_the_keychain_password() {
     assert_eq!(logins.unreadable(), 0);
     // Asked once, for all of them.
     assert_eq!(keys.asked.get(), 1);
+    // Printed for a log or a panic, the logins show no password.
+    let shown = format!("{logins:?}");
+    assert!(
+        !shown.contains("hunter2") && !shown.contains("пароль"),
+        "{shown}"
+    );
 }
 
 #[test]

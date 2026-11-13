@@ -40,6 +40,9 @@ pub const UNLOCKED_EVENT: &str = "vault-unlocked";
 const SETTINGS_FILE: &str = "vault.json";
 /// The projects without secrets, shown while the vault is locked.
 const PROJECTS_COPY: &str = "projects.json";
+/// The id of a vault whose recovery key was made here and not yet confirmed
+/// as saved ([`VaultRuntime::unsaved_recovery_key`]).
+const UNSAVED_RECOVERY_KEY: &str = "recovery-key-unsaved";
 const DATABASE_FILE: &str = "vault.kdbx";
 const TICK: Duration = Duration::from_secs(5);
 /// A tick that comes this late means the computer was asleep.
@@ -110,7 +113,7 @@ pub struct VaultRuntime {
     data_dir: PathBuf,
     settings: Mutex<VaultSettings>,
     unlocked: Mutex<Option<Vault>>,
-    last_activity: Mutex<Instant>,
+    last_activity: Mutex<Moment>,
     clipboard: Mutex<ClipboardState>,
     /// Bumped whenever a session ends.
     session: AtomicU64,
@@ -222,7 +225,7 @@ impl VaultRuntime {
             data_dir,
             settings: Mutex::new(settings),
             unlocked: Mutex::new(None),
-            last_activity: Mutex::new(Instant::now()),
+            last_activity: Mutex::new(Moment::now()),
             clipboard: Mutex::new(ClipboardState::default()),
             session: AtomicU64::new(0),
             app: OnceLock::new(),
@@ -400,6 +403,87 @@ impl VaultRuntime {
         true
     }
 
+    /// Notes that the recovery key just made for `vault` is not yet confirmed
+    /// as saved. Only the app sets this, when it makes a key; the page can
+    /// only clear it ([`Self::recovery_key_saved`]). A note that can't be
+    /// written is logged: the key is on the screen already.
+    pub fn recovery_key_unsaved(&self, vault: &Vault) {
+        let path = self.data_dir.join(UNSAVED_RECOVERY_KEY);
+        if let Err(error) = fsutil::atomic_write(&path, vault.vault_id().as_bytes(), 0o600) {
+            log::warn!("vault: the note of an unsaved recovery key was not written: {error}");
+        }
+    }
+
+    /// The user confirmed the recovery key made last as saved.
+    pub fn recovery_key_saved(&self) -> AppResult<()> {
+        let path = self.data_dir.join(UNSAVED_RECOVERY_KEY);
+        match std::fs::remove_file(&path) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                Err(AppError::new(ErrorCode::Io, error.to_string()))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Whether the unlocked vault's recovery key, made here, is not yet
+    /// confirmed as saved; the UI then reminds the user. Quiet, and gives
+    /// nothing of the key.
+    pub fn has_unsaved_recovery_key(&self, app: &AppHandle) -> AppResult<bool> {
+        self.access(app, false, |vault| {
+            Ok(self.unsaved_recovery_key(vault).is_some())
+        })
+    }
+
+    /// The recovery key not yet confirmed as saved, once `confirm` — the
+    /// user's yes in a native dialog — allows it: a lock took a new key off
+    /// the screen, and the user asks to see it again. It is read from the
+    /// unlocked vault (it is its password), and nothing of it is kept while
+    /// the vault is locked. `None`, without asking, when there is none. The
+    /// vault is not held while the dialog is open.
+    pub fn reveal_unsaved_recovery_key(
+        &self,
+        app: &AppHandle,
+        confirm: impl FnOnce() -> AppResult<()>,
+    ) -> AppResult<Option<SecretString>> {
+        self.reveal_unsaved_recovery_key_then(confirm, || {
+            let _ = app.emit(LOCKED_EVENT, LockReason::Changed);
+        })
+    }
+
+    /// [`Self::reveal_unsaved_recovery_key`], calling `on_changed` as
+    /// [`Self::access_then`] does.
+    fn reveal_unsaved_recovery_key_then(
+        &self,
+        confirm: impl FnOnce() -> AppResult<()>,
+        on_changed: impl Fn(),
+    ) -> AppResult<Option<SecretString>> {
+        let noted = self.access_then(
+            false,
+            |vault| Ok(self.unsaved_recovery_key(vault).is_some()),
+            &on_changed,
+        )?;
+        if !noted {
+            return Ok(None);
+        }
+        confirm()?;
+        self.access_then(
+            false,
+            |vault| Ok(self.unsaved_recovery_key(vault)),
+            &on_changed,
+        )
+    }
+
+    /// The recovery key of the unlocked `vault`, while the one made here is
+    /// not yet confirmed as saved. `None` for another vault, or a password
+    /// that isn't a recovery key (a KeePass file's own).
+    fn unsaved_recovery_key(&self, vault: &Vault) -> Option<SecretString> {
+        let noted = std::fs::read_to_string(self.data_dir.join(UNSAVED_RECOVERY_KEY)).ok()?;
+        if noted.trim() != vault.vault_id() {
+            return None;
+        }
+        core_vault::canonical_recovery_key(&vault.share_secret())
+    }
+
     /// Keeps the copy of the vault's projects without secrets that shows
     /// while it is locked ([`projects::save_copy`]). A copy that can't be
     /// written is logged: it only makes the locked view out of date.
@@ -424,7 +508,7 @@ impl VaultRuntime {
 
     /// Records activity, postponing the auto-lock.
     pub fn touch(&self) {
-        *lock(&self.last_activity) = Instant::now();
+        *lock(&self.last_activity) = Moment::now();
     }
 
     /// Runs `work` on the unlocked vault after picking up changes made
@@ -640,6 +724,14 @@ impl VaultRuntime {
         Ok(Some(seconds))
     }
 
+    /// For quitting the app, however it quits: clears the clipboard if it
+    /// still holds a secret copied from the vault, as a lock does. The
+    /// pending clear goes with the app, and on macOS and Windows the
+    /// clipboard would keep the secret.
+    pub fn on_exit(&self) {
+        self.clear_copied_secret();
+    }
+
     /// Clears the clipboard if it still holds the secret copied last.
     /// Also drops the logins read from a browser for an import: whenever the
     /// open vault goes, they go with it.
@@ -678,6 +770,12 @@ impl VaultRuntime {
     /// Why the unlocked vault should lock now, if it should: after the
     /// computer `slept`, or after the configured time without activity.
     fn lock_due(&self, slept: bool) -> Option<LockReason> {
+        self.lock_due_at(slept, Moment::now())
+    }
+
+    /// [`Self::lock_due`] at `now`. Time asleep counts as time without
+    /// activity, whether or not the vault locks with sleep.
+    fn lock_due_at(&self, slept: bool, now: Moment) -> Option<LockReason> {
         if !self.is_unlocked() {
             return None;
         }
@@ -686,8 +784,34 @@ impl VaultRuntime {
             return Some(LockReason::Sleep);
         }
         let minutes = settings.auto_lock_minutes?;
-        let idle = lock(&self.last_activity).elapsed();
+        let idle = lock(&self.last_activity).until(now);
         (idle >= Duration::from_secs(u64::from(minutes) * 60)).then_some(LockReason::Idle)
+    }
+}
+
+/// A moment on both clocks. `Instant` stops while the computer sleeps on
+/// macOS and Linux; the wall clock goes on.
+#[derive(Debug, Clone, Copy)]
+struct Moment {
+    instant: Instant,
+    wall: SystemTime,
+}
+
+impl Moment {
+    fn now() -> Self {
+        Self {
+            instant: Instant::now(),
+            wall: SystemTime::now(),
+        }
+    }
+
+    /// The time from this moment to `later`, counting time asleep: the
+    /// longer of the two clocks' measures. A wall clock set back counts
+    /// nothing, and the monotonic clock still does.
+    fn until(self, later: Self) -> Duration {
+        let awake = later.instant.saturating_duration_since(self.instant);
+        let wall = later.wall.duration_since(self.wall).unwrap_or_default();
+        awake.max(wall)
     }
 }
 
@@ -816,7 +940,7 @@ mod tests {
         let (vault, _) = Vault::create(&runtime.paths(), &s("master")).unwrap();
         runtime.set_unlocked(vault);
         assert_eq!(runtime.lock_due(false), None);
-        let Some(long_ago) = Instant::now().checked_sub(Duration::from_secs(6 * 60)) else {
+        let Some(long_ago) = ago(Duration::from_secs(6 * 60), Duration::from_secs(6 * 60)) else {
             return;
         };
         *lock(&runtime.last_activity) = long_ago;
@@ -834,6 +958,127 @@ mod tests {
         assert_eq!(runtime.lock_due(true), Some(LockReason::Sleep));
         assert!(runtime.lock_now());
         assert_eq!(runtime.lock_due(true), None);
+    }
+
+    /// A moment `awake` ago on the monotonic clock and `wall` ago on the
+    /// wall clock; `None` if the monotonic clock doesn't go back that far.
+    fn ago(awake: Duration, wall: Duration) -> Option<Moment> {
+        let now = Moment::now();
+        Some(Moment {
+            instant: now.instant.checked_sub(awake)?,
+            wall: now.wall.checked_sub(wall)?,
+        })
+    }
+
+    #[test]
+    fn time_asleep_counts_as_time_without_activity() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = runtime(&dir.path().join("data"), &dir.path().join("vault.kdbx"));
+        let mut settings = runtime.settings();
+        settings.lock_on_sleep = false;
+        settings.auto_lock_minutes = Some(5);
+        runtime.set_settings(settings).unwrap();
+        let (vault, _) = Vault::create(&runtime.paths(), &s("master")).unwrap();
+        runtime.set_unlocked(vault);
+
+        // Active a minute before the lid closed, then asleep for ten: the
+        // monotonic clock saw one minute, the wall clock eleven.
+        let Some(before_sleep) = ago(Duration::from_secs(60), Duration::from_secs(11 * 60)) else {
+            return;
+        };
+        *lock(&runtime.last_activity) = before_sleep;
+        assert_eq!(runtime.lock_due(true), Some(LockReason::Idle));
+
+        // A minute awake and not asleep is no reason to lock, and a wall
+        // clock set back doesn't count against the monotonic one.
+        let now = Moment::now();
+        let Some(instant) = now.instant.checked_sub(Duration::from_secs(60)) else {
+            return;
+        };
+        *lock(&runtime.last_activity) = Moment {
+            instant,
+            wall: now.wall + Duration::from_secs(3600),
+        };
+        assert_eq!(runtime.lock_due_at(false, now), None);
+        let Some(instant) = now.instant.checked_sub(Duration::from_secs(6 * 60)) else {
+            return;
+        };
+        lock(&runtime.last_activity).instant = instant;
+        assert_eq!(runtime.lock_due_at(false, now), Some(LockReason::Idle));
+    }
+
+    #[test]
+    fn a_recovery_key_not_yet_saved_comes_back_after_a_lock_and_unlock() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(&dir.path().join("data"), &dir.path().join("vault.kdbx"));
+        let (vault, recovery) = Vault::create(&rt.paths(), &s("master")).unwrap();
+        assert!(rt.unsaved_recovery_key(&vault).is_none());
+        rt.recovery_key_unsaved(&vault);
+        rt.set_unlocked(vault);
+
+        // Locked, the app keeps nothing of it.
+        assert!(rt.lock_now());
+        assert!(run_locked(&rt).is_err());
+        assert!(
+            rt.reveal_unsaved_recovery_key_then(|| Ok(()), || {})
+                .is_err()
+        );
+        rt.set_unlocked(Vault::unlock(&rt.paths(), &s("master")).unwrap());
+
+        // Unlocked again, it is shown only after the user's yes in the
+        // native dialog; a no keeps the note, so the reminder stays.
+        let no = rt.reveal_unsaved_recovery_key_then(
+            || Err(AppError::new(ErrorCode::Cancelled, "not approved")),
+            || {},
+        );
+        assert!(matches!(no, Err(e) if e.code() == ErrorCode::Cancelled));
+        assert!(run(&rt, false, |vault| Ok(rt.unsaved_recovery_key(vault))).is_some());
+        let asked = std::cell::Cell::new(0);
+        let yes = rt
+            .reveal_unsaved_recovery_key_then(
+                || {
+                    asked.set(asked.get() + 1);
+                    Ok(())
+                },
+                || {},
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(yes.expose_secret(), recovery.expose_secret());
+        assert_eq!(asked.get(), 1);
+
+        // Once saved, it is never handed out again, and nobody is asked.
+        rt.recovery_key_saved().unwrap();
+        rt.recovery_key_saved().unwrap();
+        let none = rt
+            .reveal_unsaved_recovery_key_then(|| panic!("asked about a key that is saved"), || {});
+        assert!(none.unwrap().is_none());
+    }
+
+    #[test]
+    fn a_noted_recovery_key_is_only_shown_for_its_own_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(&dir.path().join("data"), &dir.path().join("vault.kdbx"));
+        let (first, _) = Vault::create(&rt.paths(), &s("master")).unwrap();
+        rt.recovery_key_unsaved(&first);
+        let other = VaultPaths::new(dir.path().join("other.kdbx"));
+        let (second, _) = Vault::create(&other, &s("master")).unwrap();
+        assert!(rt.unsaved_recovery_key(&second).is_none());
+        assert!(rt.unsaved_recovery_key(&first).is_some());
+    }
+
+    /// What a command gets while the vault is locked.
+    fn run_locked(runtime: &VaultRuntime) -> AppResult<()> {
+        runtime.access_then(false, |_| Ok(()), || {})
+    }
+
+    #[test]
+    fn quitting_clears_a_copied_secret_the_clipboard_still_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = runtime(&dir.path().join("data"), &dir.path().join("vault.kdbx"));
+        lock(&runtime.clipboard).secret = Some(Sha256::digest(b"hunter2").into());
+        runtime.on_exit();
+        assert_eq!(lock(&runtime.clipboard).secret, None);
     }
 
     #[test]

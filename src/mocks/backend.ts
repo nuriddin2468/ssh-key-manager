@@ -625,6 +625,12 @@ const handlers: Record<string, (args: Record<string, unknown>) => unknown> = {
   trash_key: ({ keyId }) => {
     keys = keys.filter((k) => k.id !== keyId);
   },
+  // Stands in for Finder: a key is looked up by its id, as the backend does.
+  reveal_place: ({ place }) => {
+    const target = place as { kind: string; id?: string };
+    if (target.kind === 'key' && !findKey(String(target.id))) return fail('not_found', 'key');
+    return null;
+  },
   agent_view: agentView,
   agent_add: ({ keyId, passphrase, lifetimeSecs }) => {
     const k = findKey(keyId);

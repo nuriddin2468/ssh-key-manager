@@ -615,7 +615,9 @@ pub async fn projects_pick_part_folder(
 /// as the project keeps it and `path` one in it (empty for the folder
 /// itself), as the project's places name them; nothing else opens. The
 /// shell gets the variables of `env`, which must be one of those the place
-/// offers a terminal (a local one), or none. While the vault is locked the
+/// offers a terminal (a local one), or none; its secret values go in only
+/// once the user said yes in a native dialog
+/// ([`crate::secret_gate::confirm_env_secrets`]). While the vault is locked the
 /// project comes from the copy kept for then, and the shell gets none.
 #[tauri::command]
 #[expect(
@@ -640,6 +642,14 @@ pub async fn projects_open_terminal(
         path: path.unwrap_or_default(),
     };
     blocking(&state, move |state| {
+        if let Some(env) = &env {
+            crate::secret_gate::confirm_env_secrets(
+                &app,
+                state,
+                env,
+                &crate::secret_gate::EnvUse::Shell,
+            )?;
+        }
         let opened = state.vault.with(&app, |vault| {
             let project = vault.project(&id)?;
             let places = vault.project_places(&id)?;

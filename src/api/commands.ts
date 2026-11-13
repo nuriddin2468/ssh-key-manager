@@ -97,6 +97,7 @@ import type { PromptAnswer } from '@/bindings/PromptAnswer';
 import type { QuickItems } from '@/bindings/QuickItems';
 import type { QuickStatus } from '@/bindings/QuickStatus';
 import type { ReceivedGroup } from '@/bindings/ReceivedGroup';
+import type { RevealPlace } from '@/bindings/RevealPlace';
 import type { SavedHost } from '@/bindings/SavedHost';
 import type { SecretField } from '@/bindings/SecretField';
 import type { SecretPreset } from '@/bindings/SecretPreset';
@@ -150,8 +151,8 @@ export const api = {
   /** `checkKeyLogin` with the key passphrases saved in the vault. */
   vaultCheckKeyLogin: (alias: string, keyId: string) =>
     call<KeyLoginCheck>('vault_check_key_login', { alias, keyId }),
-  importKey: (source: string, fileName: string | null) =>
-    call<KeyView>('import_key', { source, fileName }),
+  /** Asks for a private key in a system file dialog and adds it to ~/.ssh; `null` if cancelled. */
+  importKey: () => call<KeyView | null>('import_key'),
   trashKey: (keyId: string) => call<void>('trash_key', { keyId }),
 
   agent: () => call<AgentView>('agent_view'),
@@ -210,7 +211,9 @@ export const api = {
   /** `jump: null` removes `ProxyJump` from the blocks `targets`. */
   setProxyJump: (jump: string | null, targets: number[], revision: string) =>
     call<ConfigFile>('set_proxy_jump', { jump, targets, revision }),
-  /** With a passphrase, an encrypted key is opened too (`wrong_passphrase` if it doesn't). */
+  /** Asks for a key file to convert in a system file dialog; its path, or `null` if cancelled. */
+  keyConvertPick: () => call<string | null>('key_convert_pick'),
+  /** `path`: the file `keyConvertPick` returned or a private key in ~/.ssh. With a passphrase, an encrypted key is opened too (`wrong_passphrase` if it doesn't). */
   keyConvertInspect: (path: string, passphrase: string | null) =>
     call<KeyFileInfo>('key_convert_inspect', { path, passphrase }),
   /** Adds the key to ~/.ssh in the OpenSSH format, never over a file. */
@@ -338,6 +341,16 @@ export const api = {
     call<void>('vault_change_master', { current, new: next }),
   /** Returns the new recovery key, to be shown once. */
   vaultNewRecoveryKey: (master: string) => call<string>('vault_new_recovery_key', { master }),
+  /** Whether the recovery key made last isn't confirmed as saved yet; gives no key. */
+  vaultRecoveryKeyPending: () => call<boolean>('vault_recovery_key_pending'),
+  /**
+   * The recovery key made last, while it isn't confirmed as saved (a lock took
+   * it off the screen); `null` once it is. Asks in a native dialog first, every
+   * time; `cancelled` if the user says no. Needs the vault unlocked.
+   */
+  vaultUnsavedRecoveryKey: () => call<string | null>('vault_unsaved_recovery_key'),
+  /** The user confirmed the recovery key made last as saved. */
+  vaultRecoveryKeySaved: () => call<void>('vault_recovery_key_saved'),
   /** A change that weakens the vault's protection is confirmed in a native dialog first. */
   vaultSetSettings: (settings: VaultSettings) =>
     call<VaultSettings>('vault_set_settings', { settings }),
@@ -484,9 +497,13 @@ export const api = {
   /** Like `vaultExportCsv`, for a copy of the database, which opens with the recovery key. */
   vaultExportKdbx: (master: string) => call<Exported | null>('vault_export_kdbx', { master }),
   vaultLocation: () => call<VaultLocation>('vault_location'),
-  /** Moves both vault files into `folder`, locked or unlocked, after a native confirmation. */
+  /** Asks for a folder for the vault in a system file dialog; `null` if cancelled. */
+  vaultPickFolder: () => call<string | null>('vault_pick_folder'),
+  /** Asks for a `.kdbx` file in a system file dialog; `null` if cancelled. Nothing is read yet. */
+  vaultPickFile: () => call<string | null>('vault_pick_file'),
+  /** Moves both vault files into `folder` (from `vaultPickFolder`), locked or unlocked, after a native confirmation. */
   vaultMove: (folder: string) => call<VaultLocation>('vault_move', { folder }),
-  /** Locks the vault and switches to another `.kdbx` file, after a native confirmation. */
+  /** Locks the vault and switches to the `.kdbx` file from `vaultPickFile`, after a native confirmation. */
   vaultUseFile: (path: string) => call<VaultLocation>('vault_use_file', { path }),
   /** Back to the app's folder: move the files there, or switch to the vault there. */
   vaultUseDefault: (moveFiles: boolean) => call<VaultLocation>('vault_use_default', { moveFiles }),
@@ -702,6 +719,8 @@ export const api = {
   /** Shows one of the project's folders in Finder, Explorer or Files; the backend checks it. */
   projectsRevealFolder: (id: string, place: ProjectFolder) =>
     call<null>('projects_reveal_folder', { id, folder: place.folder, path: place.path }),
+  /** Shows a file the app works with in Finder, Explorer or Files, named by place or id. */
+  revealPlace: (place: RevealPlace) => call<null>('reveal_place', { place }),
 
   // Running on with the window closed, and the tray icon
   // (src-tauri/src/commands/background.rs).

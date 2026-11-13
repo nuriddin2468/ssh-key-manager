@@ -723,6 +723,8 @@ const uz = {
       'Ombor bir vaqtning oʻzida boshqa kompyuterda oʻzgartirildi. Oʻsha versiya saqlab qolindi, sizning oʻzgarishingiz esa alohida nusxaga yozildi.',
     vault_locked: 'Ombor qulflangan. Uni oching va qayta urinib koʻring.',
     cancelled: 'Bekor qilindi.',
+    too_many_attempts:
+      'Muvaffaqiyatsiz urinishlar juda koʻp. Biroz kuting va qayta urinib koʻring.',
     unknown: 'Kutilmagan xato.',
   },
   keys: {
@@ -2273,6 +2275,14 @@ const uz = {
     meta_one: '{{count}} ta yozuv',
     meta_other: '{{count}} ta yozuv',
     loadFailed: 'Omborni ochib boʻlmadi',
+    keysTooNew:
+      'Bu omborni SSH Key Manager’ning yangiroq versiyasi oʻzgartirgan. Uni ochish uchun ilovani yangilang.',
+    unsavedKeyTitle: 'Yangi tiklash kaliti hali saqlanmagan',
+    unsavedKeyText: 'Ombor siz uni saqlaganingizni tasdiqlashingizdan oldin qulflandi.',
+    unsavedKeyCardText:
+      'Ombor siz uni saqlaganingizni tasdiqlashingizdan oldin qulflandi. Kalitni yana koʻrsating va saqlang: asosiy parolni unutsangiz, faqat u kirishni qaytaradi.',
+    unsavedKeyShow: 'Kalitni koʻrsatish',
+    unsavedKeyLater: 'Keyinroq',
     createTitle: 'Parollarni kalitlaringiz yonida saqlang',
     createText:
       'Server parollari, kalit parol iboralari va sayt loginlari — bitta shifrlangan omborda.',
@@ -2578,6 +2588,7 @@ const uz = {
     newSession: 'Yangi seans',
     closeSession: '{{alias}} seansini yopish',
     terminalLabel: 'Terminal: {{alias}}',
+    linkOpen: 'Ochish: {{key}} + bosish',
     shells: {
       cmd: 'Buyruq satri',
     },
@@ -2590,6 +2601,8 @@ const uz = {
       shellMissing:
         'Bu shell endi kompyuterda yoʻq. Sozlamalar → Terminal boʻlimida boshqasini tanlang.',
       folderMissing: 'Bu papka yoki uning loyihasi endi bu kompyuterda yoʻq.',
+      secretsDeclined:
+        'Ishga tushirilmadi: siz unga muhitning maxfiy qiymatlarini bermaslikni tanladingiz.',
       status: {
         connecting: 'ishga tushmoqda…',
         connected: 'ishlamoqda',
@@ -3580,9 +3593,6 @@ const uz = {
       useFile: 'Boshqa ombor faylidan foydalanish…',
       backToDefault: 'Standart joyga qaytarish',
       sync: 'Ombordan bir nechta kompyuterda foydalanish uchun uni Dropbox, iCloud Drive yoki OneDrive papkasiga koʻchiring, qolganlarida esa xuddi shu faylni tanlang. Ikki kompyuter uni bir vaqtda oʻzgartirsa, hech narsa yoʻqolmaydi: boshqa versiya zaxira nusxalar yonida alohida nusxa sifatida saqlanadi.',
-      pickFolderTitle: 'Ombor uchun papka tanlang',
-      pickFileTitle: 'Ombor faylini tanlang',
-      keepassFiles: 'KeePass bazalari',
       moveTitle: 'Ombor {{folder}} ga koʻchirilsinmi?',
       moveText:
         'Ombor fayllarining ikkalasi shu papkaga koʻchadi. Ombor ochiq boʻlsa, ochiqligicha qoladi.',
@@ -4318,6 +4328,8 @@ const uz = {
     pairDecline: 'Rad etish',
     pairConnect: 'Ulash',
     pairExpired: 'Ulanish soʻrovining vaqti tugadi',
+    extensionOutdated:
+      '{{browser}} brauzeridagi SSH Key Manager kengaytmasi eskirgan. Uni yangilang va qayta ulang. Agar brauzerning kengaytmalar doʻkoni hali yangilanishni taklif qilmasa, bir necha kundan keyin qayta urinib koʻring.',
     paired: '{{browser}} ulandi',
     unlockRequest: 'Brauzerda parollarni toʻldirish uchun omborni oching',
   },

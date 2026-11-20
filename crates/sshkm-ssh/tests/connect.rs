@@ -118,7 +118,10 @@ async fn a_known_host_opens_a_shell_signed_by_the_app() {
 
     shell.keepalive().await.unwrap();
     shell.close().await;
-    server.wait_for(|log| log.closed).await;
+    // The server's session ends: it reads the channel's close, or (on
+    // Windows, where closing the socket right after may reset it before
+    // the server reads) the connection's end.
+    server.wait_for(|log| log.closed || log.ended > 0).await;
     // The shell ends, without an exit status (nothing exited), and the
     // connection with it.
     assert_eq!(closed(&shell).await.exit_status, None);

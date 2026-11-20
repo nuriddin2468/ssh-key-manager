@@ -62,6 +62,8 @@ pub struct Log {
     pub closed: bool,
     pub forwards: Vec<(String, u32)>,
     pub rounds: usize,
+    /// Sessions that have ended, however they ended.
+    pub ended: usize,
 }
 
 pub struct TestServer {
@@ -109,10 +111,12 @@ impl TestServer {
                     sessions: Vec::new(),
                 };
                 let config = Arc::clone(&config);
+                let log = Arc::clone(&shared);
                 tokio::spawn(async move {
                     if let Ok(session) = server::run_stream(config, stream, handler).await {
                         let _ = session.await;
                     }
+                    log.lock().unwrap().ended += 1;
                 });
             }
         });

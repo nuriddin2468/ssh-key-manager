@@ -24,6 +24,8 @@
 //! - [`authorized_line`]: one `authorized_keys` line with options, checked.
 //! - [`tunnels`]: saved port forwards and the `ssh` that holds each open.
 //! - [`perms`]: permission checks and fixes (Unix modes, Windows ACLs).
+//! - [`prompt`]: what a server's prompt asks for: the password, a one-time
+//!   code or something else.
 //! - [`audit`]: security findings computed from all of the above.
 //! - [`diagnose`]: why an `ssh` run failed, read from what it printed.
 //! - [`vault`]: the encrypted password vault, its key slots and the password
@@ -76,6 +78,7 @@ pub mod net;
 pub mod p2p;
 pub mod paths;
 pub mod perms;
+pub mod prompt;
 mod severity;
 #[cfg(feature = "shell-history")]
 pub mod shell_history;

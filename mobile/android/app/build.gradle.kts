@@ -134,6 +134,7 @@ fun rustSources(task: Task): ConfigurableFileCollection =
     task.project.files(
         cargoWorkspace.dir("crates/sshkm-core"),
         cargoWorkspace.dir("crates/sshkm-mobile"),
+        cargoWorkspace.dir("crates/sshkm-ssh"),
         cargoWorkspace.file("Cargo.toml"),
         cargoWorkspace.file("Cargo.lock"),
         cargoWorkspace.file("rust-toolchain.toml"),

@@ -15,6 +15,7 @@
 
 mod jump;
 mod lexer;
+mod resolve;
 mod risky;
 
 use std::{
@@ -27,6 +28,7 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) use self::lexer::split_args;
 use self::lexer::{Directive, LineKind, lex, render_value};
+pub use self::resolve::{EffectiveOption, EffectiveSettings};
 #[cfg(feature = "ssh-audit")]
 pub(crate) use self::risky::matches_pattern;
 pub use self::risky::{Risk, RiskyDirective};

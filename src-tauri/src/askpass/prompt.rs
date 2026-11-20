@@ -14,6 +14,7 @@
 //! (see [`Connection`](super::Connection)).
 
 use serde::Serialize;
+use sshkm_core::prompt::{ServerPrompt, is_one_time_code, is_password, last_line};
 
 /// What a prompt asks for.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
@@ -127,12 +128,10 @@ impl Prompt {
 
         let kind = if from_server {
             // The server wrote everything after the prefix.
-            if is_one_time_code(&lower) {
-                PromptKind::OneTimeCode
-            } else if is_password(&lower) {
-                PromptKind::Password
-            } else {
-                PromptKind::Other
+            match ServerPrompt::of(question) {
+                ServerPrompt::OneTimeCode => PromptKind::OneTimeCode,
+                ServerPrompt::Password => PromptKind::Password,
+                ServerPrompt::Other => PromptKind::Other,
             }
         } else if whole.contains("continue connecting") || whole.contains("authenticity of host") {
             PromptKind::HostKeyConfirm
@@ -185,15 +184,6 @@ fn split_kbdint_prefix(text: &str) -> (Option<PromptAccount>, &str) {
     }
 }
 
-/// The question itself: the last line that is not blank, trimmed.
-fn last_line(text: &str) -> &str {
-    text.lines()
-        .rev()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or("")
-}
-
 fn is_yes_no(lower: &str) -> bool {
     let first = last_line(lower.lines().next().unwrap_or(""));
     lower.contains("yes/no")
@@ -217,50 +207,6 @@ fn passphrase_key(question: &str) -> Option<String> {
         .and_then(|r| r.strip_suffix('\''))
         .unwrap_or(rest);
     (!key.is_empty()).then(|| key.to_owned())
-}
-
-/// Words that make a prompt something other than "the password", such as a
-/// password change.
-fn names_other_password(lower: &str) -> bool {
-    [
-        "new", "old", "current", "retype", "again", "confirm", "change",
-    ]
-    .iter()
-    .any(|word| has_word(lower, word))
-}
-
-fn is_one_time_code(lower: &str) -> bool {
-    const PHRASES: [&str; 16] = [
-        "verification code",
-        "one-time",
-        "one time",
-        "onetime",
-        "two-factor",
-        "two factor",
-        "second factor",
-        "multi-factor",
-        "authenticator",
-        "authentication code",
-        "security code",
-        "token code",
-        "tokencode",
-        "passcode",
-        "sms code",
-        "6-digit",
-    ];
-    const WORDS: [&str; 7] = ["otp", "totp", "hotp", "2fa", "mfa", "duo", "oath"];
-    !names_other_password(lower)
-        && (PHRASES.iter().any(|phrase| lower.contains(phrase))
-            || WORDS.iter().any(|word| has_word(lower, word)))
-}
-
-fn is_password(lower: &str) -> bool {
-    (lower.contains("password") || has_word(lower, "passwd")) && !names_other_password(lower)
-}
-
-fn has_word(text: &str, word: &str) -> bool {
-    text.split(|c: char| !c.is_alphanumeric())
-        .any(|part| part == word)
 }
 
 /// `user@host's password: ` → `user@host`. The user name may itself contain

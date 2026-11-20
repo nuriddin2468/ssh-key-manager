@@ -19,6 +19,7 @@
 mod error;
 mod generator;
 mod scaffolding;
+pub mod ssh;
 
 pub use error::CoreError;
 pub use generator::{PasswordOptions, PasswordStrength, generate_password, password_strength};

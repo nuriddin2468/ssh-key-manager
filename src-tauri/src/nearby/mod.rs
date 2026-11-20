@@ -55,8 +55,8 @@ use serde::{Deserialize, Serialize};
 use sshkm_core::config::SshConfig;
 use sshkm_core::known_hosts::KnownHosts;
 use sshkm_core::p2p::conversation::{
-    Device, IO_TIMEOUT, PairingFailure, PairingPhase, Purpose, RiskyChange, RiskyVariables, Stored,
-    SyncDecisions, SyncLocal, SyncState, SyncStore, SyncWrite, User, VaultItems, broken,
+    self, Device, IO_TIMEOUT, PairingFailure, PairingPhase, Purpose, RiskyChange, RiskyVariables,
+    Stored, SyncDecisions, SyncLocal, SyncState, SyncStore, SyncWrite, User, VaultItems, broken,
     conversation_after,
 };
 use sshkm_core::p2p::deadline::Deadline;
@@ -67,8 +67,7 @@ use sshkm_core::sync::Hasher;
 use sshkm_core::sync::host_keys;
 use sshkm_core::vault::envs::files::{CloudRoots, CloudService};
 use sshkm_core::vault::sync::{
-    ENTRY_SYNC_VERSION, Pairs, Party, PeerVault, VaultApplied, VaultBase, VaultChoices, VaultPlan,
-    check_moved, digests,
+    ENTRY_SYNC_VERSION, Pairs, PeerVault, VaultApplied, VaultBase, VaultChoices, VaultPlan, digests,
 };
 use sshkm_core::vault::{self, Vault};
 use sshkm_core::{ErrorCode, ExposeSecret, SecretString, fsutil};
@@ -1268,10 +1267,11 @@ impl Nearby {
             };
             // A sync is only ever with one of the user's devices: anyone
             // else is turned away before the `Hello`, which would carry
-            // this vault's proof.
-            let sync = side.only_sync || matches!(role, Role::Connects(Goal::Sync));
+            // this vault's proof. The conversation checks the device this
+            // side connects to for a sync; this, one that connects to the
+            // port announced to own devices.
             match role {
-                _ if sync && !side.is_own(session.remote()) => PairingPhase::Failed {
+                _ if side.only_sync && !side.is_own(session.remote()) => PairingPhase::Failed {
                     reason: PairingFailure::NotOwn,
                 },
                 Role::Connects(goal) => {
@@ -1962,12 +1962,8 @@ impl Device for AppSide<'_> {
         file: Zeroizing<Vec<u8>>,
         secret: SecretText,
     ) -> Result<(), PairingFailure> {
+        // Checked already by the conversation (`check_moved`).
         let secret = SecretString::from(secret.expose().to_owned());
-        check_moved(&file, &secret).map_err(|error| match error {
-            // Sent compressed: the other computer needs the new version.
-            sshkm_core::Error::Unsupported(_) => PairingFailure::Version,
-            _ => PairingFailure::NotSaved,
-        })?;
         let mut slot = self.nearby.slot(self.id);
         let slot = slot.as_mut().ok_or(PairingFailure::Cancelled)?;
         slot.pending = Some(PendingVault { file, secret });
@@ -2053,6 +2049,10 @@ impl SyncStore for AppSide<'_> {
         store::save_unasked(&self.nearby.data_dir, unasked).map_err(|_| PairingFailure::NotSaved)
     }
 
+    fn unasked(&self) -> Result<Vec<(i64, u32)>, PairingFailure> {
+        store::load_unasked(&self.nearby.data_dir).ok_or(PairingFailure::NotSaved)
+    }
+
     fn vault_copy(&self) -> Result<Zeroizing<Vec<u8>>, PairingFailure> {
         self.read(Vault::sync_copy)?
             .map_err(|_| PairingFailure::NotSaved)
@@ -2081,7 +2081,6 @@ impl SyncStore for AppSide<'_> {
         plan: &VaultPlan,
         choices: &VaultChoices,
     ) -> Result<VaultApplied, PairingFailure> {
-        let (make, theirs) = (&choices.make, &choices.theirs);
         let hasher = self.vault_hasher()?;
         let peer = self
             .nearby
@@ -2091,15 +2090,7 @@ impl SyncStore for AppSide<'_> {
             .ok_or(PairingFailure::Broken)?;
         // The vault as it was before the day's first sync deletions
         // outlives the rotation of backups.
-        let deletes = plan
-            .changes
-            .iter()
-            .any(|change| change.removal && make.contains(&change.id))
-            || plan.conflicts.iter().any(|conflict| {
-                (conflict.there == Party::Deleted || conflict.to_bin)
-                    && theirs.contains(&conflict.id)
-            });
-        if deletes {
+        if conversation::sync::deletes(plan, choices) {
             let (state, _) = self.context()?;
             let database = self.read(|vault| vault.paths().database.clone())?;
             fsutil::keep_backup(&database, &state.backup_dir)

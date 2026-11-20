@@ -233,7 +233,9 @@ pub enum Purpose<'a> {
 }
 
 /// The whole conversation on one side: `purpose` on the side that
-/// connected, `None` on the other. Returns how it ended.
+/// connected, `None` on the other. Returns how it ended. A sync with a
+/// device that isn't one of the user's ([`Device::is_own`]) ends before
+/// anything is said.
 pub fn conversation(
     session: &mut Session<impl Connection>,
     side: &impl Side,
@@ -251,6 +253,14 @@ pub fn conversation_after(
     purpose: Option<Purpose<'_>>,
     hello: Option<Message>,
 ) -> PairingPhase {
+    // A sync is only ever with one of the user's devices: anyone else is
+    // turned away before the `Hello`, which carries this device's name and
+    // its vault's proof.
+    if matches!(purpose, Some(Purpose::Sync)) && !side.is_own(session.remote()) {
+        return PairingPhase::Failed {
+            reason: PairingFailure::NotOwn,
+        };
+    }
     let intent = match purpose {
         Some(Purpose::AddDevice) => Some(Intent::AddDevice),
         Some(Purpose::Sync) => Some(Intent::Sync),
@@ -551,7 +561,7 @@ mod tests {
 
     use crate::p2p::Identity;
 
-    use super::script::{Script, codes, pair, peers, talk_as};
+    use super::script::{Script, codes, pair, peers, talk, talk_as};
     use super::*;
 
     #[test]
@@ -669,6 +679,24 @@ mod tests {
         );
         assert_eq!(*left.broken_off.lock().unwrap(), 0);
         assert_eq!(*right.broken_off.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn a_sync_with_a_device_not_the_users_ends_before_the_hello() {
+        let mut left = Script::own("alice", "s", "");
+        left.own_peer = false;
+        let ((left_end, left), (right_end, right)) =
+            talk(left, Script::own("bob", "s", ""), Purpose::Sync);
+        assert_eq!(
+            left_end,
+            PairingPhase::Failed {
+                reason: PairingFailure::NotOwn
+            }
+        );
+        assert!(matches!(right_end, PairingPhase::Failed { .. }));
+        // Neither said who it is.
+        assert_eq!(peers(&left), Vec::<String>::new());
+        assert_eq!(peers(&right), Vec::<String>::new());
     }
 
     #[test]

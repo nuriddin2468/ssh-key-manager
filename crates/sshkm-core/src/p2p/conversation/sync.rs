@@ -106,9 +106,10 @@ pub struct SyncState {
     /// Deletions this computer made from the user's other devices without
     /// asking, whichever they came from: when (seconds since 1970) and how
     /// many. Those of the last [`DELETION_WINDOW`] count with a sync's own.
-    /// Kept in a small file of their own for this computer
+    /// Kept apart from each device's state, one list for this device
     /// ([`super::SyncStore::sync_unasked`]), written before a sync changes
-    /// anything.
+    /// anything; the conversation reads it from
+    /// [`super::SyncStore::unasked`], never from a kept state.
     #[serde(skip)]
     pub unasked: Vec<(i64, u32)>,
 }
@@ -371,7 +372,8 @@ fn talk(
 ) -> Result<PairingPhase, PairingFailure> {
     let initiator = session.is_initiator();
     side.show(None, &PairingPhase::Syncing);
-    let local = side.sync_load(peer)?;
+    let mut local = side.sync_load(peer)?;
+    local.state.unasked = unasked(side);
     let (mine, theirs) = swap_manifests(session, &local)?;
     let vault = match EntrySync::agreed(entries.mine, entries.theirs) {
         Some(_) => Some(swap_vault(session, side, &local.state.vault)?),
@@ -724,6 +726,31 @@ struct Choice<'a> {
 /// or moves it to the recycle bin.
 fn removes(conflict: &VaultConflict) -> bool {
     conflict.there == Party::Deleted || conflict.to_bin
+}
+
+/// Whether making `choices` of `plan` deletes an item from the vault or
+/// moves one to the recycle bin: then a backup that outlives the rotation
+/// goes first ([`super::SyncStore::vault_apply`]).
+pub fn deletes(plan: &VaultPlan, choices: &VaultChoices) -> bool {
+    plan.changes
+        .iter()
+        .any(|change| change.removal && choices.make.contains(&change.id))
+        || plan
+            .conflicts
+            .iter()
+            .any(|conflict| removes(conflict) && choices.theirs.contains(&conflict.id))
+}
+
+/// The deletions this device made without asking, from all the user's
+/// devices ([`SyncState::unasked`]); at the limit for a day when they can't
+/// be read, which is kept so (best effort: unkept, it stays at the limit
+/// the next time too).
+fn unasked(side: &impl Side) -> Vec<(i64, u32)> {
+    side.unasked().unwrap_or_else(|_| {
+        let at_the_limit = SyncState::at_the_limit(OffsetDateTime::now_utc().unix_timestamp());
+        let _ = side.sync_unasked(&at_the_limit);
+        at_the_limit
+    })
 }
 
 /// Deletions the other user decided through conflicts, on the side that
@@ -1223,6 +1250,24 @@ mod tests {
         )];
         let now = OffsetDateTime::now_utc().unix_timestamp();
         assert_eq!(left.sync_state.lock().unwrap().recent_unasked(now), 0);
+    }
+
+    #[test]
+    fn deletions_count_from_the_devices_list_at_the_limit_when_unreadable() {
+        let hosts = "Host h1\n    HostName 10.0.1.1\n\nHost h2\n    HostName 10.0.1.2\n";
+        let ((_, mut left), (_, right)) = sync(
+            Script::own("alice", "s", hosts),
+            Script::own("bob", "s", ""),
+        );
+        set(&right, "");
+        // Alice's list of the day's deletions can't be read (her kept state
+        // never has it: `sync_load` leaves it out). Two deletions are past
+        // the limit then, and wait for her.
+        left.unasked_unreadable = true;
+        let ((left_sum, left), _) = sync(left, right);
+        assert_eq!((left_sum.removed, left_sum.deferred), (0, 2));
+        // The limit is kept, to hold for a day.
+        assert_eq!(unasked(&left), u32::try_from(MASS_DELETE).unwrap());
     }
 
     #[test]

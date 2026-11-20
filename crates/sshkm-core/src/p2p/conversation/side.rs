@@ -20,11 +20,22 @@
 //!   each device, and the vault's entries.
 //!
 //! The methods for the user's own devices have defaults for a side that
-//! has none, such as `examples/nearby_peer.rs` in its plain modes. Every
-//! method that can fail says why in a [`PairingFailure`], which ends the
-//! conversation.
+//! has none, such as `examples/nearby_peer.rs` in its plain modes: no
+//! vault, no device of the user's, nothing allowed, nothing kept. Two have
+//! none, as no answer is right for every side: whether a device was removed from the
+//! user's ([`Device::removed`]), and the deletions this device made without
+//! asking ([`SyncStore::unasked`]). Every method that can fail says why in
+//! a [`PairingFailure`], which ends the conversation.
+//!
+//! What stays the conversation's own, whatever the side: a vault that comes
+//! for a new device is checked before [`Device::take_vault`] sees it
+//! ([`check_moved`]); a sync starts only with one of the user's devices,
+//! before either side says anything ([`Device::is_own`]); and deletions from
+//! the user's other devices are counted over a day from what
+//! [`SyncStore::unasked`] gives, at the limit when that can't be read.
 //!
 //! [`conversation`]: super::conversation
+//! [`check_moved`]: crate::vault::sync::check_moved
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -128,10 +139,10 @@ pub trait Device {
     fn is_own(&self, _peer: PeerKey) -> bool {
         false
     }
-    /// Whether `peer` was one of the user's devices and was removed.
-    fn removed(&self, _peer: PeerKey) -> bool {
-        false
-    }
+    /// Whether `peer` was one of the user's devices and was removed: such
+    /// a device can't add itself back. A side that can't tell (its vault
+    /// is locked) says `true`.
+    fn removed(&self, peer: PeerKey) -> bool;
     /// What this side's `Hello` says about syncing the vault's entries;
     /// `None` for a side that doesn't.
     fn entry_sync(&self) -> Option<EntrySync> {
@@ -145,8 +156,11 @@ pub trait Device {
     fn share_vault(&self) -> Result<(Zeroizing<Vec<u8>>, SecretText), PairingFailure> {
         Err(PairingFailure::Broken)
     }
-    /// Checks and keeps the vault another of the user's computers sent,
-    /// until the user sets a master password for it.
+    /// Keeps the vault another of the user's computers sent until the user
+    /// sets a master password for it. The conversation checked it already
+    /// ([`check_moved`]: within bounds, and opened by `secret`).
+    ///
+    /// [`check_moved`]: crate::vault::sync::check_moved
     fn take_vault(
         &self,
         _file: Zeroizing<Vec<u8>>,
@@ -157,8 +171,40 @@ pub trait Device {
 }
 
 /// What a sync with one of the user's devices reads and writes here.
+///
+/// What a side must do in each, for a sync to be as safe on it as on a
+/// computer:
+///
+/// - [`sync_write`](Self::sync_write): write the host blocks and the server
+///   keys only if they are as the sync read them
+///   ([`SyncWrite::config_revision`], [`SyncWrite::known_revision`];
+///   [`ensure_revision`]), so an edit made meanwhile is never overwritten;
+///   with [`SyncWrite::deletes`], keep a backup that outlives the rotation
+///   first ([`keep_backup`]); merge the records as one change. On a
+///   computer, also leave out a server key next to one that another file
+///   `ssh` reads trusts for the host ([`drop_trusted_elsewhere`]).
+/// - [`vault_plan`](Self::vault_plan): read the vault file again first
+///   ([`Vault::refresh`]), so the plan is against what is on disk, and keep
+///   the other side's copy open until the sync ends.
+/// - [`vault_apply`](Self::vault_apply): when the choices delete or move to
+///   the recycle bin ([`deletes`]), keep a backup that outlives the rotation
+///   first ([`keep_backup`]); nothing of an apply that fails halfway is kept
+///   ([`Vault::snapshot`], [`Vault::restore`]); save after a backup.
+/// - [`unasked`](Self::unasked) and [`sync_unasked`](Self::sync_unasked):
+///   one list for the device, whichever device a sync is with, kept apart
+///   from the per-device state that [`sync_keep`](Self::sync_keep) keeps.
+///
+/// [`ensure_revision`]: crate::fsutil::ensure_revision
+/// [`keep_backup`]: crate::fsutil::keep_backup
+/// [`drop_trusted_elsewhere`]: crate::sync::host_keys::drop_trusted_elsewhere
+/// [`Vault::refresh`]: crate::vault::Vault::refresh
+/// [`Vault::snapshot`]: crate::vault::Vault::snapshot
+/// [`Vault::restore`]: crate::vault::Vault::restore
+/// [`deletes`]: super::sync::deletes
 pub trait SyncStore {
-    /// What a sync with `peer` starts from.
+    /// What a sync with `peer` starts from. Its state's
+    /// [`SyncState::unasked`] is not read: the conversation takes it from
+    /// [`unasked`](Self::unasked).
     fn sync_load(&self, _peer: PeerKey) -> Result<SyncLocal, PairingFailure> {
         Err(PairingFailure::NotOwn)
     }
@@ -176,6 +222,12 @@ pub trait SyncStore {
     fn sync_unasked(&self, _unasked: &[(i64, u32)]) -> Result<(), PairingFailure> {
         Err(PairingFailure::NotSaved)
     }
+    /// The deletions this device made without asking, from all the user's
+    /// devices, as [`sync_unasked`](Self::sync_unasked) kept them: none
+    /// when nothing was kept yet. `Err` when they were kept but can't be
+    /// read: the conversation then counts them at the limit for a day, and
+    /// keeps that.
+    fn unasked(&self) -> Result<Vec<(i64, u32)>, PairingFailure>;
     /// This side's copy of the vault for a sync ([`Vault::sync_copy`]).
     ///
     /// [`Vault::sync_copy`]: crate::vault::Vault::sync_copy

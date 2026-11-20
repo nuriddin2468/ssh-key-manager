@@ -129,6 +129,13 @@ pub struct Script {
     pub hangs_up: bool,
     /// The records of the user's devices this side sends.
     pub device_records: Vec<DeviceRecord>,
+    /// The deletions made without asking were kept but can't be read.
+    pub unasked_unreadable: bool,
+    /// Gives a new device its vault as the saved, compressed file, as
+    /// versions before the moved-vault check did.
+    pub sends_compressed: bool,
+    /// The folder of a real vault made for the script, kept as long as it.
+    pub folder: Option<tempfile::TempDir>,
 }
 
 impl Script {
@@ -180,7 +187,37 @@ impl Script {
             asked_variables: Mutex::default(),
             hangs_up: false,
             device_records: Vec::new(),
+            unasked_unreadable: false,
+            sends_compressed: false,
+            folder: None,
         }
+    }
+
+    /// A computer with a real vault (the key own devices share, and a
+    /// login `Mail`) in a folder of its own, to give a new device.
+    pub fn giving(name: &'static str) -> Self {
+        use crate::SecretString;
+        use crate::vault::{EntryInput, VaultPaths};
+
+        let folder = tempfile::tempdir().unwrap();
+        let backups = folder.path().join("backups");
+        let paths = VaultPaths::new(folder.path().join("vault.kdbx"));
+        let (mut vault, _) =
+            crate::vault::Vault::create(&paths, &SecretString::from("master")).unwrap();
+        vault.make_own_key(&backups).unwrap();
+        vault
+            .add_entry(&EntryInput {
+                title: "Mail".into(),
+                password: Some(SecretString::from("p1")),
+                ..EntryInput::default()
+            })
+            .unwrap();
+        vault.save(&backups).unwrap();
+        let mut script = Self::new(name, Some(true));
+        script.vault = Vault::Open("the secret");
+        script.real = Some((Mutex::new(vault), backups));
+        script.folder = Some(folder);
+        script
     }
 
     /// [`Self::own`], whose entries sync with the real vault `vault`.
@@ -378,7 +415,12 @@ impl Device for Script {
         // A real vault goes as the app sends it.
         if let Some((vault, _)) = &self.real {
             let vault = vault.lock().unwrap();
-            let file = vault.moved_copy().map_err(|_| PairingFailure::NotSaved)?;
+            let file = if self.sends_compressed {
+                vault.saved_bytes()
+            } else {
+                vault.moved_copy()
+            }
+            .map_err(|_| PairingFailure::NotSaved)?;
             return Ok((file, SecretText::new(vault.share_secret().expose_secret())));
         }
         Ok((Zeroizing::new(VAULT_FILE.to_vec()), SecretText::new(secret)))
@@ -408,13 +450,19 @@ impl Device for Script {
 
 impl SyncStore for Script {
     fn sync_load(&self, _: PeerKey) -> Result<SyncLocal, PairingFailure> {
+        // As a state kept per device with serde: without the deletions made
+        // without asking, which `unasked` gives.
+        let state = SyncState {
+            unasked: Vec::new(),
+            ..self.sync_state.lock().unwrap().clone()
+        };
         Ok(SyncLocal {
             config: self.config.lock().unwrap().clone(),
             known: self.known.lock().unwrap().clone(),
             devices: self.device_records.clone(),
             projects: self.projects.lock().unwrap().clone(),
             contacts: self.contact_records.lock().unwrap().clone(),
-            state: self.sync_state.lock().unwrap().clone(),
+            state,
             hasher: Hasher::new(Zeroizing::new([u8::try_from(self.name.len()).unwrap(); 32])),
         })
     }
@@ -443,6 +491,13 @@ impl SyncStore for Script {
     fn sync_unasked(&self, unasked: &[(i64, u32)]) -> Result<(), PairingFailure> {
         self.sync_state.lock().unwrap().unasked = unasked.to_vec();
         Ok(())
+    }
+
+    fn unasked(&self) -> Result<Vec<(i64, u32)>, PairingFailure> {
+        if self.unasked_unreadable {
+            return Err(PairingFailure::NotSaved);
+        }
+        Ok(self.sync_state.lock().unwrap().unasked.clone())
     }
 
     fn vault_copy(&self) -> Result<Zeroizing<Vec<u8>>, PairingFailure> {

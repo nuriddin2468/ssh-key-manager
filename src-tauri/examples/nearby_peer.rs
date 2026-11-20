@@ -48,8 +48,7 @@ use sshkm_core::p2p::protocol::{
 use sshkm_core::p2p::{self, Identity, PeerKey};
 use sshkm_core::sync::Hasher;
 use sshkm_core::vault::sync::{
-    ENTRY_SYNC_VERSION, Pairs, PeerVault, VaultApplied, VaultBase, VaultChoices, VaultPlan,
-    check_moved, digests,
+    ENTRY_SYNC_VERSION, Pairs, PeerVault, VaultApplied, VaultBase, VaultChoices, VaultPlan, digests,
 };
 use sshkm_core::vault::{Vault, VaultPaths};
 use sshkm_core::{ExposeSecret, SecretString};
@@ -252,6 +251,11 @@ impl Device for Terminal {
             .unwrap_or(false)
     }
 
+    fn removed(&self, peer: PeerKey) -> bool {
+        self.with_vault(|vault| vault.is_removed_device(&peer))
+            .unwrap_or(true)
+    }
+
     fn takes(&self, intent: Option<Intent>) -> Result<(), PairingFailure> {
         match (&self.mode, intent) {
             (Mode::Join(_), Some(Intent::AddDevice)) | (Mode::Own { .. }, Some(Intent::Sync)) => {
@@ -275,8 +279,8 @@ impl Device for Terminal {
         let Mode::Join(dir) = &self.mode else {
             return Err(PairingFailure::NotSaved);
         };
+        // Checked already by the conversation (`check_moved`).
         let secret = SecretString::from(secret.expose().to_owned());
-        check_moved(&file, &secret).map_err(|_| PairingFailure::NotSaved)?;
         print!(
             "The vault came ({} bytes). Master password for this computer: ",
             file.len()
@@ -376,6 +380,28 @@ impl SyncStore for Terminal {
         ));
         let json = serde_json::to_vec_pretty(state).map_err(|_| PairingFailure::NotSaved)?;
         std::fs::write(file, json).map_err(|_| PairingFailure::NotSaved)
+    }
+
+    fn sync_unasked(&self, unasked: &[(i64, u32)]) -> Result<(), PairingFailure> {
+        let file = self
+            .dir()
+            .ok_or(PairingFailure::NotOwn)?
+            .join("unasked.json");
+        let json = serde_json::to_vec(unasked).map_err(|_| PairingFailure::NotSaved)?;
+        std::fs::write(file, json).map_err(|_| PairingFailure::NotSaved)
+    }
+
+    /// None kept yet, or what `sync_unasked` kept; a file that doesn't
+    /// read is the conversation's to count at the limit.
+    fn unasked(&self) -> Result<Vec<(i64, u32)>, PairingFailure> {
+        let Some(dir) = self.dir() else {
+            return Ok(Vec::new());
+        };
+        match std::fs::read(dir.join("unasked.json")) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(_) => Err(PairingFailure::NotSaved),
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| PairingFailure::NotSaved),
+        }
     }
 
     fn vault_copy(&self) -> Result<Zeroizing<Vec<u8>>, PairingFailure> {

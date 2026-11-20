@@ -20,6 +20,7 @@ import dev.sshkeymanager.android.vault.VaultSession
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 
 /**
@@ -37,24 +38,30 @@ class AppGraph(private val app: Application) {
     private val deadlines = JobDeadlines(app)
     val clipboard: Clipboard = SecretClipboard(app, deadlines, scope)
 
+    /** Every call into the core's vault, and Keystore around it: one at a time, in order, off the main thread. */
+    private val vaultThread = Dispatchers.IO.limitedParallelism(1)
+
     val session =
         VaultSession(
             vault = vault,
-            fingerprint = FingerprintUnlock(vault, KeystoreDeviceKeys(app), prefs, Dispatchers.IO),
+            fingerprint = FingerprintUnlock(vault, KeystoreDeviceKeys(app), prefs, vaultThread),
             policy = PasswordPolicy(prefs, bootCount = ::bootCount, wallClock = System::currentTimeMillis),
             settings = prefs,
             autoLock = AutoLock(SystemClock::elapsedRealtime),
             deadlines = deadlines,
             scope = scope,
-            io = Dispatchers.IO,
+            vaultThread = vaultThread,
             onLock = clipboard::clearSecret,
         )
 
-    /** A job came due, maybe in a process started just for it. */
-    fun onDeadline(deadline: Deadline) =
+    /** A job came due, maybe in a process started just for it; returns work still under way. */
+    fun onDeadline(deadline: Deadline): Job? =
         when (deadline) {
             Deadline.LOCK -> session.lockDeadline()
-            Deadline.CLEAR_CLIPBOARD -> clipboard.clearSecret()
+            Deadline.CLEAR_CLIPBOARD -> {
+                clipboard.clearSecret()
+                null
+            }
         }
 
     /** How many times the phone has started: another number means it restarted. */

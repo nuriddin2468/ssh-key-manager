@@ -68,6 +68,8 @@ import dev.sshkeymanager.android.ui.NoticeEffect
 import dev.sshkeymanager.android.ui.components.ContentMaxWidth
 import dev.sshkeymanager.android.ui.components.EmptyState
 import dev.sshkeymanager.android.ui.components.ErrorText
+import dev.sshkeymanager.android.ui.components.LocalUse
+import dev.sshkeymanager.android.ui.components.countsAsUse
 import dev.sshkeymanager.android.ui.components.ScreenGutter
 import dev.sshkeymanager.android.ui.components.VaultTopBar
 import dev.sshkeymanager.android.ui.theme.AppTheme
@@ -163,7 +165,11 @@ private fun Overflow(onGenerator: () -> Unit, onSettings: () -> Unit) {
         IconButton(onClick = { open = true }) {
             Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.action_more))
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            modifier = Modifier.countsAsUse(LocalUse.current),
+        ) {
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.menu_generator)) },
                 onClick = {
@@ -205,13 +211,7 @@ private fun SearchField(query: String, onQuery: (String) -> Unit) {
 
 @Composable
 private fun Filters(state: LoginsState, onFilter: (Filter) -> Unit) {
-    val chips = buildList {
-        add(Filter.All)
-        if (state.hasOtp) add(Filter.Otp)
-        state.projects.forEach { add(Filter.Project(it.id)) }
-        state.groups.forEach { add(Filter.Group(it)) }
-        if (state.hasTrash || state.filter == Filter.Trash) add(Filter.Trash)
-    }
+    val chips = state.chips
     if (chips.size <= 1) return
     LazyRow(
         contentPadding = PaddingValues(horizontal = ScreenGutter),

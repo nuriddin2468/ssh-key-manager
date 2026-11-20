@@ -5,8 +5,10 @@ import android.content.pm.PackageManager
 import android.hardware.biometrics.BiometricManager
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
+import java.security.GeneralSecurityException
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -24,6 +26,12 @@ enum class Availability {
     UNSUPPORTED,
 }
 
+/** Keystore invalidated the key: a fingerprint was added, or all were removed. */
+class KeyInvalidatedException(cause: Throwable?) : GeneralSecurityException(cause)
+
+/** No key under the alias (the app's data was partly cleared). */
+class KeyGoneException(alias: String) : GeneralSecurityException(alias)
+
 /**
  * The Keystore key that wraps fingerprint unlock's slot key; tests stand in
  * for it. Ciphers come back initialised and still locked: Keystore lets them
@@ -37,9 +45,9 @@ interface DeviceKeys {
 
     /**
      * A cipher to unwrap with the key under `alias`. Throws
-     * [android.security.keystore.KeyPermanentlyInvalidatedException] when a
-     * fingerprint was added or all were removed since the key was made, and
-     * [java.security.GeneralSecurityException] when the key is gone.
+     * [KeyInvalidatedException] when a fingerprint was added or all were
+     * removed since the key was made, [KeyGoneException] when there is no
+     * key, and another [GeneralSecurityException] when Keystore fails.
      */
     fun unwrapCipher(alias: String, iv: ByteArray): Cipher
 
@@ -80,8 +88,12 @@ class KeystoreDeviceKeys(private val context: Context) : DeviceKeys {
     }
 
     override fun unwrapCipher(alias: String, iv: ByteArray): Cipher {
-        val key = keyStore.getKey(alias, null) as? SecretKey ?: throw java.security.KeyException("no key $alias")
-        return Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, iv)) }
+        val key = keyStore.getKey(alias, null) as? SecretKey ?: throw KeyGoneException(alias)
+        return try {
+            Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, iv)) }
+        } catch (error: KeyPermanentlyInvalidatedException) {
+            throw KeyInvalidatedException(error)
+        }
     }
 
     override fun delete(alias: String) {

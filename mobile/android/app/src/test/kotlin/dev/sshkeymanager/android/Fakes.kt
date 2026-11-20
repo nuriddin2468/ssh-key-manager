@@ -31,7 +31,10 @@ import dev.sshkeymanager.android.vault.PasswordUse
 import dev.sshkeymanager.android.vault.PasswordUses
 import dev.sshkeymanager.android.vault.VaultBridge
 import dev.sshkeymanager.android.vault.VaultSession
-import java.security.KeyException
+import dev.sshkeymanager.android.biometric.KeyGoneException
+import dev.sshkeymanager.android.biometric.KeyInvalidatedException
+import dev.sshkeymanager.android.biometric.OffReason
+import java.security.GeneralSecurityException
 import java.util.UUID
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -52,7 +55,10 @@ class FakeVault(var status: VaultStatus = VaultStatus.LOCKED) : VaultBridge {
     val otps = mutableMapOf<String, String>()
     var projects = listOf<ProjectLabel>()
     var lockCalls = 0
+    var otpCalls = 0
     var unlockedWithKey: ByteArray? = null
+    /** Set to make unlocking with a device key fail this way, e.g. an unreadable key slots file. */
+    var deviceFailure: ErrorCode? = null
 
     private fun open() {
         if (status != VaultStatus.UNLOCKED) throw failed(ErrorCode.VAULT_LOCKED)
@@ -73,6 +79,7 @@ class FakeVault(var status: VaultStatus = VaultStatus.LOCKED) : VaultBridge {
     }
 
     override fun unlockWithDevice(slotId: String, key: ByteArray) {
+        deviceFailure?.let { throw failed(it) }
         val expected = slots[slotId] ?: throw failed(ErrorCode.NOT_FOUND)
         if (!expected.contentEquals(key)) throw failed(ErrorCode.WRONG_PASSPHRASE)
         unlockedWithKey = key.copyOf()
@@ -125,7 +132,9 @@ class FakeVault(var status: VaultStatus = VaultStatus.LOCKED) : VaultBridge {
         open()
         val secret = otps[id] ?: throw failed(ErrorCode.NOT_FOUND)
         if (secret == "unreadable") throw failed(ErrorCode.PARSE)
-        return OtpCode("123456", 20u)
+        otpCalls++
+        // A new code for each call, so a test can tell a fetch from none.
+        return OtpCode("%06d".format(otpCalls), 20u)
     }
 
     override fun addLogin(input: LoginInput): String {
@@ -204,6 +213,9 @@ class FakeDeviceKeys(var availability: Availability = Availability.AVAILABLE) : 
     val keys = mutableMapOf<String, SecretKey>()
     val invalidated = mutableSetOf<String>()
 
+    /** Set to make unwrapping fail as a busy Keystore would. */
+    var failure: GeneralSecurityException? = null
+
     override fun availability() = availability
 
     override fun newWrapCipher(alias: String): Cipher {
@@ -214,8 +226,9 @@ class FakeDeviceKeys(var availability: Availability = Availability.AVAILABLE) : 
     }
 
     override fun unwrapCipher(alias: String, iv: ByteArray): Cipher {
-        if (alias in invalidated) throw KeyException("invalidated")
-        val key = keys[alias] ?: throw KeyException("gone")
+        failure?.let { throw it }
+        if (alias in invalidated) throw KeyInvalidatedException(null)
+        val key = keys[alias] ?: throw KeyGoneException(alias)
         return Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv)) }
     }
 
@@ -238,6 +251,7 @@ class FakeLinks : DeviceLinks {
     }
 
     override var staleSlot: String? = null
+    override var offReason: OffReason? = null
     override var offer: Boolean = true
 }
 
@@ -321,7 +335,7 @@ class SessionFixture(
             autoLock = AutoLock { clock.now },
             deadlines = deadlines,
             scope = scope,
-            io = dispatcher,
+            vaultThread = dispatcher,
             onLock = clipboard::clearSecret,
         )
 }

@@ -52,11 +52,13 @@ class JobDeadlines(private val context: Context) : Deadlines {
     }
 }
 
-/** Runs a [Deadline] when JobScheduler says it's time. */
+/** Runs a [Deadline] when JobScheduler says it's time; the job lasts until the vault is locked in the core. */
 class DeadlineJobService : JobService() {
     override fun onStartJob(params: JobParameters): Boolean {
-        Deadline.of(params.jobId)?.let { (application as SshkmApplication).graph.onDeadline(it) }
-        return false
+        val deadline = Deadline.of(params.jobId) ?: return false
+        val work = (application as SshkmApplication).graph.onDeadline(deadline) ?: return false
+        work.invokeOnCompletion { jobFinished(params, false) }
+        return true
     }
 
     override fun onStopJob(params: JobParameters): Boolean = false

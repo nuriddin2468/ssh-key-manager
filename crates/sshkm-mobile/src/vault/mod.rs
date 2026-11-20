@@ -61,8 +61,9 @@ pub enum VaultStatus {
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct VaultInfo {
     pub status: VaultStatus,
-    /// Random id of the vault, the same on every device; names the Keystore
-    /// key of fingerprint unlock. `None` until the vault is here.
+    /// Random id of this phone's key slots file (each device's has its
+    /// own); names the Keystore key of fingerprint unlock. `None` until the
+    /// vault is here.
     pub vault_id: Option<String>,
     /// Ids of the vault's device slots: on the phone, at most its own.
     pub device_slots: Vec<String>,

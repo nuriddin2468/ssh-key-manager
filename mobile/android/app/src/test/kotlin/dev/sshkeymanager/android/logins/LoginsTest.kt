@@ -71,4 +71,28 @@ class LoginsTest {
             assertEquals(Filter.All, model.uiState.value.filter)
             assertEquals(listOf("Bank"), model.uiState.value.shown.map { it.title })
         }
+
+    @Test
+    fun `a filter whose chip went away falls back to all`() =
+        runTest(main.dispatcher) {
+            val f = SessionFixture(main.dispatcher, CoroutineScope(SupervisorJob()), VaultStatus.UNLOCKED)
+            f.vault.put(github, otp = "JBSWY3DPEHPK3PXP")
+            f.vault.put(router)
+            val model = LoginsViewModel(f.session)
+            model.filter(Filter.Otp)
+            assertEquals(listOf("1"), model.uiState.value.shown.map { it.id })
+            // The only 2FA entry went to the recycle bin: no 2FA chip any more.
+            f.session.change { trashLogin("1") }
+            assertEquals(Filter.All, model.uiState.value.filter)
+
+            model.filter(Filter.Group("Home"))
+            f.session.change { trashLogin("3") }
+            assertEquals(Filter.All, model.uiState.value.filter)
+            // The recycle bin stays, emptied or not.
+            model.filter(Filter.Trash)
+            f.session.change { restoreLogin("1") }
+            f.session.change { restoreLogin("3") }
+            assertEquals(Filter.Trash, model.uiState.value.filter)
+            assertTrue(Filter.Trash in model.uiState.value.chips)
+        }
 }

@@ -46,6 +46,7 @@
     <string name="unlock_after_restart">The phone restarted. Enter your master password once, then your fingerprint works again.</string>
     <string name="unlock_weekly">It’s been a week since you entered your master password. Enter it once, then your fingerprint works again.</string>
     <string name="unlock_changed">A fingerprint was added to this phone, so fingerprint unlock turned off. Enter your master password, then turn it on again.</string>
+    <string name="unlock_gone">Fingerprint unlock is no longer set up for this vault. Enter your master password, then turn it on again in Settings.</string>
     <string name="error_wrong_master">Wrong master password.</string>
     <string name="error_too_many">Too many wrong passwords. Wait a few seconds, then try again.</string>
     <string name="error_fingerprint_lockout">Too many tries with the fingerprint. Use your master password.</string>

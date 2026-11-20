@@ -52,7 +52,8 @@ class VaultFlowTest {
         openWithTestVault()
         compose.onNodeWithContentDescription(string(R.string.action_lock)).performClick()
         waitFor(string(R.string.unlock_title))
-        assertFalse("locking dropped the vault in the core", fresh.app.graph.vault.isUnlocked())
+        // The core drops the vault on its own thread, a moment later.
+        compose.waitUntil(5_000) { !fresh.app.graph.vault.isUnlocked() }
 
         val field = compose.onAllNodes(hasSetTextAction())[0]
         field.performTextInput("wrong")

@@ -63,6 +63,7 @@ fun UnlockScreen(locked: VaultState.Locked, viewModel: UnlockViewModel, prompter
                 FingerprintState.AFTER_RESTART -> Note(stringResource(R.string.unlock_after_restart))
                 FingerprintState.WEEKLY -> Note(stringResource(R.string.unlock_weekly))
                 FingerprintState.CHANGED -> Note(stringResource(R.string.unlock_changed))
+                FingerprintState.GONE -> Note(stringResource(R.string.unlock_gone))
                 FingerprintState.OFF, FingerprintState.READY -> Unit
             }
             SecretField(

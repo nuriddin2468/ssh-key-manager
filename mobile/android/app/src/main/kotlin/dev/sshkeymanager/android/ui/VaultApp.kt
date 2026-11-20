@@ -47,6 +47,7 @@ import dev.sshkeymanager.android.setup.NoVaultScreen
 import dev.sshkeymanager.android.setup.SetupScreen
 import dev.sshkeymanager.android.setup.SetupViewModel
 import dev.sshkeymanager.android.ui.components.Heading
+import dev.sshkeymanager.android.ui.components.LocalUse
 import dev.sshkeymanager.android.ui.components.NoKeyboardLearning
 import dev.sshkeymanager.android.ui.components.ScreenColumn
 import dev.sshkeymanager.android.ui.components.SecondaryButton
@@ -68,18 +69,21 @@ fun VaultApp(graph: AppGraph) {
     // Locking drops every screen of the open vault, and what they held.
     LaunchedEffect(state) { if (state !is VaultState.Unlocked) navigator.reset() }
 
-    NoKeyboardLearning {
-        when (val current = state) {
-            VaultState.Loading -> Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
-            VaultState.Missing -> {
-                val cache = LocalContext.current.cacheDir
-                val testVault = DebugTools.testVault(graph, cache)
-                NoVaultScreen(debugTestVault = testVault?.let { load -> { scope.launch { load() } } })
+    val touch: () -> Unit = remember(session) { session::touch }
+    NoKeyboardLearning(onInput = touch) {
+        CompositionLocalProvider(LocalUse provides touch) {
+            when (val current = state) {
+                VaultState.Loading -> Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
+                VaultState.Missing -> {
+                    val cache = LocalContext.current.cacheDir
+                    val testVault = DebugTools.testVault(graph, cache)
+                    NoVaultScreen(debugTestVault = testVault?.let { load -> { scope.launch { load() } } })
+                }
+                VaultState.Received -> SetupScreen(viewModel { SetupViewModel(session, RustPasswordTools) })
+                is VaultState.Locked -> UnlockScreen(current, viewModel { UnlockViewModel(session) }, prompter)
+                VaultState.Unlocked -> UnlockedApp(graph, navigator, prompter)
+                is VaultState.Unreadable -> UnreadableScreen(onRetry = { scope.launch { session.load() } })
             }
-            VaultState.Received -> SetupScreen(viewModel { SetupViewModel(session, RustPasswordTools) })
-            is VaultState.Locked -> UnlockScreen(current, viewModel { UnlockViewModel(session) }, prompter)
-            VaultState.Unlocked -> UnlockedApp(graph, navigator, prompter)
-            is VaultState.Unreadable -> UnreadableScreen(onRetry = { scope.launch { session.load() } })
         }
     }
 }

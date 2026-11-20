@@ -44,6 +44,7 @@
     <string name="unlock_after_restart">Telefon qayta ishga tushdi. Asosiy parolni bir marta kiriting, keyin barmoq izi yana ishlaydi.</string>
     <string name="unlock_weekly">Asosiy parolni oxirgi marta kiritganingizga bir hafta boʻldi. Uni bir marta kiriting, keyin barmoq izi yana ishlaydi.</string>
     <string name="unlock_changed">Telefonga yangi barmoq izi qoʻshildi, shuning uchun barmoq izi bilan ochish oʻchdi. Asosiy parolni kiriting, keyin uni qayta yoqing.</string>
+    <string name="unlock_gone">Barmoq izi bilan ochish bu ombor uchun endi sozlanmagan. Asosiy parolni kiriting va uni Sozlamalarda qayta yoqing.</string>
     <string name="error_wrong_master">Asosiy parol notoʻgʻri.</string>
     <string name="error_too_many">Notoʻgʻri parollar juda koʻp. Bir necha soniya kuting va qayta urinib koʻring.</string>
     <string name="error_fingerprint_lockout">Barmoq izi bilan urinishlar juda koʻp. Asosiy parolni kiriting.</string>

@@ -13,6 +13,7 @@ import dev.sshkeymanager.android.FakePrompter
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -115,6 +116,10 @@ class VaultSessionTest {
             f.session.appBackground()
             assertTrue(Deadline.LOCK in f.deadlines.scheduled)
             f.session.lock()
+            // The app shows it locked at once; the core is told on its own thread.
+            assertEquals(VaultState.Locked(LockReason.MANUAL, FingerprintState.OFF), f.session.vaultState.value)
+            assertEquals(0, f.vault.lockCalls)
+            runCurrent()
             assertEquals(1, f.vault.lockCalls)
             assertFalse(f.vault.isUnlocked())
             assertEquals(1, f.clipboard.cleared)
@@ -300,21 +305,108 @@ class VaultSessionTest {
             assertEquals(FingerprintOffer.AGAIN, f.session.fingerprintOffer.value)
         }
 
+    /** A session with fingerprint unlock on, locked. */
+    private suspend fun fingerprintOn(): SessionFixture {
+        val f = fixture()
+        f.session.load()
+        f.session.unlock("master")
+        f.session.enableFingerprint(FakePrompter(), promptText)
+        f.session.lock()
+        scope.runCurrent()
+        return f
+    }
+
+    private suspend fun expectFingerprint(reason: FingerprintException.Reason, f: SessionFixture, prompter: FakePrompter = FakePrompter()) {
+        try {
+            f.session.unlockWithFingerprint(prompter, promptText)
+            fail("opened")
+        } catch (error: FingerprintException) {
+            assertEquals(reason, error.reason)
+        }
+    }
+
+    private fun SessionFixture.fingerprintState() = (session.vaultState.value as VaultState.Locked).fingerprint
+
     @Test
-    fun `a slot gone from the vault turns fingerprint unlock off`() =
+    fun `a slot gone from the vault turns fingerprint unlock off as gone`() =
         scope.runTest {
-            val f = fixture()
-            f.session.load()
-            f.session.unlock("master")
-            f.session.enableFingerprint(FakePrompter(), promptText)
+            val f = fingerprintOn()
+            val slot = f.links.stored!!.slotId
             f.vault.slots.clear()
-            f.session.lock()
+            expectFingerprint(FingerprintException.Reason.GONE, f)
+            assertNull(f.links.stored)
+            assertEquals(FingerprintState.GONE, f.fingerprintState())
+            assertEquals(slot, f.links.staleSlot)
+        }
+
+    @Test
+    fun `a Keystore key gone turns it off as gone, not as a new fingerprint`() =
+        scope.runTest {
+            val f = fingerprintOn()
+            f.keys.keys.clear()
+            expectFingerprint(FingerprintException.Reason.GONE, f)
+            assertEquals(FingerprintState.GONE, f.fingerprintState())
+            f.session.unlock("master")
+            assertEquals("offered as new", FingerprintOffer.NEW, f.session.fingerprintOffer.value)
+        }
+
+    @Test
+    fun `other failures are errors and leave fingerprint unlock on`() =
+        scope.runTest {
+            val f = fingerprintOn()
+            f.keys.failure = java.security.GeneralSecurityException("Keystore is busy")
             try {
                 f.session.unlockWithFingerprint(FakePrompter(), promptText)
                 fail("opened")
-            } catch (error: FingerprintException) {
-                assertEquals(FingerprintException.Reason.CHANGED, error.reason)
+            } catch (_: java.security.GeneralSecurityException) {
             }
-            assertNull(f.links.stored)
+            f.keys.failure = null
+            // A key slots file the core can't read: the vault's trouble, not the fingerprint's.
+            f.vault.deviceFailure = ErrorCode.IO
+            expectCode(ErrorCode.IO) { f.session.unlockWithFingerprint(FakePrompter(), promptText) }
+            assertNotNull(f.links.stored)
+            assertEquals(FingerprintState.READY, f.fingerprintState())
+        }
+
+    @Test
+    fun `fingerprint unlock is refused when the master password comes first`() =
+        scope.runTest {
+            val f = fingerprintOn()
+            assertEquals(FingerprintState.READY, f.fingerprintState())
+            // The vault locked just before the week was up; the user is back the next day.
+            f.clock.now += PasswordPolicy.WEEK
+            val prompter = FakePrompter()
+            expectFingerprint(FingerprintException.Reason.PASSWORD_FIRST, f, prompter)
+            assertEquals("no prompt shown", 0, prompter.shown)
+            assertEquals(FingerprintState.WEEKLY, f.fingerprintState())
+            assertFalse(f.vault.isUnlocked())
+
+            f.clock.bootCount++
+            expectFingerprint(FingerprintException.Reason.PASSWORD_FIRST, f)
+            assertEquals(FingerprintState.AFTER_RESTART, f.fingerprintState())
+        }
+
+    @Test
+    fun `coming back says again whether the fingerprint may open the vault`() =
+        scope.runTest {
+            val f = fingerprintOn()
+            f.clock.now += PasswordPolicy.WEEK
+            assertEquals(FingerprintState.READY, f.fingerprintState())
+            f.session.appForeground()
+            assertEquals(FingerprintState.WEEKLY, f.fingerprintState())
+        }
+
+    @Test
+    fun `a vault opened while the app is away gets its lock job`() =
+        scope.runTest {
+            val f = fixture()
+            f.session.load()
+            f.session.appForeground()
+            f.session.unlock("master")
+            assertFalse("on screen, the timer does it", Deadline.LOCK in f.deadlines.scheduled)
+            f.session.lock()
+            f.session.appBackground()
+            f.session.unlock("master")
+            assertTrue(Deadline.LOCK in f.deadlines.scheduled)
         }
 }

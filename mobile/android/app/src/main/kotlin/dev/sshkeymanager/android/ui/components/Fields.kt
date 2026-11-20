@@ -2,7 +2,9 @@ package dev.sshkeymanager.android.ui.components
 
 import android.text.InputType
 import android.view.inputmethod.EditorInfo
+import android.view.KeyEvent
 import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputConnectionWrapper
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.KeyboardActionHandler
@@ -19,7 +21,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.InterceptPlatformTextInput
 import androidx.compose.ui.platform.PlatformTextInputMethodRequest
 import androidx.compose.ui.res.painterResource
@@ -34,14 +39,32 @@ import androidx.compose.ui.text.input.KeyboardType
 import dev.sshkeymanager.android.R
 
 /**
+ * What counts as using the app inside dialogs, sheets and menus, which
+ * have windows of their own: the activity only sees touches in its own.
+ */
+val LocalUse = staticCompositionLocalOf<() -> Unit> { {} }
+
+/** Counts every touch inside as using the app (for locking after a while without use). */
+fun Modifier.countsAsUse(touch: () -> Unit): Modifier =
+    pointerInput(touch) {
+        awaitPointerEventScope {
+            while (true) {
+                awaitPointerEvent(PointerEventPass.Initial)
+                touch()
+            }
+        }
+    }
+
+/**
  * Keeps the keyboard from learning what is typed anywhere inside: every
  * text field gets `IME_FLAG_NO_PERSONALIZED_LEARNING` (no learned words, no
  * typing history kept by the keyboard), and a password field also gets
  * `TYPE_TEXT_FLAG_NO_SUGGESTIONS`. The whole app is a vault, so this wraps
- * all of it.
+ * all of it. What the keyboard types counts as using the app (`onInput`):
+ * it reaches the field without touching the activity.
  */
 @Composable
-fun NoKeyboardLearning(content: @Composable () -> Unit) {
+fun NoKeyboardLearning(onInput: () -> Unit, content: @Composable () -> Unit) {
     InterceptPlatformTextInput(
         interceptor = { request, nextHandler ->
             nextHandler.startInputMethod(
@@ -49,13 +72,41 @@ fun NoKeyboardLearning(content: @Composable () -> Unit) {
                     override fun createInputConnection(outAttributes: EditorInfo): InputConnection {
                         val connection = request.createInputConnection(outAttributes)
                         privateEditorInfo(outAttributes)
-                        return connection
+                        return Typing(connection, onInput)
                     }
                 },
             )
         },
         content = content,
     )
+}
+
+/** Tells `onInput` about everything the keyboard does to the field. */
+private class Typing(target: InputConnection, private val onInput: () -> Unit) : InputConnectionWrapper(target, false) {
+    override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
+        onInput()
+        return super.commitText(text, newCursorPosition)
+    }
+
+    override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
+        onInput()
+        return super.setComposingText(text, newCursorPosition)
+    }
+
+    override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+        onInput()
+        return super.deleteSurroundingText(beforeLength, afterLength)
+    }
+
+    override fun sendKeyEvent(event: KeyEvent?): Boolean {
+        onInput()
+        return super.sendKeyEvent(event)
+    }
+
+    override fun performEditorAction(editorAction: Int): Boolean {
+        onInput()
+        return super.performEditorAction(editorAction)
+    }
 }
 
 /** Adds the flags [NoKeyboardLearning] sets to what a text field asked for. */

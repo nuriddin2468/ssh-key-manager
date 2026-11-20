@@ -1,10 +1,10 @@
 package dev.sshkeymanager.android.biometric
 
-import android.security.keystore.KeyPermanentlyInvalidatedException
 import dev.sshkeymanager.android.core.CoreException
 import dev.sshkeymanager.android.core.ErrorCode
 import dev.sshkeymanager.android.vault.VaultBridge
 import java.security.GeneralSecurityException
+import javax.crypto.AEADBadTagException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 
@@ -12,7 +12,18 @@ import kotlinx.coroutines.withContext
  * This phone's fingerprint slot in the vault: its id and its key as Keystore
  * wrapped it (AES-GCM, with `iv`).
  */
-class DeviceLink(val vaultId: String, val slotId: String, val iv: ByteArray, val wrapped: ByteArray)
+class DeviceLink(val vaultId: String, val slotId: String, val iv: ByteArray, val wrapped: ByteArray) {
+    override fun toString() = "DeviceLink(slot=$slotId)"
+}
+
+/** Why fingerprint unlock turned itself off. */
+enum class OffReason {
+    /** A fingerprint was added (or all were removed): Keystore dropped the key. */
+    CHANGED,
+
+    /** Its Keystore key or its slot in the vault is gone. */
+    GONE,
+}
 
 /** Where the app keeps its [DeviceLink], outside the vault. */
 interface DeviceLinks {
@@ -22,28 +33,30 @@ interface DeviceLinks {
 
     fun clearLink()
 
-    /**
-     * A slot whose Keystore key is gone (a new fingerprint was enrolled):
-     * removed from the vault the next time it is open.
-     */
+    /** A slot that nothing opens any more: removed from the vault the next time it is open. */
     var staleSlot: String?
+
+    /** Why fingerprint unlock turned itself off, until the master password opens the vault. */
+    var offReason: OffReason?
 
     /** Whether to offer fingerprint unlock after the master password opens the vault. */
     var offer: Boolean
 }
 
-/** Fingerprint unlock can't go on; the app words why and falls back to the master password. */
+/** Fingerprint unlock can't open the vault now; the app words why and falls back to the master password. */
 class FingerprintException(val reason: Reason) : Exception(reason.name) {
     enum class Reason {
         /** Fingerprint unlock is off. */
         OFF,
 
-        /**
-         * A fingerprint was added (or all were removed) since it was turned
-         * on: Keystore dropped the key, and fingerprint unlock is off until
-         * the user turns it on again.
-         */
+        /** A fingerprint was added (or all were removed): it turned off until turned on again. */
         CHANGED,
+
+        /** Its key or slot is gone: it turned off until turned on again. */
+        GONE,
+
+        /** The master password comes first: after a restart, or weekly. */
+        PASSWORD_FIRST,
     }
 }
 
@@ -53,6 +66,11 @@ class FingerprintException(val reason: Reason) : Exception(reason.name) {
  * makes; the key is wrapped at once by a Keystore key that a fingerprint
  * releases for one use, and the phone's copy is wiped. Unlocking unwraps it
  * after a fingerprint and hands it to the core, which opens the slot.
+ *
+ * It turns itself off only when what opens the slot is gone for good: the
+ * Keystore key invalidated or missing, or the slot no longer in the vault.
+ * Any other failure (Keystore busy, the vault's files unreadable) is an
+ * error, and fingerprint unlock stays on.
  *
  * Called on the main thread, where the prompt shows; Keystore and the core
  * are called on `io`.
@@ -68,8 +86,8 @@ class FingerprintUnlock(
     /** Whether it is on for the vault `vaultId`. */
     fun isOn(vaultId: String?): Boolean = vaultId != null && links.link()?.vaultId == vaultId
 
-    /** Whether fingerprint unlock was turned off because the fingerprints changed. */
-    fun wasChanged(): Boolean = links.staleSlot != null
+    /** Why it turned itself off, if it did, until the master password opened the vault. */
+    fun offReason(): OffReason? = links.offReason
 
     /** Whether to offer it after the master password opened the vault. */
     fun shouldOffer(vaultId: String?): Boolean = links.offer && !isOn(vaultId) && availability() == Availability.AVAILABLE
@@ -99,6 +117,7 @@ class FingerprintUnlock(
                 device.key.fill(0)
             }
             links.offer = false
+            links.offReason = null
             val stale = links.staleSlot
             links.staleSlot = null
             stale?.let(::removeSlot)
@@ -113,19 +132,19 @@ class FingerprintUnlock(
             withContext(io) {
                 try {
                     keys.unwrapCipher(alias(link.vaultId), link.iv)
-                } catch (_: KeyPermanentlyInvalidatedException) {
-                    throw changed(link)
-                } catch (_: GeneralSecurityException) {
-                    // The key is gone (app data partly cleared): it can't come back.
-                    throw changed(link)
+                } catch (_: KeyInvalidatedException) {
+                    throw turnOff(link, OffReason.CHANGED)
+                } catch (_: KeyGoneException) {
+                    throw turnOff(link, OffReason.GONE)
                 }
             }
         val authenticated =
             try {
                 prompter.authenticate(cipher, text)
             } catch (error: PromptException) {
-                if (error.reason == PromptException.Reason.FAILED && withContext(io) { keyInvalidated(link) }) {
-                    throw changed(link)
+                // All fingerprints removed while the prompt was up.
+                if (error.reason == PromptException.Reason.FAILED && withContext(io) { invalidated(link) }) {
+                    throw turnOff(link, OffReason.CHANGED)
                 }
                 throw error
             }
@@ -133,16 +152,14 @@ class FingerprintUnlock(
             val key =
                 try {
                     authenticated.doFinal(link.wrapped)
-                } catch (_: GeneralSecurityException) {
-                    throw changed(link)
+                } catch (_: AEADBadTagException) {
+                    // What the app kept doesn't belong to this key: nothing opens it.
+                    throw turnOff(link, OffReason.GONE)
                 }
             try {
                 vault.unlockWithDevice(link.slotId, key)
             } catch (error: CoreException) {
-                // The slot is gone from the key slots file: nothing opens it.
-                if ((error as? CoreException.Failed)?.code in listOf(ErrorCode.NOT_FOUND, ErrorCode.WRONG_PASSPHRASE)) {
-                    throw changed(link)
-                }
+                if (slotGone(link, error)) throw turnOff(link, OffReason.GONE)
                 throw error
             } finally {
                 key.fill(0)
@@ -160,29 +177,48 @@ class FingerprintUnlock(
         }
 
     /**
-     * After the master password opened the vault: removes a slot left from a
-     * changed fingerprint. Blocking; called on `io`.
+     * After the master password opened the vault: removes a slot nothing
+     * opens any more. Blocking; called on `io`.
      */
     fun tidy() {
+        links.offReason = null
         val stale = links.staleSlot ?: return
         links.staleSlot = null
         removeSlot(stale)
     }
 
-    private fun keyInvalidated(link: DeviceLink): Boolean =
+    /** The slot doesn't open with the key the app kept, or is no longer in the vault's key slots. */
+    private fun slotGone(link: DeviceLink, error: CoreException): Boolean =
+        when ((error as? CoreException.Failed)?.code) {
+            ErrorCode.WRONG_PASSPHRASE -> true
+            ErrorCode.NOT_FOUND -> {
+                // Also what a missing key slots file says: then it's the vault's
+                // trouble, not the fingerprint's.
+                val info = runCatching { vault.info() }.getOrNull()
+                info?.vaultId != null && link.slotId !in info.deviceSlots
+            }
+            else -> false
+        }
+
+    private fun invalidated(link: DeviceLink): Boolean =
         try {
             keys.unwrapCipher(alias(link.vaultId), link.iv)
             false
-        } catch (_: GeneralSecurityException) {
+        } catch (_: KeyInvalidatedException) {
             true
+        } catch (_: GeneralSecurityException) {
+            false
         }
 
-    private fun changed(link: DeviceLink): FingerprintException {
+    private fun turnOff(link: DeviceLink, reason: OffReason): FingerprintException {
         keys.delete(alias(link.vaultId))
         links.clearLink()
         links.staleSlot = link.slotId
+        links.offReason = reason
         links.offer = true
-        return FingerprintException(FingerprintException.Reason.CHANGED)
+        return FingerprintException(
+            if (reason == OffReason.CHANGED) FingerprintException.Reason.CHANGED else FingerprintException.Reason.GONE,
+        )
     }
 
     private fun removeSlot(slotId: String) {

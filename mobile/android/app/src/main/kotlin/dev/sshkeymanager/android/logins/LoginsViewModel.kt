@@ -51,6 +51,20 @@ data class LoginsState(
 
     val hasOtp: Boolean = all.any { it.hasOtp && !it.inTrash }
 
+    /**
+     * The filters there are chips for: All, 2FA when an entry has it, each
+     * project and folder, and the recycle bin when it has something or is
+     * the filter (to show it emptied).
+     */
+    val chips: List<Filter> =
+        buildList {
+            add(Filter.All)
+            if (hasOtp) add(Filter.Otp)
+            projects.forEach { add(Filter.Project(it.id)) }
+            groups.forEach { add(Filter.Group(it)) }
+            if (hasTrash || filter == Filter.Trash) add(Filter.Trash)
+        }
+
     /** What the list shows: the filter's entries that match the search. */
     val shown: List<Login> = all.filter { matches(it) }
 
@@ -92,12 +106,10 @@ class LoginsViewModel(private val session: VaultSession) : ViewModel() {
         try {
             val (logins, projects) = session.read { logins() to projects() }
             state.update { current ->
-                val filter =
-                    when (val filter = current.filter) {
-                        is Filter.Project -> filter.takeIf { projects.any { it.id == filter.id } }
-                        else -> filter
-                    } ?: Filter.All
-                current.copy(loading = false, all = logins, projects = projects, filter = filter, error = null)
+                val next = current.copy(loading = false, all = logins, projects = projects, error = null)
+                // A filter whose chip went away (its project, folder or last
+                // 2FA entry gone) would leave the list empty with no way out.
+                if (next.filter in next.chips) next else next.copy(filter = Filter.All)
             }
         } catch (failure: Exception) {
             state.update { it.copy(loading = false, error = messageFor(failure)) }

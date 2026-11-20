@@ -29,6 +29,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.sshkeymanager.android.R
 import dev.sshkeymanager.android.core.EntryKind
@@ -37,6 +39,8 @@ import dev.sshkeymanager.android.ui.NoticeEffect
 import dev.sshkeymanager.android.ui.components.EmptyState
 import dev.sshkeymanager.android.ui.components.ErrorText
 import dev.sshkeymanager.android.ui.components.FieldRow
+import dev.sshkeymanager.android.ui.components.LocalUse
+import dev.sshkeymanager.android.ui.components.countsAsUse
 import dev.sshkeymanager.android.ui.components.OtpRow
 import dev.sshkeymanager.android.ui.components.ScreenColumn
 import dev.sshkeymanager.android.ui.components.SecondaryButton
@@ -54,6 +58,10 @@ fun DetailScreen(viewModel: DetailViewModel, onBack: () -> Unit, onEdit: () -> U
     val detail = state.detail
     val login = detail?.login
     var confirmTrash by remember { mutableStateOf(false) }
+    // Every second while up, and at once when back on screen (the phone may
+    // have slept): a shown password hides after a while, a 2FA code renews.
+    LaunchedEffect(viewModel) { viewModel.follow() }
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.onScreen() }
 
     Scaffold(
         topBar = {
@@ -102,6 +110,7 @@ fun DetailScreen(viewModel: DetailViewModel, onBack: () -> Unit, onEdit: () -> U
     if (confirmTrash && login != null) {
         AlertDialog(
             onDismissRequest = { confirmTrash = false },
+            modifier = Modifier.countsAsUse(LocalUse.current),
             title = { Text(stringResource(R.string.trash_confirm_title, login.title)) },
             text = { Text(stringResource(R.string.trash_confirm_body)) },
             confirmButton = {
@@ -163,7 +172,6 @@ private fun Fields(detail: LoginDetail, state: DetailState, viewModel: DetailVie
 
 @Composable
 private fun OtpField(state: DetailState, viewModel: DetailViewModel) {
-    LaunchedEffect(Unit) { viewModel.followOtp() }
     // The countdown ticks here; the code itself comes from the view model.
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     LaunchedEffect(Unit) {

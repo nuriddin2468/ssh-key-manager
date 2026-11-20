@@ -41,6 +41,8 @@ import dev.sshkeymanager.android.R
 import dev.sshkeymanager.android.generator.GeneratorPanel
 import dev.sshkeymanager.android.generator.GeneratorViewModel
 import dev.sshkeymanager.android.ui.components.ErrorText
+import dev.sshkeymanager.android.ui.components.LocalUse
+import dev.sshkeymanager.android.ui.components.countsAsUse
 import dev.sshkeymanager.android.ui.components.PlainField
 import dev.sshkeymanager.android.ui.components.ScreenColumn
 import dev.sshkeymanager.android.ui.components.SecondaryButton
@@ -183,6 +185,7 @@ private fun GeneratorSheet(onUse: (String) -> Unit, onDismiss: () -> Unit) {
     val state by generator.uiState.collectAsStateWithLifecycle()
     ModalBottomSheet(
         onDismissRequest = onDismiss,
+        modifier = Modifier.countsAsUse(LocalUse.current),
         sheetState = rememberBottomSheetState(SheetValue.Hidden, setOf(SheetValue.Hidden, SheetValue.Expanded)),
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
     ) {

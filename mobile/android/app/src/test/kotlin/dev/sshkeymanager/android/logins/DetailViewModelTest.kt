@@ -49,14 +49,17 @@ class DetailViewModelTest {
     }
 
     @Test
-    fun `a shown password hides itself after a while`() =
+    fun `a shown password hides itself after a while, sleep included`() =
         runTest(main.dispatcher) {
             val model = model()
             model.togglePassword()
             assertEquals("hunter2", model.uiState.value.shownPassword)
-            advanceTimeBy(DetailViewModel.SHOWN_MILLIS - 1)
+            now += DetailViewModel.SHOWN_MILLIS - 1
+            model.refresh()
             assertEquals("hunter2", model.uiState.value.shownPassword)
-            advanceTimeBy(2)
+            // The phone slept through the rest.
+            now += 1
+            model.onScreen()
             assertNull(model.uiState.value.shownPassword)
         }
 
@@ -85,30 +88,46 @@ class DetailViewModelTest {
         }
 
     @Test
-    fun `the code is followed while shown and refreshed when it runs out`() =
+    fun `the code renews on the clock that counts sleep`() =
         runTest(main.dispatcher) {
             val model = model()
-            val follow = launch { model.followOtp() }
-            val otp = model.uiState.value.otp!!
-            assertEquals("123456", otp.code)
-            assertEquals(20, otp.remaining(now))
-            assertEquals(8, otp.remaining(now + 12_000))
-            model.copyOtp("2FA code")
-            assertEquals(FakeClipboard.Clip("2FA code", "123456", secret = true), fixture.clipboard.clips.last())
-            advanceTimeBy(20_601)
-            assertEquals("123456", model.uiState.value.otp?.code)
+            val follow = launch { model.follow() }
+            assertEquals("000001", model.uiState.value.otp?.code)
+            assertEquals(20, model.uiState.value.otp!!.remaining(now))
+            // Ticks before it runs out fetch nothing.
+            advanceTimeBy(5_000)
+            assertEquals(1, fixture.vault.otpCalls)
+            // The phone slept: its clock moved on, coroutine time didn't.
+            now += 21_000
+            model.onScreen()
+            assertEquals("000002", model.uiState.value.otp?.code)
+            assertEquals(2, fixture.vault.otpCalls)
             follow.cancel()
             follow.join()
             assertNull(model.uiState.value.otp)
         }
 
     @Test
-    fun `a code the phone can't make says so`() =
+    fun `copying a code copies the one valid now`() =
+        runTest(main.dispatcher) {
+            val model = model()
+            model.copyOtp("2FA code")
+            assertEquals(FakeClipboard.Clip("2FA code", "000001", secret = true), fixture.clipboard.clips.last())
+            now += 60_000
+            model.copyOtp("2FA code")
+            assertEquals("000002", fixture.clipboard.clips.last().text)
+        }
+
+    @Test
+    fun `a code the phone can't make says so, and isn't asked for again`() =
         runTest(main.dispatcher) {
             fixture.vault.otps["1"] = "unreadable"
             val model = model()
-            model.followOtp()
+            model.refresh()
             assertTrue(model.uiState.value.otpUnreadable)
+            fixture.vault.otps["1"] = "JBSWY3DPEHPK3PXP"
+            model.refresh()
+            assertEquals(0, fixture.vault.otpCalls)
         }
 
     @Test

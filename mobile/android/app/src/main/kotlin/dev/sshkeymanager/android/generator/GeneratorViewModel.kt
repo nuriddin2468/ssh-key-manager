@@ -16,7 +16,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 
-data class Generated(val password: String, val score: Int)
+data class Generated(val password: String, val score: Int) {
+    override fun toString() = "Generated(score=$score)"
+}
 
 data class GeneratorState(
     val options: PasswordOptions = PasswordOptions(),

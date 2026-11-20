@@ -89,14 +89,20 @@ button (`src/release/.../DebugTools.kt`) nor the function.
   biometric authentication, only while the phone is unlocked, and that
   Keystore invalidates when a fingerprint is added. The phone's PIN doesn't
   release it: the master password is the other way in. When it is
-  invalidated, the app says so, removes the slot once the master password
-  opened the vault, and offers to turn it on again.
+  invalidated (or its key or slot is gone), the app says so, removes the
+  slot once the master password opened the vault, and offers to turn it on
+  again. Any other failure is an error, and fingerprint unlock stays on.
 - **The master password stays required** after the phone restarts and once
-  a week, even with fingerprint unlock on.
+  a week, even with fingerprint unlock on; fingerprint unlock itself checks
+  this, and the lock screen says it again when the app comes back.
 - **Locking**: after one setting's time without use (30 s, 1 min by
   default, 5 or 15 min), counted whether the app is on screen or not, and on
-  demand. In the background a JobScheduler job does it, since Android freezes
-  the app's own timers. Locking drops the open vault in the core.
+  demand. Touches, keys, typing and touches in dialogs, sheets and menus
+  count as use. In the background a JobScheduler job does it, since Android
+  freezes the app's own timers. Locking drops the open vault in the core.
+- **One thread for the core's vault**: every call into it runs on one
+  background thread, in order; the main thread never waits for an unlock or
+  a save to finish.
 - **Copying** a password or a code marks the clip sensitive
   (`EXTRA_IS_SENSITIVE`) and clears it after 30 seconds, unless something
   else was copied meanwhile (while the app can still tell).
@@ -108,8 +114,13 @@ button (`src/release/.../DebugTools.kt`) nor the function.
   or copies it, a 2FA code while it is on screen. View models hold them only
   while shown; a shown password hides itself after 30 seconds, and every
   screen of the open vault, with its view models, goes when the vault locks.
+  Those times run on the clock that counts the phone's sleep, and are
+  checked as the screen comes back. App classes holding a secret print
+  without it.
 
 ## Testing
+
+CI also builds the release APK and checks that it has no test vault.
 
 `./gradlew test` runs the view models and the session over fakes of the
 core, Keystore and the fingerprint prompt. `connectedDebugAndroidTest` runs

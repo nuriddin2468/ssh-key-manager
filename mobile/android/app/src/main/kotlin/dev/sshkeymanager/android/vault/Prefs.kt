@@ -6,6 +6,7 @@ import android.util.Base64
 import androidx.core.content.edit
 import dev.sshkeymanager.android.biometric.DeviceLink
 import dev.sshkeymanager.android.biometric.DeviceLinks
+import dev.sshkeymanager.android.biometric.OffReason
 
 /** The vault's preferences. */
 interface LockSettings {
@@ -65,6 +66,10 @@ class Prefs(context: Context) : LockSettings, PasswordUses, DeviceLinks {
         get() = prefs.getString(STALE_SLOT, null)
         set(value) = prefs.edit { if (value == null) remove(STALE_SLOT) else putString(STALE_SLOT, value) }
 
+    override var offReason: OffReason?
+        get() = prefs.getString(OFF_REASON, null)?.let { name -> OffReason.entries.firstOrNull { it.name == name } }
+        set(value) = prefs.edit { if (value == null) remove(OFF_REASON) else putString(OFF_REASON, value.name) }
+
     override var offer: Boolean
         get() = prefs.getBoolean(OFFER, true)
         set(value) = prefs.edit { putBoolean(OFFER, value) }
@@ -79,6 +84,7 @@ class Prefs(context: Context) : LockSettings, PasswordUses, DeviceLinks {
         const val LINK_KEY = "device_wrapped_key"
         const val STALE_SLOT = "device_stale_slot"
         const val OFFER = "device_offer"
+        const val OFF_REASON = "device_off_reason"
 
         fun encode(bytes: ByteArray): String = Base64.encodeToString(bytes, Base64.NO_WRAP)
 

@@ -3,7 +3,7 @@ import { Signpost } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
-import { toastError } from '@/api/useAppMutation';
+import { useShowError } from '@/api/useAppMutation';
 import type { HostsFileEntry } from '@/bindings/HostsFileEntry';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -23,12 +23,13 @@ interface LookupDialogProps {
 /** Shows where a name leads: the hosts file lines for it, then the system's answer. */
 export function LookupDialog({ entries, initialName, onShowLine, onDone }: LookupDialogProps) {
   const { t } = useTranslation();
+  const showError = useShowError();
   const [name, setName] = useState(initialName);
   const [asked, setAsked] = useState<string | null>(null);
   // A lookup reads nothing the app caches, so it is not an app mutation.
   const lookup = useMutation({
     mutationFn: api.lookupHost,
-    onError: (error) => toastError(t, error),
+    onError: (error) => showError(error),
   });
 
   const value = name.trim();

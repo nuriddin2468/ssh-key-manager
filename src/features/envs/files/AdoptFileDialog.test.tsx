@@ -1,4 +1,5 @@
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, within } from '@testing-library/react';
+import { toast } from 'sonner';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { answer, renderIn, stubPointer } from '../testing';
 import { AdoptFileDialog } from './AdoptFileDialog';
@@ -32,7 +33,7 @@ function show() {
 }
 
 beforeAll(stubPointer);
-afterEach(() => vi.clearAllMocks());
+afterEach(() => vi.restoreAllMocks());
 
 describe('taking a file under management in a new environment', () => {
   it('names the project’s part first when the file’s part is a second', async () => {
@@ -58,5 +59,53 @@ describe('taking a file under management in a new environment', () => {
       [{ name: 'API_URL', secret: false }],
       null,
     );
+  });
+});
+
+describe('a file taken under management that isn’t written', () => {
+  it('says the environment is saved and the file isn’t, not that the save failed', async () => {
+    const success = vi.spyOn(toast, 'success');
+    const warning = vi.spyOn(toast, 'warning');
+    const onDone = show();
+    api.envsFilesAdopt.mockResolvedValue({
+      id: 'e3',
+      added: 1,
+      replaced: 0,
+      fileProblem: { code: 'io', message: 'disk full' },
+    });
+    const part = await screen.findByRole('textbox', { name: 'Part' });
+    await vi.waitFor(() => expect(part).toHaveValue('marketing-site'));
+    // Site's part has a dev already.
+    fireEvent.change(screen.getByRole('textbox', { name: 'Environment' }), {
+      target: { value: 'local' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Take under management' }));
+
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(warning).toHaveBeenCalledWith(
+      'Site · marketing-site · local is saved, but .env wasn’t written',
+      expect.objectContaining({
+        description:
+          'The file could not be read or written. disk full How the file stands shows under the environment.',
+      }),
+    );
+    expect(success).not.toHaveBeenCalled();
+  });
+
+  it('says a save that failed in the dialog and keeps it open', async () => {
+    const onDone = show();
+    api.envsFilesAdopt.mockRejectedValue({ code: 'io', message: 'disk full' });
+    const part = await screen.findByRole('textbox', { name: 'Part' });
+    await vi.waitFor(() => expect(part).toHaveValue('marketing-site'));
+    // Site's part has a dev already.
+    fireEvent.change(screen.getByRole('textbox', { name: 'Environment' }), {
+      target: { value: 'local' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Take under management' }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(await within(dialog).findByText('disk full')).toBeInTheDocument();
+    expect(within(dialog).getByText('The file could not be read or written.')).toBeInTheDocument();
+    expect(onDone).not.toHaveBeenCalled();
   });
 });

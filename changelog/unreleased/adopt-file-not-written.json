@@ -1,0 +1,6 @@
+{
+  "kind": "fixed",
+  "en": "Take under management… no longer reports a failure when the environment was saved and only writing its .env file failed: it now says the environment is saved and the file wasn’t written.",
+  "ru": "«Взять под управление…» больше не сообщает об ошибке, когда окружение сохранено и не удалось только записать файл .env: теперь приложение пишет, что окружение сохранено, а файл не записан.",
+  "uz": "«Boshqaruvga olish…» endi muhit saqlanib, faqat .env faylini yozish muvaffaqiyatsiz boʻlganda xato haqida xabar bermaydi: endi ilova muhit saqlanganini va fayl yozilmaganini aytadi."
+}

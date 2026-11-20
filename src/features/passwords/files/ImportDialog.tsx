@@ -22,7 +22,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
 import { useVaultStatus } from '@/api/queries';
-import { toastError, useAppMutation } from '@/api/useAppMutation';
+import { toastError, useAppMutation, useShowError } from '@/api/useAppMutation';
 import type { BrowserProfile } from '@/bindings/BrowserProfile';
 import type { ImportOutcome } from '@/bindings/ImportOutcome';
 import type { ImportPasswords } from '@/bindings/ImportPasswords';
@@ -85,6 +85,7 @@ type Step =
  */
 export function ImportDialog({ onDone }: ImportDialogProps) {
   const { t } = useTranslation();
+  const showError = useShowError();
   const doneId = useId();
   const status = useVaultStatus();
   const locked = status.data !== undefined && status.data.state !== 'unlocked';
@@ -134,7 +135,7 @@ export function ImportDialog({ onDone }: ImportDialogProps) {
       };
       const message = messages[appError.code];
       if (message) setError(message);
-      else if (appError.code !== 'cancelled') toastError(t, appError);
+      else if (appError.code !== 'cancelled') showError(appError);
     },
   });
 

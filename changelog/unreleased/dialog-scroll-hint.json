@@ -1,0 +1,6 @@
+{
+  "kind": "improved",
+  "en": "A dialog taller than the window fades out at the edge where there is more to scroll, and a form that can’t be saved yet brings the field to fix into view.",
+  "ru": "Окно, которое не помещается по высоте, плавно затемняется у края, за которым есть ещё содержимое, а форма, которую пока нельзя сохранить, прокручивается к полю, которое нужно исправить.",
+  "uz": "Balandligi sigʻmaydigan oyna davomi bor chetida xiralashadi, hali saqlab boʻlmaydigan forma esa tuzatish kerak boʻlgan maydonga aylantiriladi."
+}

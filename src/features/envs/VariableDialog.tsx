@@ -9,7 +9,7 @@ import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/compone
 import { SwitchGroup, SwitchRow } from '@/components/ui/Switch';
 import { TextField } from '@/components/ui/TextField';
 import { Tile } from '@/components/ui/Tile';
-import { toastVaultError, useSecretCall, useVaultMutation } from '@/features/passwords/vault';
+import { useSecretCall, useShowVaultError, useVaultMutation } from '@/features/passwords/vault';
 import { isVariableName, looksSecretName } from './model';
 import { useEnvLabel } from './useProjectNames';
 
@@ -27,6 +27,7 @@ interface VariableDialogProps {
  */
 export function VariableDialog({ env, variable, onDone }: VariableDialogProps) {
   const { t } = useTranslation();
+  const showError = useShowVaultError();
   const envLabelOf = useEnvLabel();
   const valueId = useId();
   const [name, setName] = useState(variable?.name ?? '');
@@ -80,7 +81,7 @@ export function VariableDialog({ env, variable, onDone }: VariableDialogProps) {
         // The button is gone with the loaded value: go on in the field.
         requestAnimationFrame(() => valueField.current?.focus());
       })
-      .catch((error: unknown) => toastVaultError(t, error));
+      .catch((error: unknown) => showError(error));
   };
 
   const submit = (event: FormEvent) => {

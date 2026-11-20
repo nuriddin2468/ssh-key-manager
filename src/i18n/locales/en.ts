@@ -161,6 +161,14 @@ const en = {
     removed: 'Removed from {{name}}',
     undo: 'Undo',
     folderAdded: 'Folder added',
+    envFound: {
+      notManaged: 'Not managed yet',
+      inFolder: 'In {{folder}} · not managed yet',
+      toast_one: 'Found a .env file in {{folder}}',
+      toast_other: 'Found {{count}} .env files in {{folder}}',
+      toastText_one: 'It’s on the Environments card, ready to take under management.',
+      toastText_other: 'They’re on the Environments card, ready to take under management.',
+    },
     addToProject: 'Add to project',
     addToProjectFor: 'Add {{name}} to a project',
     inProjects: 'In projects',
@@ -4367,6 +4375,8 @@ const en = {
       problems: 'Some lines can’t be read. They stay in the file as they are.',
       submit: 'Take under management',
       done: '{{file}} is written by {{env}} now',
+      fileProblem: '{{env}} is saved, but {{file}} wasn’t written',
+      fileProblemNext: 'How the file stands shows under the environment.',
     },
     share: {
       sendText:

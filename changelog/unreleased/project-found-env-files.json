@@ -1,0 +1,6 @@
+{
+  "kind": "improved",
+  "en": "A project’s page now shows the .env files found in its folders on the Environments card, even before the project has any environments, with Take under management… next to each. Adding a folder says which .env files it has.",
+  "ru": "Страница проекта теперь показывает в карточке «Окружения» файлы .env из папок проекта, даже пока в нём нет ни одного окружения, с кнопкой «Взять под управление…» у каждого. После добавления папки приложение сообщает, какие файлы .env в ней есть.",
+  "uz": "Loyiha sahifasi endi «Muhitlar» kartasida loyiha papkalaridagi .env fayllarni, loyihada hali muhit boʻlmasa ham, har birining yonida «Boshqaruvga olish…» tugmasi bilan koʻrsatadi. Papka qoʻshilganda undagi .env fayllar aytiladi."
+}

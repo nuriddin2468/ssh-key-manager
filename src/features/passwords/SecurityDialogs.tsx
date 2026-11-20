@@ -16,8 +16,8 @@ import { RecoveryKeyPanel } from './RecoveryKeyPanel';
 import {
   recoveryKeySaved,
   setPendingRecoveryKey,
-  toastVaultError,
   useSecretCall,
+  useShowVaultError,
   useVaultMutation,
 } from './vault';
 
@@ -184,6 +184,7 @@ const DEVICE_UNLOCK = { macos: 'Touch ID', windows: 'Windows Hello', linux: null
  */
 export function NewRecoveryKeyDialog({ onDone }: { onDone: () => void }) {
   const { t } = useTranslation();
+  const showError = useShowVaultError();
   const [master, setMaster] = useState('');
   const [wrong, setWrong] = useState(false);
   const [recoveryKey, setRecoveryKey] = useState<string | null>(null);
@@ -212,7 +213,7 @@ export function NewRecoveryKeyDialog({ onDone }: { onDone: () => void }) {
       void invalidateAll();
     } catch (error) {
       if (AppError.from(error).code === 'wrong_passphrase') setWrong(true);
-      else toastVaultError(t, error);
+      else showError(error);
     }
   };
 

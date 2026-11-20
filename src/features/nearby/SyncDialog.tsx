@@ -15,7 +15,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
-import { toastError, useAppMutation } from '@/api/useAppMutation';
+import { toastError, useAppMutation, useShowError } from '@/api/useAppMutation';
 import { useRouter } from '@/app/router';
 import type { Pairing } from '@/bindings/Pairing';
 import type { Review } from '@/bindings/Review';
@@ -598,6 +598,7 @@ function ConflictValues({
   fields: string[];
 }) {
   const { t } = useTranslation();
+  const showError = useShowError();
   const [shown, setShown] = useState<Record<string, { mine: string; theirs: string }>>({});
   // The button goes once the values come: the focus goes to its row.
   const rows = useRef<Record<string, HTMLTableCellElement | null>>({});
@@ -614,7 +615,7 @@ function ConflictValues({
       setShown((current) => ({ ...current, [field]: { mine, theirs } }));
       setFocus(field);
     } catch (error) {
-      toastError(t, error);
+      showError(error);
     }
   };
   return (

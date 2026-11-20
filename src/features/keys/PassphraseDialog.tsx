@@ -3,7 +3,7 @@ import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
-import { errorMessage, toastError, useAppMutation } from '@/api/useAppMutation';
+import { errorMessage, toastError, useAppMutation, useShowError } from '@/api/useAppMutation';
 import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { KeyView } from '@/bindings/KeyView';
 import { Button } from '@/components/ui/Button';
@@ -43,6 +43,7 @@ interface Change {
  */
 export function PassphraseDialog({ keyView, suggest = false, onDone }: PassphraseDialogProps) {
   const { t } = useTranslation();
+  const showError = useShowError();
   const hasOld = keyView.encrypted === true;
   const vault = useVaultKey(keyView.fingerprint);
   const entry = vault.vault === 'unlocked' ? vault.entry : undefined;
@@ -67,12 +68,12 @@ export function PassphraseDialog({ keyView, suggest = false, onDone }: Passphras
       (value) => {
         if (live) fill(value);
       },
-      (error: unknown) => toastError(t, error),
+      (error: unknown) => showError(error),
     );
     return () => {
       live = false;
     };
-  }, [suggest, fill, t]);
+  }, [suggest, fill, showError]);
 
   const change = useAppMutation(
     async (vars: Change) => {

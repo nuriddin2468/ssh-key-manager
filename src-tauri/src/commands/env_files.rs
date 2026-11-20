@@ -552,28 +552,43 @@ pub async fn envs_files_adopt(
             let counts = vault.import_env_variables(&id, &vars)?;
             vault.bind_env_file(&id, &file, &ctx)?;
             super::projects::apply_folder_choice(vault, &id, folder.as_ref())?;
-            Ok(EnvImported { id, counts })
+            Ok(EnvImported {
+                id,
+                counts,
+                file_problem: None,
+            })
         })?;
         // A folder whose AI tools' rules the user asked for gets its line.
         super::env_agents::follow_choice(&app, state, &file.folder);
         // The vault holds the file's variables now, and perhaps more: the
         // file gets those too, keeping its own lines, unless it changed
-        // since it was read.
-        let file = managed::check_env_file(&file)?;
-        let seen = state
-            .vault
-            .with(&app, |vault| {
-                Ok(vault.compare_env_file(&imported.id, &file, &ctx)?)
-            })?
-            .revision;
-        let prefer = Preference {
-            env_id: &imported.id,
-            file: &file,
-            keep: KeepSide::Vault,
-            seen: seen.as_deref(),
-        };
-        files.sync(&app, state, Some(prefer), true)?;
-        Ok(imported)
+        // since it was read. The environment is saved by now, so a failure
+        // here is said as the file's, not as a save that didn't happen.
+        let written = (|| -> AppResult<()> {
+            let file = managed::check_env_file(&file)?;
+            let seen = state
+                .vault
+                .with(&app, |vault| {
+                    Ok(vault.compare_env_file(&imported.id, &file, &ctx)?)
+                })?
+                .revision;
+            let prefer = Preference {
+                env_id: &imported.id,
+                file: &file,
+                keep: KeepSide::Vault,
+                seen: seen.as_deref(),
+            };
+            files.sync(&app, state, Some(prefer), true)?;
+            Ok(())
+        })();
+        let file_problem = written.err().map(|error| {
+            log::warn!("env files: a file taken under management wasn't written: {error}");
+            error.info()
+        });
+        Ok(EnvImported {
+            file_problem,
+            ..imported
+        })
     })
     .await
 }

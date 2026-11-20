@@ -84,6 +84,11 @@ pub struct EnvImported {
     #[serde(flatten)]
     #[cfg_attr(test, ts(flatten))]
     pub counts: ImportCounts,
+    /// A file taken under management: why it wasn't written after the
+    /// environment was saved, which stands either way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    pub file_problem: Option<sshkm_core::ErrorInfo>,
 }
 
 /// An export: written, or waiting because of a Git working tree.
@@ -460,7 +465,11 @@ pub async fn envs_import(
                 ImportTarget::Existing { id } => id.clone(),
             };
             let counts = vault.import_env_variables(&id, &vars)?;
-            Ok(EnvImported { id, counts })
+            Ok(EnvImported {
+                id,
+                counts,
+                file_problem: None,
+            })
         })?;
         *picked_import() = None;
         Ok(imported)

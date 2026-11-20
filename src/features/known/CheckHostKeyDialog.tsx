@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
 import { keys, queryClient } from '@/api/queries';
-import { toastError, useAppMutation } from '@/api/useAppMutation';
+import { useAppMutation, useShowError } from '@/api/useAppMutation';
 import type { HostKeyCheck } from '@/bindings/HostKeyCheck';
 import type { KnownHostEntry } from '@/bindings/KnownHostEntry';
 import { Button } from '@/components/ui/Button';
@@ -51,6 +51,7 @@ const RESULT = {
 /** Compares the key a server offers now with the saved one (`ssh-keyscan`). */
 export function CheckHostKeyDialog({ initialHost, onRemove, onDone }: CheckHostKeyDialogProps) {
   const { t } = useTranslation();
+  const showError = useShowError();
   const [host, setHost] = useState(initialHost);
   const [port, setPort] = useState('');
   const [result, setResult] = useState<HostKeyCheck | null>(null);
@@ -77,7 +78,7 @@ export function CheckHostKeyDialog({ initialHost, onRemove, onDone }: CheckHostK
         setResult(null);
       }
     } catch (error) {
-      toastError(t, error);
+      showError(error);
     }
   };
 

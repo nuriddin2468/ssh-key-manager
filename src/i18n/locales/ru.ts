@@ -187,6 +187,18 @@ const ru = {
     removed: 'Убрано из {{name}}',
     undo: 'Отменить',
     folderAdded: 'Папка добавлена',
+    envFound: {
+      notManaged: 'Ещё не под управлением',
+      inFolder: 'В папке {{folder}} · ещё не под управлением',
+      toast_one: 'В папке {{folder}} найден файл .env',
+      toast_few: 'В папке {{folder}} найдено {{count}} файла .env',
+      toast_many: 'В папке {{folder}} найдено {{count}} файлов .env',
+      toast_other: 'В папке {{folder}} найдено {{count}} файла .env',
+      toastText_one: 'Он в карточке «Окружения» — его можно взять под управление.',
+      toastText_few: 'Они в карточке «Окружения» — их можно взять под управление.',
+      toastText_many: 'Они в карточке «Окружения» — их можно взять под управление.',
+      toastText_other: 'Они в карточке «Окружения» — их можно взять под управление.',
+    },
     addToProject: 'Добавить в проект',
     addToProjectFor: 'Добавить {{name}} в проект',
     inProjects: 'В проектах',
@@ -4723,6 +4735,8 @@ const ru = {
       problems: 'Некоторые строки нельзя прочитать. Они останутся в файле как есть.',
       submit: 'Взять под управление',
       done: '{{file}} теперь записывает {{env}}',
+      fileProblem: '{{env}} сохранено, но {{file}} не записан',
+      fileProblemNext: 'Состояние файла видно у окружения.',
     },
     share: {
       sendText:

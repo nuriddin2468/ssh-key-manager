@@ -23,7 +23,7 @@ import { labelProblem, nameTaken, partsOf, secondPart, whereLabel } from '../mod
 import { useEnvs } from '../queries';
 import { useEnvLabel } from '../useProjectNames';
 import { partProblem, WhereFields } from '../WhereFields';
-import { bindRefusal, isEnvNameClash } from './errors';
+import { bindRefusal, isEnvNameClash, toastFileProblem } from './errors';
 import { fileName } from './model';
 import { refreshFileReports } from './queries';
 
@@ -119,6 +119,13 @@ export function AdoptFileDialog({ found, onDone }: AdoptFileDialogProps) {
         ? secondPart(envs.data ?? [], found.project, [chosenEnv.part], [chosenEnv.id])
         : null;
 
+  // The environment the file went to, as the list names it.
+  const adoptedLabel = (id: string) => {
+    const env = envs.data?.find((item) => item.id === id);
+    return env
+      ? envLabelOf(env)
+      : whereLabel(whereLabel(project?.name, partValue.trim()), nameValue.trim());
+  };
   const adopt = useVaultMutation(
     () =>
       api.envsFilesAdopt(
@@ -131,16 +138,15 @@ export function AdoptFileDialog({ found, onDone }: AdoptFileDialogProps) {
         firstPart.rename,
       ),
     {
-      success: (result) => {
-        const env = envs.data?.find((item) => item.id === result.id);
-        return t('envs.adopt.done', {
-          file,
-          env: env
-            ? envLabelOf(env)
-            : whereLabel(whereLabel(project?.name, partValue.trim()), nameValue.trim()),
-        });
-      },
-      onSuccess: () => {
+      // Saved; a file that wasn't written after says so instead.
+      success: (result) =>
+        result.fileProblem
+          ? undefined
+          : t('envs.adopt.done', { file, env: adoptedLabel(result.id) }),
+      onSuccess: (result) => {
+        if (result.fileProblem) {
+          toastFileProblem(t, found.file, adoptedLabel(result.id), result.fileProblem);
+        }
         void refreshFileReports();
         onDone();
       },

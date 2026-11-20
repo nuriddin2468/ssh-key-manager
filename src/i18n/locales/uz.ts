@@ -164,6 +164,14 @@ const uz = {
     removed: '{{name}} loyihasidan olib tashlandi',
     undo: 'Bekor qilish',
     folderAdded: 'Papka qoʻshildi',
+    envFound: {
+      notManaged: 'Hali boshqarilmaydi',
+      inFolder: '{{folder}} papkasida · hali boshqarilmaydi',
+      toast_one: '{{folder}} papkasida .env fayli topildi',
+      toast_other: '{{folder}} papkasida {{count}} ta .env fayli topildi',
+      toastText_one: 'U «Muhitlar» kartasida, uni boshqaruvga olish mumkin.',
+      toastText_other: 'Ular «Muhitlar» kartasida, ularni boshqaruvga olish mumkin.',
+    },
     addToProject: 'Loyihaga qoʻshish',
     addToProjectFor: '{{name}}ni loyihaga qoʻshish',
     inProjects: 'Loyihalarda',
@@ -4436,6 +4444,8 @@ const uz = {
       problems: 'Baʼzi qatorlarni oʻqib boʻlmaydi. Ular faylda oʻz holicha qoladi.',
       submit: 'Boshqaruvga olish',
       done: '{{file}}ni endi {{env}} yozadi',
+      fileProblem: '{{env}} saqlandi, lekin {{file}} yozilmadi',
+      fileProblemNext: 'Faylning holati muhitda koʻrinadi.',
     },
     share: {
       sendText:

@@ -1,6 +1,7 @@
 package dev.sshkeymanager.android.ui.theme
 
 import androidx.compose.material3.darkColorScheme
+import dev.sshkeymanager.android.core.ProjectColor
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
 
@@ -91,3 +92,25 @@ internal val LightStrength =
         good = Color(0xFF0F766E),
         strong = Color(0xFF115E59),
     )
+
+/**
+ * A project's colour, from the desktop app's tile tones (Tile.tsx): the
+ * light end on the dark theme, the deep end on the light one. Only for dots
+ * beside the project's name, never for text.
+ */
+fun ProjectColor.tone(dark: Boolean): Color {
+    val (light, deep) =
+        when (this) {
+            ProjectColor.TEAL -> 0xFF5EEAD4 to 0xFF0D9488
+            ProjectColor.BLUE -> 0xFF7DD3FC to 0xFF2563EB
+            ProjectColor.INDIGO -> 0xFFA5B4FC to 0xFF4F46E5
+            ProjectColor.VIOLET -> 0xFFC4B5FD to 0xFF7C3AED
+            ProjectColor.PINK -> 0xFFF9A8D4 to 0xFFDB2777
+            ProjectColor.RED -> 0xFFFDA4AF to 0xFFE11D48
+            ProjectColor.ORANGE -> 0xFFFDBA74 to 0xFFEA580C
+            ProjectColor.AMBER -> 0xFFFCD34D to 0xFFD97706
+            ProjectColor.GREEN -> 0xFF86EFAC to 0xFF16A34A
+            ProjectColor.SLATE -> 0xFFCBD5E1 to 0xFF475569
+        }
+    return Color(if (dark) light else deep)
+}

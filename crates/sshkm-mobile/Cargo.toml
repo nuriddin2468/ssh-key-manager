@@ -24,13 +24,24 @@ required-features = ["bindgen"]
 # Without the features only computers use (ssh-agent, `~/.ssh` audit, trash,
 # browser import, shell history, leak scanner, `.env` files on disk, tunnels).
 sshkm-core = { path = "../sshkm-core", default-features = false }
+# A test vault's scratch folder, in debug builds of the app (`test-vault`).
+tempfile = { version = "3.27.0", optional = true }
 thiserror = "2.0.21"
 # The bindings generator's runtime half. MPL-2.0, which deny.toml allows.
 uniffi = { version = "0.32.2", default-features = false }
+zeroize = "1.9.1"
+
+[dev-dependencies]
+tempfile = "3.27.0"
 
 [features]
 # The `uniffi-bindgen` program: only the machine that builds the app runs it.
 bindgen = ["uniffi/cli", "uniffi/cargo-metadata"]
+# A made-up vault the debug build of the app can take instead of one from a
+# computer, until pairing exists (`PhoneVault::receive_test_vault`). Release
+# builds never turn it on, so neither the function nor its bindings exist
+# there.
+test-vault = ["dep:tempfile"]
 
 # The workspace lints, `forbid(unsafe_code)` included: UniFFI's scaffolding
 # is `unsafe`, but it comes from its macros, where rustc doesn't report the

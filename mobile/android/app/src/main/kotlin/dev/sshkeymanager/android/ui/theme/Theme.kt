@@ -38,12 +38,18 @@ val SecretTextStyle =
     )
 
 private val LocalStrengthColors = staticCompositionLocalOf { DarkStrength }
+private val LocalDark = staticCompositionLocalOf { true }
 
 /** The app's colours beyond Material's roles. */
 object AppTheme {
     val strength: StrengthColors
         @Composable @ReadOnlyComposable
         get() = LocalStrengthColors.current
+
+    /** Whether the dark scheme is on. */
+    val dark: Boolean
+        @Composable @ReadOnlyComposable
+        get() = LocalDark.current
 }
 
 /**
@@ -52,7 +58,10 @@ object AppTheme {
  */
 @Composable
 fun SshkmTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
-    CompositionLocalProvider(LocalStrengthColors provides if (darkTheme) DarkStrength else LightStrength) {
+    CompositionLocalProvider(
+        LocalStrengthColors provides if (darkTheme) DarkStrength else LightStrength,
+        LocalDark provides darkTheme,
+    ) {
         MaterialTheme(
             colorScheme = if (darkTheme) DarkColors else LightColors,
             typography = Typography(),

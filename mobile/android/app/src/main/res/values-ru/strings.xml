@@ -1,20 +1,171 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="home_version">Версия %1$s</string>
-    <string name="home_coming">Приложение для телефона в работе: следом появятся хранилище и синхронизация с компьютерами.</string>
+    <!-- Common -->
+    <string name="action_back">Назад</string>
+    <string name="action_cancel">Отмена</string>
+    <string name="action_save">Сохранить</string>
+    <string name="action_lock">Заблокировать</string>
+    <string name="action_more">Ещё</string>
+    <string name="action_retry">Повторить</string>
+    <string name="action_show">Показать: %1$s</string>
+    <string name="action_hide">Скрыть: %1$s</string>
+    <string name="action_copy">Копировать: %1$s</string>
+    <string name="state_shown">Показано</string>
+    <string name="state_hidden">Скрыто</string>
+    <plurals name="clipboard_clears">
+        <item quantity="one">%1$s: скопировано. Буфер обмена очистится через %2$d секунду.</item>
+        <item quantity="few">%1$s: скопировано. Буфер обмена очистится через %2$d секунды.</item>
+        <item quantity="many">%1$s: скопировано. Буфер обмена очистится через %2$d секунд.</item>
+        <item quantity="other">%1$s: скопировано. Буфер обмена очистится через %2$d секунды.</item>
+    </plurals>
+    <string name="copied">%1$s: скопировано</string>
 
+    <!-- No vault yet -->
+    <string name="novault_title">Хранилище придёт с вашего компьютера</string>
+    <string name="novault_body">Телефон станет одним из ваших устройств: он получит хранилище, общее для ваших компьютеров, а вы зададите для телефона свой мастер-пароль.</string>
+    <string name="novault_soon">Вы добавите этот телефон из SSH Key Manager на компьютере. Это появится в следующей версии приложения.</string>
+    <string name="novault_debug_title">Отладочная сборка</string>
+    <string name="novault_debug_body">Загрузить выдуманное хранилище, как будто его прислал компьютер.</string>
+    <string name="novault_debug_action">Загрузить тестовое хранилище</string>
+
+    <!-- This phone's master password -->
+    <string name="setup_title">Задайте мастер-пароль для этого телефона</string>
+    <string name="setup_body">Его вы вводите, чтобы открыть хранилище на телефоне. Он может отличаться от мастер-паролей на компьютерах.</string>
+    <string name="field_master">Мастер-пароль</string>
+    <string name="field_master_repeat">Повторите мастер-пароль</string>
+    <string name="setup_mismatch">Пароли не совпадают.</string>
+    <string name="setup_empty">Введите мастер-пароль.</string>
+    <string name="setup_weak">Легко подобрать. Добавьте слово-другое.</string>
+    <string name="setup_action">Задать пароль и открыть</string>
+
+    <!-- Unlock -->
+    <string name="unlock_title">Хранилище заблокировано</string>
+    <string name="unlock_body">Введите мастер-пароль, чтобы открыть его.</string>
+    <string name="unlock_action">Разблокировать</string>
+    <string name="unlock_fingerprint">Разблокировать отпечатком</string>
+    <string name="unlock_after_restart">Телефон перезагрузился. Введите мастер-пароль один раз, и отпечаток снова заработает.</string>
+    <string name="unlock_weekly">Прошла неделя с тех пор, как вы вводили мастер-пароль. Введите его один раз, и отпечаток снова заработает.</string>
+    <string name="unlock_changed">На телефон добавили отпечаток, поэтому разблокировка отпечатком выключилась. Введите мастер-пароль, затем включите её снова.</string>
+    <string name="error_wrong_master">Неверный мастер-пароль.</string>
+    <string name="error_too_many">Слишком много неверных паролей. Подождите несколько секунд и попробуйте снова.</string>
+    <string name="error_fingerprint_lockout">Слишком много попыток с отпечатком. Введите мастер-пароль.</string>
+    <string name="prompt_unlock_title">Разблокировать хранилище</string>
+    <string name="prompt_unlock_cancel">Ввести мастер-пароль</string>
+    <string name="prompt_enable_title">Включить разблокировку отпечатком</string>
+    <string name="prompt_enable_subtitle">Подтвердите отпечатком пальца.</string>
+
+    <!-- The vault can't be read -->
+    <string name="unreadable_title">Хранилище не открывается</string>
+    <string name="unreadable_body">Его файлы на телефоне повреждены или созданы более новой версией приложения. Обновите приложение и попробуйте снова.</string>
+
+    <!-- Passwords list -->
+    <string name="logins_title">Пароли</string>
+    <string name="logins_search">Поиск паролей</string>
+    <string name="logins_search_hint">Название, пользователь или сайт</string>
+    <string name="logins_clear_search">Очистить поиск</string>
+    <string name="filter_all">Все</string>
+    <string name="filter_otp">2FA</string>
+    <string name="filter_trash">Корзина</string>
+    <string name="logins_add">Добавить запись</string>
+    <string name="logins_empty_title">Паролей пока нет</string>
+    <string name="logins_empty_body">Добавьте логин сайта здесь. Логины с компьютеров придут с синхронизацией в следующей версии.</string>
+    <string name="logins_no_match">Ничего не найдено по запросу «%1$s».</string>
+    <string name="logins_filter_empty">Здесь пока ничего нет.</string>
+    <string name="trash_empty">Корзина пуста.</string>
+    <string name="kind_host">Пароль сервера · %1$s</string>
+    <string name="kind_key">Парольная фраза ключа</string>
+    <string name="otp_badge">2FA</string>
+    <string name="otp_badge_label">Есть код 2FA</string>
+    <string name="menu_generator">Генератор паролей</string>
+    <string name="menu_settings">Настройки</string>
+    <string name="offer_title">Разблокировать отпечатком?</string>
+    <string name="offer_body">Открывайте хранилище касанием, без ввода мастер-пароля.</string>
+    <string name="offer_body_again">Разблокировка отпечатком выключилась, когда добавили отпечаток. Включить её снова?</string>
+    <string name="offer_turn_on">Включить</string>
+    <string name="offer_not_now">Не сейчас</string>
+    <string name="fingerprint_on">Разблокировка отпечатком включена.</string>
+
+    <!-- An entry -->
+    <string name="field_title">Название</string>
+    <string name="field_username">Имя пользователя</string>
+    <string name="field_password">Пароль</string>
+    <string name="field_website">Сайт</string>
+    <string name="field_notes">Заметки</string>
+    <string name="field_otp">Код 2FA</string>
+    <string name="field_otp_secret">Секрет 2FA</string>
+    <string name="password_none">Пароль не сохранён</string>
+    <plurals name="otp_changes_in">
+        <item quantity="one">Новый код через %d секунду</item>
+        <item quantity="few">Новый код через %d секунды</item>
+        <item quantity="many">Новый код через %d секунд</item>
+        <item quantity="other">Новый код через %d секунды</item>
+    </plurals>
+    <string name="otp_unreadable">Этот код 2FA нельзя показать на телефоне.</string>
+    <string name="detail_edit">Изменить</string>
+    <string name="detail_trash">Переместить в корзину</string>
+    <string name="detail_restore">Восстановить</string>
+    <string name="detail_in_trash">В корзине</string>
+    <string name="detail_password_changed">Пароль задан %1$s</string>
+    <string name="trash_confirm_title">Переместить «%1$s» в корзину?</string>
+    <string name="trash_confirm_body">Запись можно будет восстановить из корзины.</string>
+    <string name="moved_to_trash">Запись «%1$s» перемещена в корзину</string>
+    <string name="restored">Запись «%1$s» восстановлена</string>
+    <string name="detail_gone">Этой записи больше нет.</string>
+
+    <!-- New and edited entries -->
+    <string name="edit_new_title">Новая запись</string>
+    <string name="edit_title">Изменить запись</string>
+    <string name="edit_title_hint">например, GitHub</string>
+    <string name="edit_new_password">Новый пароль</string>
+    <string name="edit_keep_password">Оставьте пустым, чтобы сохранить текущий пароль.</string>
+    <string name="edit_generate">Сгенерировать пароль</string>
+    <string name="edit_otp_hint">Вставьте ссылку otpauth:// или ключ настройки, который показывает сайт.</string>
+    <string name="edit_otp_saved">2FA настроена</string>
+    <string name="edit_otp_replace">Заменить</string>
+    <string name="edit_otp_remove">Удалить</string>
+    <string name="edit_otp_keep">Оставить текущий</string>
+    <string name="edit_otp_removing">Секрет 2FA удалится при сохранении.</string>
+    <string name="edit_title_required">Введите название.</string>
+    <string name="edit_otp_invalid">Это не похоже на секрет 2FA. Вставьте ссылку otpauth:// или ключ настройки.</string>
+
+    <!-- Password generator -->
     <string name="generator_title">Генератор паролей</string>
-    <string name="generator_empty">Пароля пока нет. Сгенерируйте его: 20 символов — буквы, цифры и спецсимволы.</string>
     <string name="generator_password">Сгенерированный пароль</string>
-    <string name="generator_generate">Сгенерировать пароль</string>
     <string name="generator_again">Сгенерировать другой</string>
+    <string name="generator_use">Использовать этот пароль</string>
+    <string name="generator_length">Длина: %1$d</string>
+    <string name="generator_lowercase">Строчные буквы</string>
+    <string name="generator_uppercase">Заглавные буквы</string>
+    <string name="generator_digits">Цифры</string>
+    <string name="generator_symbols">Символы</string>
+    <string name="generator_ambiguous">Без похожих символов (I l 1 O 0 o)</string>
     <string name="generator_strength">Надёжность: %1$s</string>
     <string name="strength_0">Очень слабый</string>
     <string name="strength_1">Слабый</string>
     <string name="strength_2">Средний</string>
     <string name="strength_3">Хороший</string>
     <string name="strength_4">Надёжный</string>
+    <string name="error_settings">С такими настройками пароль не составить.</string>
 
-    <string name="error_settings">С этими настройками пароль не получится.</string>
-    <string name="error_other">Не удалось создать пароль. Попробуйте снова.</string>
+    <!-- Settings -->
+    <string name="settings_title">Настройки</string>
+    <string name="settings_security">Безопасность</string>
+    <string name="settings_lock_after">Блокировать через</string>
+    <string name="settings_lock_after_body">Хранилище заблокируется, если вы не пользуетесь приложением столько времени, открыто оно или нет.</string>
+    <string name="lock_after_30s">30 секунд</string>
+    <string name="lock_after_1m">1 минуту</string>
+    <string name="lock_after_5m">5 минут</string>
+    <string name="lock_after_15m">15 минут</string>
+    <string name="settings_fingerprint">Разблокировка отпечатком</string>
+    <string name="settings_fingerprint_body">Мастер-пароль всё равно понадобится после перезагрузки телефона и раз в неделю.</string>
+    <string name="settings_fingerprint_none">Сначала добавьте отпечаток в настройках телефона.</string>
+    <string name="settings_fingerprint_unsupported">На этом телефоне нет сканера отпечатков, подходящего для хранилища.</string>
+    <string name="settings_lock_now">Заблокировать сейчас</string>
+    <string name="settings_about">О приложении</string>
+    <string name="settings_version">Версия %1$s</string>
+
+    <!-- Errors -->
+    <string name="error_conflict">Хранилище тем временем изменилось, поэтому изменения не сохранены. Попробуйте снова.</string>
+    <string name="error_storage">Не удалось записать в память телефона. Освободите место и попробуйте снова.</string>
+    <string name="error_other">Что-то пошло не так. Попробуйте снова.</string>
 </resources>

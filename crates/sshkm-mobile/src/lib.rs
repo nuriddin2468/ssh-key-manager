@@ -4,8 +4,8 @@
 //! vault, sync and SSH goes through this crate to `sshkm-core`, built without
 //! the features only computers use. [UniFFI] writes the Kotlin side from what
 //! is exported here: records, enums, errors and functions. The API grows with
-//! the steps of `docs/mobile.md`; for now it proves the bridge with the core's
-//! version and the vault's password generator.
+//! the steps of `docs/mobile.md`: the core's version, the vault's password
+//! generator, and the vault on the phone ([`PhoneVault`]).
 //!
 //! Secrets cross the bridge one at a time, when the user asks for them, and
 //! are never logged.
@@ -19,9 +19,14 @@
 mod error;
 mod generator;
 mod scaffolding;
+mod vault;
 
 pub use error::CoreError;
 pub use generator::{PasswordOptions, PasswordStrength, generate_password, password_strength};
 pub use scaffolding::core_version;
 // The tag UniFFI's generated code names as `crate::UniFfiTag`.
 pub use scaffolding::UniFfiTag;
+pub use vault::{
+    DeviceUnlockKey, Login, LoginDetail, LoginInput, OtpCode, PhoneVault, ProjectLabel, VaultInfo,
+    VaultStatus,
+};

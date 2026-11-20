@@ -17,6 +17,37 @@ computers use (see the core's README). The API grows with the steps of
 | `passwordStrength(password)` | zxcvbn's score and guesses. |
 | `CoreException.Failed(code, detail)` | Every error: `code` is the core's stable `ErrorCode`, for the app to word; `detail` is English for developers. |
 
+### The vault on the phone (`PhoneVault`, step C)
+
+One object for the vault in a folder of the app's private storage
+(`vault.kdbx`, `vault.keys`, `backups/`). The phone never makes a vault: it
+gets the one its computers share (step E) and sets its own master password,
+as a new computer does (`Vault::join`). Until it is unlocked nothing but
+`info()` reads the files.
+
+| Kotlin | What it does |
+|---|---|
+| `PhoneVault(folder)` | The vault in `folder`; reads nothing yet. |
+| `info()` | `VaultInfo(status, vaultId, deviceSlots)`: `MISSING`, `RECEIVED` (waiting for the master password), `LOCKED`, `UNLOCKED`. |
+| `setMasterPassword(master)` | Writes the received vault with this phone's master password and opens it. |
+| `unlock(master)` | Opens it; wrong passwords in a row wait (`TOO_MANY_ATTEMPTS`), as on computers. |
+| `unlockWithDevice(slotId, key)` | Opens it with the fingerprint slot's 32-byte key, which the app unwrapped with Keystore. The key is wiped on the Rust side. |
+| `lock()`, `isUnlocked()` | Drops the open vault (database and secret) from memory. |
+| `verifyMasterPassword(master)` | Checks it without changing anything. |
+| `enableDeviceUnlock()` | Adds the phone's fingerprint slot; its random key comes back once (`DeviceUnlockKey`) for the app to wrap. |
+| `disableDeviceUnlock(slotId)` | Removes a fingerprint slot. |
+| `logins()`, `login(id)` | `Login` / `LoginDetail`: no secrets. Every entry, the recycle bin's included. |
+| `projects()` | `ProjectLabel(id, name, color, logins)`, to filter by. |
+| `password(id)` | One password, when the user asks to see or copy it. |
+| `otpCode(id)` | The current 2FA code and the seconds it stays valid; the 2FA secret never crosses. |
+| `addLogin(input)`, `updateLogin(id, input)` | Saved at once with a backup of the previous file. `LoginInput.password = null` keeps the password; `otp = ""` removes the 2FA secret. An edit keeps the entry's kind, host and key. |
+| `trashLogin(id)`, `restoreLogin(id)` | To the recycle bin and back, as on computers. |
+| `receiveTestVault(scratch)` | **Debug builds only** (the `test-vault` feature): a made-up vault, received as if a computer had sent it. |
+
+A change that fails, in the core or when saving, leaves the vault in memory
+as it is on disk. Records holding a secret (`LoginInput`, `OtpCode`,
+`DeviceUnlockKey`) leave it out of their `Debug` output.
+
 ## Unsafe code
 
 The crate takes the workspace's lints, `forbid(unsafe_code)` included. The
@@ -36,4 +67,5 @@ cargo run -p sshkm-mobile --features bindgen --bin uniffi-bindgen -- \
   --language kotlin --out-dir out/kotlin
 ```
 
-`cargo test -p sshkm-mobile` tests the API on the computer.
+`cargo test -p sshkm-mobile --all-features` tests the API on the computer,
+the test vault included.

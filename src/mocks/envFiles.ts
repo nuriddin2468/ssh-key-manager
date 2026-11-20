@@ -220,6 +220,27 @@ const UNMANAGED: { folder: string; path: string; text: string }[] = [
 ];
 const adopted = new Set<string>();
 
+/**
+ * The unmanaged `.env` files in `folder`: the samples', and in a folder
+ * added in the preview (projects.ts names them `new-folder-…`) a `.env`
+ * and a `.env.local`, to show them offered on the project's page.
+ */
+function unmanagedIn(folder: string) {
+  const added = /\/new-folder-\d+$/.test(folder)
+    ? [
+        {
+          folder,
+          path: '.env',
+          text: 'DATABASE_URL=postgres://localhost:5432/app\nAPI_KEY=dev-key-4f1b\nPORT=8080\n',
+        },
+        { folder, path: '.env.local', text: 'DEBUG=true\nSTRIPE_SECRET_KEY=sk_test_51x\n' },
+      ]
+    : [];
+  return [...UNMANAGED.filter((x) => x.folder === folder), ...added].filter(
+    (x) => !adopted.has(`${x.folder}\n${x.path}`),
+  );
+}
+
 /** The AI tools and their ignore files, in the backend's order. */
 const AGENT_FILES: [AgentTool, string][] = [
   ['claudeCode', '~/.claude/settings.json'],
@@ -459,10 +480,7 @@ function compare(
 }
 
 function unmanagedFor(file: EnvFile) {
-  return UNMANAGED.find(
-    (x) =>
-      x.folder === file.folder && x.path === file.path && !adopted.has(`${x.folder}\n${x.path}`),
-  );
+  return unmanagedIn(file.folder).find((x) => x.path === file.path);
 }
 
 /** The files with Git and cloud folders, as the backend reports them. */
@@ -712,9 +730,7 @@ export const envFilesHandlers: Record<string, Handler> = {
     const unmanaged = all
       .filter((p) => wanted([p.id]))
       .flatMap((p) =>
-        UNMANAGED.filter(
-          (x) => p.folders.includes(x.folder) && !adopted.has(`${x.folder}\n${x.path}`),
-        ).map((x) => ({
+        p.folders.flatMap(unmanagedIn).map((x) => ({
           project: p.id,
           file: { folder: x.folder, path: x.path },
           location: locate(x),

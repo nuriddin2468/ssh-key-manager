@@ -5,6 +5,7 @@ import {
   ChevronDown,
   Copy,
   CornerDownRight,
+  FileSearch,
   Folder,
   FolderInput,
   FolderOpen,
@@ -50,6 +51,7 @@ import type { Project } from '@/bindings/Project';
 import type { ProjectFolder } from '@/bindings/ProjectFolder';
 import type { ProjectMember } from '@/bindings/ProjectMember';
 import type { Severity } from '@/bindings/Severity';
+import type { UnmanagedEnvFile } from '@/bindings/UnmanagedEnvFile';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Dialog } from '@/components/ui/Dialog';
@@ -67,6 +69,7 @@ import { findingTitle } from '@/features/audit/model';
 import { useVaultAudit } from '@/features/audit/queries';
 import { vaultFindingTitle } from '@/features/audit/vaultModel';
 import { FileStateLine } from '@/features/envs/files/FileStateLine';
+import { useFilesOverview } from '@/features/envs/files/queries';
 import { isProduction } from '@/features/envs/model';
 import { editOf } from '@/features/hostsFile/draft';
 import { isSystemName, listsSystemName, normalizeName } from '@/features/hostsFile/model';
@@ -96,7 +99,7 @@ import {
 } from './model';
 import { PartFolderDialog } from './PartFolderDialog';
 import { AddToProjectButton } from './ProjectMenu';
-import { envFolderText, placeOfEnv, placeText, usePlaces } from './places';
+import { envFolderText, lastName, placeOfEnv, placeText, usePlaces } from './places';
 import { useProjects } from './queries';
 import { TerminalButton } from './TerminalButton';
 
@@ -166,6 +169,8 @@ interface CardsProps {
   /** What the Add menu made on the page (`memberKey`, `envs:<id>`). */
   made: Set<string>;
   onAdd: (kind: MemberKind) => void;
+  /** Takes a `.env` file found in the project's folders under management. */
+  onAdopt: (found: UnmanagedEnvFile) => void;
 }
 
 const NOTHING_GONE: Missing = {
@@ -181,7 +186,16 @@ const NOTHING_GONE: Missing = {
  * problems first, and the rest on "Show all". Wide, they stand in two
  * columns of their own, so a long card doesn't push the other column down.
  */
-export function Cards({ project, members, library, goneFolders, locked, made, onAdd }: CardsProps) {
+export function Cards({
+  project,
+  members,
+  library,
+  goneFolders,
+  locked,
+  made,
+  onAdd,
+  onAdopt,
+}: CardsProps) {
   const { t } = useTranslation();
   const dialogs = useDialogs();
   const wide = useWide();
@@ -195,12 +209,24 @@ export function Cards({ project, members, library, goneFolders, locked, made, on
   const hostsFile = useHostsFileCard(origin, members.hostsFile, gone.hostsFile);
   const places = usePlaces(project?.id).data;
   const folders = useFoldersCard(project, members.folders, gone.folders, locked, library, places);
+  // The `.env` files in the project's folders that no environment writes:
+  // looked for only with the vault open, as the Files view does.
+  const overview = useFilesOverview(
+    project?.id ?? null,
+    Boolean(project) && !locked && members.folders.length > 0,
+  ).data;
+  const found =
+    project && !locked
+      ? (overview?.unmanaged ?? []).filter((item) => item.project === project.id)
+      : [];
   const environments = useEnvironmentsCard(
     origin,
     locked ? [] : members.environments,
     gone.environments,
     library,
     places,
+    found,
+    onAdopt,
   );
   const logins = useLoginsCard(origin, locked ? [] : members.logins, library);
   const keys = useKeysCard(origin, members.keys, gone.keys, library);
@@ -1146,17 +1172,24 @@ function PartMenu({ project, place }: { project: Project; place: FolderPlace }) 
   );
 }
 
+/**
+ * The project's environments, and before them the `.env` files found in its
+ * folders that none of them writes, each to take under management: the card
+ * shows for those alone too, so a new project with a folder offers its files.
+ */
 function useEnvironmentsCard(
   { project, back, made }: Origin,
   ids: string[],
   gone: Set<string>,
   library: Library,
   places: FolderPlace[] | undefined,
+  found: UnmanagedEnvFile[],
+  onAdopt: (found: UnmanagedEnvFile) => void,
 ): CardSpec | null {
   const { t } = useTranslation();
   const { navigate } = useRouter();
   const terminals = useTerminals();
-  if (ids.length === 0) return null;
+  if (ids.length === 0 && found.length === 0) return null;
   const envs = ids.flatMap((id) => library.envs?.find((env) => env.id === id) ?? []);
   // Parts show when the project has more than one.
   const parts = new Set(envs.map((env) => env.part.toLowerCase()));
@@ -1253,15 +1286,80 @@ function useEnvironmentsCard(
       },
     ];
   });
+  // Which folder, when the project has several.
+  const severalFolders = (project?.folders.length ?? 0) > 1;
+  const foundRows = found.map(
+    (item): CardRow => ({
+      key: `found:${item.file.folder}\n${item.file.path}`,
+      node: (
+        <FoundFileRow
+          found={item}
+          folder={severalFolders ? lastName(item.file.folder) : undefined}
+          onAdopt={() => onAdopt(item)}
+        />
+      ),
+    }),
+  );
   return {
     id: 'environments',
     icon: (
       <Variable data-hue="envs" className="size-3.5 text-[var(--accent-fg)]" strokeWidth={2.2} />
     ),
     title: t('projects.cards.environments'),
-    count: ids.length,
-    rows,
+    count: ids.length > 0 ? ids.length : undefined,
+    // Found files first, so a long card doesn't fold them away.
+    rows: [...foundRows, ...rows],
   };
+}
+
+/**
+ * A `.env` file in one of the project's folders that no environment
+ * writes, with what Git makes of it, and Take under management.
+ */
+function FoundFileRow({
+  found,
+  folder,
+  onAdopt,
+}: {
+  found: UnmanagedEnvFile;
+  /** The folder's name, when the project has several. */
+  folder?: string;
+  onAdopt: () => void;
+}) {
+  const { t } = useTranslation();
+  const git = found.git?.state;
+  return (
+    <Row
+      mono
+      leading={
+        <span
+          aria-hidden="true"
+          className="grid size-7 shrink-0 place-items-center rounded-lg bg-ink/[0.07] text-subtle"
+        >
+          <FileSearch className="size-[14px]" strokeWidth={2} />
+        </span>
+      }
+      title={<span title={found.location}>{found.file.path}</span>}
+      subtitle={
+        folder ? t('projects.envFound.inFolder', { folder }) : t('projects.envFound.notManaged')
+      }
+      detail={
+        git === 'tracked' ? (
+          <Problem text={t('envs.center.gitTracked')} />
+        ) : git === 'untracked' ? (
+          <Problem text={t('envs.center.gitUntracked')} />
+        ) : undefined
+      }
+    >
+      <Button
+        size="sm"
+        aria-label={t('envs.center.adoptLabel', { file: found.file.path })}
+        onClick={onAdopt}
+      >
+        {t('envs.center.adopt')}
+      </Button>
+    </Row>
+  );
 }
 
 function useLoginsCard(

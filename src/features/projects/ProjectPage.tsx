@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import type { TFunction } from 'i18next';
 import {
   FolderKanban,
   FolderPlus,
@@ -14,12 +15,21 @@ import {
 } from 'lucide-react';
 import { type ReactNode, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import { api } from '@/api/commands';
-import { useConfig, useHostsFile, useKeys, useVaultEntries, useVaultStatus } from '@/api/queries';
+import {
+  queryClient,
+  useConfig,
+  useHostsFile,
+  useKeys,
+  useVaultEntries,
+  useVaultStatus,
+} from '@/api/queries';
 import { useDialogs } from '@/app/dialogs';
 import { useRouter } from '@/app/router';
 import type { Project } from '@/bindings/Project';
 import type { ProjectMember } from '@/bindings/ProjectMember';
+import type { UnmanagedEnvFile } from '@/bindings/UnmanagedEnvFile';
 import { PageBody, Toolbar } from '@/components/layout/Toolbar';
 import { Button } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
@@ -29,6 +39,8 @@ import { IconButton } from '@/components/ui/IconButton';
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '@/components/ui/Menu';
 import { Spinner } from '@/components/ui/Spinner';
 import { EnvDialog } from '@/features/envs/EnvDialog';
+import { AdoptFileDialog } from '@/features/envs/files/AdoptFileDialog';
+import { filesKeys, refreshFileReports } from '@/features/envs/files/queries';
 import { useEnvs } from '@/features/envs/queries';
 import { EntryEditor } from '@/features/passwords/EntryEditor';
 import { useVaultMutation } from '@/features/passwords/vault';
@@ -38,6 +50,7 @@ import { Cards } from './cards';
 import { holds, type Library, type Members, memberKey, memberSummary, personal } from './model';
 import { ProjectDialog } from './ProjectDialog';
 import { PersonalTile, ProjectTile } from './ProjectTile';
+import { lastName } from './places';
 import { projectKeys, refreshSuggestions, useProjects } from './queries';
 
 /** What the Add menu creates, in the dialogs the Library uses. */
@@ -63,6 +76,8 @@ export function ProjectPage({ id }: { id?: string }) {
   const dialogs = useDialogs();
   const [adding, setAdding] = useState<MemberKind | null>(null);
   const [creating, setCreating] = useState<'login' | 'environment' | null>(null);
+  // A `.env` file found in the project's folders, being taken under management.
+  const [adopting, setAdopting] = useState<UnmanagedEnvFile | null>(null);
   // What the Add menu made here, listed first on its card.
   const [made, setMade] = useState<Set<string>>(new Set());
   // biome-ignore lint/correctness/useExhaustiveDependencies: forgotten on another project
@@ -106,7 +121,10 @@ export function ProjectPage({ id }: { id?: string }) {
   });
   const addFolder = useVaultMutation(() => api.projectsAddFolder(id ?? ''), {
     success: (saved) => (saved ? t('projects.folderAdded') : undefined),
-    onSuccess: () => void refreshSuggestions(),
+    onSuccess: (saved) => {
+      void refreshSuggestions();
+      if (saved) void announceFound(t, saved, project?.folders ?? [], setAdopting);
+    },
   });
   const join = useJoinMade();
   // Marks what was made (`memberKey`, or `envs:<id>`) and puts it in the project.
@@ -286,6 +304,7 @@ export function ProjectPage({ id }: { id?: string }) {
             locked={locked}
             made={made}
             onAdd={startAdding}
+            onAdopt={setAdopting}
           />
         )}
       </PageBody>
@@ -324,6 +343,11 @@ export function ProjectPage({ id }: { id?: string }) {
               />
             ) : null}
           </Dialog>
+          <Dialog open={adopting !== null} onOpenChange={(open) => !open && setAdopting(null)}>
+            {adopting ? (
+              <AdoptFileDialog found={adopting} onDone={() => setAdopting(null)} />
+            ) : null}
+          </Dialog>
           <Dialog open={editing} onOpenChange={setEditing}>
             {editing ? (
               <ProjectDialog
@@ -348,6 +372,43 @@ export function ProjectPage({ id }: { id?: string }) {
       ) : null}
     </>
   );
+}
+
+/**
+ * After a folder joins the project: looks through it again for `.env` files
+ * no environment writes and says what it found, with Take under management
+ * for a single file. The Environments card lists them all.
+ */
+async function announceFound(
+  t: TFunction,
+  saved: Project,
+  before: readonly string[],
+  adopt: (found: UnmanagedEnvFile) => void,
+) {
+  const added = saved.folders.filter((folder) => !before.includes(folder));
+  if (added.length === 0) return;
+  let found: UnmanagedEnvFile[];
+  try {
+    await refreshFileReports();
+    const overview = await queryClient.fetchQuery({
+      queryKey: filesKeys.overview(saved.id),
+      queryFn: () => api.envsFilesOverview(saved.id),
+    });
+    found = overview.unmanaged.filter(
+      (item) => item.project === saved.id && added.includes(item.file.folder),
+    );
+  } catch {
+    // The folder is added; the card says the rest when it can look.
+    return;
+  }
+  const first = found[0];
+  if (!first) return;
+  const count = found.length;
+  toast.info(t('projects.envFound.toast', { count, folder: lastName(first.file.folder) }), {
+    description: t('projects.envFound.toastText', { count }),
+    action:
+      count === 1 ? { label: t('envs.center.adopt'), onClick: () => adopt(first) } : undefined,
+  });
 }
 
 /**

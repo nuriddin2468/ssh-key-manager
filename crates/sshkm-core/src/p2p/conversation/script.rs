@@ -484,7 +484,14 @@ impl SyncStore for Script {
     }
 
     fn sync_keep(&self, _: PeerKey, state: &SyncState) -> Result<(), PairingFailure> {
-        *self.sync_state.lock().unwrap() = state.clone();
+        // As a state kept with serde: without the deletions made without
+        // asking, which only `sync_unasked` keeps.
+        let mut kept = self.sync_state.lock().unwrap();
+        let unasked = std::mem::take(&mut kept.unasked);
+        *kept = SyncState {
+            unasked,
+            ..state.clone()
+        };
         Ok(())
     }
 

@@ -1279,7 +1279,11 @@ mod tests {
         let not_own = PairingPhase::Failed {
             reason: PairingFailure::NotOwn,
         };
-        assert_eq!((&left_end, &right_end), (&not_own, &not_own));
+        // The side connected to hangs up without a word.
+        let left = PairingPhase::Failed {
+            reason: PairingFailure::PeerLeft,
+        };
+        assert_eq!((&left_end, &right_end), (&left, &not_own));
         assert_eq!(right.config_text(), RIGHT);
 
         let ((left_end, _), _) = talk(

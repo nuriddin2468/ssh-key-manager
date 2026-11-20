@@ -235,7 +235,8 @@ pub enum Purpose<'a> {
 /// The whole conversation on one side: `purpose` on the side that
 /// connected, `None` on the other. Returns how it ended. A sync with a
 /// device that isn't one of the user's ([`Device::is_own`]) ends before
-/// anything is said.
+/// this side says anything: the side that connects checks before its
+/// `Hello`, the side connected to once it read the other's.
 pub fn conversation(
     session: &mut Session<impl Connection>,
     side: &impl Side,
@@ -255,8 +256,24 @@ pub fn conversation_after(
 ) -> PairingPhase {
     // A sync is only ever with one of the user's devices: anyone else is
     // turned away before the `Hello`, which carries this device's name and
-    // its vault's proof.
-    if matches!(purpose, Some(Purpose::Sync)) && !side.is_own(session.remote()) {
+    // its vault's proof. The side connected to reads the other's `Hello`
+    // first to know what it came for.
+    let hello = match hello {
+        None if !session.is_initiator() => match session.recv() {
+            Ok(hello) => Some(hello),
+            Err(error) => {
+                return PairingPhase::Failed {
+                    reason: broken(error),
+                };
+            }
+        },
+        hello => hello,
+    };
+    let sync = match &purpose {
+        Some(purpose) => matches!(purpose, Purpose::Sync),
+        None => hello.as_ref().is_some_and(asks_to_sync),
+    };
+    if sync && !side.is_own(session.remote()) {
         return PairingPhase::Failed {
             reason: PairingFailure::NotOwn,
         };
@@ -279,6 +296,20 @@ pub fn conversation_after(
         (Met::AddDevice { peer, name, joins }, _) => own::add(session, side, peer, &name, joins),
         (Met::Sync { peer, entries }, _) => sync::run(session, side, peer, entries),
     }
+}
+
+/// Whether the other side's `Hello` comes for a sync.
+fn asks_to_sync(hello: &Message) -> bool {
+    matches!(
+        hello,
+        Message::Hello {
+            own: Some(Own {
+                intent: Some(Intent::Sync),
+                ..
+            }),
+            ..
+        }
+    )
 }
 
 /// How two sides met.
@@ -697,6 +728,38 @@ mod tests {
         // Neither said who it is.
         assert_eq!(peers(&left), Vec::<String>::new());
         assert_eq!(peers(&right), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_side_connected_to_says_nothing_to_a_stranger_asking_to_sync() {
+        let mut right = Script::own("bob", "s", "");
+        right.own_peer = false;
+        let ((left_end, left), (right_end, right)) =
+            talk(Script::own("alice", "s", ""), right, Purpose::Sync);
+        assert_eq!(
+            right_end,
+            PairingPhase::Failed {
+                reason: PairingFailure::NotOwn
+            }
+        );
+        // No `Hello` came back: the side that connected heard nothing.
+        assert_eq!(
+            left_end,
+            PairingPhase::Failed {
+                reason: PairingFailure::PeerLeft
+            }
+        );
+        assert_eq!(peers(&left), Vec::<String>::new());
+        assert_eq!(peers(&right), Vec::<String>::new());
+
+        // Asked for anything else, it answers as before.
+        let mut right = Script::new("bob", Some(true));
+        right.own_peer = false;
+        let ((left_end, _), (right_end, _)) = pair(Script::new("alice", Some(true)), right);
+        assert_eq!(
+            (left_end, right_end),
+            (PairingPhase::Paired, PairingPhase::Paired)
+        );
     }
 
     #[test]

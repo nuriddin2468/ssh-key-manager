@@ -103,6 +103,23 @@ it('finds the version in every file that keeps it', () => {
   }
 });
 
+it('bumps every crate of the workspace in Cargo.lock', () => {
+  // The workspace's own crates are the packages Cargo.lock lists without a
+  // source; a stale version of one fails every `cargo … --locked`.
+  const lock = readFileSync('Cargo.lock', 'utf8');
+  const local = lock
+    .split('[[package]]')
+    .filter((block) => block.includes('name = ') && !block.includes('source = '))
+    .map((block) => /name = "([^"]+)"/.exec(block)[1]);
+  expect(local.length).toBeGreaterThan(0);
+  for (const name of local) {
+    const bumped = VERSION_FILES.some(
+      ({ path, pattern }) => path === 'Cargo.lock' && pattern.source.includes(`"${name}"`),
+    );
+    expect(bumped, name).toBe(true);
+  }
+});
+
 it('names the permissions the extension asks for since a release', () => {
   const before = { permissions: ['storage'], host_permissions: ['https://*/*'] };
   const now = {

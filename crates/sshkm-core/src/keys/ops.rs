@@ -1,9 +1,8 @@
 //! Operations that create or modify key files.
 
-use std::{
-    fmt, fs, io,
-    path::{Path, PathBuf},
-};
+#[cfg(feature = "trash")]
+use std::path::PathBuf;
+use std::{fmt, fs, io, path::Path};
 
 use rand_core::OsRng;
 use secrecy::{ExposeSecret, SecretString};
@@ -123,6 +122,7 @@ impl UnlockedKey {
         KeyAlgorithm::from_ssh(&self.key.algorithm())
     }
 
+    #[cfg_attr(not(feature = "ssh-agent"), allow(dead_code))]
     pub(crate) fn keypair(&self) -> &KeypairData {
         self.key.key_data()
     }
@@ -496,6 +496,7 @@ fn file_label(label: &str) -> String {
 /// Moves files to the system trash / recycle bin, so deletion can be undone.
 /// All paths must exist. On macOS the files go to the Trash via
 /// `NSFileManager`, which needs no Finder automation permission.
+#[cfg(feature = "trash")]
 pub fn move_to_trash(paths: &[PathBuf]) -> Result<()> {
     if paths.is_empty() {
         return Ok(());
@@ -1185,6 +1186,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "trash")]
     fn trash_validates_paths() {
         move_to_trash(&[]).unwrap();
         let dir = tempfile::tempdir().unwrap();
@@ -1194,6 +1196,7 @@ mod tests {
 
     /// Moves a temporary file to the real trash; run manually with `--ignored`.
     #[test]
+    #[cfg(feature = "trash")]
     #[ignore = "touches the user's trash"]
     fn trash_moves_file() {
         let dir = tempfile::tempdir().unwrap();

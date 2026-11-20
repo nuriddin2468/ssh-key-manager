@@ -31,6 +31,7 @@ mod export;
 mod generator;
 mod import;
 pub(crate) mod kdf;
+#[cfg(feature = "leaks")]
 mod known;
 mod location;
 mod own_devices;
@@ -61,10 +62,12 @@ pub use self::generator::{
     GenerateOptions, Generated, SecretPreset, Strength, TokenEncoding, UuidVersion, generate,
     generate_preset, strength,
 };
+#[cfg(feature = "browser-import")]
 pub use self::import::{
-    BrowserFamily, BrowserKeyStore, BrowserLogins, BrowserProfile, BrowserReadError, CsvFormat,
-    ImportComparison, ImportOutcome, ImportPreview, ImportRow, SafeStorage, browser_profiles,
+    BrowserFamily, BrowserKeyStore, BrowserLogins, BrowserProfile, BrowserReadError, SafeStorage,
+    browser_profiles,
 };
+pub use self::import::{CsvFormat, ImportComparison, ImportOutcome, ImportPreview, ImportRow};
 pub use self::location::{check_database, cloud_service, copy_files, remove_files};
 pub use self::own_devices::{DeviceRecord, MAX_RECORDS, OwnDevice, check_records, learned_devices};
 use self::slots::KeySlots;

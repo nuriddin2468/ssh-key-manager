@@ -920,6 +920,7 @@ fn set_file_mode(file: &fs::File, path: &Path, mode: u32) -> Result<()> {
 /// own and renamed into place, so that it never carries an entry the
 /// folder's access list hands down, not even before its mode is set
 /// ([`private_folder`]). Fails if something is at `path` by then.
+#[cfg_attr(not(feature = "env-files"), allow(dead_code))]
 pub(crate) fn make_private(path: &Path, make: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
     #[cfg(target_os = "macos")]
     {

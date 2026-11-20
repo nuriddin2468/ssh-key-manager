@@ -206,6 +206,7 @@ type Identity = PathBuf;
 
 impl FileId {
     /// The identity as text, to keep in a file.
+    #[cfg_attr(not(feature = "env-files"), allow(dead_code))]
     pub(in crate::vault) fn token(&self) -> String {
         #[cfg(unix)]
         {

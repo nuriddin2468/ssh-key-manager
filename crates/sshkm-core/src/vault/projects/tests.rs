@@ -1628,6 +1628,7 @@ fn a_stage_is_unique_however_an_environment_comes_in() {
 }
 
 #[test]
+#[cfg(feature = "env-files")]
 fn a_file_an_older_environment_is_written_to_works_once_it_takes_the_step() {
     use crate::vault::envs::files::{EnvFile, FileState, FilesContext, InactiveReason, SyncState};
     let dir = tempfile::tempdir().unwrap();

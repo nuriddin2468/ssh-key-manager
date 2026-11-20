@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      The window behind Compose, and the system splash screen: the desktop
+      app's canvas, so opening the app shows no white flash in dark mode.
+    -->
+    <style name="Theme.SshKeyManager" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/canvas</item>
+    </style>
+</resources>

@@ -16,8 +16,9 @@ aes-gcm = "0.10.3"
 aho-corasick = "1.1.5"
 # Reading the logins browsers keep (vault/import/browser): AES-CBC, and
 # Triple DES for older Firefox profiles. The versions aes-gcm and ssh-key use.
+# AES alone also opens a sync copy (vault/sync/payload.rs).
 aes = "0.8.4"
-cbc = "0.1.2"
+cbc = { version = "0.1.2", optional = true }
 base64ct = "1.8.3"
 chacha20poly1305 = "0.11.0"
 # Decrypting a sync copy's payload before the `keepass` crate reads it
@@ -27,7 +28,7 @@ chacha20 = "0.10"
 twofish = "0.8"
 chrono = { version = "0.4.23", default-features = false, features = ["std"] }
 csv = "1.4.0"
-des = "0.8.1"
+des = { version = "0.8.1", optional = true }
 diceware_wordlists = "1.2.3"
 dirs = "7.0.0"
 ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }
@@ -44,7 +45,7 @@ p521 = { version = "0.13", features = ["pem", "pkcs8"] }
 psl = "2.1.246"
 rand_core = { version = "0.6", features = ["getrandom"] }
 # The SQLite databases browsers keep their logins in, read from a private copy.
-rusqlite = { version = "0.41.1", features = ["bundled"] }
+rusqlite = { version = "0.41.1", features = ["bundled"], optional = true }
 rsa = { version = "0.9", features = ["pem", "std"] }
 rust-argon2 = "3.0.0"
 # The Tools page's TLS check; the versions and features the updater already
@@ -63,7 +64,7 @@ ssh-key = { version = "0.6.7", features = ["ed25519", "rsa", "p256", "p384", "p5
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 time = { version = "0.3.45", features = ["formatting", "macros", "parsing", "std"] }
-trash = "5.2.9"
+trash = { version = "5.2.9", optional = true }
 url = "2.5.8"
 ts-rs = { version = "12.0.1", optional = true, features = ["no-serde-warnings"] }
 uuid = "1.18.1"
@@ -112,7 +113,32 @@ missing_panics_doc = "allow"
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
 
+# What only computers use is behind features the desktop app gets by default;
+# the phone (`sshkm-mobile`) builds with `default-features = false`. The
+# vault, `p2p`, `sync`, `config`, `known_hosts` and `keys` build either way.
 [features]
+default = ["browser-import", "env-files", "leaks", "shell-history", "ssh-agent", "ssh-audit", "trash", "tunnels"]
+# Importing the logins browsers keep in their SQLite databases
+# (`vault::import::browser`).
+browser-import = ["dep:cbc", "dep:des", "dep:rusqlite"]
+# `.env` files on disk that the vault manages: finding, reading and writing
+# them, named pipes, AI agents' files and cloud folders (`vault::envs::files`).
+# The bindings themselves are vault data and build without it.
+env-files = ["leaks"]
+# The leak scanner: the vault's secrets in AI tools' session history, the shell
+# history and picked folders (`leaks`).
+leaks = ["shell-history"]
+# Hosts found in the user's shell history (`shell_history`).
+shell-history = []
+# The client for the system ssh-agent (`agent`).
+ssh-agent = []
+# The audit of `~/.ssh` (`audit`). The permission rules stay in `perms`: key
+# scans report them and private files are made with them.
+ssh-audit = []
+# Deleted keys go to the system trash (`keys::move_to_trash`).
+trash = ["dep:trash"]
+# Saved port forwards and the `ssh` that holds each open (`tunnels`).
+tunnels = []
 ts = ["dep:ts-rs"]
 
 [dev-dependencies]

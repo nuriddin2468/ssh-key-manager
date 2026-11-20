@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="home_version">Версия %1$s</string>
+    <string name="home_coming">Приложение для телефона в работе: следом появятся хранилище и синхронизация с компьютерами.</string>
+
+    <string name="generator_title">Генератор паролей</string>
+    <string name="generator_empty">Пароля пока нет. Сгенерируйте его: 20 символов — буквы, цифры и спецсимволы.</string>
+    <string name="generator_password">Сгенерированный пароль</string>
+    <string name="generator_generate">Сгенерировать пароль</string>
+    <string name="generator_again">Сгенерировать другой</string>
+    <string name="generator_strength">Надёжность: %1$s</string>
+    <string name="strength_0">Очень слабый</string>
+    <string name="strength_1">Слабый</string>
+    <string name="strength_2">Средний</string>
+    <string name="strength_3">Хороший</string>
+    <string name="strength_4">Надёжный</string>
+
+    <string name="error_settings">С этими настройками пароль не получится.</string>
+    <string name="error_other">Не удалось создать пароль. Попробуйте снова.</string>
+</resources>

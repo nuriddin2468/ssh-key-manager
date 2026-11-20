@@ -32,9 +32,11 @@ use ssh_key::{
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use zeroize::Zeroizing;
 
+#[cfg(feature = "trash")]
+pub use ops::move_to_trash;
 pub use ops::{
     EcdsaCurve, GenerateAlgorithm, GenerateRequest, UnlockedKey, add_public, change_passphrase,
-    generate, import, load_private, move_to_trash, regenerate_public, validate_file_name,
+    generate, import, load_private, regenerate_public, validate_file_name,
 };
 
 use crate::{

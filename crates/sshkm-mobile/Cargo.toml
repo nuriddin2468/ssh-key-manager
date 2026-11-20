@@ -1,0 +1,39 @@
+[package]
+name = "sshkm-mobile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "The phone app's bridge to the core of SSH Key Manager, through UniFFI"
+readme = "README.md"
+publish = false
+
+[lib]
+# `cdylib` is the library the Android app loads; `lib` is for the tests and
+# the `uniffi-bindgen` program.
+crate-type = ["cdylib", "lib"]
+
+# Writes the Kotlin bindings from the built library (`mobile/android` runs it).
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[dependencies]
+# Without the features only computers use (ssh-agent, `~/.ssh` audit, trash,
+# browser import, shell history, leak scanner, `.env` files on disk, tunnels).
+sshkm-core = { path = "../sshkm-core", default-features = false }
+thiserror = "2.0.21"
+# The bindings generator's runtime half. MPL-2.0, which deny.toml allows.
+uniffi = { version = "0.32.2", default-features = false }
+
+[features]
+# The `uniffi-bindgen` program: only the machine that builds the app runs it.
+bindgen = ["uniffi/cli", "uniffi/cargo-metadata"]
+
+# The workspace lints, `forbid(unsafe_code)` included: UniFFI's scaffolding
+# is `unsafe`, but it comes from its macros, where rustc doesn't report the
+# lint (see lib.rs).
+[lints]
+workspace = true

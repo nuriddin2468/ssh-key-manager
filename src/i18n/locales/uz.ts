@@ -4444,6 +4444,8 @@ const uz = {
       problems: 'Baʼzi qatorlarni oʻqib boʻlmaydi. Ular faylda oʻz holicha qoladi.',
       submit: 'Boshqaruvga olish',
       done: '{{file}}ni endi {{env}} yozadi',
+      fileProblem: '{{env}} saqlandi, lekin {{file}} yozilmadi',
+      fileProblemNext: 'Faylning holati muhitda koʻrinadi.',
     },
     share: {
       sendText:

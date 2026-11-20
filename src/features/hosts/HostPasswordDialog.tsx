@@ -3,7 +3,7 @@ import { type FormEvent, useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
-import { toastError, useAppMutation } from '@/api/useAppMutation';
+import { useAppMutation, useShowError } from '@/api/useAppMutation';
 import type { EntrySummary } from '@/bindings/EntrySummary';
 import type { GenerateOptions } from '@/bindings/GenerateOptions';
 import { Button } from '@/components/ui/Button';
@@ -61,6 +61,7 @@ export function HostPasswordDialog({
   onDone,
 }: HostPasswordDialogProps) {
   const { t } = useTranslation();
+  const showError = useShowError();
   const username = user;
   const [password, setPassword] = useState('');
   const [visible, setVisible] = useState(false);
@@ -144,7 +145,7 @@ export function HostPasswordDialog({
       setVisible(true);
       setGenerated(true);
     } catch (error) {
-      toastError(t, error);
+      showError(error);
     } finally {
       setGenerating(false);
     }

@@ -5,15 +5,16 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { TFunction } from 'i18next';
-import { useState, useSyncExternalStore } from 'react';
+import { useCallback, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { api } from '@/api/commands';
 import { invalidateAll, keys, queryClient, useVaultStatus } from '@/api/queries';
-import { toastError } from '@/api/useAppMutation';
+import { failureOf, toastError } from '@/api/useAppMutation';
 import type { Environment } from '@/bindings/Environment';
 import type { LockReason } from '@/bindings/LockReason';
 import type { VaultStatus } from '@/bindings/VaultStatus';
+import { useDialogErrors } from '@/components/ui/Dialog';
 import { displayPath } from '@/lib/format';
 import { AppError } from '@/lib/ipc';
 import { conflictCopyPath } from './model';
@@ -100,6 +101,24 @@ export function toastVaultError(t: TFunction, error: unknown): void {
   if (!handleVaultError(t, error)) toastError(t, error);
 }
 
+/**
+ * Says a failed vault command where the user is: a locked vault or a
+ * conflict as `handleVaultError` does, anything else above the buttons of
+ * the dialog the component is in, else in a toast.
+ */
+export function useShowVaultError(): (error: unknown) => void {
+  const { t } = useTranslation();
+  const dialog = useDialogErrors();
+  return useCallback(
+    (error: unknown) => {
+      if (handleVaultError(t, error)) return;
+      if (dialog?.show(failureOf(t, error))) return;
+      toastError(t, error);
+    },
+    [t, dialog],
+  );
+}
+
 interface VaultMutationOptions<TVars, TResult> {
   /** Toast shown on success; return nothing for a silent success. */
   success?: (result: TResult, vars: TVars) => string | undefined;
@@ -110,18 +129,22 @@ interface VaultMutationOptions<TVars, TResult> {
 
 /**
  * `useAppMutation` for vault commands: also handles `vault_locked` and
- * `conflict`, and drops the mutation from TanStack's cache as soon as nothing
- * shows it, because its variables may hold a master password or an entry's
- * new password (the default keeps finished mutations for five minutes).
+ * `conflict`, says other failures in the dialog the component is in (as
+ * `useAppMutation` does), and drops the mutation from TanStack's cache as
+ * soon as nothing shows it, because its variables may hold a master password
+ * or an entry's new password (the default keeps finished mutations for five
+ * minutes).
  */
 export function useVaultMutation<TVars, TResult>(
   run: (vars: TVars) => Promise<TResult>,
   options: VaultMutationOptions<TVars, TResult> = {},
 ) {
   const { t } = useTranslation();
+  const dialog = useDialogErrors();
   return useMutation({
     mutationFn: run,
     gcTime: 0,
+    onMutate: () => dialog?.clear(),
     onSuccess: async (result, vars) => {
       await invalidateAll();
       const message = options.success?.(result, vars);
@@ -130,8 +153,13 @@ export function useVaultMutation<TVars, TResult>(
     },
     onError: (error, vars) => {
       const appError = AppError.from(error);
-      if (options.onError?.(appError, vars)) return;
-      toastVaultError(t, appError);
+      if (options.onError?.(appError, vars)) {
+        dialog?.revealInvalid();
+        return;
+      }
+      if (handleVaultError(t, appError)) return;
+      if (dialog?.show(failureOf(t, appError))) return;
+      toastError(t, appError);
     },
   });
 }

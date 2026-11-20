@@ -1,0 +1,6 @@
+{
+  "kind": "fixed",
+  "en": "Clicking a message no longer closes the dialog you’re in and loses what you typed. When saving in a dialog fails, the reason now shows inside the dialog, above its buttons, and the dialog stays open.",
+  "ru": "Клик по уведомлению больше не закрывает открытое окно вместе с введёнными данными. Если сохранение в окне не удалось, причина теперь показывается в самом окне, над кнопками, и окно остаётся открытым.",
+  "uz": "Bildirishnomani bosish endi ochiq oynani kiritilgan maʼlumotlar bilan birga yopmaydi. Oynada saqlash muvaffaqiyatsiz boʻlsa, sababi endi oynaning oʻzida, tugmalar ustida koʻrsatiladi va oyna ochiq qoladi."
+}

@@ -57,10 +57,14 @@ export function App() {
         </TooltipProvider>
         {/* Toasts start in the empty foot of the sidebar and run on over the page's
             left edge: action buttons sit on the right, so they stay clear. */}
+        {/* An open dialog turns off pointer events on the page: the toasts keep
+            theirs, so a click on one reaches it (the dialog takes that as no
+            click outside) instead of the backdrop under it, which closes it. */}
         <Toaster
           theme={theme}
           position="bottom-left"
           offset={SIDEBAR_INSET}
+          className="pointer-events-auto"
           toastOptions={{
             className: '!bg-popover !border-line-strong !text-fg !rounded-xl !shadow-2xl',
             descriptionClassName: '!text-muted',

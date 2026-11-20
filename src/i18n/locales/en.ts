@@ -4375,6 +4375,8 @@ const en = {
       problems: 'Some lines can’t be read. They stay in the file as they are.',
       submit: 'Take under management',
       done: '{{file}} is written by {{env}} now',
+      fileProblem: '{{env}} is saved, but {{file}} wasn’t written',
+      fileProblemNext: 'How the file stands shows under the environment.',
     },
     share: {
       sendText:

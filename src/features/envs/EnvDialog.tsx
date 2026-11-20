@@ -1,10 +1,11 @@
 import { Pencil, Plus } from 'lucide-react';
-import { type FormEvent, useId, useState } from 'react';
+import { type FormEvent, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
 import { errorMessage } from '@/api/useAppMutation';
 import type { EnvDetail } from '@/bindings/EnvDetail';
 import type { EnvSummary } from '@/bindings/EnvSummary';
+import type { ErrorInfo } from '@/bindings/ErrorInfo';
 import { Button } from '@/components/ui/Button';
 import { DialogBody, DialogContent, DialogFooter, DialogHeader } from '@/components/ui/Dialog';
 import { TextField } from '@/components/ui/TextField';
@@ -13,6 +14,7 @@ import { useVaultMutation } from '@/features/passwords/vault';
 import { useProjects } from '@/features/projects/queries';
 import { FirstPartField, useFirstPart } from './FirstPart';
 import { useFolderField } from './FolderField';
+import { toastFileProblem } from './files/errors';
 import { refreshFileReports } from './files/queries';
 import {
   KEEPASS_PERSONAL,
@@ -84,8 +86,11 @@ export function EnvDialog({ env, all, defaultProject, onDone, onSaved }: EnvDial
   });
 
   const input = { project: projectId, part: part.trim(), name, notes };
+  // A found file the environment took, saved with it but not written after.
+  const fileProblem = useRef<ErrorInfo | undefined>(undefined);
   const save = useVaultMutation(
     async () => {
+      fileProblem.current = undefined;
       if (env) return api.envsUpdate(env.id, input, firstPart.rename, folder.change);
       if (!folder.adopt || projectId === null) {
         return api.envsCreate(input, firstPart.rename, folder.change);
@@ -100,13 +105,21 @@ export function EnvDialog({ env, all, defaultProject, onDone, onSaved }: EnvDial
         firstPart.rename,
         folder.change,
       );
+      fileProblem.current = adopted.fileProblem;
       void refreshFileReports();
       return api.envsGet(adopted.id);
     },
     {
       success: (saved) =>
-        env ? t('envs.saved', { name: saved.name }) : t('envs.created', { name: saved.name }),
+        fileProblem.current
+          ? undefined
+          : env
+            ? t('envs.saved', { name: saved.name })
+            : t('envs.created', { name: saved.name }),
       onSuccess: (saved) => {
+        if (fileProblem.current && folder.adopt) {
+          toastFileProblem(t, folder.adopt.file, saved.name, fileProblem.current);
+        }
         onSaved?.(saved);
         onDone(saved.id);
       },

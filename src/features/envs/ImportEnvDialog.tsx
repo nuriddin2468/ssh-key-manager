@@ -3,7 +3,7 @@ import { FileUp, FolderPlus, Layers, TriangleAlert } from 'lucide-react';
 import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '@/api/commands';
-import { errorMessage, toastError } from '@/api/useAppMutation';
+import { errorMessage, useShowError } from '@/api/useAppMutation';
 import type { EnvImportPreview } from '@/bindings/EnvImportPreview';
 import type { EnvSummary } from '@/bindings/EnvSummary';
 import type { ImportChoice } from '@/bindings/ImportChoice';
@@ -51,6 +51,7 @@ interface Picked {
  */
 export function ImportEnvDialog({ all, into, onDone }: ImportEnvDialogProps) {
   const { t } = useTranslation();
+  const showError = useShowError();
   const envLabelOf = useEnvLabel();
   const names = useProjectNames();
   const [picked, setPicked] = useState<Picked | null>(null);
@@ -107,7 +108,7 @@ export function ImportEnvDialog({ all, into, onDone }: ImportEnvDialogProps) {
       };
       const message = messages[appError.code];
       if (message) setError(message);
-      else if (appError.code !== 'cancelled') toastError(t, appError);
+      else if (appError.code !== 'cancelled') showError(appError);
     },
   });
 

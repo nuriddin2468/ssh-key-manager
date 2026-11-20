@@ -6,7 +6,9 @@
 
 import type { TFunction } from 'i18next';
 import { toast } from 'sonner';
+import { failureOf } from '@/api/useAppMutation';
 import type { EnvFile } from '@/bindings/EnvFile';
+import type { ErrorInfo } from '@/bindings/ErrorInfo';
 import { conflictCopyPath } from '@/features/passwords/model';
 import { AppError } from '@/lib/ipc';
 import { fileName, isTemplateName } from './model';
@@ -74,4 +76,17 @@ export function ignoreFailed(t: TFunction, error: unknown, file: EnvFile): boole
   if (appError.code === 'vault_locked' || isVaultConflict(appError)) return false;
   toast.error(t('envs.center.ignoreFailed', { file: fileName(file) }));
   return true;
+}
+
+/**
+ * A file taken under management whose environment is saved, but which
+ * wasn't written after (the backend's `fileProblem`): said as that, with
+ * why, so nobody takes it for a save that didn't happen and tries again.
+ */
+export function toastFileProblem(t: TFunction, file: EnvFile, env: string, problem: ErrorInfo) {
+  const { text, detail } = failureOf(t, problem);
+  toast.warning(t('envs.adopt.fileProblem', { file: fileName(file), env }), {
+    description: [text, detail, t('envs.adopt.fileProblemNext')].filter(Boolean).join(' '),
+    duration: 12_000,
+  });
 }

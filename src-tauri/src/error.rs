@@ -34,6 +34,14 @@ impl AppError {
             Self::App { code, .. } => *code,
         }
     }
+
+    /// As the UI gets it, for a failure that comes inside a result.
+    pub(crate) fn info(&self) -> sshkm_core::ErrorInfo {
+        sshkm_core::ErrorInfo {
+            code: self.code(),
+            message: self.to_string(),
+        }
+    }
 }
 
 impl From<tauri::Error> for AppError {

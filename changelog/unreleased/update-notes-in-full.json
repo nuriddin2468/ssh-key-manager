@@ -1,0 +1,6 @@
+{
+  "kind": "fixed",
+  "en": "Before an update, the app lists every change of a large version; it used to leave out those after the 50th.",
+  "ru": "Перед обновлением приложение показывает все изменения большой версии; раньше оно пропускало те, что после 50-го.",
+  "uz": "Yangilashdan oldin ilova katta versiyaning barcha oʻzgarishlarini koʻrsatadi; avval 50-dan keyingilarini tushirib qoldirardi."
+}

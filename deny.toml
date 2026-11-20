@@ -20,10 +20,10 @@ ignore = [
     # proc-macro-error is unmaintained; glib-macros (the GTK bindings Tauri
     # uses on Linux) needs it at build time. No release without it yet.
     { id = "RUSTSEC-2024-0370", reason = "build-time only, through glib-macros of Tauri's GTK bindings; no fixed version" },
-    # chrono is unmaintained, with no fixed version. keepass keeps the vault's
-    # entry times as chrono types, so sshkm-core reads them as such; zxcvbn
-    # and trash use it too. It can go once keepass moves to another crate.
-    { id = "RUSTSEC-2026-0543", reason = "chrono: keepass's entry times are chrono types; no fixed version" },
+    # chrono is unmaintained. keepass 0.17 keeps every KeePass time as a
+    # chrono value, so sshkm-core reads and writes them with it; it stays
+    # until keepass moves to another time crate.
+    { id = "RUSTSEC-2026-0543", reason = "chrono: keepass 0.17 keeps KeePass times as chrono values; waiting for keepass to move" },
     # basic-toml is unmaintained; askama's derive reads its config with it.
     # askama comes only with uniffi_bindgen, in the uniffi-bindgen program
     # that writes the phone app's Kotlin bindings on the build machine

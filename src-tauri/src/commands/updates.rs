@@ -24,7 +24,7 @@ static PENDING: Mutex<Option<Update>> = Mutex::new(None);
 /// itself, `latest.json` isn't signed, so it may not fill the dialog with
 /// whatever it likes.
 const MAX_RELEASES: usize = 20;
-const MAX_CHANGES: usize = 50;
+const MAX_CHANGES: usize = 100;
 const MAX_TEXT: usize = 1000;
 
 /// A newer version the release server offers.

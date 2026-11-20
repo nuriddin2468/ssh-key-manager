@@ -83,6 +83,11 @@ the app's business (asking the user, system dialogs, finding peers, files on dis
 traits. The desktop app's behaviour doesn't change; its tests keep passing, and the
 conversation gets tests over in-memory pipes.
 
+Done in [#75](https://github.com/nuriddin2468/ssh-key-manager/pull/75): the conversation is
+`sshkm_core::p2p::conversation`, over any `p2p::connection::Connection`, and reaches the device
+through `Side`: `User` (screens and system dialogs), `Device` (name, contacts, own devices, vault
+proof) and `SyncStore` (host blocks and server keys, records, snapshots, the vault's entries).
+
 ### B. Core on Android, UniFFI crate and the app's shell
 
 Done in [#78](https://github.com/nuriddin2468/ssh-key-manager/pull/78).

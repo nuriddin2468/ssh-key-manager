@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use sshkm_core::p2p::conversation::SyncDecisions;
 use sshkm_core::vault::Contact;
 use sshkm_core::vault::envs::files::CloudService;
 use sshkm_core::{ErrorCode, ExposeSecret, SecretString};
@@ -12,7 +13,6 @@ use tauri::{AppHandle, State};
 use super::{Shared, blocking};
 use crate::error::{AppError, AppResult};
 use crate::nearby::items::{ReceivedGroup, SendRequest};
-use crate::nearby::sync::SyncDecisions;
 use crate::nearby::{MyDevice, Nearby, NearbyStatus, SharedNearby};
 
 async fn on_nearby<T, F>(nearby: &SharedNearby, work: F) -> AppResult<T>

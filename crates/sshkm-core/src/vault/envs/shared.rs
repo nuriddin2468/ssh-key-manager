@@ -343,6 +343,7 @@ impl Vault {
     }
 
     /// The values a shared value had, newest first.
+    #[cfg_attr(not(feature = "env-files"), allow(dead_code))]
     pub(super) fn shared_history(&self, shared: Uuid) -> Vec<String> {
         self.db
             .entry(EntryId::from(shared))
@@ -356,6 +357,7 @@ impl Vault {
     }
 
     /// The current value of a shared value.
+    #[cfg_attr(not(feature = "env-files"), allow(dead_code))]
     pub(super) fn shared_value(&self, shared: Uuid) -> Option<String> {
         self.db
             .entry(EntryId::from(shared))

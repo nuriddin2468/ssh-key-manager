@@ -93,6 +93,43 @@ jobs:
         if: runner.os == 'Linux'
         run: git diff --exit-code -- src/bindings
 
+  android:
+    name: Android
+    if: ${{ !startsWith(github.event.head_commit.message, 'Release ') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
+        with:
+          toolchain: stable
+          targets: aarch64-linux-android, x86_64-linux-android
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-on-failure: true
+          key: android
+      # The Rust library is built for each ABI with cargo-ndk, linked with the
+      # NDK the app names (mobile/android/app/build.gradle.kts).
+      - name: Install cargo-ndk and the NDK
+        run: |
+          cargo install cargo-ndk --version 4.1.2 --locked
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;30.0.16248370" > /dev/null
+      # Checks the wrapper's checksum and caches Gradle's downloads.
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      - name: Lint, test and build the APK
+        working-directory: mobile/android
+        run: ./gradlew lint test assembleDebug
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-debug-apk
+          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
+
   dependencies:
     name: Dependencies
     if: ${{ !startsWith(github.event.head_commit.message, 'Release ') }}

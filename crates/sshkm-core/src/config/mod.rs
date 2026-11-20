@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) use self::lexer::split_args;
 use self::lexer::{Directive, LineKind, lex, render_value};
+#[cfg(feature = "ssh-audit")]
 pub(crate) use self::risky::matches_pattern;
 pub use self::risky::{Risk, RiskyDirective};
 use crate::{

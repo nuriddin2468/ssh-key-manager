@@ -42,6 +42,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 pub use self::config_risks::{AGENT_KEYS_LIMIT, apply_config_fix};
+pub use crate::Severity;
 use crate::{
     Result,
     config::{IdentityUsage, SshConfig},
@@ -71,19 +72,6 @@ const CODE_HOSTS: &[&str] = &[
     "git.sr.ht",
     "gitea.com",
 ];
-
-/// How serious a finding is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
-pub enum Severity {
-    /// Insecure or broken; fix now.
-    Critical,
-    /// Should be fixed.
-    Warning,
-    /// Worth knowing.
-    Info,
-}
 
 /// What was found, with its parameters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

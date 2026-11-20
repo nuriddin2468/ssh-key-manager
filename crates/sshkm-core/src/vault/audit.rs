@@ -28,7 +28,7 @@ use secrecy::SecretString;
 use serde::Serialize;
 
 use super::{BreachCache, EntryKind, Vault, password_changed, rfc3339, strength};
-use crate::audit::Severity;
+use crate::Severity;
 use crate::config::{HostEntry, HostKind};
 use crate::keys::KeyInfo;
 

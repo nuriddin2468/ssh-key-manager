@@ -121,6 +121,7 @@ impl PrivateFolder {
     /// The folder's path as it is now, for what can't be made through a
     /// descriptor (a pipe). What is made there is then checked with
     /// [`Self::holds`].
+    #[cfg_attr(not(feature = "env-files"), allow(dead_code))]
     pub(crate) fn path(&self) -> io::Result<PathBuf> {
         let path = rustix::fs::getpath(&self.fd)?;
         Ok(PathBuf::from(OsStr::from_bytes(path.as_bytes())))
@@ -128,6 +129,7 @@ impl PrivateFolder {
 
     /// Fails unless `name`, looked up through the folder held (no link
     /// followed), is there and this user's, and sets its mode to 0600.
+    #[cfg_attr(not(feature = "env-files"), allow(dead_code))]
     pub(crate) fn holds(&self, name: &OsStr) -> io::Result<()> {
         let owner = rustix::fs::fstat(&self.fd)?.st_uid;
         let found = rustix::fs::statat(&self.fd, name, AtFlags::SYMLINK_NOFOLLOW)?;

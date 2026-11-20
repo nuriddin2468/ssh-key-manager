@@ -47,46 +47,67 @@
 //! nor does a file left without a variable, which is a conflict.
 //! Values never reach errors or logs.
 
+// What touches the disk is behind the `env-files` feature; the bindings,
+// levels and kinds are vault data and sync without it.
+#[cfg(feature = "env-files")]
 pub mod agents;
 mod cloud;
+#[cfg(feature = "env-files")]
 mod disk;
+#[cfg(feature = "env-files")]
 mod folder;
+#[cfg(feature = "env-files")]
 pub mod pipes;
-#[cfg(test)]
+#[cfg(all(test, feature = "env-files"))]
 mod tests;
+#[cfg(feature = "env-files")]
 mod unlocked;
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use base64ct::{Base64, Encoding};
-use hmac::{Hmac, Mac};
 use keepass::db::{CustomDataItem, CustomDataValue, Entry, Times};
-use rand_core::{OsRng, RngCore};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
-use zeroize::Zeroizing;
 
 pub use self::cloud::{CloudRoots, CloudService};
-use self::disk::{Disk, Target};
+#[cfg(feature = "env-files")]
 pub use self::disk::{find_env_files, ignore_in_git};
+#[cfg(feature = "env-files")]
 pub use self::pipes::{Answer, PipeId, VirtualFile};
+#[cfg(feature = "env-files")]
 pub use self::unlocked::{Leftover, Leftovers, PutAway, left_on_disk, put_away};
-use super::document::EnvDocument;
-use super::dotenv::{self, ParseProblem, ParsedEnv, ProblemKind};
-use super::{
-    EnvComparison, EnvVariable, history_newest_first, is_environment, looks_secret, variables_of,
-};
+#[cfg(feature = "env-files")]
 pub use crate::leaks::GitState;
-use crate::vault::projects::{self, Project};
-use crate::vault::{Vault, in_group, parse_id};
-use crate::{Error, Result, fsutil};
+use crate::vault::projects;
+use crate::vault::{Vault, parse_id};
+use crate::{Error, Result};
+// What only the files on disk use.
+#[cfg(feature = "env-files")]
+use {
+    self::disk::{Disk, Target},
+    super::document::EnvDocument,
+    super::dotenv::{self, ParseProblem, ParsedEnv, ProblemKind},
+    super::{
+        EnvComparison, EnvVariable, history_newest_first, is_environment, looks_secret,
+        variables_of,
+    },
+    crate::fsutil,
+    crate::vault::in_group,
+    crate::vault::projects::Project,
+    base64ct::{Base64, Encoding},
+    hmac::{Hmac, Mac},
+    rand_core::{OsRng, RngCore},
+    secrecy::{ExposeSecret, SecretString},
+    sha2::{Digest, Sha256},
+    std::collections::{BTreeMap, BTreeSet},
+    std::path::PathBuf,
+    zeroize::Zeroizing,
+};
 
 /// Custom data of an environment's entry: its kind and files.
 const FILES_DATA: &str = "sshkm.env.files";
 /// Custom data of the database: the key revisions are made with.
+#[cfg(feature = "env-files")]
 const REVISION_KEY: &str = "sshkm.env.key";
 /// Most files one environment is written to.
 pub const MAX_FILES: usize = 32;
@@ -98,6 +119,7 @@ const TEMPLATE_WORDS: [&str; 6] = ["example", "sample", "template", "dist", "def
 
 /// Whether this system serves pipes in folders ([`pipes::SUPPORTED`]);
 /// a test can make it say no, as on Windows.
+#[cfg(feature = "env-files")]
 pub(crate) fn pipes_supported() -> bool {
     #[cfg(test)]
     if NO_PIPES.with(std::cell::Cell::get) {
@@ -106,7 +128,7 @@ pub(crate) fn pipes_supported() -> bool {
     pipes::SUPPORTED
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "env-files"))]
 thread_local! {
     /// Set in a test to act as a system without pipes in folders.
     pub(crate) static NO_PIPES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -220,6 +242,7 @@ impl FilesData {
             )
     }
 
+    #[cfg(feature = "env-files")]
     fn list_mut(&mut self, level: FileLevel) -> &mut Vec<StoredFile> {
         match level {
             FileLevel::Always => &mut self.files,
@@ -254,6 +277,7 @@ impl StoredFile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+#[cfg(feature = "env-files")]
 pub enum InactiveReason {
     /// The environment is remote now.
     Remote,
@@ -270,6 +294,7 @@ pub enum InactiveReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+#[cfg(feature = "env-files")]
 pub enum RefusedReason {
     /// It is a symbolic link.
     Link,
@@ -288,6 +313,7 @@ pub enum RefusedReason {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+#[cfg(feature = "env-files")]
 pub enum FileState {
     /// It holds what the vault holds.
     InSync,
@@ -325,6 +351,7 @@ pub enum FileState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+#[cfg(feature = "env-files")]
 pub struct EnvFileStatus {
     pub env_id: String,
     /// Where the environment is, for people: `Shop · backend`, `Shop`, a
@@ -342,6 +369,7 @@ pub struct EnvFileStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+#[cfg(feature = "env-files")]
 pub struct EnvFileChange {
     pub env_id: String,
     /// Where the environment is, as [`EnvFileStatus::label`].
@@ -360,6 +388,7 @@ pub struct EnvFileChange {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+#[cfg(feature = "env-files")]
 pub struct EnvUndo {
     pub env_id: String,
     pub before: String,
@@ -374,6 +403,7 @@ pub struct EnvUndo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+#[cfg(feature = "env-files")]
 pub struct SharedUndo {
     pub id: String,
     pub before: String,
@@ -384,6 +414,7 @@ pub struct SharedUndo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+#[cfg(feature = "env-files")]
 pub enum KeepSide {
     /// The file's variables go to the vault.
     File,
@@ -394,6 +425,7 @@ pub enum KeepSide {
 
 /// One file to settle a certain way.
 #[derive(Debug, Clone, Copy)]
+#[cfg(feature = "env-files")]
 pub struct Preference<'a> {
     pub env_id: &'a str,
     pub file: &'a EnvFile,
@@ -404,6 +436,7 @@ pub struct Preference<'a> {
     pub seen: Option<&'a str>,
 }
 
+#[cfg(feature = "env-files")]
 impl Preference<'_> {
     /// Whether this settles `bound`'s file, as it is now (`file_rev`, `None`
     /// when it is missing), by keeping `side`.
@@ -420,6 +453,7 @@ impl Preference<'_> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+#[cfg(feature = "env-files")]
 pub struct EnvFileComparison {
     #[serde(flatten)]
     #[cfg_attr(feature = "ts", ts(flatten))]
@@ -432,6 +466,7 @@ pub struct EnvFileComparison {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+#[cfg(feature = "env-files")]
 pub struct EnvFilesSynced {
     /// Edits of files saved to the vault.
     pub changes: Vec<EnvFileChange>,
@@ -461,6 +496,7 @@ pub struct EnvFilesSynced {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+#[cfg(feature = "env-files")]
 pub struct ExampleCheck {
     /// The template's name: `.env.example`.
     pub file: String,
@@ -471,6 +507,7 @@ pub struct ExampleCheck {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+#[cfg(feature = "env-files")]
 pub struct GitInfo {
     /// Untracked means the next `git add .` takes it along; tracked means
     /// ignoring it doesn't take it out.
@@ -482,6 +519,7 @@ pub struct GitInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+#[cfg(feature = "env-files")]
 pub struct EnvFileReport {
     #[serde(flatten)]
     #[cfg_attr(feature = "ts", ts(flatten))]
@@ -501,6 +539,7 @@ pub struct EnvFileReport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+#[cfg(feature = "env-files")]
 pub struct UnmanagedEnvFile {
     /// The project (by id) whose folder holds it.
     pub project: String,
@@ -516,6 +555,7 @@ pub struct UnmanagedEnvFile {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
+#[cfg(feature = "env-files")]
 pub struct EnvFilesOverview {
     pub files: Vec<EnvFileReport>,
     pub unmanaged: Vec<UnmanagedEnvFile>,
@@ -526,6 +566,7 @@ pub struct EnvFilesOverview {
 /// What the first half of a round did in the vault ([`Vault::env_files_pull`]):
 /// to save before the second half writes any file.
 #[derive(Debug, Default)]
+#[cfg(feature = "env-files")]
 pub struct Pulled {
     /// The vault changed and must be saved.
     pub vault_changed: bool,
@@ -540,12 +581,14 @@ pub struct Pulled {
 /// nothing to go by. Kept by the app, one per computer, by the key the
 /// revisions were made with, so switching vaults loses nothing.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg(feature = "env-files")]
 pub struct SyncState {
     #[serde(default)]
     keys: BTreeMap<String, KeyedState>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg(feature = "env-files")]
 struct KeyedState {
     /// When it was last used, in seconds since 1970.
     #[serde(default)]
@@ -555,6 +598,7 @@ struct KeyedState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg(feature = "env-files")]
 struct Agreement {
     rev: String,
     #[serde(default)]
@@ -570,8 +614,10 @@ struct Agreement {
 }
 
 /// Most keys a [`SyncState`] keeps revisions for.
+#[cfg(feature = "env-files")]
 const MAX_KEYS: usize = 8;
 
+#[cfg(feature = "env-files")]
 impl SyncState {
     /// The state kept at `path`; empty if there is none or it can't be read.
     pub fn load(path: &Path) -> Self {
@@ -646,6 +692,7 @@ impl SyncState {
 
 /// What finding files on this computer needs.
 #[derive(Debug, Clone, Default)]
+#[cfg(feature = "env-files")]
 pub struct FilesContext {
     /// The home folder, for folders kept as `~/…`.
     pub home: Option<PathBuf>,
@@ -664,6 +711,7 @@ pub struct FilesContext {
 
 /// A file binding with its environment.
 #[derive(Debug, Clone)]
+#[cfg(feature = "env-files")]
 struct Bound {
     env_id: String,
     /// The project that has the environment, by id.
@@ -680,6 +728,7 @@ struct Bound {
     valid: bool,
 }
 
+#[cfg(feature = "env-files")]
 impl Bound {
     /// How [`SyncState`] knows the file: no part has a line break.
     fn state_key(&self) -> String {
@@ -701,6 +750,7 @@ impl Bound {
 
 /// A file binding with where its file is on this computer, if its folder is
 /// here, and the file found there or why it can't be used.
+#[cfg(feature = "env-files")]
 struct Planned {
     bound: Bound,
     location: Option<PathBuf>,
@@ -807,12 +857,14 @@ pub(super) fn bindings_of(entry: &Entry) -> Vec<(EnvFile, FileLevel)> {
 }
 
 /// The variables as names and values.
+#[cfg(feature = "env-files")]
 fn pairs(vars: &[EnvVariable]) -> Vec<(&str, &str)> {
     vars.iter()
         .map(|var| (var.name.as_str(), var.value.expose_secret()))
         .collect()
 }
 
+#[cfg(feature = "env-files")]
 fn parsed_pairs(parsed: &ParsedEnv) -> Vec<(&str, &str)> {
     parsed
         .vars
@@ -823,6 +875,7 @@ fn parsed_pairs(parsed: &ParsedEnv) -> Vec<(&str, &str)> {
 
 /// A keyed hash of a set of variables, whatever their order: the same
 /// names and values give the same revision.
+#[cfg(feature = "env-files")]
 fn revision(key: &[u8; 32], vars: &[(&str, &str)]) -> String {
     let mut sorted = vars.to_vec();
     sorted.sort_unstable();
@@ -838,12 +891,14 @@ fn revision(key: &[u8; 32], vars: &[(&str, &str)]) -> String {
 }
 
 /// A keyed hash of one value, as a shared value's revision.
+#[cfg(feature = "env-files")]
 fn value_revision(key: &[u8; 32], value: &str) -> String {
     revision(key, &[("", value)])
 }
 
 /// A key no revision was made with: without a key yet, nothing was ever
 /// in step, and comparing with this one finds no agreement.
+#[cfg(feature = "env-files")]
 fn made_up_key() -> Zeroizing<[u8; 32]> {
     let mut key = Zeroizing::new([0u8; 32]);
     OsRng.fill_bytes(key.as_mut());
@@ -851,6 +906,7 @@ fn made_up_key() -> Zeroizing<[u8; 32]> {
 }
 
 /// Which key a [`SyncState`] was made with: the start of its hash.
+#[cfg(feature = "env-files")]
 fn key_id(key: &[u8; 32]) -> String {
     use std::fmt::Write as _;
     Sha256::digest(key)[..8]
@@ -868,6 +924,7 @@ fn key_id(key: &[u8; 32]) -> String {
 /// (`DB_HOST db.internal` caught while it is typed, `API-TOKEN=`, which
 /// Node's dotenv reads) is one being written. Other such lines set
 /// nothing the vault has, so they don't count.
+#[cfg(feature = "env-files")]
 fn blocking(text: &str, parsed: &ParsedEnv, vault: &[EnvVariable]) -> Option<Vec<ParseProblem>> {
     let lines: Vec<&str> = text
         .strip_prefix('\u{feff}')
@@ -924,6 +981,7 @@ fn blocking(text: &str, parsed: &ParsedEnv, vault: &[EnvVariable]) -> Option<Vec
 /// An edit that removes every variable, or two or more that are half of
 /// them or more: what an editor or a script that writes in place leaves
 /// for a moment, or a mistake. The user says so first, as for a conflict.
+#[cfg(feature = "env-files")]
 fn drastic(file: &ParsedEnv, vault: &[EnvVariable]) -> bool {
     let removed = vault
         .iter()
@@ -937,6 +995,7 @@ fn drastic(file: &ParsedEnv, vault: &[EnvVariable]) -> bool {
 /// keeps its secret flag and note; a new one gets them from the latest
 /// version in `remembered` that had it (a line deleted and written again),
 /// else it is secret if it looks so.
+#[cfg(feature = "env-files")]
 fn take_file(
     vault: &[EnvVariable],
     file: &ParsedEnv,
@@ -977,6 +1036,7 @@ fn take_file(
 }
 
 #[derive(Default)]
+#[cfg(feature = "env-files")]
 struct FileEdit {
     added: Vec<String>,
     changed: Vec<String>,
@@ -984,6 +1044,7 @@ struct FileEdit {
 }
 
 /// Compares two sets of variables by name and value.
+#[cfg(feature = "env-files")]
 fn compare(left: &[(&str, &str)], right: &[(&str, &str)]) -> EnvComparison {
     let mut comparison = EnvComparison::default();
     for (name, value) in left {
@@ -1004,6 +1065,7 @@ fn compare(left: &[(&str, &str)], right: &[(&str, &str)]) -> EnvComparison {
 /// A search for `.env` files in projects' folders that no environment is
 /// written to ([`Vault::unmanaged_search`]), run without the vault.
 #[derive(Debug, Clone)]
+#[cfg(feature = "env-files")]
 pub struct UnmanagedSearch {
     vault: crate::vault::VaultPaths,
     /// Project ids and their folders.
@@ -1013,6 +1075,7 @@ pub struct UnmanagedSearch {
 
 /// Folders of the home folder a search never goes into from above: macOS
 /// asks before an app reads them, and they hold no projects' code.
+#[cfg(feature = "env-files")]
 const PRIVATE_HOME_FOLDERS: [&str; 7] = [
     "Desktop",
     "Documents",
@@ -1023,6 +1086,7 @@ const PRIVATE_HOME_FOLDERS: [&str; 7] = [
     "Pictures",
 ];
 
+#[cfg(feature = "env-files")]
 impl UnmanagedSearch {
     /// The files found, and whether a folder was too large to look through
     /// to the end.
@@ -1095,6 +1159,7 @@ impl Vault {
 
     /// Writes `file` from now on with the environment `id`, all the time
     /// ([`Self::bind_env_file_at`] at level 1).
+    #[cfg(feature = "env-files")]
     pub fn bind_env_file(
         &mut self,
         id: &str,
@@ -1112,6 +1177,7 @@ impl Vault {
     /// here or through another folder that is the same on disk, and for one
     /// that can never be written ([`RefusedReason`]). Returns the binding as
     /// kept.
+    #[cfg(feature = "env-files")]
     pub fn bind_env_file_at(
         &mut self,
         id: &str,
@@ -1136,6 +1202,7 @@ impl Vault {
     /// Writes a file of the environment at another level from now on.
     /// Returns whether its level changed. A remote environment's files stay
     /// at level 2.
+    #[cfg(feature = "env-files")]
     pub fn set_env_file_level(
         &mut self,
         id: &str,
@@ -1172,6 +1239,7 @@ impl Vault {
     /// as [`Self::bind_env_file_at`] does, without binding it: to tell the
     /// user what writing there means first. Returns the binding as it would
     /// be kept and the file on this computer, if its folder is here.
+    #[cfg(feature = "env-files")]
     pub fn check_env_file_binding(
         &self,
         id: &str,
@@ -1259,6 +1327,7 @@ impl Vault {
 
     /// Deletes the file of a binding, only if it holds exactly what the
     /// vault has, so nothing is lost. Returns whether there was one.
+    #[cfg(feature = "env-files")]
     pub fn delete_env_file(&self, id: &str, file: &EnvFile, ctx: &FilesContext) -> Result<bool> {
         let bound = self
             .bound()
@@ -1291,6 +1360,7 @@ impl Vault {
     }
 
     /// Every file and where it stands, without changing anything.
+    #[cfg(feature = "env-files")]
     pub fn env_files_status(&self, ctx: &FilesContext, state: &SyncState) -> Vec<EnvFileStatus> {
         let key = self.revision_key().unwrap_or_else(made_up_key);
         let id = key_id(&key);
@@ -1323,6 +1393,7 @@ impl Vault {
     /// is to be saved before [`Self::env_files_push`] writes any file, so
     /// a save that fails can't leave files with values the vault lost.
     /// `prefer` takes one file's variables whatever changed.
+    #[cfg(feature = "env-files")]
     pub fn env_files_pull(
         &mut self,
         ctx: &FilesContext,
@@ -1411,6 +1482,7 @@ impl Vault {
     /// kept in step any more is removed, if it holds what the vault holds.
     /// `prefer` writes one file from the vault whatever changed, and writes
     /// it again if it is missing.
+    #[cfg(feature = "env-files")]
     pub fn env_files_push(
         &self,
         ctx: &FilesContext,
@@ -1519,6 +1591,7 @@ impl Vault {
     /// The second half of a round for a level-3 file: its place settled
     /// ([`Self::settle_virtual`]) and, where the two agree, the agreement
     /// kept in `files`, as made with the app's pipe.
+    #[cfg(feature = "env-files")]
     fn push_virtual(
         &self,
         key: &[u8; 32],
@@ -1566,6 +1639,7 @@ impl Vault {
     /// of a file was saved, if nothing changed them since: from the entry's
     /// history, with their secret flags and notes. The files are rewritten
     /// by the next [`Self::env_files_push`].
+    #[cfg(feature = "env-files")]
     pub fn undo_env_file_change(&mut self, undo: &EnvUndo) -> Result<()> {
         let key = self
             .revision_key()
@@ -1623,6 +1697,7 @@ impl Vault {
     /// values as they are to be: a shared variable's value goes to its
     /// shared value, for every environment that uses it, and the variable
     /// keeps its reference. Returns the shared values it changed, for Undo.
+    #[cfg(feature = "env-files")]
     fn take_resolved(
         &mut self,
         key: &[u8; 32],
@@ -1664,6 +1739,7 @@ impl Vault {
     /// of one of its files (right), for the compare dialog; values are
     /// compared here. Only a file the environment is written to, as found
     /// for keeping it in step.
+    #[cfg(feature = "env-files")]
     pub fn compare_env_file(
         &self,
         id: &str,
@@ -1699,6 +1775,7 @@ impl Vault {
     /// vault changed or `prefer` says so, and written when it was never
     /// written here, listed first as [`disk::write`] says. Returns the
     /// state and, when the two agree now, their revision.
+    #[cfg(feature = "env-files")]
     fn settle(
         &self,
         key: &[u8; 32],
@@ -1812,6 +1889,7 @@ impl Vault {
     /// vault can't take (both sides changed, lines that can't be read)
     /// stays until the user keeps a side. Returns the state, the agreement
     /// when the two agree now, and the pipe to serve with its answer.
+    #[cfg(feature = "env-files")]
     fn settle_virtual(
         &self,
         key: &[u8; 32],
@@ -1922,6 +2000,7 @@ impl Vault {
     /// Every file binding with what it can be: its file on this computer,
     /// or why it isn't kept in step. Of two bindings that name one file on
     /// disk, the first in order is.
+    #[cfg(feature = "env-files")]
     fn plan(&self, ctx: &FilesContext) -> Vec<Planned> {
         let projects = self.projects();
         let mut seen: Vec<disk::Identity> = Vec::new();
@@ -1972,6 +2051,7 @@ impl Vault {
     /// The level-2 file of `bound` as it is on disk now, if it holds what the
     /// vault holds: read again after its stamp is taken, so an edit made
     /// meanwhile isn't taken for the app's own write.
+    #[cfg(feature = "env-files")]
     fn leftover(&self, key: &[u8; 32], bound: &Bound, target: &Target) -> Option<Leftover> {
         let left = Leftover::of(&target.real)?;
         let Disk::Text(text) = disk::read_checked(target) else {
@@ -1987,6 +2067,7 @@ impl Vault {
     /// longer has the folder), if it holds what the vault holds: it was
     /// there only while the vault is unlocked. Not one another binding keeps
     /// in step.
+    #[cfg(feature = "env-files")]
     fn remove_stale(
         &self,
         key: &[u8; 32],
@@ -2018,6 +2099,7 @@ impl Vault {
 
     /// The flags and notes of the variables of an environment's earlier
     /// versions, newest first, each name once.
+    #[cfg(feature = "env-files")]
     fn remembered_variables(&self, id: &str) -> Vec<EnvVariable> {
         let Ok(entry) = self.env_entry(id) else {
             return Vec::new();
@@ -2039,6 +2121,7 @@ impl Vault {
     }
 
     /// Every file binding of every environment, in a fixed order.
+    #[cfg(feature = "env-files")]
     fn bound(&self) -> Vec<Bound> {
         let owners = self.environment_owners();
         let names: BTreeMap<String, String> = self
@@ -2088,6 +2171,7 @@ impl Vault {
     /// environment lacks. Git is the caller's to look at, and so are the
     /// files no environment is written to ([`Self::unmanaged_search`]), both
     /// once the vault is free again.
+    #[cfg(feature = "env-files")]
     pub fn env_files_overview(
         &self,
         ctx: &FilesContext,
@@ -2134,6 +2218,7 @@ impl Vault {
     /// What looking for `.env` files that no environment is written to, in
     /// the folders of every project or of the one with the id `project`,
     /// needs: taken while the vault is held, run after.
+    #[cfg(feature = "env-files")]
     pub fn unmanaged_search(&self, ctx: &FilesContext, project: Option<&str>) -> UnmanagedSearch {
         let bound = self
             .bound()
@@ -2164,6 +2249,7 @@ impl Vault {
     /// to take it under management, as a binding's file is read: without
     /// following a link, a regular file only. Returns where it is and what
     /// it holds.
+    #[cfg(feature = "env-files")]
     pub fn unmanaged_env_file(
         &self,
         project: &str,
@@ -2188,6 +2274,7 @@ impl Vault {
     /// by every environment and at either level, as paths in the folder: the
     /// files AI tools' rules name ([`agents`]). Only bindings the app would
     /// write.
+    #[cfg(feature = "env-files")]
     pub fn env_files_in_folder(&self, folder: &str) -> Vec<String> {
         let mut paths: Vec<String> = self
             .bound()
@@ -2231,6 +2318,7 @@ impl Vault {
     }
 
     /// The key revisions are made with, if the vault has one.
+    #[cfg(feature = "env-files")]
     fn revision_key(&self) -> Option<Zeroizing<[u8; 32]>> {
         let Some(CustomDataValue::String(text)) = self
             .db
@@ -2247,6 +2335,7 @@ impl Vault {
     }
 
     /// Makes the key if the vault has none. Returns whether it did.
+    #[cfg(feature = "env-files")]
     fn ensure_revision_key(&mut self) -> bool {
         if self.revision_key().is_some() {
             return false;
@@ -2267,6 +2356,7 @@ impl Vault {
 /// Whether [`Vault::settle`] and [`Vault::settle_virtual`] only look, or act:
 /// write the file or make the pipe, listing it in the lists of `ctx`.
 #[derive(Clone, Copy)]
+#[cfg(feature = "env-files")]
 enum Settle<'a> {
     Look,
     Act { ctx: &'a FilesContext },
@@ -2274,6 +2364,7 @@ enum Settle<'a> {
 
 /// What [`Vault::push_virtual`] did: the pipe to serve, and whether one
 /// was made.
+#[cfg(feature = "env-files")]
 struct PushedVirtual {
     served: Option<VirtualFile>,
     written: bool,
@@ -2281,6 +2372,7 @@ struct PushedVirtual {
 
 /// The two sides agree on `revision`; `written` when the file was written
 /// to get there.
+#[cfg(feature = "env-files")]
 struct Agreed {
     revision: String,
     written: bool,
@@ -2290,6 +2382,7 @@ struct Agreed {
 /// saying where they come from, then the variables, as the app writes them
 /// to a new file. The names in that line can't end it
 /// ([`super::format::one_line`]).
+#[cfg(feature = "env-files")]
 fn virtual_answer(bound: &Bound, vars: &[(&str, &str)]) -> Result<Zeroizing<String>> {
     let place = if bound.label.is_empty() {
         bound.env_name.clone()
@@ -2305,12 +2398,14 @@ fn virtual_answer(bound: &Bound, vars: &[(&str, &str)]) -> Result<Zeroizing<Stri
 }
 
 /// Level 3 asked for where there are no pipes in folders.
+#[cfg(feature = "env-files")]
 fn unsupported() -> Error {
     Error::Unsupported("virtual files work on macOS and Linux".into())
 }
 
 /// Whether the live project `owner`, which has the environment, holds
 /// `folder`.
+#[cfg(feature = "env-files")]
 fn holds(projects: &[Project], owner: Option<&str>, folder: &str) -> bool {
     owner.is_some_and(|owner| {
         projects

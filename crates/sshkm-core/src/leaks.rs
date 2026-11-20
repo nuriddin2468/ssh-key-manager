@@ -54,7 +54,7 @@ pub use self::sources::{
     AiLocation, AiTool, AiToolInfo, GitFiles, GitLister, Listing, Plan, ai_locations,
     default_ai_locations, detect_ai_tools, list_files,
 };
-use crate::audit::Severity;
+use crate::Severity;
 use crate::shell_history::Shell;
 use crate::vault::EntryKind;
 

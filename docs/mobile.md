@@ -59,19 +59,19 @@ Agreed with the user on 2026-11-16 and 2026-11-20.
 
 Letters are the sessions that build them. A step starts once the steps it needs are merged.
 
-| Step                                                  | Needs   |
-| ----------------------------------------------------- | ------- |
-| A. Shared sync                                        | —       |
-| B. Core on Android, UniFFI crate and the app's shell  | —       |
-| C. The vault on the phone                             | B       |
-| D. SSH in the core                                    | B       |
-| E. The phone as one of my devices: pairing and sync   | A, C    |
-| F. Autofill                                           | C       |
-| G. Environments and servers, to look at               | C       |
-| H. The terminal                                       | C, D    |
-| I. A new computer from the phone                      | E       |
-| J. The phone's key on servers, and a lost phone       | E, H    |
-| K. Release                                            | all     |
+| Step                                                 | Needs |
+| ---------------------------------------------------- | ----- |
+| A. Shared sync                                       | —     |
+| B. Core on Android, UniFFI crate and the app's shell | —     |
+| C. The vault on the phone                            | B     |
+| D. SSH in the core                                   | B     |
+| E. The phone as one of my devices: pairing and sync  | A, C  |
+| F. Autofill                                          | C     |
+| G. Environments and servers, to look at              | C     |
+| H. The terminal                                      | C, D  |
+| I. A new computer from the phone                     | E     |
+| J. The phone's key on servers, and a lost phone      | E, H  |
+| K. Release                                           | all   |
 
 ### A. Shared sync
 

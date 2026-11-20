@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">SSH Key Manager</string>
+    <string name="home_version">Version %1$s</string>
+    <string name="home_coming">The phone app is being built: the vault and sync with your computers come next.</string>
+
+    <string name="generator_title">Password generator</string>
+    <string name="generator_empty">No password yet. Generate one: 20 characters with letters, digits and symbols.</string>
+    <string name="generator_password">Generated password</string>
+    <string name="generator_generate">Generate a password</string>
+    <string name="generator_again">Generate another</string>
+    <string name="generator_strength">Strength: %1$s</string>
+    <string name="strength_0">Very weak</string>
+    <string name="strength_1">Weak</string>
+    <string name="strength_2">Fair</string>
+    <string name="strength_3">Good</string>
+    <string name="strength_4">Strong</string>
+
+    <string name="error_settings">These settings can’t make a password.</string>
+    <string name="error_other">Couldn’t make a password. Try again.</string>
+</resources>

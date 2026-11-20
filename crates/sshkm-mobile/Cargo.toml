@@ -1,0 +1,51 @@
+[package]
+name = "sshkm-mobile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "The phone app's bridge to the core of SSH Key Manager, through UniFFI"
+readme = "README.md"
+publish = false
+
+[lib]
+# `cdylib` is the library the Android app loads; `lib` is for the tests and
+# the `uniffi-bindgen` program.
+crate-type = ["cdylib", "lib"]
+
+# Writes the Kotlin bindings from the built library (`mobile/android` runs it).
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[dependencies]
+# Without the features only computers use (ssh-agent, `~/.ssh` audit, trash,
+# browser import, shell history, leak scanner, `.env` files on disk, tunnels).
+sshkm-core = { path = "../sshkm-core", default-features = false }
+thiserror = "2.0.21"
+# The bindings generator's runtime half. MPL-2.0, which deny.toml allows.
+uniffi = { version = "0.32.2", default-features = false }
+
+[features]
+# The `uniffi-bindgen` program: only the machine that builds the app runs it.
+bindgen = ["uniffi/cli", "uniffi/cargo-metadata"]
+
+# The workspace lints, except that `unsafe_code` is `deny` instead of
+# `forbid`: the scaffolding UniFFI generates around every exported function
+# and type is `extern "C"` glue that has to be `unsafe` (raw pointers, foreign
+# buffers, `#[unsafe(no_mangle)]`). The modules holding exports opt in with
+# `#[allow(unsafe_code)]` on their declaration in lib.rs; nothing written by
+# hand here uses `unsafe`.
+[lints.rust]
+unsafe_code = "deny"
+unused_qualifications = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"

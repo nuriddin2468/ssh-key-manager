@@ -30,6 +30,29 @@ All errors are one `Error` enum with a stable `code()` (`not_found`,
 and findings are machine-readable kinds with parameters, so the UI can localise
 them.
 
+## Features
+
+What only computers use is behind cargo features, all on by default, so the
+desktop app builds as it always has. The phone app (`crates/sshkm-mobile`)
+takes the crate with `default-features = false`; the vault (KDBX, generator,
+2FA codes), `p2p`, `sync`, `config`, `known_hosts` and `keys` build either
+way, for `aarch64-linux-android` and `x86_64-linux-android` too.
+
+| Feature | Gates |
+|---|---|
+| `ssh-agent` | `agent`: the client for the system ssh-agent. |
+| `ssh-audit` | `audit`: the audit of `~/.ssh` and its config fixes. `Severity`, which the vault's audit shares, is at the crate root. |
+| `trash` | `keys::move_to_trash` and the `trash` crate. |
+| `browser-import` | `vault::import::browser`: logins from browsers' SQLite databases (`rusqlite` with bundled SQLite, `cbc`, `des`). |
+| `shell-history` | `shell_history`: hosts found in the shell history. |
+| `leaks` | `leaks`, and the vault's list of secrets to look for. Needs `shell-history`. |
+| `env-files` | The disk side of `vault::envs::files`: finding, reading and writing `.env` files, named pipes, AI agents' files, put-away on lock. The bindings, levels and kinds stay: they are vault data and sync. Needs `leaks`. |
+| `tunnels` | `tunnels`: saved port forwards and their `ssh` processes. |
+| `ts` | TypeScript declarations (below); off by default. |
+
+`cargo test -p sshkm-core --no-default-features` runs the tests that hold
+without them.
+
 ## TypeScript bindings
 
 Every public data type is `serde::Serialize` with camelCase fields. With the

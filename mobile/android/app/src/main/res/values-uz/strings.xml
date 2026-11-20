@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="home_version">Versiya %1$s</string>
+    <string name="home_coming">Telefon ilovasi ishlab chiqilmoqda: keyin ombor va kompyuterlar bilan sinxronlash qoʻshiladi.</string>
+
+    <string name="generator_title">Parol generatori</string>
+    <string name="generator_empty">Hozircha parol yoʻq. Uni yarating: 20 ta belgi — harflar, raqamlar va maxsus belgilar.</string>
+    <string name="generator_password">Yaratilgan parol</string>
+    <string name="generator_generate">Parol yaratish</string>
+    <string name="generator_again">Boshqasini yaratish</string>
+    <string name="generator_strength">Mustahkamlik: %1$s</string>
+    <string name="strength_0">Juda zaif</string>
+    <string name="strength_1">Zaif</string>
+    <string name="strength_2">Oʻrtacha</string>
+    <string name="strength_3">Yaxshi</string>
+    <string name="strength_4">Kuchli</string>
+
+    <string name="error_settings">Bu sozlamalar bilan parol yaratib boʻlmaydi.</string>
+    <string name="error_other">Parol yaratib boʻlmadi. Qayta urinib koʻring.</string>
+</resources>

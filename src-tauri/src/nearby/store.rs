@@ -11,13 +11,13 @@ use std::path::{Path, PathBuf};
 
 use sshkm_core::fsutil;
 use sshkm_core::p2p::PeerKey;
+use sshkm_core::p2p::conversation::SyncState;
 
 use serde::{Deserialize, Serialize};
 use sshkm_core::vault::OwnDevice;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::sync::SyncState;
 use crate::error::AppResult;
 
 const DIR: &str = "sync";
@@ -68,27 +68,21 @@ fn file(data_dir: &Path, name: &str) -> PathBuf {
 /// The state of the last sync with `peer`; empty if there was none or
 /// the file can't be read (the next sync then asks about differences).
 /// The deletions made without asking are this computer's, from all the
-/// user's devices ([`load_unasked`]).
+/// user's devices, apart from it ([`load_unasked`]).
 pub fn load(data_dir: &Path, peer: &PeerKey) -> SyncState {
-    let mut state: SyncState = read(&path(data_dir, peer, ".json"), MAX_STATE).unwrap_or_default();
-    state.unasked = load_unasked(data_dir);
-    state
+    read(&path(data_dir, peer, ".json"), MAX_STATE).unwrap_or_default()
 }
 
 /// The deletions this computer made from the user's devices without
-/// asking. When the file is there but can't be read, they count as at the
-/// limit ([`SyncState::at_the_limit`]), never as none, and the file is
-/// written so, to count for a day from now.
-fn load_unasked(data_dir: &Path) -> Vec<(i64, u32)> {
+/// asking: none if the file isn't there, `None` if it is but can't be read
+/// or is too large. The conversation then counts them at the limit, never
+/// as none, and keeps that ([`save_unasked`]), to count for a day from
+/// now.
+pub fn load_unasked(data_dir: &Path) -> Option<Vec<(i64, u32)>> {
     let path = file(data_dir, UNASKED);
     match std::fs::symlink_metadata(&path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        _ => read(&path, MAX_UNASKED).unwrap_or_else(|| {
-            let at_the_limit = SyncState::at_the_limit(OffsetDateTime::now_utc().unix_timestamp());
-            // Best effort: when it can't be written, it stays at the limit.
-            let _ = write(&path, &at_the_limit);
-            at_the_limit
-        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(Vec::new()),
+        _ => read(&path, MAX_UNASKED),
     }
 }
 
@@ -179,35 +173,29 @@ mod tests {
     }
 
     #[test]
-    fn deletions_are_this_computers_outlive_a_bad_state_and_fail_closed() {
+    fn deletions_are_this_computers_outlive_a_bad_state_and_never_read_as_none() {
         let dir = tempfile::tempdir().unwrap();
         let (a, b) = (
             Identity::generate().unwrap().public(),
             Identity::generate().unwrap().public(),
         );
+        assert_eq!(load_unasked(dir.path()), Some(Vec::new()));
         save_unasked(dir.path(), &[(1_000, 3)]).unwrap();
-        // Kept apart from each device's state, and the same for all.
+        // Kept apart from each device's state, whose file never has them.
         save(dir.path(), &a, &SyncState::default()).unwrap();
-        assert_eq!(load(dir.path(), &a).unasked, [(1_000, 3)]);
-        assert_eq!(load(dir.path(), &b).unasked, [(1_000, 3)]);
+        assert_eq!(load(dir.path(), &a).unasked, []);
+        assert_eq!(load_unasked(dir.path()), Some(vec![(1_000, 3)]));
         // A state file that doesn't read leaves them as they are.
         std::fs::write(path(dir.path(), &a, ".json"), "{ not json").unwrap();
-        assert_eq!(load(dir.path(), &a).unasked, [(1_000, 3)]);
         forget(dir.path(), &a);
-        assert_eq!(load(dir.path(), &b).unasked, [(1_000, 3)]);
-        // Their own file unreadable or too large: at the limit, written so
-        // that it ends a day from now.
+        forget(dir.path(), &b);
+        assert_eq!(load_unasked(dir.path()), Some(vec![(1_000, 3)]));
+        // Their own file unreadable or too large: not none, but unreadable
+        // (the conversation counts them at the limit and keeps that).
         let unasked = file(dir.path(), UNASKED);
-        let at_limit = |state: &SyncState| {
-            state.unasked.iter().map(|(_, n)| *n).sum::<u32>()
-                == u32::try_from(super::super::sync::MASS_DELETE).unwrap()
-        };
         for bad in [b"[[1".to_vec(), vec![b' '; 65 * 1024]] {
             std::fs::write(&unasked, bad).unwrap();
-            let state = load(dir.path(), &a);
-            assert!(at_limit(&state));
-            let kept: Vec<(i64, u32)> = read(&unasked, MAX_UNASKED).unwrap();
-            assert_eq!(kept, state.unasked);
+            assert_eq!(load_unasked(dir.path()), None);
         }
     }
 

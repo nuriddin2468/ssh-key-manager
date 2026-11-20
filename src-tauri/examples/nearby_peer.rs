@@ -34,13 +34,13 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
-use sshkm_app_lib::nearby::pairing::{
-    PairingFailure, PairingPhase, Purpose, Side, Stored, VaultItems, conversation,
-};
-use sshkm_app_lib::nearby::sync::{SyncLocal, SyncState, SyncWrite};
 use sshkm_app_lib::nearby::{BASE_LABEL, OWN_SERVICE_TYPE, SERVICE_TYPE, VAULT_BASE_LABEL};
 use sshkm_core::config::SshConfig;
 use sshkm_core::known_hosts::KnownHosts;
+use sshkm_core::p2p::conversation::{
+    Device, PairingFailure, PairingPhase, Purpose, Stored, SyncLocal, SyncState, SyncStore,
+    SyncWrite, User, VaultItems, conversation,
+};
 use sshkm_core::p2p::own::window;
 use sshkm_core::p2p::protocol::{
     EntrySync, HostKey, HostsEntry, Intent, Item, ItemSummary, SecretText, VaultState,
@@ -48,8 +48,7 @@ use sshkm_core::p2p::protocol::{
 use sshkm_core::p2p::{self, Identity, PeerKey};
 use sshkm_core::sync::Hasher;
 use sshkm_core::vault::sync::{
-    ENTRY_SYNC_VERSION, Pairs, PeerVault, VaultApplied, VaultBase, VaultChoices, VaultPlan,
-    check_moved, digests,
+    ENTRY_SYNC_VERSION, Pairs, PeerVault, VaultApplied, VaultBase, VaultChoices, VaultPlan, digests,
 };
 use sshkm_core::vault::{Vault, VaultPaths};
 use sshkm_core::{ExposeSecret, SecretString};
@@ -90,27 +89,7 @@ impl Terminal {
     }
 }
 
-impl Side for Terminal {
-    fn name(&self) -> String {
-        self.name.clone()
-    }
-
-    fn knows(&self, peer: PeerKey) -> Result<Option<String>, PairingFailure> {
-        Ok(self
-            .with_vault(|vault| {
-                vault
-                    .is_own_device(&peer)
-                    .then(|| vault.known_name(&peer))
-                    .flatten()
-            })
-            .flatten())
-    }
-
-    fn save(&self, peer: PeerKey, name: &str) -> Result<(), PairingFailure> {
-        println!("Paired with {name} ({peer}).");
-        Ok(())
-    }
-
+impl User for Terminal {
     fn show(&self, peer: Option<&str>, phase: &PairingPhase) {
         let peer = peer.unwrap_or("the app");
         match phase {
@@ -141,6 +120,34 @@ impl Side for Terminal {
             .read_line(&mut line)
             .map_err(|_| PairingFailure::Cancelled)?;
         Ok(Some(line.trim().eq_ignore_ascii_case("y")))
+    }
+
+    /// The app asks in a system dialog; here, the sample was chosen with
+    /// `--send` when the example started.
+    fn allow_send(&self, _item: &Item, _left_out: &[String]) -> bool {
+        true
+    }
+}
+
+impl Device for Terminal {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    fn knows(&self, peer: PeerKey) -> Result<Option<String>, PairingFailure> {
+        Ok(self
+            .with_vault(|vault| {
+                vault
+                    .is_own_device(&peer)
+                    .then(|| vault.known_name(&peer))
+                    .flatten()
+            })
+            .flatten())
+    }
+
+    fn save(&self, peer: PeerKey, name: &str) -> Result<(), PairingFailure> {
+        println!("Paired with {name} ({peer}).");
+        Ok(())
     }
 
     fn store(&self, item: &Item) -> Result<Stored, PairingFailure> {
@@ -244,10 +251,9 @@ impl Side for Terminal {
             .unwrap_or(false)
     }
 
-    /// The app asks in a system dialog; here, the sample was chosen with
-    /// `--send` when the example started.
-    fn allow_send(&self, _item: &Item, _left_out: &[String]) -> bool {
-        true
+    fn removed(&self, peer: PeerKey) -> bool {
+        self.with_vault(|vault| vault.is_removed_device(&peer))
+            .unwrap_or(true)
     }
 
     fn takes(&self, intent: Option<Intent>) -> Result<(), PairingFailure> {
@@ -273,8 +279,8 @@ impl Side for Terminal {
         let Mode::Join(dir) = &self.mode else {
             return Err(PairingFailure::NotSaved);
         };
+        // Checked already by the conversation (`check_moved`).
         let secret = SecretString::from(secret.expose().to_owned());
-        check_moved(&file, &secret).map_err(|_| PairingFailure::NotSaved)?;
         print!(
             "The vault came ({} bytes). Master password for this computer: ",
             file.len()
@@ -308,6 +314,14 @@ impl Side for Terminal {
         Ok(())
     }
 
+    fn entry_sync(&self) -> Option<EntrySync> {
+        self.with_vault(|_| EntrySync::On {
+            version: ENTRY_SYNC_VERSION,
+        })
+    }
+}
+
+impl SyncStore for Terminal {
     fn sync_load(&self, peer: PeerKey) -> Result<SyncLocal, PairingFailure> {
         let (config, known) = self.files().ok_or(PairingFailure::NotOwn)?;
         let state_file = self.dir().ok_or(PairingFailure::NotOwn)?.join(format!(
@@ -368,10 +382,26 @@ impl Side for Terminal {
         std::fs::write(file, json).map_err(|_| PairingFailure::NotSaved)
     }
 
-    fn entry_sync(&self) -> Option<EntrySync> {
-        self.with_vault(|_| EntrySync::On {
-            version: ENTRY_SYNC_VERSION,
-        })
+    fn sync_unasked(&self, unasked: &[(i64, u32)]) -> Result<(), PairingFailure> {
+        let file = self
+            .dir()
+            .ok_or(PairingFailure::NotOwn)?
+            .join("unasked.json");
+        let json = serde_json::to_vec(unasked).map_err(|_| PairingFailure::NotSaved)?;
+        std::fs::write(file, json).map_err(|_| PairingFailure::NotSaved)
+    }
+
+    /// None kept yet, or what `sync_unasked` kept; a file that doesn't
+    /// read is the conversation's to count at the limit.
+    fn unasked(&self) -> Result<Vec<(i64, u32)>, PairingFailure> {
+        let Some(dir) = self.dir() else {
+            return Ok(Vec::new());
+        };
+        match std::fs::read(dir.join("unasked.json")) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(_) => Err(PairingFailure::NotSaved),
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| PairingFailure::NotSaved),
+        }
     }
 
     fn vault_copy(&self) -> Result<Zeroizing<Vec<u8>>, PairingFailure> {

@@ -999,7 +999,8 @@ user's organization or another extension controls is left alone.
 ## Nearby
 
 Two copies of the app on the same local network pair, and later talk, over a direct
-TCP connection. The cryptography is in `sshkm_core::p2p`, the networking in
+TCP connection. The cryptography and the conversation (pairing, sending, adding a
+device, syncing) are in `sshkm_core::p2p`, the networking and the system dialogs in
 `src-tauri/src/nearby/`.
 
 - **Local network only.** The app connects only to an address on the local network,

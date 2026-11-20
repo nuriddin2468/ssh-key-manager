@@ -40,6 +40,11 @@
 //! - [`net`]: the Tools page's network checks: SSH ping, open ports, DNS
 //!   records and TLS certificates.
 //!
+//! What only computers use (`agent`, `audit`, `leaks`, `shell_history`,
+//! `tunnels`, browser import, the trash and the `.env` files on disk) is
+//! behind cargo features that are on by default; the phone app builds the
+//! crate without them. The crate's README lists them.
+//!
 //! Every public data type implements [`serde::Serialize`] with camelCase field
 //! names so it can be returned from Tauri commands unchanged. With the `ts`
 //! feature the types also derive `ts_rs::TS`, and `cargo test --features ts`
@@ -50,7 +55,9 @@
 //! `Serialize` nor a revealing `Debug`, and is zeroized on drop. Passphrases are
 //! passed as [`SecretString`].
 
+#[cfg(feature = "ssh-agent")]
 pub mod agent;
+#[cfg(feature = "ssh-audit")]
 pub mod audit;
 pub mod authorized_keys;
 pub mod authorized_line;
@@ -63,19 +70,27 @@ pub mod fsutil;
 pub mod hosts_file;
 pub mod keys;
 pub mod known_hosts;
+#[cfg(feature = "leaks")]
 pub mod leaks;
 pub mod net;
 pub mod p2p;
 pub mod paths;
 pub mod perms;
+mod severity;
+#[cfg(feature = "shell-history")]
 pub mod shell_history;
 pub mod sync;
 mod text;
+#[cfg(feature = "tunnels")]
 pub mod tunnels;
 pub mod vault;
 
 pub use error::{Error, ErrorCode, ErrorInfo, Result};
 pub use secrecy::{self, ExposeSecret, SecretString};
+pub use severity::Severity;
+
+/// The version of this crate: the app's version, the same on every device.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Directory that `ts-rs` writes the TypeScript bindings into: the repository's
 /// `src/bindings/`. It is absolute so that neither the working directory of the

@@ -90,6 +90,8 @@ proof) and `SyncStore` (host blocks and server keys, records, snapshots, the vau
 
 ### B. Core on Android, UniFFI crate and the app's shell
 
+Done in [#78](https://github.com/nuriddin2468/ssh-key-manager/pull/78).
+
 - `sshkm-core` builds for `aarch64-linux-android` and `x86_64-linux-android` (the
   emulator): what only computers use (ssh-agent, `~/.ssh` audit and permissions, the trash,
   browser import, shell history, terminals, `.env` files on disk) goes behind features that

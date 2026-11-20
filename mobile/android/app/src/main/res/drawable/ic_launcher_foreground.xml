@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The keyhole and its orbit from assets/app-icon.svg, drawn in the icon's
+  24-unit space and placed in the 66dp safe zone of an adaptive icon. The
+  keyhole's eye is cut out, so the themed (monochrome) icon keeps it.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:pivotX="12"
+        android:pivotY="12.4"
+        android:scaleX="2.3"
+        android:scaleY="2.3"
+        android:translateX="42"
+        android:translateY="41.6">
+        <group
+            android:pivotX="12"
+            android:pivotY="13.2"
+            android:rotation="-18">
+            <path
+                android:pathData="M1.6,13.2a10.4,3.8 0,1 0,20.8 0a10.4,3.8 0,1 0,-20.8 0z"
+                android:strokeAlpha="0.5"
+                android:strokeColor="#FFFFFFFF"
+                android:strokeWidth="0.55" />
+        </group>
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M7.9,9.2a4.1,4.1 0,1 0,8.2 0a4.1,4.1 0,1 0,-8.2 0zM10.5,9.2a1.5,1.5 0,1 0,3 0a1.5,1.5 0,1 0,-3 0z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M10.4,11.6L9.1,18.4Q8.9,19.7 10.2,19.7H13.8Q15.1,19.7 14.9,18.4L13.6,11.6Z" />
+        <path
+            android:fillColor="#FF99F6E4"
+            android:pathData="M19.4,9.7a1.2,1.2 0,1 0,2.4 0a1.2,1.2 0,1 0,-2.4 0z" />
+    </group>
+</vector>

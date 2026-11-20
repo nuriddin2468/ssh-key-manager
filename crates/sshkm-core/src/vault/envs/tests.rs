@@ -608,6 +608,7 @@ fn finds_the_git_work_tree() {
 }
 
 #[test]
+#[cfg(feature = "leaks")]
 fn the_leak_scanner_gets_secret_variables_and_passwords() {
     use crate::leaks::LeakSecret;
     let mut fx = Fixture::new();

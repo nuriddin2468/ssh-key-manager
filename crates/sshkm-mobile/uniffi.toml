@@ -1,0 +1,4 @@
+# How UniFFI writes the Kotlin bindings of this crate.
+[bindings.kotlin]
+package_name = "dev.sshkeymanager.android.core"
+cdylib_name = "sshkm_mobile"

@@ -901,7 +901,9 @@ fn without_formula_guard(cell: &str) -> &str {
     }
 }
 
+#[cfg(feature = "browser-import")]
 mod browser;
+#[cfg(feature = "browser-import")]
 pub use browser::{
     BrowserFamily, BrowserKeyStore, BrowserLogins, BrowserProfile, BrowserReadError, SafeStorage,
     browser_profiles,

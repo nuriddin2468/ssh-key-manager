@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The canvas colour of the desktop app's light theme (src/styles/app.css). -->
+    <color name="canvas">#ECEEF2</color>
+</resources>

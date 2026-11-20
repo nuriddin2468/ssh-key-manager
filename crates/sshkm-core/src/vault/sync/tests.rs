@@ -8,8 +8,10 @@ use zeroize::Zeroizing;
 
 use super::*;
 use crate::sync::{Hasher, agree_hashed};
+#[cfg(feature = "env-files")]
 use crate::vault::envs::files::{EnvFile, FileState, FilesContext, InactiveReason};
 use crate::vault::envs::{EnvInput, EnvVarInput};
+#[cfg(feature = "env-files")]
 use crate::vault::projects::{ProjectColor, ProjectInput, ProjectMember};
 use crate::vault::sync::copy::{check_xml_for_tests, newest_removals};
 use crate::vault::{EntryInput, SecretField, Vault, VaultPaths};
@@ -1157,6 +1159,7 @@ fn a_conflict_value_is_shown_only_when_asked_for_one_field() {
 
 /// A project `Shop` with the folder `shop` on both sides, and an
 /// environment in it on `a`.
+#[cfg(feature = "env-files")]
 fn project_with_env(dir: &std::path::Path, a: &mut Device, b: &mut Device) -> (String, EnvFile) {
     let folder = dir.join("shop");
     fs::create_dir_all(&folder).unwrap();
@@ -1199,6 +1202,7 @@ fn project_with_env(dir: &std::path::Path, a: &mut Device, b: &mut Device) -> (S
     )
 }
 
+#[cfg(feature = "env-files")]
 fn ctx(dir: &std::path::Path) -> FilesContext {
     FilesContext {
         home: None,
@@ -1210,6 +1214,7 @@ fn ctx(dir: &std::path::Path) -> FilesContext {
 }
 
 /// What a round of `.env` files does on `device`: the files' states.
+#[cfg(feature = "env-files")]
 fn round(device: &mut Device, dir: &std::path::Path) -> Vec<FileState> {
     let ctx = ctx(dir);
     let mut state = crate::vault::envs::files::SyncState::default();
@@ -1228,6 +1233,7 @@ fn round(device: &mut Device, dir: &std::path::Path) -> Vec<FileState> {
 
 #[cfg(unix)]
 #[test]
+#[cfg(feature = "env-files")]
 fn a_virtual_file_never_becomes_a_file_where_pipes_are_missing() {
     let (dir, mut a, mut b) = two();
     let (env, file) = project_with_env(dir.path(), &mut a, &mut b);
@@ -1255,6 +1261,7 @@ fn a_virtual_file_never_becomes_a_file_where_pipes_are_missing() {
 }
 
 #[test]
+#[cfg(feature = "env-files")]
 fn a_remote_environment_gets_no_file_from_a_sync() {
     let (dir, mut a, mut b) = two();
     let (env, file) = project_with_env(dir.path(), &mut a, &mut b);

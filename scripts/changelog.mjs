@@ -42,7 +42,7 @@ export const VERSION_FILES = [
   { path: 'src-tauri/tauri.conf.json', pattern: /^( {2}"version": ")([^"]+)(")/m },
   { path: 'extension/manifest.json', pattern: /^( {2}"version": ")([^"]+)(")/m },
   { path: 'Cargo.toml', pattern: /^(\[workspace\.package\]\nversion = ")([^"]+)(")/m },
-  ...['sshkm-app', 'sshkm-core', 'sshkm-os'].map((name) => ({
+  ...['sshkm-app', 'sshkm-core', 'sshkm-mobile', 'sshkm-os'].map((name) => ({
     path: 'Cargo.lock',
     pattern: new RegExp(`^(name = "${name}"\\nversion = ")([^"]+)(")`, 'm'),
   })),

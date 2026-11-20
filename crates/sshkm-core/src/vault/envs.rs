@@ -1320,6 +1320,7 @@ pub(super) fn settle_versions(db: &mut Database, entry_id: keepass::db::EntryId,
 /// An entry's earlier versions, newest first by when each was made; of two
 /// made the same second, the later in place (KeePass keeps them oldest
 /// first).
+#[cfg_attr(not(feature = "env-files"), allow(dead_code))]
 pub(super) fn history_newest_first(entry: &Entry) -> Vec<&Entry> {
     let mut versions: Vec<&Entry> = entry
         .history

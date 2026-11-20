@@ -19,12 +19,13 @@ use crate::error::{AppError, AppResult};
 /// The release the last check found, until a later check replaces it.
 static PENDING: Mutex<Option<Update>> = Mutex::new(None);
 
-/// At most this many releases, changes per release and characters per note
-/// are taken from the release server's `changelog`. Unlike the update
-/// itself, `latest.json` isn't signed, so it may not fill the dialog with
-/// whatever it likes.
+/// At most this many releases, changes in all and characters per note are
+/// taken from the release server's `changelog`. Unlike the update itself,
+/// `latest.json` isn't signed, so it may not fill the dialog with whatever it
+/// likes. Changes count across releases, newest first, so one large release
+/// shows in full: 0.11.0 alone had 53.
 const MAX_RELEASES: usize = 20;
-const MAX_CHANGES: usize = 50;
+const MAX_CHANGES: usize = 1000;
 const MAX_TEXT: usize = 1000;
 
 /// A newer version the release server offers.
@@ -189,7 +190,6 @@ fn releases_between(manifest: &serde_json::Value, current: &str, offered: &str) 
             if version <= current || version > offered || !is_date(&release.date) {
                 return None;
             }
-            release.changes.truncate(MAX_CHANGES);
             release.changes.retain(|change| {
                 [Some(&change.en), change.ru.as_ref(), change.uz.as_ref()]
                     .into_iter()
@@ -201,7 +201,15 @@ fn releases_between(manifest: &serde_json::Value, current: &str, offered: &str) 
         .collect();
     releases.sort_by(|a, b| b.0.cmp(&a.0));
     releases.dedup_by(|a, b| a.0 == b.0);
-    releases.into_iter().map(|(_, release)| release).collect()
+    let mut left = MAX_CHANGES;
+    releases
+        .into_iter()
+        .map(|(_, mut release)| {
+            release.changes.truncate(left);
+            left -= release.changes.len();
+            release
+        })
+        .collect()
 }
 
 /// `YYYY-MM-DD`, as the release script writes the date.
@@ -326,6 +334,25 @@ mod tests {
             .push(json!({ "kind": "new", "en": "a".repeat(MAX_TEXT + 1) }));
         let releases = releases_between(&json!({ "changelog": [long] }), "0.7.0", "0.8.0");
         assert_eq!(releases[0].changes.len(), 1);
+    }
+
+    #[test]
+    fn keeps_a_large_release_whole_and_caps_the_notes_in_all() {
+        fn with_changes(version: &str, count: usize) -> serde_json::Value {
+            let mut value = release(version);
+            value["changes"] = (0..count)
+                .map(|i| json!({ "kind": "fixed", "en": format!("Fix {i} in {version}.") }))
+                .collect();
+            value
+        }
+        let manifest = json!({
+            "changelog": [with_changes("0.9.0", MAX_CHANGES - 1), with_changes("0.8.0", 3)],
+        });
+        let releases = releases_between(&manifest, "0.7.0", "0.9.0");
+        assert_eq!(versions(&releases), ["0.9.0", "0.8.0"]);
+        assert_eq!(releases[0].changes.len(), MAX_CHANGES - 1);
+        assert_eq!(releases[1].changes.len(), 1);
+        assert_eq!(releases[1].changes[0].en, "Fix 0 in 0.8.0.");
     }
 
     #[test]

@@ -99,6 +99,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.compose.material3)
+    implementation(libs.compose.material.icons.core)
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.jna) {
@@ -108,6 +109,7 @@ dependencies {
     debugImplementation(libs.compose.ui.test.manifest)
 
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.androidx.test.junit)
@@ -152,6 +154,9 @@ abstract class CargoNdkBuild : DefaultTask() {
     @get:Input abstract val platform: Property<Int>
     @get:Input abstract val release: Property<Boolean>
 
+    /** Cargo features of `sshkm-mobile`: `test-vault` in debug builds only. */
+    @get:Input abstract val features: ListProperty<String>
+
     @get:Internal abstract val workspace: DirectoryProperty
     @get:Internal abstract val ndk: DirectoryProperty
 
@@ -180,6 +185,7 @@ abstract class CargoNdkBuild : DefaultTask() {
             abis.get().forEach { args += listOf("-t", it) }
             args += listOf("-P", platform.get().toString(), "-o", out.path, "build", "-p", "sshkm-mobile", "--locked")
             if (release.get()) args += "--release"
+            if (features.get().isNotEmpty()) args += listOf("--features", features.get().joinToString(","))
             commandLine(args)
         }
     }
@@ -228,6 +234,9 @@ androidComponents {
             abis = rustAbis
             platform = minSdkVersion
             release = variant.buildType == "release"
+            // The made-up vault debug builds can take until pairing exists;
+            // a release library has neither it nor its binding.
+            features = if (variant.buildType == "release") emptyList() else listOf("test-vault")
             workspace = cargoWorkspace
             ndk = androidComponents.sdkComponents.ndkDirectory
             outputDir = layout.buildDirectory.dir("rust/${variant.name}/jniLibs")

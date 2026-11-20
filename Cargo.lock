@@ -6525,6 +6525,7 @@ dependencies = [
  "russh",
  "sshkm-core",
  "sshkm-ssh",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "uniffi",

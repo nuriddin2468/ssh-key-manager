@@ -28,6 +28,8 @@ async-trait = "0.1.92"
 sshkm-core = { path = "../sshkm-core", default-features = false }
 # The phone's SSH client, on a runtime of the bridge's own (`ssh.rs`).
 sshkm-ssh = { path = "../sshkm-ssh" }
+# A test vault's scratch folder, in debug builds of the app (`test-vault`).
+tempfile = { version = "3.27.0", optional = true }
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["rt-multi-thread"] }
 # The bindings generator's runtime half. MPL-2.0, which deny.toml allows.
@@ -39,11 +41,17 @@ zeroize = "1.9.1"
 # already in the build through sshkm-ssh.
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 russh = { version = "0.65.2", default-features = false, features = ["ring", "rsa"] }
+tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["net", "rt-multi-thread"] }
 
 [features]
 # The `uniffi-bindgen` program: only the machine that builds the app runs it.
 bindgen = ["uniffi/cli", "uniffi/cargo-metadata"]
+# A made-up vault the debug build of the app can take instead of one from a
+# computer, until pairing exists (`PhoneVault::receive_test_vault`). Release
+# builds never turn it on, so neither the function nor its bindings exist
+# there.
+test-vault = ["dep:tempfile"]
 
 # The workspace lints, `forbid(unsafe_code)` included: UniFFI's scaffolding
 # is `unsafe`, but it comes from its macros, where rustc doesn't report the

@@ -1,20 +1,168 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="home_version">Versiya %1$s</string>
-    <string name="home_coming">Telefon ilovasi ishlab chiqilmoqda: keyin ombor va kompyuterlar bilan sinxronlash qoʻshiladi.</string>
+    <!-- Common -->
+    <string name="action_back">Orqaga</string>
+    <string name="action_cancel">Bekor qilish</string>
+    <string name="action_save">Saqlash</string>
+    <string name="action_lock">Qulflash</string>
+    <string name="action_more">Yana</string>
+    <string name="action_retry">Qayta urinish</string>
+    <string name="action_show">Koʻrsatish: %1$s</string>
+    <string name="action_hide">Yashirish: %1$s</string>
+    <string name="action_copy">Nusxalash: %1$s</string>
+    <string name="state_shown">Koʻrsatilgan</string>
+    <string name="state_hidden">Yashirilgan</string>
+    <plurals name="clipboard_clears">
+        <item quantity="one">%1$s nusxalandi. Bufer %2$d soniyadan keyin tozalanadi.</item>
+        <item quantity="other">%1$s nusxalandi. Bufer %2$d soniyadan keyin tozalanadi.</item>
+    </plurals>
+    <string name="copied">%1$s nusxalandi</string>
 
+    <!-- No vault yet -->
+    <string name="novault_title">Ombor kompyuteringizdan keladi</string>
+    <string name="novault_body">Bu telefon qurilmalaringizdan biriga aylanadi: kompyuterlaringizdagi umumiy omborni oladi, siz esa telefon uchun alohida asosiy parol qoʻyasiz.</string>
+    <string name="novault_soon">Bu telefonni kompyuterdagi SSH Key Manager orqali qoʻshasiz. Bu ilovaning keyingi versiyasida chiqadi.</string>
+    <string name="novault_debug_title">Sinov yigʻmasi</string>
+    <string name="novault_debug_body">Xuddi kompyuter yuborgandek, oʻylab topilgan omborni yuklash.</string>
+    <string name="novault_debug_action">Sinov omborini yuklash</string>
+
+    <!-- This phone's master password -->
+    <string name="setup_title">Bu telefon uchun asosiy parol qoʻying</string>
+    <string name="setup_body">Telefonda omborni ochish uchun uni kiritasiz. U kompyuterlardagi asosiy paroldan farq qilishi mumkin.</string>
+    <string name="field_master">Asosiy parol</string>
+    <string name="field_master_repeat">Asosiy parolni takrorlang</string>
+    <string name="setup_mismatch">Parollar mos kelmadi.</string>
+    <string name="setup_empty">Asosiy parolni kiriting.</string>
+    <string name="setup_weak">Topish oson. Yana bir-ikki soʻz qoʻshing.</string>
+    <string name="setup_action">Parolni qoʻyib ochish</string>
+
+    <!-- Unlock -->
+    <string name="unlock_title">Ombor qulflangan</string>
+    <string name="unlock_body">Ochish uchun asosiy parolni kiriting.</string>
+    <string name="unlock_action">Ochish</string>
+    <string name="unlock_fingerprint">Barmoq izi bilan ochish</string>
+    <string name="unlock_after_restart">Telefon qayta ishga tushdi. Asosiy parolni bir marta kiriting, keyin barmoq izi yana ishlaydi.</string>
+    <string name="unlock_weekly">Asosiy parolni oxirgi marta kiritganingizga bir hafta boʻldi. Uni bir marta kiriting, keyin barmoq izi yana ishlaydi.</string>
+    <string name="unlock_changed">Telefonga yangi barmoq izi qoʻshildi, shuning uchun barmoq izi bilan ochish oʻchdi. Asosiy parolni kiriting, keyin uni qayta yoqing.</string>
+    <string name="unlock_gone">Barmoq izi bilan ochish bu ombor uchun endi sozlanmagan. Asosiy parolni kiriting va uni Sozlamalarda qayta yoqing.</string>
+    <string name="error_wrong_master">Asosiy parol notoʻgʻri.</string>
+    <string name="error_too_many">Notoʻgʻri parollar juda koʻp. Bir necha soniya kuting va qayta urinib koʻring.</string>
+    <string name="error_fingerprint_lockout">Barmoq izi bilan urinishlar juda koʻp. Asosiy parolni kiriting.</string>
+    <string name="prompt_unlock_title">Omborni ochish</string>
+    <string name="prompt_unlock_cancel">Asosiy parolni kiritish</string>
+    <string name="prompt_enable_title">Barmoq izi bilan ochishni yoqish</string>
+    <string name="prompt_enable_subtitle">Barmoq izingiz bilan tasdiqlang.</string>
+
+    <!-- The vault can't be read -->
+    <string name="unreadable_title">Ombor ochilmayapti</string>
+    <string name="unreadable_body">Uning telefondagi fayllari shikastlangan yoki ilovaning yangiroq versiyasida yaratilgan. Ilovani yangilang va qayta urinib koʻring.</string>
+
+    <!-- Passwords list -->
+    <string name="logins_title">Parollar</string>
+    <string name="logins_search">Parollarni qidirish</string>
+    <string name="logins_search_hint">Nomi, foydalanuvchi yoki sayt</string>
+    <string name="logins_clear_search">Qidiruvni tozalash</string>
+    <string name="filter_all">Hammasi</string>
+    <string name="filter_otp">2FA</string>
+    <string name="filter_trash">Savat</string>
+    <string name="logins_add">Yozuv qoʻshish</string>
+    <string name="logins_empty_title">Hali parollar yoʻq</string>
+    <string name="logins_empty_body">Sayt loginini shu yerda qoʻshing. Kompyuterlardagi loginlar keyingi versiyada sinxronlash bilan keladi.</string>
+    <string name="logins_no_match">«%1$s» boʻyicha hech narsa topilmadi.</string>
+    <string name="logins_filter_empty">Bu yerda hali hech narsa yoʻq.</string>
+    <string name="trash_empty">Savat boʻsh.</string>
+    <string name="kind_host">Server paroli · %1$s</string>
+    <string name="kind_key">Kalitning parol iborasi</string>
+    <string name="otp_badge">2FA</string>
+    <string name="otp_badge_label">2FA kodi bor</string>
+    <string name="menu_generator">Parol generatori</string>
+    <string name="menu_settings">Sozlamalar</string>
+    <string name="offer_title">Barmoq izi bilan ochilsinmi?</string>
+    <string name="offer_body">Omborni asosiy parolni yozmasdan, bir teginish bilan oching.</string>
+    <string name="offer_body_again">Yangi barmoq izi qoʻshilganda barmoq izi bilan ochish oʻchdi. Qayta yoqilsinmi?</string>
+    <string name="offer_turn_on">Yoqish</string>
+    <string name="offer_not_now">Hozir emas</string>
+    <string name="fingerprint_on">Barmoq izi bilan ochish yoqildi.</string>
+
+    <!-- An entry -->
+    <string name="field_title">Nomi</string>
+    <string name="field_username">Foydalanuvchi nomi</string>
+    <string name="field_password">Parol</string>
+    <string name="field_website">Sayt</string>
+    <string name="field_notes">Izohlar</string>
+    <string name="field_otp">2FA kodi</string>
+    <string name="field_otp_secret">2FA maxfiy kaliti</string>
+    <string name="password_none">Parol saqlanmagan</string>
+    <plurals name="otp_changes_in">
+        <item quantity="one">Yangi kod %d soniyadan keyin</item>
+        <item quantity="other">Yangi kod %d soniyadan keyin</item>
+    </plurals>
+    <string name="otp_unreadable">Bu 2FA kodini telefonda koʻrsatib boʻlmaydi.</string>
+    <string name="detail_edit">Tahrirlash</string>
+    <string name="detail_trash">Savatga tashlash</string>
+    <string name="detail_restore">Tiklash</string>
+    <string name="detail_in_trash">Savatda</string>
+    <string name="detail_password_changed">Parol qoʻyilgan: %1$s</string>
+    <string name="trash_confirm_title">«%1$s» savatga tashlansinmi?</string>
+    <string name="trash_confirm_body">Uni savatdan tiklash mumkin.</string>
+    <string name="moved_to_trash">«%1$s» savatga tashlandi</string>
+    <string name="restored">«%1$s» tiklandi</string>
+    <string name="detail_gone">Bu yozuv endi yoʻq.</string>
+
+    <!-- New and edited entries -->
+    <string name="edit_new_title">Yangi yozuv</string>
+    <string name="edit_title">Yozuvni tahrirlash</string>
+    <string name="edit_title_hint">masalan, GitHub</string>
+    <string name="edit_new_password">Yangi parol</string>
+    <string name="edit_keep_password">Joriy parolni qoldirish uchun boʻsh qoldiring.</string>
+    <string name="edit_generate">Parol yaratish</string>
+    <string name="edit_otp_hint">Sayt koʻrsatgan otpauth:// havolasini yoki sozlash kalitini qoʻying.</string>
+    <string name="edit_otp_saved">2FA sozlangan</string>
+    <string name="edit_otp_replace">Almashtirish</string>
+    <string name="edit_otp_remove">Olib tashlash</string>
+    <string name="edit_otp_keep">Joriysini qoldirish</string>
+    <string name="edit_otp_removing">Saqlaganingizda 2FA maxfiy kaliti olib tashlanadi.</string>
+    <string name="edit_title_required">Nomini kiriting.</string>
+    <string name="edit_otp_invalid">Bu 2FA maxfiy kalitiga oʻxshamaydi. otpauth:// havolasini yoki sozlash kalitini qoʻying.</string>
+
+    <!-- Password generator -->
     <string name="generator_title">Parol generatori</string>
-    <string name="generator_empty">Hozircha parol yoʻq. Uni yarating: 20 ta belgi — harflar, raqamlar va maxsus belgilar.</string>
     <string name="generator_password">Yaratilgan parol</string>
-    <string name="generator_generate">Parol yaratish</string>
     <string name="generator_again">Boshqasini yaratish</string>
-    <string name="generator_strength">Mustahkamlik: %1$s</string>
-    <string name="strength_0">Juda zaif</string>
-    <string name="strength_1">Zaif</string>
+    <string name="generator_use">Shu parolni ishlatish</string>
+    <string name="generator_length">Uzunligi: %1$d</string>
+    <string name="generator_lowercase">Kichik harflar</string>
+    <string name="generator_uppercase">Bosh harflar</string>
+    <string name="generator_digits">Raqamlar</string>
+    <string name="generator_symbols">Belgilar</string>
+    <string name="generator_ambiguous">Oʻxshash belgilarsiz (I l 1 O 0 o)</string>
+    <string name="generator_strength">Mustahkamligi: %1$s</string>
+    <string name="strength_0">Juda kuchsiz</string>
+    <string name="strength_1">Kuchsiz</string>
     <string name="strength_2">Oʻrtacha</string>
     <string name="strength_3">Yaxshi</string>
     <string name="strength_4">Kuchli</string>
-
     <string name="error_settings">Bu sozlamalar bilan parol yaratib boʻlmaydi.</string>
-    <string name="error_other">Parol yaratib boʻlmadi. Qayta urinib koʻring.</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Sozlamalar</string>
+    <string name="settings_security">Xavfsizlik</string>
+    <string name="settings_lock_after">Qulflash vaqti</string>
+    <string name="settings_lock_after_body">Ilovadan shuncha vaqt foydalanmasangiz, u ochiq boʻladimi yoki yoʻqmi, ombor qulflanadi.</string>
+    <string name="lock_after_30s">30 soniya</string>
+    <string name="lock_after_1m">1 daqiqa</string>
+    <string name="lock_after_5m">5 daqiqa</string>
+    <string name="lock_after_15m">15 daqiqa</string>
+    <string name="settings_fingerprint">Barmoq izi bilan ochish</string>
+    <string name="settings_fingerprint_body">Telefon qayta ishga tushgandan keyin va haftada bir marta baribir asosiy parolni kiritasiz.</string>
+    <string name="settings_fingerprint_none">Avval telefon sozlamalarida barmoq izini qoʻshing.</string>
+    <string name="settings_fingerprint_unsupported">Bu telefonda ombor ishlata oladigan barmoq izi skaneri yoʻq.</string>
+    <string name="settings_lock_now">Hozir qulflash</string>
+    <string name="settings_about">Ilova haqida</string>
+    <string name="settings_version">Versiya %1$s</string>
+
+    <!-- Errors -->
+    <string name="error_conflict">Ombor shu orada oʻzgardi, shuning uchun bu saqlanmadi. Qayta urinib koʻring.</string>
+    <string name="error_storage">Telefon xotirasiga yozib boʻlmadi. Joy boʻshating va qayta urinib koʻring.</string>
+    <string name="error_other">Nimadir xato ketdi. Qayta urinib koʻring.</string>
 </resources>

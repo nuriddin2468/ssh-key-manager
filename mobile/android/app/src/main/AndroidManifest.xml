@@ -1,12 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  No permissions: each step of docs/mobile.md adds only what it needs.
+  Only the permissions a step of docs/mobile.md needs: USE_BIOMETRIC for the
+  fingerprint prompt of fingerprint unlock (step C), granted at install.
   No backup of app data: allowBackup="false" turns off backup and restore
   (Android 11 and older and adb), and the data extraction rules exclude
   everything from cloud backup and device-to-device transfer (Android 12+).
   Every window is FLAG_SECURE (SshkmApplication).
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <application
         android:name=".SshkmApplication"
@@ -28,6 +31,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Locks the vault and clears a copied secret when the app is in the
+             background by then (vault/Deadlines.kt). Only the system binds it. -->
+        <service
+            android:name=".vault.DeadlineJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
     </application>
 
 </manifest>

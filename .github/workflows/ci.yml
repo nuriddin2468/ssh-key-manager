@@ -130,6 +130,24 @@ jobs:
       - name: Lint, test and build the APK
         working-directory: mobile/android
         run: ./gradlew lint test assembleDebug
+      # Debug builds can load a made-up vault (the Rust feature `test-vault`
+      # and its Kotlin binding); a release build must have neither. One ABI
+      # is enough to tell.
+      - name: Build the release APK, without the test vault
+        working-directory: mobile/android
+        run: |
+          ./gradlew -PrustAbis=arm64-v8a assembleRelease
+          bindings=kotlin/dev/sshkeymanager/android/core/sshkm_mobile.kt
+          library=jniLibs/arm64-v8a/libsshkm_mobile.so
+          # The check finds it where it is...
+          grep -q receiveTestVault "app/build/rust/debug/$bindings"
+          grep -aq receive_test_vault "app/build/rust/debug/$library"
+          # ...and the release build doesn't have it.
+          if grep -q receiveTestVault "app/build/rust/release/$bindings" \
+            || grep -aq receive_test_vault "app/build/rust/release/$library"; then
+            echo "::error::The release build has the debug-only test vault."
+            exit 1
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: android-debug-apk

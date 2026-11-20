@@ -63,21 +63,88 @@ newer.
   screenshots on a phone come out black, as they should.
 - No backup of app data: `allowBackup="false"`, and data extraction rules
   that exclude every domain from cloud backup and device-to-device transfer.
-- No permissions. The merged manifest has only what AndroidX adds for
-  itself: androidx.core's signature-level
-  `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`, which the app defines and
-  only it holds.
-- The generated password is shown, never selectable: copying, with the
-  clipboard marked sensitive and cleared after a while, comes with the vault.
+  The vault lives in `noBackupFilesDir` besides.
+- One permission: `USE_BIOMETRIC`, for fingerprint unlock (granted at
+  install). The merged manifest also has androidx.core's signature-level
+  `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`, which only the app holds, and
+  a job service only the system may bind (`BIND_JOB_SERVICE`).
+- No autofill service sees the app's own fields
+  (`IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS`).
+
+## The vault on the phone
+
+The vault is `vault.kdbx`, `vault.keys` and `backups/` in
+`noBackupFilesDir/vault`, opened by the Rust core (`PhoneVault`, see
+`crates/sshkm-mobile`). The phone never makes a vault of its own: it gets the
+one its computers share (pairing, step E) and the user sets a master
+password for the phone. Until step E the first screen says so; **debug
+builds** add "Load a test vault", which makes a vault in the core (the
+`test-vault` Cargo feature, which only the debug variant turns on) and
+receives it as if a computer had sent it. Release builds have neither the
+button (`src/release/.../DebugTools.kt`) nor the function.
+
+- **Fingerprint unlock** is a device key slot of the vault, as Touch ID on a
+  Mac. The slot's random key is wrapped by an AES-256-GCM key in Android
+  Keystore (StrongBox when the phone has it) that works once per strong
+  biometric authentication, only while the phone is unlocked, and that
+  Keystore invalidates when a fingerprint is added. The phone's PIN doesn't
+  release it: the master password is the other way in. When it is
+  invalidated (or its key or slot is gone), the app says so, removes the
+  slot once the master password opened the vault, and offers to turn it on
+  again. Any other failure is an error, and fingerprint unlock stays on.
+- **The master password stays required** after the phone restarts and once
+  a week, even with fingerprint unlock on; fingerprint unlock itself checks
+  this, and the lock screen says it again when the app comes back.
+- **Locking**: after one setting's time without use (30 s, 1 min by
+  default, 5 or 15 min), counted whether the app is on screen or not, and on
+  demand. Touches, keys, typing and touches in dialogs, sheets and menus
+  count as use. In the background a JobScheduler job does it, since Android
+  freezes the app's own timers. Locking drops the open vault in the core.
+- **One thread for the core's vault**: every call into it runs on one
+  background thread, in order; the main thread never waits for an unlock or
+  a save to finish.
+- **Copying** a password or a code marks the clip sensitive
+  (`EXTRA_IS_SENSITIVE`) and clears it after 30 seconds, unless something
+  else was copied meanwhile (while the app can still tell).
+- **The keyboard** learns nothing anywhere in the app
+  (`IME_FLAG_NO_PERSONALIZED_LEARNING`); secret fields also get a password
+  keyboard without suggestions or autocorrect, and accessibility services
+  read dots from them, as from Android's own password fields.
+- **Secrets cross the bridge one at a time**: a password when the user shows
+  or copies it, a 2FA code while it is on screen. View models hold them only
+  while shown; a shown password hides itself after 30 seconds, and every
+  screen of the open vault, with its view models, goes when the vault locks.
+  Those times run on the clock that counts the phone's sleep, and are
+  checked as the screen comes back. App classes holding a secret print
+  without it.
+
+## Testing
+
+CI also builds the release APK and checks that it has no test vault.
+
+`./gradlew test` runs the view models and the session over fakes of the
+core, Keystore and the fingerprint prompt. `connectedDebugAndroidTest` runs
+the real core on the device (the test vault, unlock, lock, a login's round
+trip), the UI end to end, and the keyboard, accessibility, clipboard and lock
+job checks. The Keystore key test runs only on a device with a screen lock
+and a fingerprint; on an emulator set them up with
+`adb shell locksettings set-pin 1234`, Settings → Security → Fingerprint, and
+`adb emu finger touch 1`, which also stands in for the finger in the prompt.
 
 ## Layout
 
 ```
 app/src/main/kotlin/dev/sshkeymanager/android/
-  SshkmApplication.kt   FLAG_SECURE on every activity
+  SshkmApplication.kt   FLAG_SECURE on every activity; tells the vault when the app comes and goes
+  AppGraph.kt           the long-lived parts: the core's vault, the session, the clipboard
   MainActivity.kt
-  home/                 the first screen and its view model
-  ui/theme/             the desktop app's tokens as Material 3 colour schemes
+  vault/                the session (unlock, lock, auto-lock, deadlines), the bridge, preferences
+  biometric/            Keystore key, the fingerprint prompt, fingerprint unlock
+  clipboard/            copying secrets
+  setup/ unlock/ logins/ generator/ settings/   screens and their view models
+  ui/                   the app's root and back stack, shared components, theme
+app/src/debug/          the test vault (debug builds only)
+app/src/release/        the same entry point, empty
 app/src/main/res/
   values/ values-ru/ values-uz/   strings
   xml/data_extraction_rules.xml

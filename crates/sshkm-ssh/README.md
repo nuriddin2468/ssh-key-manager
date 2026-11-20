@@ -91,8 +91,9 @@ ABI.
 ## Shell
 
 `Connection::open_shell` asks for a terminal (`TERM=xterm-256color`, the
-size, backspace as DEL, UTF-8) and a shell, within 30 seconds and keeping at
-most 1 MiB of output until the server answers. `Shell` gives output as events
+size, backspace as DEL, UTF-8) and a shell, waiting for each answer as long as
+the host's `ConnectTimeout` (30 seconds without one) and keeping at most 1 MiB
+of output until the server answers. `Shell` gives output as events
 (`next_event`) and takes input, a new size and keepalives; reading and writing
 run at once.
 

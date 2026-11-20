@@ -47,8 +47,24 @@ pub struct Spec {
     pub key_then_code: bool,
     /// It opens `direct-tcpip` channels (a jump host).
     pub forwards: bool,
-    /// Keyboard-interactive asks `Password:` again after every answer.
-    pub endless: bool,
+    /// Keyboard-interactive asks this again after every answer; empty
+    /// answers fail the attempt, as PAM does, unless `stubborn`.
+    pub endless: Option<&'static str>,
+    /// Asks again even after empty answers.
+    pub stubborn: bool,
+    /// How it answers the terminal request.
+    pub pty: PtyReply,
+}
+
+/// How a test server answers the terminal request.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PtyReply {
+    #[default]
+    Yes,
+    /// Sends 2 MiB of output first.
+    AfterAFlood,
+    /// Never answers.
+    Never,
 }
 
 /// What a test server saw.
@@ -62,6 +78,7 @@ pub struct Log {
     pub closed: bool,
     pub forwards: Vec<(String, u32)>,
     pub rounds: usize,
+    pub empty_answers: usize,
     /// Sessions that have ended, however they ended.
     pub ended: usize,
 }
@@ -86,7 +103,7 @@ impl TestServer {
         if spec.key.is_some() {
             methods.push(MethodKind::PublicKey);
         }
-        if spec.interactive || spec.key_then_code || spec.endless {
+        if spec.interactive || spec.key_then_code || spec.endless.is_some() {
             methods.push(MethodKind::KeyboardInteractive);
         }
         if spec.password {
@@ -225,12 +242,30 @@ impl server::Handler for Handler {
         response: Option<Response<'a>>,
     ) -> Result<Auth, Self::Error> {
         let code_only = self.spec.key_then_code;
-        if self.spec.endless {
-            self.log.lock().unwrap().rounds += 1;
+        if let Some(prompt) = self.spec.endless {
+            let answers: Option<Vec<_>> = response.map(Iterator::collect);
+            let empty = answers
+                .as_ref()
+                .is_some_and(|answers| answers.iter().all(|a| a.is_empty()));
+            let mut log = self.log.lock().unwrap();
+            if empty {
+                log.empty_answers += 1;
+                if !self.spec.stubborn {
+                    let mut methods = vec![MethodKind::KeyboardInteractive];
+                    if self.spec.password {
+                        methods.push(MethodKind::Password);
+                    }
+                    return Ok(Auth::Reject {
+                        proceed_with_methods: Some(MethodSet::from(methods.as_slice())),
+                        partial_success: false,
+                    });
+                }
+            }
+            log.rounds += 1;
             return Ok(Auth::Partial {
                 name: "".into(),
                 instructions: "".into(),
-                prompts: vec![("Password: ".into(), false)].into(),
+                prompts: vec![(prompt.into(), false)].into(),
             });
         }
         if user != self.spec.user || !(self.spec.interactive || (code_only && self.key_done)) {
@@ -326,7 +361,16 @@ impl server::Handler for Handler {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         self.log.lock().unwrap().pty = Some((term.to_owned(), cols, rows));
-        session.channel_success(channel)
+        match self.spec.pty {
+            PtyReply::Yes => session.channel_success(channel),
+            PtyReply::AfterAFlood => {
+                for _ in 0..64 {
+                    session.data(channel, vec![b'x'; 32 * 1024])?;
+                }
+                session.channel_success(channel)
+            }
+            PtyReply::Never => Ok(()),
+        }
     }
 
     async fn shell_request(

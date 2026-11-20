@@ -351,10 +351,12 @@ async fn the_app_isnt_asked_to_sign_for_a_key_the_server_refuses() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_server_that_keeps_asking_gets_three_answers() {
+    // It asks again even after empty answers: given up on, not hung.
     let server = TestServer::start(Spec {
         seed: 19,
         user: "bob".into(),
-        endless: true,
+        endless: Some("Password: "),
+        stubborn: true,
         ..Spec::default()
     })
     .await;
@@ -377,7 +379,127 @@ async fn a_server_that_keeps_asking_gets_three_answers() {
         .map(|p| p.attempt)
         .collect();
     assert_eq!(attempts, [1, 2, 3]);
-    assert_eq!(server.log.lock().unwrap().rounds, 3 + 1);
+    let log = server.log.lock().unwrap();
+    // The first question, three answers, then two empty answers.
+    assert_eq!(log.rounds, 1 + 3 + 2);
+    assert_eq!(log.empty_answers, 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn after_three_codes_the_password_method_still_gets_through() {
+    // keyboard-interactive asks for a code every round; the client stops
+    // after three, leaves the exchange with an empty answer, and the
+    // password method that follows reaches the server.
+    let server = TestServer::start(Spec {
+        seed: 21,
+        user: "bob".into(),
+        endless: Some("Verification code: "),
+        password: true,
+        ..Spec::default()
+    })
+    .await;
+    let app = Arc::new(App::new().answering(&[&[CODE], &[CODE], &[CODE], &[PASSWORD]]));
+    connect(
+        &host_block("db", server.port, "bob"),
+        &server.known_line(),
+        "db",
+        ConnectOptions::default(),
+        &app,
+    )
+    .await
+    .unwrap();
+    let asked: Vec<(AuthMethod, ServerPrompt, u32)> = app
+        .asked
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|p| (p.method, p.prompts[0].kind, p.attempt))
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            (
+                AuthMethod::KeyboardInteractive,
+                ServerPrompt::OneTimeCode,
+                1
+            ),
+            (
+                AuthMethod::KeyboardInteractive,
+                ServerPrompt::OneTimeCode,
+                2
+            ),
+            (
+                AuthMethod::KeyboardInteractive,
+                ServerPrompt::OneTimeCode,
+                3
+            ),
+            (AuthMethod::Password, ServerPrompt::Password, 1),
+        ]
+    );
+    let log = server.log.lock().unwrap();
+    assert_eq!(log.empty_answers, 1);
+    assert_eq!(log.signed_in, ["password"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_flood_before_the_terminal_is_answered_is_refused() {
+    let server = TestServer::start(Spec {
+        pty: common::PtyReply::AfterAFlood,
+        ..key_server(22)
+    })
+    .await;
+    let app = Arc::new(App::new().with_signer());
+    let connection = connect(
+        &host_block("web", server.port, "alice"),
+        &server.known_line(),
+        "web",
+        with_key(),
+        &app,
+    )
+    .await
+    .unwrap();
+    // 2 MiB before the answer: more than the client keeps.
+    let error = tokio::time::timeout(
+        Duration::from_secs(10),
+        connection.open_shell(PtySize { cols: 80, rows: 24 }),
+    )
+    .await
+    .expect("neither opened nor failed")
+    .unwrap_err();
+    assert!(
+        matches!(&error, Error::ShellRefused { alias } if alias == "web"),
+        "{error:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_terminal_request_left_unanswered_times_out() {
+    let server = TestServer::start(Spec {
+        pty: common::PtyReply::Never,
+        ..key_server(23)
+    })
+    .await;
+    let app = Arc::new(App::new().with_signer());
+    let config = format!(
+        "{}  ConnectTimeout 1\n",
+        host_block("web", server.port, "alice")
+    );
+    let connection = connect(&config, &server.known_line(), "web", with_key(), &app)
+        .await
+        .unwrap();
+    let started = std::time::Instant::now();
+    let error = tokio::time::timeout(
+        Duration::from_secs(10),
+        connection.open_shell(PtySize { cols: 80, rows: 24 }),
+    )
+    .await
+    .expect("neither opened nor failed")
+    .unwrap_err();
+    assert!(
+        matches!(&error, Error::TimedOut { alias, .. } if alias == "web"),
+        "{error:?}"
+    );
+    assert!(started.elapsed() >= Duration::from_secs(1));
 }
 
 #[tokio::test(flavor = "multi_thread")]

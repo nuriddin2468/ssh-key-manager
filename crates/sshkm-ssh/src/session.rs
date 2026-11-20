@@ -23,7 +23,8 @@ use crate::error::Error;
 /// The terminal type the phone's terminal emulates.
 pub const TERM: &str = "xterm-256color";
 
-/// How long the server may take to answer the terminal and shell requests.
+/// How long the server may take to answer the terminal and shell requests,
+/// when the host's settings have no `ConnectTimeout`.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 /// Output kept while waiting for those answers, at most.
 const PENDING_BYTES: usize = 1 << 20;
@@ -104,8 +105,9 @@ impl Shell {
             closed: false,
         };
         let destination = connection.destination();
+        let timeout = destination.connect_timeout.unwrap_or(REPLY_TIMEOUT);
         let answered = async |reader: &mut Reader| match tokio::time::timeout(
-            REPLY_TIMEOUT,
+            timeout,
             reader.wait_for_reply(),
         )
         .await

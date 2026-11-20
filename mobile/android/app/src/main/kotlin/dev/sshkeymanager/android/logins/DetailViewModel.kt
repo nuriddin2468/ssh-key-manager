@@ -11,8 +11,11 @@ import dev.sshkeymanager.android.ui.Notice
 import dev.sshkeymanager.android.ui.coreCode
 import dev.sshkeymanager.android.ui.messageFor
 import dev.sshkeymanager.android.vault.VaultSession
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -72,17 +75,44 @@ class DetailViewModel(
     /** When the password was shown. */
     private var shownAt: Long? = null
 
-    /** The 2FA code can't be had (an unreadable secret, a locked vault): not asked again. */
-    private var otpStopped = false
+    /** Reading the password to show it; a hide before it arrives cancels it. */
+    private var showing: Job? = null
+
+    /**
+     * The entry's 2FA secret can't make codes: not asked again until the
+     * entry changes (an edit may fix it).
+     */
+    private var otpUnreadable = false
+
+    /** After a failure that may pass (the vault busy or a file unreadable for a moment): when to ask again. */
+    private var otpRetryAt: Long? = null
 
     init {
         viewModelScope.launch { session.changes.collect { load() } }
     }
 
+    /**
+     * Reads the entry, at first and after every change saved. When the entry
+     * itself changed (an edit may have replaced or fixed its 2FA secret), its
+     * code is asked for afresh.
+     */
     private suspend fun load() {
         try {
             val detail = session.read { login(id) }
-            state.update { it.copy(detail = detail, gone = false, error = null) }
+            val changed = detail != state.value.detail
+            if (changed) {
+                otpUnreadable = false
+                otpRetryAt = null
+            }
+            state.update {
+                it.copy(
+                    detail = detail,
+                    otp = if (changed) null else it.otp,
+                    otpUnreadable = otpUnreadable,
+                    gone = false,
+                    error = null,
+                )
+            }
         } catch (failure: Exception) {
             if (failure.coreCode == ErrorCode.NOT_FOUND) {
                 state.update { DetailState(gone = true) }
@@ -92,24 +122,34 @@ class DetailViewModel(
         }
     }
 
-    /** Shows the password, or hides it again. */
+    /**
+     * Shows the password, or hides it again. A hide wins over a show still
+     * on its way (the core's thread may be busy with a save): the password
+     * read for it is dropped.
+     */
     fun togglePassword() {
-        if (state.value.shownPassword != null) {
+        if (showing?.isActive == true || state.value.shownPassword != null) {
             hidePassword()
             return
         }
-        viewModelScope.launch {
-            try {
-                val password = session.read { password(id) }
-                shownAt = now()
-                state.update { it.copy(shownPassword = password) }
-            } catch (failure: Exception) {
-                state.update { it.copy(error = messageFor(failure)) }
+        showing =
+            viewModelScope.launch {
+                try {
+                    val password = session.read { password(id) }
+                    ensureActive()
+                    shownAt = now()
+                    state.update { it.copy(shownPassword = password) }
+                } catch (failure: CancellationException) {
+                    throw failure
+                } catch (failure: Exception) {
+                    state.update { it.copy(error = messageFor(failure)) }
+                }
             }
-        }
     }
 
     private fun hidePassword() {
+        showing?.cancel()
+        showing = null
         shownAt = null
         state.update { it.copy(shownPassword = null) }
     }
@@ -154,14 +194,21 @@ class DetailViewModel(
     suspend fun refresh() {
         shownAt?.let { if (now() - it >= SHOWN_MILLIS) hidePassword() }
         val hasOtp = state.value.detail?.login?.hasOtp == true
-        if (!hasOtp || otpStopped) return
+        if (!hasOtp || otpUnreadable) return
+        if (otpRetryAt?.let { now() < it } == true) return
         val otp = state.value.otp
         if (otp == null || otp.expired(now())) {
             try {
                 fetchOtp()
+                otpRetryAt = null
+            } catch (failure: CancellationException) {
+                throw failure
             } catch (failure: Exception) {
-                otpStopped = true
-                state.update { it.copy(otp = null, otpUnreadable = failure.coreCode == ErrorCode.PARSE) }
+                // An unreadable secret stays so until the entry changes;
+                // anything else is asked again a little later.
+                otpUnreadable = failure.coreCode == ErrorCode.PARSE
+                otpRetryAt = if (otpUnreadable) null else now() + OTP_RETRY_MILLIS
+                state.update { it.copy(otp = null, otpUnreadable = otpUnreadable) }
             }
         }
     }
@@ -216,6 +263,7 @@ class DetailViewModel(
     }
 
     override fun onCleared() {
+        showing?.cancel()
         shownAt = null
         state.value = DetailState()
     }
@@ -229,5 +277,8 @@ class DetailViewModel(
 
         /** How often the screen is brought up to date. */
         const val TICK_MILLIS = 1_000L
+
+        /** How long after a failure that may pass the 2FA code is asked for again. */
+        const val OTP_RETRY_MILLIS = 5_000L
     }
 }

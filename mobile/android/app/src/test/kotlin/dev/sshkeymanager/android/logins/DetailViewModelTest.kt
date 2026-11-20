@@ -1,7 +1,7 @@
 package dev.sshkeymanager.android.logins
 
-import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import dev.sshkeymanager.android.FakeClipboard
@@ -9,6 +9,8 @@ import dev.sshkeymanager.android.FakeVault
 import dev.sshkeymanager.android.MainDispatcherRule
 import dev.sshkeymanager.android.SessionFixture
 import dev.sshkeymanager.android.clipboard.Clipboard
+import dev.sshkeymanager.android.core.ErrorCode
+import dev.sshkeymanager.android.core.LoginInput
 import dev.sshkeymanager.android.core.VaultStatus
 import dev.sshkeymanager.android.ui.Notice
 import kotlinx.coroutines.CoroutineScope
@@ -16,9 +18,13 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -128,6 +134,58 @@ class DetailViewModelTest {
             fixture.vault.otps["1"] = "JBSWY3DPEHPK3PXP"
             model.refresh()
             assertEquals(0, fixture.vault.otpCalls)
+        }
+
+    @Test
+    fun `a 2FA secret fixed in an edit is asked for again`() =
+        runTest(main.dispatcher) {
+            fixture.vault.otps["1"] = "unreadable"
+            val model = model()
+            model.refresh()
+            assertTrue(model.uiState.value.otpUnreadable)
+
+            fixture.session.change { updateLogin("1", LoginInput(title = "GitHub", username = "octo", otp = "JBSWY3DPEHPK3PXP")) }
+            assertFalse(model.uiState.value.otpUnreadable)
+            model.refresh()
+            assertEquals("000001", model.uiState.value.otp?.code)
+        }
+
+    @Test
+    fun `a failure that may pass is asked again a little later`() =
+        runTest(main.dispatcher) {
+            fixture.vault.otpFailure = ErrorCode.IO
+            val model = model()
+            model.refresh()
+            assertNull(model.uiState.value.otp)
+            assertFalse("not unreadable", model.uiState.value.otpUnreadable)
+
+            fixture.vault.otpFailure = null
+            now += DetailViewModel.OTP_RETRY_MILLIS - 1
+            model.refresh()
+            assertEquals("not yet", 0, fixture.vault.otpCalls)
+            now += 1
+            model.refresh()
+            assertEquals("000001", model.uiState.value.otp?.code)
+        }
+
+    @Test
+    fun `a hide wins over a show still on its way`() =
+        runTest(main.dispatcher) {
+            // The core's thread is busy (a save): calls wait until it runs.
+            val busy = StandardTestDispatcher(testScheduler)
+            val slow = SessionFixture(busy, CoroutineScope(SupervisorJob()), VaultStatus.UNLOCKED)
+            slow.vault.put(FakeVault.login("1", "GitHub", "octo"), password = "hunter2")
+            val model = DetailViewModel("1", slow.session, slow.clipboard, { now })
+            runCurrent()
+            model.togglePassword()
+            model.togglePassword()
+            advanceUntilIdle()
+            assertNull(model.uiState.value.shownPassword)
+
+            // And a show that arrives does show.
+            model.togglePassword()
+            advanceUntilIdle()
+            assertEquals("hunter2", model.uiState.value.shownPassword)
         }
 
     @Test

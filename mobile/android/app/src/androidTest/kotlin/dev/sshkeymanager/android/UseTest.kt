@@ -17,6 +17,7 @@ import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.sshkeymanager.android.ui.components.NoKeyboardLearning
 import dev.sshkeymanager.android.ui.components.countsAsUse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -54,6 +55,37 @@ class UseTest {
             connection!!.deleteSurroundingText(1, 0)
         }
         assertTrue("$uses uses", uses >= before + 3)
+    }
+
+    @Test
+    fun whatTheKeyboardTypesReachesTheField() {
+        val state = TextFieldState()
+        compose.setContent {
+            NoKeyboardLearning(onInput = {}) {
+                BasicTextField(state, Modifier.testTag("field"))
+            }
+        }
+        compose.onNodeWithTag("field").performClick()
+        compose.waitForIdle()
+        var connection: InputConnection? = null
+        compose.runOnUiThread {
+            connection = compose.activity.window.decorView.findFocus()?.onCreateInputConnection(EditorInfo())
+        }
+        assertNotNull("no text input", connection)
+        fun type(edit: InputConnection.() -> Unit): String {
+            compose.runOnUiThread { connection!!.edit() }
+            compose.waitForIdle()
+            return state.text.toString()
+        }
+        assertEquals("hunter", type { commitText("hunter", 1) })
+        assertEquals(
+            "hunter2",
+            type {
+                setComposingText("2", 1)
+                finishComposingText()
+            },
+        )
+        assertEquals("hunter", type { deleteSurroundingText(1, 0) })
     }
 
     @Test

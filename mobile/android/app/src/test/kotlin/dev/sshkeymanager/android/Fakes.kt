@@ -60,6 +60,10 @@ class FakeVault(var status: VaultStatus = VaultStatus.LOCKED) : VaultBridge {
     /** Set to make unlocking with a device key fail this way, e.g. an unreadable key slots file. */
     var deviceFailure: ErrorCode? = null
 
+    /** Set to make 2FA codes fail this way for now, e.g. a file read failing. */
+    var otpFailure: ErrorCode? = null
+    private var revision = 0
+
     private fun open() {
         if (status != VaultStatus.UNLOCKED) throw failed(ErrorCode.VAULT_LOCKED)
     }
@@ -132,6 +136,7 @@ class FakeVault(var status: VaultStatus = VaultStatus.LOCKED) : VaultBridge {
         open()
         val secret = otps[id] ?: throw failed(ErrorCode.NOT_FOUND)
         if (secret == "unreadable") throw failed(ErrorCode.PARSE)
+        otpFailure?.let { throw failed(it) }
         otpCalls++
         // A new code for each call, so a test can tell a fetch from none.
         return OtpCode("%06d".format(otpCalls), 20u)
@@ -164,6 +169,8 @@ class FakeVault(var status: VaultStatus = VaultStatus.LOCKED) : VaultBridge {
                 hasPassword = !passwords[id].isNullOrEmpty(),
                 hasOtp = id in otps,
                 inTrash = current?.inTrash ?: false,
+                // As the core's last-modified time: an edit changes the entry.
+                modified = "revision ${++revision}",
             )
     }
 

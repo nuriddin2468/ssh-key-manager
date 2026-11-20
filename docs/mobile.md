@@ -108,6 +108,8 @@ Done in [#78](https://github.com/nuriddin2468/ssh-key-manager/pull/78).
 
 ### C. The vault on the phone
 
+Done in [#81](https://github.com/nuriddin2468/ssh-key-manager/pull/81).
+
 Opening a vault the phone has (it gets one in E; until then a test vault), unlocking with
 the master password and with the fingerprint (a key slot whose key lives in Keystore,
 invalidated when a new fingerprint is enrolled), lock after a timeout and when the app

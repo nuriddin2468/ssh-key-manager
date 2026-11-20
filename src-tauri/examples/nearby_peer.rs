@@ -34,13 +34,13 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
-use sshkm_app_lib::nearby::pairing::{
-    PairingFailure, PairingPhase, Purpose, Side, Stored, VaultItems, conversation,
-};
-use sshkm_app_lib::nearby::sync::{SyncLocal, SyncState, SyncWrite};
 use sshkm_app_lib::nearby::{BASE_LABEL, OWN_SERVICE_TYPE, SERVICE_TYPE, VAULT_BASE_LABEL};
 use sshkm_core::config::SshConfig;
 use sshkm_core::known_hosts::KnownHosts;
+use sshkm_core::p2p::conversation::{
+    Device, PairingFailure, PairingPhase, Purpose, Stored, SyncLocal, SyncState, SyncStore,
+    SyncWrite, User, VaultItems, conversation,
+};
 use sshkm_core::p2p::own::window;
 use sshkm_core::p2p::protocol::{
     EntrySync, HostKey, HostsEntry, Intent, Item, ItemSummary, SecretText, VaultState,
@@ -90,27 +90,7 @@ impl Terminal {
     }
 }
 
-impl Side for Terminal {
-    fn name(&self) -> String {
-        self.name.clone()
-    }
-
-    fn knows(&self, peer: PeerKey) -> Result<Option<String>, PairingFailure> {
-        Ok(self
-            .with_vault(|vault| {
-                vault
-                    .is_own_device(&peer)
-                    .then(|| vault.known_name(&peer))
-                    .flatten()
-            })
-            .flatten())
-    }
-
-    fn save(&self, peer: PeerKey, name: &str) -> Result<(), PairingFailure> {
-        println!("Paired with {name} ({peer}).");
-        Ok(())
-    }
-
+impl User for Terminal {
     fn show(&self, peer: Option<&str>, phase: &PairingPhase) {
         let peer = peer.unwrap_or("the app");
         match phase {
@@ -141,6 +121,34 @@ impl Side for Terminal {
             .read_line(&mut line)
             .map_err(|_| PairingFailure::Cancelled)?;
         Ok(Some(line.trim().eq_ignore_ascii_case("y")))
+    }
+
+    /// The app asks in a system dialog; here, the sample was chosen with
+    /// `--send` when the example started.
+    fn allow_send(&self, _item: &Item, _left_out: &[String]) -> bool {
+        true
+    }
+}
+
+impl Device for Terminal {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    fn knows(&self, peer: PeerKey) -> Result<Option<String>, PairingFailure> {
+        Ok(self
+            .with_vault(|vault| {
+                vault
+                    .is_own_device(&peer)
+                    .then(|| vault.known_name(&peer))
+                    .flatten()
+            })
+            .flatten())
+    }
+
+    fn save(&self, peer: PeerKey, name: &str) -> Result<(), PairingFailure> {
+        println!("Paired with {name} ({peer}).");
+        Ok(())
     }
 
     fn store(&self, item: &Item) -> Result<Stored, PairingFailure> {
@@ -244,12 +252,6 @@ impl Side for Terminal {
             .unwrap_or(false)
     }
 
-    /// The app asks in a system dialog; here, the sample was chosen with
-    /// `--send` when the example started.
-    fn allow_send(&self, _item: &Item, _left_out: &[String]) -> bool {
-        true
-    }
-
     fn takes(&self, intent: Option<Intent>) -> Result<(), PairingFailure> {
         match (&self.mode, intent) {
             (Mode::Join(_), Some(Intent::AddDevice)) | (Mode::Own { .. }, Some(Intent::Sync)) => {
@@ -308,6 +310,14 @@ impl Side for Terminal {
         Ok(())
     }
 
+    fn entry_sync(&self) -> Option<EntrySync> {
+        self.with_vault(|_| EntrySync::On {
+            version: ENTRY_SYNC_VERSION,
+        })
+    }
+}
+
+impl SyncStore for Terminal {
     fn sync_load(&self, peer: PeerKey) -> Result<SyncLocal, PairingFailure> {
         let (config, known) = self.files().ok_or(PairingFailure::NotOwn)?;
         let state_file = self.dir().ok_or(PairingFailure::NotOwn)?.join(format!(
@@ -366,12 +376,6 @@ impl Side for Terminal {
         ));
         let json = serde_json::to_vec_pretty(state).map_err(|_| PairingFailure::NotSaved)?;
         std::fs::write(file, json).map_err(|_| PairingFailure::NotSaved)
-    }
-
-    fn entry_sync(&self) -> Option<EntrySync> {
-        self.with_vault(|_| EntrySync::On {
-            version: ENTRY_SYNC_VERSION,
-        })
     }
 
     fn vault_copy(&self) -> Result<Zeroizing<Vec<u8>>, PairingFailure> {

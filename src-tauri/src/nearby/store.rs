@@ -11,13 +11,13 @@ use std::path::{Path, PathBuf};
 
 use sshkm_core::fsutil;
 use sshkm_core::p2p::PeerKey;
+use sshkm_core::p2p::conversation::SyncState;
 
 use serde::{Deserialize, Serialize};
 use sshkm_core::vault::OwnDevice;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::sync::SyncState;
 use crate::error::AppResult;
 
 const DIR: &str = "sync";
@@ -200,7 +200,7 @@ mod tests {
         let unasked = file(dir.path(), UNASKED);
         let at_limit = |state: &SyncState| {
             state.unasked.iter().map(|(_, n)| *n).sum::<u32>()
-                == u32::try_from(super::super::sync::MASS_DELETE).unwrap()
+                == u32::try_from(sshkm_core::p2p::conversation::MASS_DELETE).unwrap()
         };
         for bad in [b"[[1".to_vec(), vec![b' '; 65 * 1024]] {
             std::fs::write(&unasked, bad).unwrap();

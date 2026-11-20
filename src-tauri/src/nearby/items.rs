@@ -28,6 +28,7 @@ use sshkm_core::config::{HostEdit, HostEntry, HostKind, HostOption, Risk, SshCon
 use sshkm_core::hosts_file::{HostsChange, HostsEntryEdit, HostsFile, is_system_name};
 use sshkm_core::keys;
 use sshkm_core::known_hosts::{KnownHosts, fingerprint};
+use sshkm_core::p2p::conversation::{PairingFailure, Stored};
 use sshkm_core::p2p::protocol::{EnvVariable, HostKey, HostsEntry, Item, ItemSummary, Server};
 use sshkm_core::paths::{SshPaths, expand_tilde_in};
 use sshkm_core::sync::host_keys::trusted_in;
@@ -35,7 +36,6 @@ use sshkm_core::vault::{EntryInput, EntryKind, SecretField, envs};
 use sshkm_core::{ErrorCode, ExposeSecret, SecretString, fsutil};
 use tauri::AppHandle;
 
-use super::pairing::{PairingFailure, Stored};
 use super::{Nearby, prompt};
 use crate::commands::keys::find_key;
 use crate::confirm;

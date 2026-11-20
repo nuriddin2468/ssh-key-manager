@@ -1,33 +1,35 @@
-//! A scripted [`Side`] and two sides talking over loopback, for the tests of
-//! [`pairing`](super::pairing), [`transfer`](super::transfer),
-//! [`own`](super::own) and [`sync`](super::sync).
+//! A scripted [`Side`](super::Side) and two sides talking over an
+//! in-memory [`pipe`], for the tests of [`conversation`](super),
+//! [`transfer`](super::transfer), [`own`](super::own) and
+//! [`sync`](super::sync).
 
 use std::collections::VecDeque;
-use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use secrecy::ExposeSecret;
 use sha2::{Digest, Sha256};
-use sshkm_core::config::SshConfig;
-use sshkm_core::known_hosts::KnownHosts;
-use sshkm_core::p2p::own::OwnKey;
-use sshkm_core::p2p::protocol::{EntrySync, Intent, Item, ItemSummary, SecretText, VaultState};
-use sshkm_core::p2p::{Identity, PeerKey, accept, accept_own, connect, connect_own};
-use sshkm_core::sync::Hasher;
-use sshkm_core::vault::projects::ProjectRecord;
-use sshkm_core::vault::sync::{
-    Pairs, PeerVault, VaultApplied, VaultBase, VaultChoices, VaultPlan, digests,
-};
-use sshkm_core::vault::{ContactRecord, DeviceRecord};
 use zeroize::Zeroizing;
 
-use super::pairing::{
-    PairingFailure, PairingPhase, Purpose, Side, Stored, VaultItems, conversation,
-    conversation_after,
-};
 use super::sync::{RiskyChange, RiskyVariables, SyncDecisions, SyncLocal, SyncState, SyncWrite};
+use super::{
+    Device, PairingFailure, PairingPhase, Purpose, Stored, SyncStore, User, VaultItems,
+    conversation, conversation_after,
+};
+use crate::config::SshConfig;
+use crate::known_hosts::KnownHosts;
+use crate::p2p::connection::{Connection, pipe};
+use crate::p2p::own::OwnKey;
+use crate::p2p::protocol::{EntrySync, Intent, Item, ItemSummary, SecretText, VaultState};
+use crate::p2p::{Identity, PeerKey, accept, accept_own, connect, connect_own};
+use crate::sync::Hasher;
+use crate::vault::projects::ProjectRecord;
+use crate::vault::sync::{
+    Pairs, PeerVault, VaultApplied, VaultBase, VaultChoices, VaultPlan, digests,
+};
+use crate::vault::{ContactRecord, DeviceRecord};
 
 /// The vault a script has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,7 +44,7 @@ pub enum Vault {
     Open(&'static str),
 }
 
-/// The file a script gives a new device.
+/// The file a script without a real vault gives a new device.
 pub const VAULT_FILE: &[u8] = b"the vault file";
 
 /// A side whose user gives `answers` in turn (`None`: cancels), each after
@@ -116,7 +118,7 @@ pub struct Script {
     /// What its `Hello` says about syncing the vault's entries.
     pub entries: Option<EntrySync>,
     /// A real vault whose entries sync, with its backups' folder.
-    pub real: Option<(Mutex<sshkm_core::vault::Vault>, PathBuf)>,
+    pub real: Option<(Mutex<crate::vault::Vault>, PathBuf)>,
     /// The other side's copy during a sync.
     pub peer_vault: Mutex<Option<PeerVault>>,
     /// This user allows variables that load code in the system dialog.
@@ -185,7 +187,7 @@ impl Script {
     pub fn with_vault(
         name: &'static str,
         config: &str,
-        vault: sshkm_core::vault::Vault,
+        vault: crate::vault::Vault,
         backups: PathBuf,
     ) -> Self {
         let mut script = Self::own(name, "s", config);
@@ -195,7 +197,7 @@ impl Script {
     }
 
     /// The real vault, for a test to look at or change.
-    pub fn real_vault(&self) -> std::sync::MutexGuard<'_, sshkm_core::vault::Vault> {
+    pub fn real_vault(&self) -> std::sync::MutexGuard<'_, crate::vault::Vault> {
         self.real
             .as_ref()
             .expect("a script with a vault")
@@ -235,26 +237,14 @@ impl Script {
     }
 }
 
-impl Side for Script {
-    fn name(&self) -> String {
-        self.name.into()
-    }
-    fn knows(&self, peer: PeerKey) -> Result<Option<String>, PairingFailure> {
-        if let Some((_, name)) = self.contacts.iter().find(|(key, _)| *key == peer) {
-            return Ok(Some((*name).to_owned()));
-        }
-        Ok(self.knows.then(|| self.known_as.to_owned()))
-    }
-    fn save(&self, _: PeerKey, name: &str) -> Result<(), PairingFailure> {
-        self.saved.lock().unwrap().push(name.into());
-        Ok(())
-    }
+impl User for Script {
     fn show(&self, peer: Option<&str>, phase: &PairingPhase) {
         self.shown
             .lock()
             .unwrap()
             .push((peer.map(str::to_owned), phase.clone()));
     }
+
     fn answer(&self, wait: Duration) -> Result<Option<bool>, PairingFailure> {
         let first = *self.asked.lock().unwrap().get_or_insert_with(Instant::now);
         if first.elapsed() < self.delay {
@@ -267,6 +257,62 @@ impl Side for Script {
         *last = answer;
         answer.map(Some).ok_or(PairingFailure::Cancelled)
     }
+
+    fn authorized(&self, _: Duration) -> Result<bool, PairingFailure> {
+        *self.asked_to_authorize.lock().unwrap() += 1;
+        if self.authorizes {
+            Ok(true)
+        } else {
+            Err(PairingFailure::Cancelled)
+        }
+    }
+
+    fn decisions(&self, _: Duration) -> Result<Option<SyncDecisions>, PairingFailure> {
+        Ok(Some(self.decisions.clone()))
+    }
+
+    fn allow_risky(&self, changes: &[RiskyChange]) -> bool {
+        self.asked_risky.lock().unwrap().extend_from_slice(changes);
+        self.allows_risky
+    }
+
+    fn allow_send(&self, item: &Item, left_out: &[String]) -> bool {
+        self.asked_to_send.lock().unwrap().push(item.summary());
+        self.asked_left_out.lock().unwrap().push(left_out.to_vec());
+        self.allows_send
+    }
+
+    fn allow_added(&self) -> bool {
+        *self.asked_added.lock().unwrap() += 1;
+        self.allows_added
+    }
+
+    fn allow_risky_variables(&self, changes: &[RiskyVariables]) -> bool {
+        self.asked_variables
+            .lock()
+            .unwrap()
+            .extend_from_slice(changes);
+        self.allows_variables
+    }
+}
+
+impl Device for Script {
+    fn name(&self) -> String {
+        self.name.into()
+    }
+
+    fn knows(&self, peer: PeerKey) -> Result<Option<String>, PairingFailure> {
+        if let Some((_, name)) = self.contacts.iter().find(|(key, _)| *key == peer) {
+            return Ok(Some((*name).to_owned()));
+        }
+        Ok(self.knows.then(|| self.known_as.to_owned()))
+    }
+
+    fn save(&self, _: PeerKey, name: &str) -> Result<(), PairingFailure> {
+        self.saved.lock().unwrap().push(name.into());
+        Ok(())
+    }
+
     fn store(&self, item: &Item) -> Result<Stored, PairingFailure> {
         if let Some(failure) = self.store_fails {
             return Err(failure);
@@ -300,13 +346,16 @@ impl Side for Script {
             }),
         }
     }
+
     fn same_vault(&self, hash: &[u8], initiator: bool, proof: &str) -> bool {
         self.own_key()
             .is_some_and(|key| key.verify(hash, initiator, proof))
     }
+
     fn is_own(&self, _: PeerKey) -> bool {
         self.own_peer
     }
+
     fn takes(&self, intent: Option<Intent>) -> Result<(), PairingFailure> {
         if self.only_sync && intent != Some(Intent::Sync) {
             return Err(PairingFailure::NotOwn);
@@ -316,24 +365,25 @@ impl Side for Script {
         }
         Ok(())
     }
-    fn authorized(&self, _: Duration) -> Result<bool, PairingFailure> {
-        *self.asked_to_authorize.lock().unwrap() += 1;
-        if self.authorizes {
-            Ok(true)
-        } else {
-            Err(PairingFailure::Cancelled)
-        }
-    }
+
     fn add_device(&self, _: PeerKey, name: &str) -> Result<(), PairingFailure> {
         self.added.lock().unwrap().push(name.into());
         Ok(())
     }
+
     fn share_vault(&self) -> Result<(Zeroizing<Vec<u8>>, SecretText), PairingFailure> {
         let Vault::Open(secret) = self.vault else {
             return Err(PairingFailure::Broken);
         };
+        // A real vault goes as the app sends it.
+        if let Some((vault, _)) = &self.real {
+            let vault = vault.lock().unwrap();
+            let file = vault.moved_copy().map_err(|_| PairingFailure::NotSaved)?;
+            return Ok((file, SecretText::new(vault.share_secret().expose_secret())));
+        }
         Ok((Zeroizing::new(VAULT_FILE.to_vec()), SecretText::new(secret)))
     }
+
     fn take_vault(
         &self,
         file: Zeroizing<Vec<u8>>,
@@ -342,6 +392,21 @@ impl Side for Script {
         *self.taken.lock().unwrap() = Some((file.to_vec(), secret.expose().to_owned()));
         Ok(())
     }
+
+    fn broke_off(&self) {
+        *self.broken_off.lock().unwrap() += 1;
+    }
+
+    fn removed(&self, _: PeerKey) -> bool {
+        self.removed
+    }
+
+    fn entry_sync(&self) -> Option<EntrySync> {
+        self.entries
+    }
+}
+
+impl SyncStore for Script {
     fn sync_load(&self, _: PeerKey) -> Result<SyncLocal, PairingFailure> {
         Ok(SyncLocal {
             config: self.config.lock().unwrap().clone(),
@@ -353,6 +418,7 @@ impl Side for Script {
             hasher: Hasher::new(Zeroizing::new([u8::try_from(self.name.len()).unwrap(); 32])),
         })
     }
+
     fn sync_write(&self, _: PeerKey, write: &SyncWrite) -> Result<(), PairingFailure> {
         if let Some(config) = &write.config {
             *self.config.lock().unwrap() = config.clone();
@@ -368,51 +434,23 @@ impl Side for Script {
             .clone_from(&write.contacts);
         Ok(())
     }
+
     fn sync_keep(&self, _: PeerKey, state: &SyncState) -> Result<(), PairingFailure> {
         *self.sync_state.lock().unwrap() = state.clone();
         Ok(())
     }
+
     fn sync_unasked(&self, unasked: &[(i64, u32)]) -> Result<(), PairingFailure> {
         self.sync_state.lock().unwrap().unasked = unasked.to_vec();
         Ok(())
     }
-    fn decisions(&self, _: Duration) -> Result<Option<SyncDecisions>, PairingFailure> {
-        Ok(Some(self.decisions.clone()))
-    }
-    fn allow_risky(&self, changes: &[RiskyChange]) -> bool {
-        self.asked_risky.lock().unwrap().extend_from_slice(changes);
-        self.allows_risky
-    }
-    fn allow_send(&self, item: &Item, left_out: &[String]) -> bool {
-        self.asked_to_send.lock().unwrap().push(item.summary());
-        self.asked_left_out.lock().unwrap().push(left_out.to_vec());
-        self.allows_send
-    }
-    fn broke_off(&self) {
-        *self.broken_off.lock().unwrap() += 1;
-    }
-    fn removed(&self, _: PeerKey) -> bool {
-        self.removed
-    }
-    fn allow_added(&self) -> bool {
-        *self.asked_added.lock().unwrap() += 1;
-        self.allows_added
-    }
-    fn allow_risky_variables(&self, changes: &[RiskyVariables]) -> bool {
-        self.asked_variables
-            .lock()
-            .unwrap()
-            .extend_from_slice(changes);
-        self.allows_variables
-    }
-    fn entry_sync(&self) -> Option<EntrySync> {
-        self.entries
-    }
+
     fn vault_copy(&self) -> Result<Zeroizing<Vec<u8>>, PairingFailure> {
         self.real_vault()
             .sync_copy()
             .map_err(|_| PairingFailure::NotSaved)
     }
+
     fn vault_plan(&self, copy: &[u8], base: &VaultBase) -> Result<VaultPlan, PairingFailure> {
         let vault = self.real_vault();
         let peer = vault
@@ -422,6 +460,7 @@ impl Side for Script {
         *self.peer_vault.lock().unwrap() = Some(peer);
         Ok(plan)
     }
+
     fn vault_apply(
         &self,
         plan: &VaultPlan,
@@ -440,6 +479,7 @@ impl Side for Script {
         }
         Ok(applied)
     }
+
     fn vault_items(&self, pairs: &Pairs) -> Result<VaultItems, PairingFailure> {
         if self.hangs_up {
             return Err(PairingFailure::Broken);
@@ -472,15 +512,24 @@ pub fn talk(
 /// between two sides of one vault opens with the key own devices mix into
 /// their handshake.
 pub fn talk_as(
+    left: (Script, Identity),
+    right: (Script, Identity),
+    purpose: Purpose<'_>,
+) -> ((PairingPhase, Script), (PairingPhase, Script)) {
+    talk_on(pipe(), left, right, purpose)
+}
+
+/// [`talk_as`] over `ends`: the left side's end of a connection, and the
+/// right side's.
+pub fn talk_on<C: Connection + Send + 'static>(
+    (stream, theirs): (C, C),
     (left, left_key): (Script, Identity),
     (right, right_key): (Script, Identity),
     purpose: Purpose<'_>,
 ) -> ((PairingPhase, Script), (PairingPhase, Script)) {
     let own = own_session_key(&left, &right, &purpose);
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
     let other = thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
+        let stream = theirs;
         let mut session = match own {
             Some(key) => accept_own(stream, &right_key, &key).unwrap(),
             None => accept(stream, &right_key).unwrap(),
@@ -488,7 +537,6 @@ pub fn talk_as(
         let hello = session.recv().ok();
         (conversation_after(&mut session, &right, None, hello), right)
     });
-    let stream = TcpStream::connect(address).unwrap();
     let mut session = match own {
         Some(key) => connect_own(stream, &left_key, &key).unwrap(),
         None => connect(stream, &left_key).unwrap(),

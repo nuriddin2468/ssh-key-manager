@@ -1,8 +1,12 @@
-//! One conversation, from the open session to how it ended.
+//! One conversation between two devices, from the open session to how it
+//! ended. The desktop app and the phone run the same one.
 //!
-//! Both sides run [`conversation`] with a [`Side`]: the app's own state in
-//! the app, a script in the tests. Each sends `Hello`, saying what the side
-//! that connected came for:
+//! Both sides run [`conversation`] over a [`Session`] on any
+//! [`Connection`], each with a [`Side`]: what only the device it runs on can
+//! do or knows (see [`side`]). Finding the other device and opening the
+//! connection come before it and are the app's business, so the tests hold
+//! whole conversations over in-memory pipes. Each sends `Hello`, saying
+//! what the side that connected came for:
 //!
 //! - **To pair or to send** (no intent). If both already know each other
 //!   there is nothing to agree on. Otherwise they agree on the pairing code,
@@ -18,38 +22,42 @@
 //! Each side shows a device it knows by the name it keeps for it, whatever
 //! name the device gives in its `Hello`; only a device it doesn't know yet
 //! is shown by its own.
-//!
-//! [`transfer`]: super::transfer
-//! [`own`]: super::own
-//! [`sync`]: super::sync
 
-use std::collections::BTreeMap;
-use std::io::{self, ErrorKind};
-use std::net::TcpStream;
+pub mod own;
+#[cfg(test)]
+mod script;
+pub mod side;
+pub mod sync;
+pub mod transfer;
+
+use std::io::ErrorKind;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use sshkm_core::p2p::protocol::{
-    EntrySync, Intent, Item, ItemSummary, Own, SecretText, VERSION, VaultState, clean_name,
-    features,
-};
-use sshkm_core::p2p::{Message, PeerKey, Session};
-use sshkm_core::sync::Hashes;
-use sshkm_core::vault::sync::{Pairs, VaultApplied, VaultBase, VaultChoices, VaultPlan};
-use zeroize::Zeroizing;
 
-use super::sync::{Review, SyncDecisions, SyncLocal, SyncState, SyncSummary, SyncWrite};
-use super::{own, sync, transfer};
+pub use self::side::{Device, Side, Stored, SyncStore, User, VaultItems};
+pub use self::sync::{
+    MASS_DELETE, Review, RiskyChange, RiskyVariables, SyncDecisions, SyncLocal, SyncState,
+    SyncSummary, SyncWrite, VaultOff, VaultReview,
+};
+use super::connection::Connection;
+use super::protocol::{
+    EntrySync, Intent, Item, ItemSummary, Own, VERSION, VaultState, clean_name, features,
+};
+use super::{Message, PeerKey, Session};
 
 /// How long the users have to compare the codes.
 pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(180);
 /// How often the wait for an answer looks at the connection.
-pub(super) const POLL: Duration = Duration::from_millis(200);
+const POLL: Duration = Duration::from_millis(200);
+/// How long a read or write waits, but where a step says otherwise. The
+/// app's handshake leaves the connection with this too.
+pub const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Where a conversation is.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = crate::types::BINDINGS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
 pub enum PairingPhase {
     /// Connecting and agreeing on a code.
     Connecting,
@@ -88,9 +96,7 @@ pub enum PairingPhase {
     /// This side saved the item it got, as `name`: the entry's title, the
     /// host's alias (with a number if it is taken) or the key's file name. A
     /// hosts file group named `name` waits for the user to save it on the
-    /// Hosts file page (see [`Nearby::received_group`]).
-    ///
-    /// [`Nearby::received_group`]: super::Nearby::received_group
+    /// Hosts file page (the app keeps it until then).
     #[serde(rename_all = "camelCase")]
     Received {
         item: ItemSummary,
@@ -112,9 +118,9 @@ pub enum PairingPhase {
     Approving,
     /// The vault goes over: bytes so far, and in all.
     Transfer {
-        #[cfg_attr(test, ts(type = "number"))]
+        #[cfg_attr(feature = "ts", ts(type = "number"))]
         done: u64,
-        #[cfg_attr(test, ts(type = "number"))]
+        #[cfg_attr(feature = "ts", ts(type = "number"))]
         total: u64,
     },
     /// The vault came: this user sets a master password for this computer.
@@ -173,7 +179,7 @@ impl PairingPhase {
 /// Why a conversation ended without what it was for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = crate::types::BINDINGS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
 pub enum PairingFailure {
     /// No connection to the device.
     Unreachable,
@@ -212,190 +218,6 @@ pub enum PairingFailure {
     NotOwn,
 }
 
-/// What [`conversation`] needs from the side it runs on. The methods for
-/// the user's own devices have defaults for a side that has none, such as
-/// `examples/nearby_peer.rs` in its plain modes.
-pub trait Side {
-    /// This device's name, for the other user to read.
-    fn name(&self) -> String;
-    /// The name this side keeps for `peer`, if it is a contact or one of
-    /// the user's devices already.
-    fn knows(&self, peer: PeerKey) -> Result<Option<String>, PairingFailure>;
-    /// Saves `peer` as a contact named `name`.
-    fn save(&self, peer: PeerKey, name: &str) -> Result<(), PairingFailure>;
-    /// Shows the user where the conversation is; `peer` once the other
-    /// device said who it is: the name this side keeps for it, or for a
-    /// device it doesn't know, the name it gave.
-    fn show(&self, peer: Option<&str>, phase: &PairingPhase);
-    /// The user's answer if one comes within `wait`; `Err(Cancelled)` once
-    /// the user cancelled.
-    fn answer(&self, wait: Duration) -> Result<Option<bool>, PairingFailure>;
-    /// Saves an item the user accepted, checked against what was offered,
-    /// and says what became of it.
-    fn store(&self, item: &Item) -> Result<Stored, PairingFailure>;
-
-    /// What this side's `Hello` says about its vault in the session with
-    /// handshake `hash`; `None` leaves own devices out of it.
-    fn vault(&self, _hash: &[u8], _initiator: bool) -> Option<VaultState> {
-        None
-    }
-    /// Whether `proof`, from the peer (the session's initiator or not),
-    /// shows it has this side's vault.
-    fn same_vault(&self, _hash: &[u8], _initiator: bool, _proof: &str) -> bool {
-        false
-    }
-    /// Whether `peer` is one of the user's devices.
-    fn is_own(&self, _peer: PeerKey) -> bool {
-        false
-    }
-    /// Fails unless this side has a conversation for `intent`: one that
-    /// waits for a vault is only added, and one announced to the user's
-    /// devices only syncs.
-    fn takes(&self, _intent: Option<Intent>) -> Result<(), PairingFailure> {
-        Ok(())
-    }
-    /// Whether this user confirmed, within `wait`, making the other computer
-    /// one of their devices: with Touch ID / Windows Hello or the master
-    /// password, never with a plain yes. `Err(Cancelled)` once the user
-    /// cancelled.
-    fn authorized(&self, _wait: Duration) -> Result<bool, PairingFailure> {
-        Err(PairingFailure::Cancelled)
-    }
-    /// Records this computer and `peer`, named `name`, as the user's devices.
-    fn add_device(&self, _peer: PeerKey, _name: &str) -> Result<(), PairingFailure> {
-        Err(PairingFailure::Broken)
-    }
-    /// The vault file and its secret, for a new device.
-    fn share_vault(&self) -> Result<(Zeroizing<Vec<u8>>, SecretText), PairingFailure> {
-        Err(PairingFailure::Broken)
-    }
-    /// Checks and keeps the vault another of the user's computers sent,
-    /// until the user sets a master password for it.
-    fn take_vault(
-        &self,
-        _file: Zeroizing<Vec<u8>>,
-        _secret: SecretText,
-    ) -> Result<(), PairingFailure> {
-        Err(PairingFailure::NotSaved)
-    }
-    /// What a sync with `peer` starts from.
-    fn sync_load(&self, _peer: PeerKey) -> Result<SyncLocal, PairingFailure> {
-        Err(PairingFailure::NotOwn)
-    }
-    /// Writes the files a sync changed, unless they changed meanwhile.
-    fn sync_write(&self, _peer: PeerKey, _write: &SyncWrite) -> Result<(), PairingFailure> {
-        Err(PairingFailure::NotSaved)
-    }
-    /// Keeps what this side knows after a sync with `peer`.
-    fn sync_keep(&self, _peer: PeerKey, _state: &SyncState) -> Result<(), PairingFailure> {
-        Err(PairingFailure::NotSaved)
-    }
-    /// Keeps the deletions this computer made without asking, from all the
-    /// user's devices ([`SyncState::unasked`]): before a sync writes
-    /// anything.
-    fn sync_unasked(&self, _unasked: &[(i64, u32)]) -> Result<(), PairingFailure> {
-        Err(PairingFailure::NotSaved)
-    }
-    /// The user's decisions on a review, if they come within `wait`.
-    fn decisions(&self, _wait: Duration) -> Result<Option<SyncDecisions>, PairingFailure> {
-        Err(PairingFailure::Cancelled)
-    }
-    /// Whether this user allows, in a system dialog that a script in the
-    /// page can't answer, the risky changes of a sync they chose to make.
-    fn allow_risky(&self, _changes: &[sync::RiskyChange]) -> bool {
-        false
-    }
-    /// Whether this user allows, in a system dialog that a script in the
-    /// page can't answer, sending `item`, which holds a secret, to the
-    /// other side, as it goes: without the variables named in `left_out`,
-    /// which the other side's version would set without asking.
-    fn allow_send(&self, _item: &Item, _left_out: &[String]) -> bool {
-        false
-    }
-    /// The other side hung up after this side gave it what it needs to work
-    /// out the code this side would show, and before this side showed it:
-    /// it may be trying again until the code is one it wants.
-    fn broke_off(&self) {}
-    /// Whether `peer` was one of the user's devices and was removed.
-    fn removed(&self, _peer: PeerKey) -> bool {
-        false
-    }
-    /// On a computer being added that has the vault already: whether this
-    /// user allows, in a system dialog, becoming one of their devices with
-    /// the computer that adds it.
-    fn allow_added(&self) -> bool {
-        false
-    }
-
-    /// Whether this user allows, in a system dialog that a script in the
-    /// page can't answer, the variables a sync would add or change that
-    /// make programs load code.
-    fn allow_risky_variables(&self, _changes: &[sync::RiskyVariables]) -> bool {
-        false
-    }
-
-    /// What this side's `Hello` says about syncing the vault's entries;
-    /// `None` for a side that doesn't.
-    fn entry_sync(&self) -> Option<EntrySync> {
-        None
-    }
-    /// This side's copy of the vault for a sync ([`Vault::sync_copy`]).
-    ///
-    /// [`Vault::sync_copy`]: sshkm_core::vault::Vault::sync_copy
-    fn vault_copy(&self) -> Result<Zeroizing<Vec<u8>>, PairingFailure> {
-        Err(PairingFailure::NotSaved)
-    }
-    /// Opens the other side's copy and works out what to take from it
-    /// against `base`; the copy stays open until the sync ends.
-    fn vault_plan(&self, _copy: &[u8], _base: &VaultBase) -> Result<VaultPlan, PairingFailure> {
-        Err(PairingFailure::Broken)
-    }
-    /// Makes the changes of `plan` the `choices` name and settles its
-    /// conflicts as they say, then saves the vault after a backup.
-    fn vault_apply(
-        &self,
-        _plan: &VaultPlan,
-        _choices: &VaultChoices,
-    ) -> Result<VaultApplied, PairingFailure> {
-        Err(PairingFailure::NotSaved)
-    }
-    /// The vault's items now, with the groups paired as `pairs`: their
-    /// snapshots (keyed with this device's key) and their digests (keyed
-    /// with the key own devices share).
-    fn vault_items(&self, _pairs: &Pairs) -> Result<VaultItems, PairingFailure> {
-        Err(PairingFailure::Broken)
-    }
-}
-
-/// What became of an item saved here.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Stored {
-    /// Its name here: the entry's title, the host's alias (with a number if
-    /// it is taken), the key's file name, the environment's label.
-    pub name: String,
-    /// A host came with server keys other than the ones trusted here, which
-    /// are kept.
-    pub keys_differ: bool,
-    /// An environment's variables left out, as they make programs run code.
-    pub left_out: Vec<String>,
-}
-
-impl Stored {
-    /// Saved as `name`, as it came.
-    pub fn named(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            ..Self::default()
-        }
-    }
-}
-
-/// The vault's items after a sync, as [`Side::vault_items`] gives them.
-pub struct VaultItems {
-    pub snapshots: BTreeMap<String, Hashes>,
-    pub digests: BTreeMap<String, String>,
-}
-
 /// What the side that connected came for.
 #[derive(Debug, Clone, Copy)]
 pub enum Purpose<'a> {
@@ -413,7 +235,7 @@ pub enum Purpose<'a> {
 /// The whole conversation on one side: `purpose` on the side that
 /// connected, `None` on the other. Returns how it ended.
 pub fn conversation(
-    session: &mut Session<TcpStream>,
+    session: &mut Session<impl Connection>,
     side: &impl Side,
     purpose: Option<Purpose<'_>>,
 ) -> PairingPhase {
@@ -424,7 +246,7 @@ pub fn conversation(
 /// the side that was connected to: it reads that before the conversation
 /// takes its place, under the deadline of the handshake.
 pub fn conversation_after(
-    session: &mut Session<TcpStream>,
+    session: &mut Session<impl Connection>,
     side: &impl Side,
     purpose: Option<Purpose<'_>>,
     hello: Option<Message>,
@@ -473,7 +295,7 @@ impl Met {
 }
 
 fn meet(
-    session: &mut Session<TcpStream>,
+    session: &mut Session<impl Connection>,
     side: &impl Side,
     intent: Option<Intent>,
     hello: Option<Message>,
@@ -584,7 +406,7 @@ fn hello_own(
 /// Before a sync, each side says whether the other is one of the user's
 /// devices (`ok`): the side that answers first, so the side that
 /// connected never starts with a device that turned it away.
-fn confirm_own(session: &mut Session<TcpStream>, ok: bool) -> Result<(), PairingFailure> {
+fn confirm_own(session: &mut Session<impl Connection>, ok: bool) -> Result<(), PairingFailure> {
     if session.is_initiator() {
         if !ok {
             return Err(PairingFailure::NotOwn);
@@ -644,7 +466,7 @@ fn hello_of(message: Message) -> Result<Hello, PairingFailure> {
 /// Agrees on the pairing code and has both users compare it; `Ok` only when
 /// both said the codes match.
 fn compare_codes(
-    session: &mut Session<TcpStream>,
+    session: &mut Session<impl Connection>,
     side: &impl Side,
     peer: Option<&str>,
 ) -> Result<(), PairingFailure> {
@@ -681,8 +503,8 @@ fn compare_codes(
 /// Waits for this user's answer while watching the connection, so a "no" or
 /// a hang-up from the other side ends the wait. Returns this user's answer
 /// and the other's, if it came first.
-pub(super) fn wait_for_answer(
-    session: &mut Session<TcpStream>,
+fn wait_for_answer(
+    session: &mut Session<impl Connection>,
     side: &impl Side,
 ) -> Result<(bool, Option<bool>), PairingFailure> {
     let started = Instant::now();
@@ -691,7 +513,12 @@ pub(super) fn wait_for_answer(
         if let Some(matched) = side.answer(POLL)? {
             return Ok((matched, theirs));
         }
-        if theirs.is_none() && waiting(session.stream()).map_err(|_| PairingFailure::Broken)? {
+        if theirs.is_none()
+            && session
+                .stream()
+                .waiting()
+                .map_err(|_| PairingFailure::Broken)?
+        {
             match session.recv().map_err(broken)? {
                 Message::Confirm { matched: true } => theirs = Some(true),
                 Message::Confirm { matched: false } => return Err(PairingFailure::PeerDeclined),
@@ -704,22 +531,10 @@ pub(super) fn wait_for_answer(
     }
 }
 
-/// Whether the peer sent something (or hung up: then reading fails).
-pub(super) fn waiting(stream: &TcpStream) -> io::Result<bool> {
-    stream.set_nonblocking(true)?;
-    let peeked = stream.peek(&mut [0; 1]);
-    stream.set_nonblocking(false)?;
-    match peeked {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == ErrorKind::WouldBlock => Ok(false),
-        Err(error) => Err(error),
-    }
-}
-
 /// A failed read: the peer hung up, took too long, or sent garbage.
-pub(super) fn broken(error: sshkm_core::Error) -> PairingFailure {
+pub fn broken(error: crate::Error) -> PairingFailure {
     match error {
-        sshkm_core::Error::Io { source, .. } => match source.kind() {
+        crate::Error::Io { source, .. } => match source.kind() {
             ErrorKind::UnexpectedEof
             | ErrorKind::ConnectionReset
             | ErrorKind::ConnectionAborted => PairingFailure::PeerLeft,
@@ -734,9 +549,9 @@ pub(super) fn broken(error: sshkm_core::Error) -> PairingFailure {
 mod tests {
     use std::time::Duration;
 
-    use sshkm_core::p2p::Identity;
+    use crate::p2p::Identity;
 
-    use super::super::script::{Script, codes, pair, peers, talk_as};
+    use super::script::{Script, codes, pair, peers, talk_as};
     use super::*;
 
     #[test]
@@ -801,20 +616,18 @@ mod tests {
     /// side's nonce, as one would that didn't like the code; or, without
     /// `commits`, right after the hello.
     fn hang_up_after_the_nonce(commits: bool) -> Script {
-        use std::net::{TcpListener, TcpStream};
         use std::thread;
 
-        use sshkm_core::p2p::{accept, connect};
+        use crate::p2p::connection::pipe;
+        use crate::p2p::{accept, connect};
 
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
+        let (stream, theirs) = pipe();
         let other = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
+            let stream = theirs;
             let mut session = accept(stream, &Identity::generate().unwrap()).unwrap();
             let side = Script::new("bob", Some(true));
             (conversation(&mut session, &side, None), side)
         });
-        let stream = TcpStream::connect(address).unwrap();
         let mut session = connect(stream, &Identity::generate().unwrap()).unwrap();
         session
             .send(&Message::Hello {

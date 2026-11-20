@@ -2,7 +2,7 @@
 //! (see [`conversation`]).
 //!
 //! The side that connected has the vault. Its user confirms with Touch ID
-//! or the master password ([`Side::authorized`]: only the app's check of
+//! or the master password ([`User::authorized`]: only the app's check of
 //! either says so, never the page's yes to the code), and says so
 //! ([`Message::Added`]). If the other computer has no vault yet, the first
 //! records both computers as the user's devices before it says so, the
@@ -12,26 +12,28 @@
 //!
 //! If the other computer has the same vault already (a synced folder; the
 //! two tell that by the key own devices share, which is in the file, see
-//! [`sshkm_core::p2p::own`]), its user confirms too, in a system dialog
-//! ([`Side::allow_added`]), while the first confirms; a computer the user
-//! removed from their devices is turned away there ([`Side::removed`]).
+//! [`crate::p2p::own`]), its user confirms too, in a system dialog
+//! ([`User::allow_added`]), while the first confirms; a computer the user
+//! removed from their devices is turned away there ([`Device::removed`]).
 //! Then each records both, the first only once the other did.
 //!
-//! [`conversation`]: super::pairing::conversation
+//! [`conversation`]: super::conversation
+//! [`User::authorized`]: super::User::authorized
+//! [`User::allow_added`]: super::User::allow_added
+//! [`Device::removed`]: super::Device::removed
 
-use std::net::TcpStream;
 use std::time::Instant;
 
-use sshkm_core::p2p::{Message, PeerKey, Session};
-use sshkm_core::vault::MAX_DATABASE_SIZE;
-
-use super::pairing::{ANSWER_TIMEOUT, POLL, PairingFailure, PairingPhase, Side, broken, waiting};
 use super::transfer::STEP_TIMEOUT;
+use super::{ANSWER_TIMEOUT, POLL, PairingFailure, PairingPhase, Side, broken};
+use crate::p2p::connection::Connection;
+use crate::p2p::{Message, PeerKey, Session};
+use crate::vault::MAX_DATABASE_SIZE;
 
 /// The rest of the conversation: giving (the side that connected) or
 /// being given (the other). With `joins`, the vault goes over.
 pub fn add(
-    session: &mut Session<TcpStream>,
+    session: &mut Session<impl Connection>,
     side: &impl Side,
     peer: PeerKey,
     name: &str,
@@ -46,7 +48,7 @@ pub fn add(
 }
 
 fn give(
-    session: &mut Session<TcpStream>,
+    session: &mut Session<impl Connection>,
     side: &impl Side,
     peer: PeerKey,
     name: &str,
@@ -100,11 +102,11 @@ fn give(
 }
 
 /// Waits for this user to confirm with Touch ID / Windows Hello or the
-/// master password ([`Side::authorized`]); a yes or no meant for the code
-/// doesn't count. Meanwhile the other side only ever says no (its user
-/// turned it down), or hangs up.
+/// master password ([`super::User::authorized`]); a yes or no meant for
+/// the code doesn't count. Meanwhile the other side only ever says no (its
+/// user turned it down), or hangs up.
 fn wait_for_authorization(
-    session: &mut Session<TcpStream>,
+    session: &mut Session<impl Connection>,
     side: &impl Side,
 ) -> Result<(), PairingFailure> {
     let started = Instant::now();
@@ -112,7 +114,11 @@ fn wait_for_authorization(
         if side.authorized(POLL)? {
             return Ok(());
         }
-        if waiting(session.stream()).map_err(|_| PairingFailure::Broken)? {
+        if session
+            .stream()
+            .waiting()
+            .map_err(|_| PairingFailure::Broken)?
+        {
             return Err(match session.recv() {
                 Ok(Message::Confirm { matched: false }) => PairingFailure::PeerDeclined,
                 _ => PairingFailure::PeerLeft,
@@ -125,7 +131,7 @@ fn wait_for_authorization(
 }
 
 fn take(
-    session: &mut Session<TcpStream>,
+    session: &mut Session<impl Connection>,
     side: &impl Side,
     peer: PeerKey,
     name: &str,
@@ -180,7 +186,7 @@ fn take(
 
 #[cfg(test)]
 mod tests {
-    use super::super::pairing::Purpose;
+    use super::super::Purpose;
     use super::super::script::{Script, VAULT_FILE, Vault, codes, talk};
     use super::*;
 
@@ -346,6 +352,68 @@ mod tests {
         assert_eq!(*left.asked_to_authorize.lock().unwrap(), 1);
         assert_eq!(*right.asked_to_authorize.lock().unwrap(), 0);
         assert_eq!(*right.asked_added.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn a_moved_vault_opens_with_its_own_master_password_and_then_syncs() {
+        use crate::SecretString;
+        use crate::vault::sync::check_moved;
+        use crate::vault::{EntryInput, VaultPaths};
+
+        let dir = tempfile::tempdir().unwrap();
+        let folder = |name: &str| {
+            let folder = dir.path().join(name);
+            std::fs::create_dir_all(&folder).unwrap();
+            folder
+        };
+        let (a, b) = (folder("a"), folder("b"));
+        let paths = |folder: &std::path::Path| VaultPaths::new(folder.join("vault.kdbx"));
+        let (mut vault, _) =
+            crate::vault::Vault::create(&paths(&a), &SecretString::from("master of a")).unwrap();
+        vault.make_own_key(&a.join("backups")).unwrap();
+        let mail = vault
+            .add_entry(&EntryInput {
+                title: "Mail".into(),
+                password: Some(SecretString::from("p1")),
+                ..EntryInput::default()
+            })
+            .unwrap();
+        vault.save(&a.join("backups")).unwrap();
+        let giver = Script::with_vault("MacBook", "", vault, a.join("backups"));
+
+        let ((left_end, left), (right_end, right)) = talk(giver, newcomer(), Purpose::AddDevice);
+        assert_eq!(left_end, PairingPhase::Added { vault: true });
+        assert_eq!(right_end, PairingPhase::SetMaster);
+        // What came is the vault, whole, opened by the secret that came
+        // with it, and kept under the new computer's own master password.
+        let (file, secret) = right.taken.lock().unwrap().clone().unwrap();
+        let secret = SecretString::from(secret);
+        check_moved(&file, &secret).unwrap();
+        let master = SecretString::from("master of b");
+        let joined = crate::vault::Vault::join(&paths(&b), &file, &secret, &master).unwrap();
+        assert_eq!(joined.entry(&mail).unwrap().summary.title, "Mail");
+        drop(joined);
+
+        // The two are copies of one vault now: their entries sync.
+        let joined = crate::vault::Vault::unlock(&paths(&b), &master).unwrap();
+        let right = Script::with_vault("ThinkPad", "", joined, b.join("backups"));
+        let blog = right
+            .real_vault()
+            .add_entry(&EntryInput {
+                title: "Blog".into(),
+                ..EntryInput::default()
+            })
+            .unwrap();
+        let ((left_end, left), (right_end, _)) = talk(left, right, Purpose::Sync);
+        let added = |end: &PairingPhase| match end {
+            PairingPhase::Synced { summary } => summary.vault.logins.added,
+            other => panic!("not synced: {other:?}"),
+        };
+        assert_eq!((added(&left_end), added(&right_end)), (1, 0));
+        assert_eq!(
+            left.real_vault().entry(&blog).unwrap().summary.title,
+            "Blog"
+        );
     }
 
     #[test]

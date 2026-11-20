@@ -10,15 +10,21 @@
 //! - **Chats.** While Nearby is open, with contacts and the user's devices
 //!   online too ([`chat`]); outside the one conversation at a time below.
 //! - **Conversations.** One at a time, started from either side: a Noise
-//!   session ([`sshkm_core::p2p`]), then [`pairing::conversation`]: pairing
-//!   and sending, adding one of the user's devices ([`own`]), or a sync
-//!   ([`sync`]). Contacts and devices are kept in the vault, so all of them
-//!   need it unlocked, but for a computer being given one.
+//!   session ([`sshkm_core::p2p`]), then [`conversation`]: pairing and
+//!   sending, adding one of the user's devices, or a sync, the same as on
+//!   the phone. This app is the conversation's [`Side`] (`AppSide`): the
+//!   Nearby page and the system dialogs, the vault, `~/.ssh` and the sync
+//!   state in the app's data folder ([`store`]). Contacts and devices are
+//!   kept in the vault, so all of them need it unlocked, but for a computer
+//!   being given one.
 //!
 //! The device key lives in the system's credential store; the device name,
 //! and the fingerprints of public keys received from others, in
 //! `nearby.json` in the app's data folder. The UI follows [`CHANGED_EVENT`],
 //! which carries the whole [`NearbyStatus`].
+//!
+//! [`conversation`]: sshkm_core::p2p::conversation
+//! [`Side`]: sshkm_core::p2p::conversation::Side
 //!
 //! Nearby stays on the local network: it connects only to addresses there
 //! and takes connections only from there ([`on_local_network`]). A
@@ -27,15 +33,10 @@
 
 pub mod chat;
 pub mod items;
-pub mod own;
-pub mod pairing;
 mod presence;
 pub mod prompt;
-#[cfg(test)]
-mod script;
 mod store;
-pub mod sync;
-pub mod transfer;
+pub mod sync_prompt;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
@@ -53,6 +54,11 @@ use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sshkm_core::config::SshConfig;
 use sshkm_core::known_hosts::KnownHosts;
+use sshkm_core::p2p::conversation::{
+    Device, IO_TIMEOUT, PairingFailure, PairingPhase, Purpose, RiskyChange, RiskyVariables, Stored,
+    SyncDecisions, SyncLocal, SyncState, SyncStore, SyncWrite, User, VaultItems, broken,
+    conversation_after,
+};
 use sshkm_core::p2p::deadline::Deadline;
 use sshkm_core::p2p::protocol::{EntrySync, Intent, Item, SecretText, VaultState, clean_name};
 use sshkm_core::p2p::{self, Identity, Message, PeerKey, Session};
@@ -72,12 +78,8 @@ use time::format_description::well_known::Rfc3339;
 use zeroize::Zeroizing;
 
 use self::items::{ReceivedGroup, SendRequest};
-use self::pairing::{
-    PairingFailure, PairingPhase, Purpose, Side, Stored, VaultItems, broken, conversation_after,
-};
 pub use self::presence::OWN_SERVICE_TYPE;
 use self::presence::{OwnFound, Presence};
-use self::sync::{RiskyChange, RiskyVariables, SyncDecisions, SyncLocal, SyncState, SyncWrite};
 use crate::commands::Shared;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
@@ -93,8 +95,6 @@ pub const DEVICES_EVENT: &str = "nearby-devices";
 pub const SERVICE_TYPE: &str = "_sshkm._tcp.local.";
 const VISIBLE_FOR: Duration = Duration::from_secs(10 * 60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-/// For the handshake and `Hello`; comparing codes waits longer.
-const IO_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a connection has for its first steps (the handshake and, on
 /// the side connected to, the other's `Hello`), however slowly its bytes
 /// come.
@@ -1335,9 +1335,11 @@ impl Nearby {
     }
 
     /// The other device's copy, to show `field` of `item` from, and the
-    /// item's label: only a field [`sync::Review::may_show`] allows in the
+    /// item's label: only a field [`Review::may_show`] allows in the
     /// review open in the sync `id`, and at most [`MAX_VALUES_SHOWN`] in one
     /// sync.
+    ///
+    /// [`Review::may_show`]: sshkm_core::p2p::conversation::Review::may_show
     fn shown_from(&self, id: u32, item: &str, field: &str) -> AppResult<(Arc<PeerVault>, String)> {
         let mut slot = self.slot(id);
         let slot = slot
@@ -1636,7 +1638,11 @@ impl SlotGuard<'_> {
     }
 }
 
-/// [`Side`] for the app: the vault, the device name and the user's answers.
+/// The conversation's [`Side`] in the app: the device name, the vault,
+/// `~/.ssh`, the sync state in the app's data folder, and the user's
+/// answers on the Nearby page and in system dialogs.
+///
+/// [`Side`]: sshkm_core::p2p::conversation::Side
 struct AppSide<'a> {
     nearby: &'a Nearby,
     id: u32,
@@ -1730,7 +1736,108 @@ impl AppSide<'_> {
     }
 }
 
-impl Side for AppSide<'_> {
+impl User for AppSide<'_> {
+    fn show(&self, peer: Option<&str>, phase: &PairingPhase) {
+        if let Some(slot) = self.nearby.slot(self.id).as_mut() {
+            if peer.is_some() {
+                slot.view.peer = peer.map(str::to_owned);
+            }
+            if let PairingPhase::Compare { code } = phase {
+                slot.code = Some(code.clone());
+            }
+            slot.view.phase = phase.clone();
+        }
+        self.nearby.changed();
+    }
+
+    fn answer(&self, wait: Duration) -> Result<Option<bool>, PairingFailure> {
+        Ok(match self.receive(wait)? {
+            Some(Said::Yes(yes)) => Some(yes),
+            Some(Said::Authorized | Said::Decided(_)) | None => None,
+        })
+    }
+
+    fn authorized(&self, wait: Duration) -> Result<bool, PairingFailure> {
+        Ok(matches!(self.receive(wait)?, Some(Said::Authorized)))
+    }
+
+    fn allow_send(&self, item: &Item, left_out: &[String]) -> bool {
+        let Ok((_, app)) = self.context() else {
+            return false;
+        };
+        let peer = self
+            .nearby
+            .slot(self.id)
+            .as_mut()
+            .and_then(|slot| slot.view.peer.clone())
+            .unwrap_or_default();
+        // The dialog a chat asks in before the same item leaves.
+        prompt::send_item(&peer, item, left_out).is_none_or(|prompt| {
+            crate::confirm::require(app, &prompt.title, &prompt.body, &prompt.approve).is_ok()
+        })
+    }
+
+    fn allow_added(&self) -> bool {
+        let Ok((_, app)) = self.context() else {
+            return false;
+        };
+        let Some((known, code)) = self
+            .nearby
+            .slot(self.id)
+            .as_mut()
+            .map(|slot| (slot.known.clone(), slot.code.clone().unwrap_or_default()))
+        else {
+            return false;
+        };
+        let prompt = prompt::added(known.as_deref(), &code);
+        crate::confirm::require(app, &prompt.title, &prompt.body, &prompt.approve).is_ok()
+    }
+
+    fn allow_risky_variables(&self, changes: &[RiskyVariables]) -> bool {
+        let Ok((_, app)) = self.context() else {
+            return false;
+        };
+        let (peer, copy) = self
+            .nearby
+            .slot(self.id)
+            .as_mut()
+            .map(|slot| (slot.view.peer.clone(), slot.peer_vault.clone()))
+            .unwrap_or_default();
+        // The values as the other device's copy has them.
+        let value = |change: &RiskyVariables, name: &str| {
+            copy.as_ref()?
+                .variable(&change.id, name)
+                .map(|value| value.expose_secret().to_owned())
+        };
+        let (title, body, approve) =
+            sync_prompt::variables_prompt(&peer.unwrap_or_default(), changes, &value);
+        crate::confirm::require(app, &title, &body, &approve).is_ok()
+    }
+
+    fn allow_risky(&self, changes: &[RiskyChange]) -> bool {
+        let Ok((state, app)) = self.context() else {
+            return false;
+        };
+        let peer = self
+            .nearby
+            .slot(self.id)
+            .as_mut()
+            .and_then(|slot| slot.view.peer.clone())
+            .unwrap_or_default();
+        let file = state.paths.config.display().to_string();
+        let (title, body, approve) = sync_prompt::risky_prompt(&peer, &file, changes);
+        crate::confirm::require(app, &title, &body, &approve).is_ok()
+    }
+
+    fn decisions(&self, wait: Duration) -> Result<Option<SyncDecisions>, PairingFailure> {
+        Ok(match self.receive(wait)? {
+            Some(Said::Decided(decisions)) => Some(decisions),
+            Some(Said::Yes(_) | Said::Authorized) | None => None,
+        })
+    }
+}
+
+impl Device for AppSide<'_> {
     fn name(&self) -> String {
         self.nearby.lock().name.clone()
     }
@@ -1761,19 +1868,6 @@ impl Side for AppSide<'_> {
         Ok(())
     }
 
-    fn show(&self, peer: Option<&str>, phase: &PairingPhase) {
-        if let Some(slot) = self.nearby.slot(self.id).as_mut() {
-            if peer.is_some() {
-                slot.view.peer = peer.map(str::to_owned);
-            }
-            if let PairingPhase::Compare { code } = phase {
-                slot.code = Some(code.clone());
-            }
-            slot.view.phase = phase.clone();
-        }
-        self.nearby.changed();
-    }
-
     fn store(&self, item: &Item) -> Result<Stored, PairingFailure> {
         let peer = self
             .nearby
@@ -1781,17 +1875,6 @@ impl Side for AppSide<'_> {
             .as_mut()
             .and_then(|slot| slot.view.peer.clone());
         items::store(self.nearby, self.id, peer.as_deref(), item)
-    }
-
-    fn answer(&self, wait: Duration) -> Result<Option<bool>, PairingFailure> {
-        Ok(match self.receive(wait)? {
-            Some(Said::Yes(yes)) => Some(yes),
-            Some(Said::Authorized | Said::Decided(_)) | None => None,
-        })
-    }
-
-    fn authorized(&self, wait: Duration) -> Result<bool, PairingFailure> {
-        Ok(matches!(self.receive(wait)?, Some(Said::Authorized)))
     }
 
     fn vault(&self, hash: &[u8], initiator: bool) -> Option<VaultState> {
@@ -1830,38 +1913,6 @@ impl Side for AppSide<'_> {
 
     fn broke_off(&self) {
         self.nearby.broke_off();
-    }
-
-    fn allow_send(&self, item: &Item, left_out: &[String]) -> bool {
-        let Ok((_, app)) = self.context() else {
-            return false;
-        };
-        let peer = self
-            .nearby
-            .slot(self.id)
-            .as_mut()
-            .and_then(|slot| slot.view.peer.clone())
-            .unwrap_or_default();
-        // The dialog a chat asks in before the same item leaves.
-        prompt::send_item(&peer, item, left_out).is_none_or(|prompt| {
-            crate::confirm::require(app, &prompt.title, &prompt.body, &prompt.approve).is_ok()
-        })
-    }
-
-    fn allow_added(&self) -> bool {
-        let Ok((_, app)) = self.context() else {
-            return false;
-        };
-        let Some((known, code)) = self
-            .nearby
-            .slot(self.id)
-            .as_mut()
-            .map(|slot| (slot.known.clone(), slot.code.clone().unwrap_or_default()))
-        else {
-            return false;
-        };
-        let prompt = prompt::added(known.as_deref(), &code);
-        crate::confirm::require(app, &prompt.title, &prompt.body, &prompt.approve).is_ok()
     }
 
     fn takes(&self, intent: Option<Intent>) -> Result<(), PairingFailure> {
@@ -1923,6 +1974,21 @@ impl Side for AppSide<'_> {
         Ok(())
     }
 
+    fn entry_sync(&self) -> Option<EntrySync> {
+        if self.joining() {
+            return None;
+        }
+        let paths = self.read(|vault| vault.paths().clone()).ok()?;
+        Some(match vault_cloud(&paths) {
+            Some(service) => EntrySync::Cloud { service },
+            None => EntrySync::On {
+                version: ENTRY_SYNC_VERSION,
+            },
+        })
+    }
+}
+
+impl SyncStore for AppSide<'_> {
     fn sync_load(&self, peer: PeerKey) -> Result<SyncLocal, PairingFailure> {
         let (state, _) = self.context()?;
         let identity = self.nearby.identity().map_err(|_| PairingFailure::Broken)?;
@@ -1985,40 +2051,6 @@ impl Side for AppSide<'_> {
 
     fn sync_unasked(&self, unasked: &[(i64, u32)]) -> Result<(), PairingFailure> {
         store::save_unasked(&self.nearby.data_dir, unasked).map_err(|_| PairingFailure::NotSaved)
-    }
-
-    fn allow_risky_variables(&self, changes: &[RiskyVariables]) -> bool {
-        let Ok((_, app)) = self.context() else {
-            return false;
-        };
-        let (peer, copy) = self
-            .nearby
-            .slot(self.id)
-            .as_mut()
-            .map(|slot| (slot.view.peer.clone(), slot.peer_vault.clone()))
-            .unwrap_or_default();
-        // The values as the other device's copy has them.
-        let value = |change: &RiskyVariables, name: &str| {
-            copy.as_ref()?
-                .variable(&change.id, name)
-                .map(|value| value.expose_secret().to_owned())
-        };
-        let (title, body, approve) =
-            sync::variables_prompt(&peer.unwrap_or_default(), changes, &value);
-        crate::confirm::require(app, &title, &body, &approve).is_ok()
-    }
-
-    fn entry_sync(&self) -> Option<EntrySync> {
-        if self.joining() {
-            return None;
-        }
-        let paths = self.read(|vault| vault.paths().clone()).ok()?;
-        Some(match vault_cloud(&paths) {
-            Some(service) => EntrySync::Cloud { service },
-            None => EntrySync::On {
-                version: ENTRY_SYNC_VERSION,
-            },
-        })
     }
 
     fn vault_copy(&self) -> Result<Zeroizing<Vec<u8>>, PairingFailure> {
@@ -2101,28 +2133,6 @@ impl Side for AppSide<'_> {
             })
         })?
         .ok_or(PairingFailure::NotOwn)
-    }
-
-    fn allow_risky(&self, changes: &[RiskyChange]) -> bool {
-        let Ok((state, app)) = self.context() else {
-            return false;
-        };
-        let peer = self
-            .nearby
-            .slot(self.id)
-            .as_mut()
-            .and_then(|slot| slot.view.peer.clone())
-            .unwrap_or_default();
-        let file = state.paths.config.display().to_string();
-        let (title, body, approve) = sync::risky_prompt(&peer, &file, changes);
-        crate::confirm::require(app, &title, &body, &approve).is_ok()
-    }
-
-    fn decisions(&self, wait: Duration) -> Result<Option<SyncDecisions>, PairingFailure> {
-        Ok(match self.receive(wait)? {
-            Some(Said::Decided(decisions)) => Some(decisions),
-            Some(Said::Yes(_) | Said::Authorized) | None => None,
-        })
     }
 }
 
@@ -2300,6 +2310,8 @@ fn random_hex() -> String {
 
 #[cfg(test)]
 mod tests {
+    use sshkm_core::p2p::conversation::{Review, VaultReview};
+
     use super::*;
 
     /// The side that reads the answers of conversation `id`, with no app
@@ -2760,7 +2772,7 @@ mod tests {
         );
         assert_eq!(side.answer(WAIT), Ok(None), "given at another step");
 
-        let review = sync::Review::default();
+        let review = Review::default();
         at(&nearby, id, PairingPhase::Decide { review });
         nearby.answer(id, false).unwrap();
         nearby.tell(id, Said::Authorized).unwrap();
@@ -2789,8 +2801,8 @@ mod tests {
         nearby.slot(id).as_mut().unwrap().peer_vault = Some(Arc::new(copy));
         // While nothing is under review, nothing is shown.
         assert!(nearby.shown_from(id, "mail", "s:Password").is_err());
-        let review = sync::Review {
-            vault: sync::VaultReview {
+        let review = Review {
+            vault: VaultReview {
                 conflicts: vec![VaultConflict {
                     id: "mail".into(),
                     kind: ItemKind::Login,
@@ -2801,9 +2813,9 @@ mod tests {
                     risky: Vec::new(),
                     to_bin: false,
                 }],
-                ..sync::VaultReview::default()
+                ..VaultReview::default()
             },
-            ..sync::Review::default()
+            ..Review::default()
         };
         at(&nearby, id, PairingPhase::Decide { review });
         assert!(nearby.shown_from(id, "other", "s:Password").is_err());

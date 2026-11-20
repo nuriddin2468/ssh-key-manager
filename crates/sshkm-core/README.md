@@ -16,8 +16,9 @@ file, so KeePassXC and other KeePass apps open it too.
 | `paths` | `SshPaths` (`~/.ssh`, `%USERPROFILE%\.ssh`), `expand_tilde`, `display_path` (`~/…`). |
 | `fsutil` | `atomic_write` (temp file + fsync + rename, keeps permissions, follows symlinks), `write_new` (never overwrites), `backup` (timestamped copies, newest 20 kept). |
 | `keys` | `scan` a directory by content (OpenSSH, legacy PEM, PKCS#8, `.pub`), `inspect` one file, `generate` (Ed25519, RSA 3072/4096, ECDSA), `change_passphrase`, `load_private`, `regenerate_public`, `import`, `move_to_trash`. |
-| `config` | Lossless `ssh_config` model: byte-for-byte round trip, read view of `Host`/`Match` blocks, minimal-diff edits (`upsert_host`, `delete_host`, `remove_identity_file`, `remove_option`, `append_option`), `identity_usage`. |
+| `config` | Lossless `ssh_config` model: byte-for-byte round trip, read view of `Host`/`Match` blocks, minimal-diff edits (`upsert_host`, `delete_host`, `remove_identity_file`, `remove_option`, `append_option`), `identity_usage`, and the settings in effect for a host without `ssh -G` (`effective`: first match, patterns, `Match`, and the lines that would run a program), for the phone. |
 | `known_hosts` | Lossless `known_hosts` model: plain and hashed (`\|1\|salt\|hash`) entries, markers, matching with `*`/`?`/`!` and `[host]:port`, `remove_host`, `remove_lines`. |
+| `prompt` | What a server's prompt asks for (password, one-time code, other), shared by the desktop's askpass and the phone's SSH client. |
 | `agent` | Synchronous `ssh-agent` client: status, list, add (lifetime / confirm constraints), remove, remove all. Unix socket or Windows named pipe. |
 | `perms` | Permission checks and fixes: Unix modes; Windows ACLs via one batched PowerShell call, compared by SID, fixed with `icacls`. |
 | `audit` | Findings (DSA, short RSA, no passphrase, open permissions, missing/mismatched `.pub`, duplicates, dangling `IdentityFile`, legacy format, `StrictHostKeyChecking no`, `UserKnownHostsFile /dev/null`, `ForwardAgent`, too many agent keys without `IdentitiesOnly`) with stable ids and one-click fixes (`apply_config_fix` applies only those the rules offer). |

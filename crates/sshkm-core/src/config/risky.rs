@@ -327,7 +327,7 @@ pub(crate) fn matches_pattern(pattern: &[u8], name: &[u8]) -> bool {
 /// turn a feature off or keep the safe default (`none`, `no`, …) are
 /// harmless; they are compared case-sensitively, as exactly as OpenSSH does
 /// or more so, and anything else counts.
-fn risk(key: &str, d: &Directive<'_>, rest: &str) -> Option<Risk> {
+pub(super) fn risk(key: &str, d: &Directive<'_>, rest: &str) -> Option<Risk> {
     use Risk::{Exposed, HostKeys, RunsCode, ServerAccess};
     // Commands are taken literally: `"none"` is a program called `none`.
     let literal = d.value;

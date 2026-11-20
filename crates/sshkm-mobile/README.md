@@ -17,6 +17,25 @@ computers use (see the core's README). The API grows with the steps of
 | `passwordStrength(password)` | zxcvbn's score and guesses. |
 | `CoreException.Failed(code, detail)` | Every error: `code` is the core's stable `ErrorCode`, for the app to word; `detail` is English for developers. |
 
+### SSH (`ssh.rs`)
+
+A shell on one of the user's servers by its name, through `sshkm-ssh` (see its
+README for the rules). The app passes the host blocks and `known_hosts` it
+carries as text; the client runs on a tokio runtime of the bridge's own.
+
+| Kotlin | What it does |
+|---|---|
+| `sshOpenShell(SshConnectRequest(...), callbacks)` | `suspend`: connects (jump hosts included), signs in and opens a shell (`xterm-256color`, `cols` × `rows`). Returns `SshShell`. |
+| `SshCallbacks` | The app's side, implemented in Kotlin: `suspend sign(SshSignRequest)` returns Keystore's DER `SHA256withECDSA` signature; `suspend unknownHost(SshUnknownHost)` returns the user's yes or no; `hostKeyTrusted(line)` hands over the `known_hosts` line to store after a yes; `suspend answer(SshAuthPrompt)` returns one answer per prompt (`kind`: password, one-time code, other) or `null` to cancel. |
+| `SshShell.nextEvent()` | `suspend`: `Output(data)`, or `Closed(exitStatus, exitSignal, connectionLost)`. Call it again when the last output is drawn. |
+| `SshShell.write(data)`, `resize(cols, rows)`, `keepalive()`, `disconnect()` | `suspend`; may run while `nextEvent` waits. `disconnect` ends the shell and the connection; `close()` (`AutoCloseable`) frees the object, as for every UniFFI object. |
+| `sshRoute(hostsConfig, destination)` | The machines on the way, without connecting; `SshException.NotAvailable` for a host the phone can't connect to. |
+| `sshPublicKeyFromSpki(der, comment)` | The phone's OpenSSH public key line from Keystore's `PublicKey.getEncoded()`. |
+| `sshKeyFingerprint(publicKey)` | Its `SHA256:…` fingerprint. |
+| `SshException` | Typed: `NotAvailable`, `NameNotFound`, `Refused`, `TimedOut`, `Unreachable`, `JumpFailed`, `HostKeyChanged` (both fingerprints), `HostKeyRevoked`, `UnknownHostDeclined`, `AuthFailed`, `Signer`, `Cancelled`, `ShellRefused`, `Disconnected`, … each naming the machine (`alias`). |
+
+Cancelling the coroutine of a call stops the work behind it.
+
 ## Unsafe code
 
 The crate takes the workspace's lints, `forbid(unsafe_code)` included. The

@@ -15,6 +15,22 @@ val rustAbis: List<String> =
 
 val minSdkVersion = 29
 
+/**
+ * The app's version: the workspace's (`[workspace.package]` in Cargo.toml),
+ * which the release script bumps, so the app and its core always agree.
+ */
+val appVersion: String =
+    providers.fileContents(cargoWorkspace.file("Cargo.toml")).asText.get().let { toml ->
+        Regex("""(?m)^\[workspace\.package]\nversion = "(\d+\.\d+\.\d+)"""").find(toml)?.groupValues?.get(1)
+            ?: error("no version in [workspace.package] of Cargo.toml")
+    }
+
+/** Grows with every release: 0.11.0 is 11000, 1.2.3 is 1002003. */
+val appVersionCode: Int =
+    appVersion.split('.').map(String::toInt).let { (major, minor, patch) ->
+        major * 1_000_000 + minor * 1_000 + patch
+    }
+
 android {
     namespace = "dev.sshkeymanager.android"
     // Android 17's second minor release, which Compose's libraries need.
@@ -28,8 +44,8 @@ android {
         applicationId = "dev.sshkeymanager.android"
         minSdk = minSdkVersion
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.11.0"
+        versionCode = appVersionCode
+        versionName = appVersion
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Only the ABIs the Rust library exists for, so JNA's other native
         // parts stay out of the APK.
@@ -155,6 +171,10 @@ abstract class CargoNdkBuild : DefaultTask() {
             // UniFFI writes the bindings from; strip only the debug info here.
             // Packaging strips the library again.
             environment("CARGO_PROFILE_RELEASE_STRIP", "debuginfo")
+            // The release profile aborts on a panic, which would kill the app
+            // from inside a call; unwinding lets UniFFI turn it into an
+            // InternalException the app can show.
+            environment("CARGO_PROFILE_RELEASE_PANIC", "unwind")
             val args = mutableListOf(cargo.get(), "ndk")
             abis.get().forEach { args += listOf("-t", it) }
             args += listOf("-P", platform.get().toString(), "-o", out.path, "build", "-p", "sshkm-mobile", "--locked")

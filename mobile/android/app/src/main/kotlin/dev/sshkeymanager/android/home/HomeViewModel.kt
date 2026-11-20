@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import dev.sshkeymanager.android.R
 import dev.sshkeymanager.android.core.CoreException
 import dev.sshkeymanager.android.core.ErrorCode
+import dev.sshkeymanager.android.core.InternalException
 import dev.sshkeymanager.android.core.PasswordOptions
 import dev.sshkeymanager.android.core.coreVersion
 import dev.sshkeymanager.android.core.generatePassword
@@ -56,6 +57,9 @@ class HomeViewModel(private val core: Core = RustCore) : ViewModel() {
             state.update { it.copy(generated = Generated(password, core.strength(password)), error = null) }
         } catch (error: CoreException) {
             state.update { it.copy(error = errorMessage(error)) }
+        } catch (_: InternalException) {
+            // A panic in the core, unwound into an exception by UniFFI.
+            state.update { it.copy(error = R.string.error_other) }
         }
     }
 }

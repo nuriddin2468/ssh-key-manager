@@ -32,20 +32,8 @@ uniffi = { version = "0.32.2", default-features = false }
 # The `uniffi-bindgen` program: only the machine that builds the app runs it.
 bindgen = ["uniffi/cli", "uniffi/cargo-metadata"]
 
-# The workspace lints, except that `unsafe_code` is `deny` instead of
-# `forbid`: the scaffolding UniFFI generates around every exported function
-# and type is `extern "C"` glue that has to be `unsafe` (raw pointers, foreign
-# buffers, `#[unsafe(no_mangle)]`). The modules holding exports opt in with
-# `#[allow(unsafe_code)]` on their declaration in lib.rs; nothing written by
-# hand here uses `unsafe`.
-[lints.rust]
-unsafe_code = "deny"
-unused_qualifications = "warn"
-
-[lints.clippy]
-all = { level = "warn", priority = -1 }
-pedantic = { level = "warn", priority = -1 }
-missing_errors_doc = "allow"
-missing_panics_doc = "allow"
-module_name_repetitions = "allow"
-must_use_candidate = "allow"
+# The workspace lints, `forbid(unsafe_code)` included: UniFFI's scaffolding
+# is `unsafe`, but it comes from its macros, where rustc doesn't report the
+# lint (see lib.rs).
+[lints]
+workspace = true

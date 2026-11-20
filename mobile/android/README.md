@@ -45,6 +45,12 @@ Kotlin bindings from the built library (`uniffi-bindgen` from this
 workspace, so its version is always the runtime's). Both are generated
 sources under `app/build/rust/`; nothing generated is committed.
 
+The release build unwinds on a Rust panic instead of aborting (the desktop's
+release profile aborts): UniFFI turns a panic inside a call into an
+`InternalException`, and the app shows an error instead of closing. Release
+builds also strip only debug info, since a full strip removes the metadata
+UniFFI writes the bindings from; packaging strips the library again.
+
 Android Studio opens this folder as a project. Set its Gradle JDK to 17 or
 newer.
 

@@ -1,3 +1,7 @@
 # Key fixtures are embedded byte for byte (`include_str!`); keep their LF line
 # endings on Windows checkouts with `core.autocrlf`.
 crates/sshkm-core/src/keys/testdata/** -text
+
+# The Gradle wrapper's scripts keep the line endings their shells need.
+mobile/android/gradlew text eol=lf
+mobile/android/gradlew.bat text eol=crlf

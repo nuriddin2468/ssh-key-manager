@@ -12,13 +12,12 @@
 //!
 //! [UniFFI]: https://mozilla.github.io/uniffi-rs/
 
-// Every module here exports through UniFFI, whose scaffolding is `unsafe`
-// FFI glue: see `[lints.rust]` in Cargo.toml.
-#[allow(unsafe_code)]
+// Everything here is under the workspace's `forbid(unsafe_code)`: the
+// `unsafe` in what UniFFI's macros generate is theirs, and rustc doesn't
+// report the lint inside another crate's macro output. Hand-written `unsafe`
+// fails to build.
 mod error;
-#[allow(unsafe_code)]
 mod generator;
-#[allow(unsafe_code)]
 mod scaffolding;
 
 pub use error::CoreError;

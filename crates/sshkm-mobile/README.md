@@ -19,10 +19,11 @@ computers use (see the core's README). The API grows with the steps of
 
 ## Unsafe code
 
-UniFFI's scaffolding around every export is `extern "C"` glue that has to be
-`unsafe`, so the crate has `unsafe_code = "deny"` instead of the workspace's
-`forbid`, and its modules opt in with `#[allow(unsafe_code)]` where lib.rs
-declares them. Nothing written by hand here uses `unsafe`.
+The crate takes the workspace's lints, `forbid(unsafe_code)` included. The
+scaffolding UniFFI generates around every export is `unsafe` (`extern "C"`,
+raw buffers), but it comes from UniFFI's macros, and rustc doesn't report
+`unsafe_code` inside another crate's macro output. Any `unsafe` written here
+fails to build.
 
 ## Building
 

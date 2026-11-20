@@ -3,6 +3,7 @@ package dev.sshkeymanager.android.home
 import dev.sshkeymanager.android.R
 import dev.sshkeymanager.android.core.CoreException
 import dev.sshkeymanager.android.core.ErrorCode
+import dev.sshkeymanager.android.core.InternalException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -63,6 +64,13 @@ class HomeViewModelTest {
         fail = false
         model.generate()
         assertNull(model.uiState.value.error)
+    }
+
+    @Test
+    fun `a panic in the core asks to try again instead of closing the app`() {
+        val model = HomeViewModel(FakeCore { throw InternalException("Rust panic") })
+        model.generate()
+        assertEquals(R.string.error_other, model.uiState.value.error)
     }
 
     @Test

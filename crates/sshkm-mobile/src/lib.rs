@@ -5,7 +5,7 @@
 //! the features only computers use. [UniFFI] writes the Kotlin side from what
 //! is exported here: records, enums, errors and functions. The API grows with
 //! the steps of `docs/mobile.md`: the core's version, the vault's password
-//! generator, and the vault on the phone ([`PhoneVault`]).
+//! generator, the vault on the phone ([`PhoneVault`]) and SSH ([`ssh`]).
 //!
 //! Secrets cross the bridge one at a time, when the user asks for them, and
 //! are never logged.
@@ -19,6 +19,7 @@
 mod error;
 mod generator;
 mod scaffolding;
+pub mod ssh;
 mod vault;
 
 pub use error::CoreError;

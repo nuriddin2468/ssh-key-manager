@@ -1,0 +1,37 @@
+[package]
+name = "sshkm-ssh"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "The phone's SSH client: russh with host settings and server keys from the core of SSH Key Manager"
+readme = "README.md"
+publish = false
+
+[dependencies]
+async-trait = "0.1.92"
+# Reading DER signatures from Android Keystore and the phone's public key
+# (SubjectPublicKeyInfo): the version and features the core already builds,
+# plus `ecdsa`, whose crate ssh-key already brings in.
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+# `ring` for AES-GCM and ChaCha20-Poly1305: it builds for Android with the
+# NDK's C compiler alone and is already in the build (rustls), where
+# aws-lc-rs, russh's default, needs cmake and its own cross-compile setup.
+# `rsa` verifies servers' rsa-sha2-256/512 host keys; no compression.
+russh = { version = "0.65.2", default-features = false, features = ["ring", "rsa"] }
+sshkm-core = { path = "../sshkm-core", default-features = false }
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["net", "rt", "sync", "time"] }
+zeroize = "1.9.1"
+
+[dev-dependencies]
+# A hashed `known_hosts` line, made the way `ssh-keygen -H` makes it; the
+# versions the core builds.
+base64ct = "1.8.3"
+hmac = "0.12"
+sha1 = "0.10"
+tokio = { version = "1.54.1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+
+[lints]
+workspace = true

@@ -21,18 +21,28 @@ path = "src/bin/uniffi-bindgen.rs"
 required-features = ["bindgen"]
 
 [dependencies]
+# Async callback interfaces (UniFFI's generated code names it).
+async-trait = "0.1.92"
 # Without the features only computers use (ssh-agent, `~/.ssh` audit, trash,
 # browser import, shell history, leak scanner, `.env` files on disk, tunnels).
 sshkm-core = { path = "../sshkm-core", default-features = false }
+# The phone's SSH client, on a runtime of the bridge's own (`ssh.rs`).
+sshkm-ssh = { path = "../sshkm-ssh" }
 # A test vault's scratch folder, in debug builds of the app (`test-vault`).
 tempfile = { version = "3.27.0", optional = true }
 thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread"] }
 # The bindings generator's runtime half. MPL-2.0, which deny.toml allows.
 uniffi = { version = "0.32.2", default-features = false }
 zeroize = "1.9.1"
 
 [dev-dependencies]
+# A server for the bridge's own test, and the phone's kind of key; both
+# already in the build through sshkm-ssh.
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+russh = { version = "0.65.2", default-features = false, features = ["ring", "rsa"] }
 tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["net", "rt-multi-thread"] }
 
 [features]
 # The `uniffi-bindgen` program: only the machine that builds the app runs it.

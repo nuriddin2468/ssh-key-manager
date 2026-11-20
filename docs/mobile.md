@@ -119,6 +119,11 @@ Secret fields turn off the keyboard's learning.
 
 ### D. SSH in the core
 
+Done in [#80](https://github.com/nuriddin2468/ssh-key-manager/pull/80): `crates/sshkm-ssh`
+(see its README), the settings in effect for a host in the core (`SshConfig::effective`),
+prompt classification shared with the desktop (`sshkm_core::prompt`), and the Kotlin API in
+`crates/sshkm-mobile/src/ssh.rs`.
+
 A client on `russh` in the core: connect by host alias from the carried host blocks
 (the whitelist above), ProxyJump chains through direct-tcpip channels, host key check
 against the carried `known_hosts` with the same rules as computers, authentication with a

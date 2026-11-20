@@ -244,9 +244,11 @@ impl server::Handler for Handler {
         let code_only = self.spec.key_then_code;
         if let Some(prompt) = self.spec.endless {
             let answers: Option<Vec<_>> = response.map(Iterator::collect);
-            let empty = answers
-                .as_ref()
-                .is_some_and(|answers| answers.iter().all(russh::keys::ssh_encoding::bytes::Bytes::is_empty));
+            let empty = answers.as_ref().is_some_and(|answers| {
+                answers
+                    .iter()
+                    .all(russh::keys::ssh_encoding::bytes::Bytes::is_empty)
+            });
             let mut log = self.log.lock().unwrap();
             if empty {
                 log.empty_answers += 1;

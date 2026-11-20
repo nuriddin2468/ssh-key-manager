@@ -5,8 +5,8 @@
 //!    records of the user's devices, projects and contacts. The side that
 //!    connected goes first. When both sync the vault's entries
 //!    ([`Entries`]), each then sends its copy of the vault
-//!    ([`Side::vault_copy`]) as bytes.
-//! 2. Each works out on its own what to take ([`plan`], [`Side::vault_plan`])
+//!    ([`SyncStore::vault_copy`]) as bytes.
+//! 2. Each works out on its own what to take ([`plan`], [`SyncStore::vault_plan`])
 //!    and sorts it:
 //!    - changes nobody needs to look at;
 //!    - changes that add a directive running a program or reaching beyond
@@ -21,46 +21,49 @@
 //!    changes and mass deletions: its user is asked when they sync from it.
 //!    A risky change the user chose, a conflict settled for the other
 //!    computer's version included, is made only once they allow it in a
-//!    system dialog ([`Side::allow_risky`], [`Side::allow_risky_variables`]),
+//!    system dialog ([`User::allow_risky`], [`User::allow_risky_variables`]),
 //!    which a script in the page can't answer; what they don't allow waits
 //!    for the next sync.
 //! 4. Each writes its files and its vault (after a backup) and says what it
 //!    has now ([`Message::Applied`]). What both have alike becomes the
 //!    snapshot for next time ([`agree`], [`agree_hashed`]).
 //!
-//! [`conversation`]: super::pairing::conversation
+//! [`conversation`]: super::conversation
+//! [`SyncStore::vault_copy`]: super::SyncStore::vault_copy
+//! [`SyncStore::vault_plan`]: super::SyncStore::vault_plan
+//! [`User::allow_risky`]: super::User::allow_risky
+//! [`User::allow_risky_variables`]: super::User::allow_risky_variables
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::TcpStream;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use sshkm_core::config::SshConfig;
-use sshkm_core::known_hosts::KnownHosts;
-use sshkm_core::p2p::protocol::{EntrySync, VaultDecisions};
-use sshkm_core::p2p::{Message, PeerKey, Session};
-use sshkm_core::sync::host_keys::{self, KeysDiffer};
-use sshkm_core::sync::hosts::{self, RiskyLine};
-use sshkm_core::sync::{
-    Base, Change, Conflict, Hasher, MAX_MANIFEST, Manifest, agree, agree_hashed, digest, digests,
-    plan,
-};
-use sshkm_core::vault::envs::files::CloudService;
-use sshkm_core::vault::projects::ProjectRecord;
-use sshkm_core::vault::sync::{
-    Party, VaultBase, VaultChange, VaultChoices, VaultConflict, VaultCounts, VaultPlan,
-};
-use sshkm_core::vault::{ContactRecord, DeviceRecord, MAX_DATABASE_SIZE, learned_devices};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use zeroize::Zeroizing;
 
-use super::IO_TIMEOUT;
-use super::pairing::{
-    ANSWER_TIMEOUT, Entries, POLL, PairingFailure, PairingPhase, Side, VaultItems, broken, waiting,
-};
 use super::transfer::STEP_TIMEOUT;
-use crate::confirm::{Localized, invisible, shown};
+use super::{
+    ANSWER_TIMEOUT, Entries, IO_TIMEOUT, POLL, PairingFailure, PairingPhase, Side, VaultItems,
+    broken,
+};
+use crate::config::SshConfig;
+use crate::known_hosts::KnownHosts;
+use crate::p2p::connection::Connection;
+use crate::p2p::protocol::{EntrySync, VaultDecisions};
+use crate::p2p::{Message, PeerKey, Session};
+use crate::sync::host_keys::{self, KeysDiffer};
+use crate::sync::hosts::{self, RiskyLine};
+use crate::sync::{
+    Base, Change, Conflict, Hasher, MAX_MANIFEST, Manifest, agree, agree_hashed, digest, digests,
+    plan,
+};
+use crate::vault::envs::files::CloudService;
+use crate::vault::projects::ProjectRecord;
+use crate::vault::sync::{
+    Party, VaultBase, VaultChange, VaultChoices, VaultConflict, VaultCounts, VaultPlan,
+};
+use crate::vault::{ContactRecord, DeviceRecord, MAX_DATABASE_SIZE, learned_devices};
 
 /// More deletions than this within [`DELETION_WINDOW`] from the user's
 /// other devices, all of them together, need the user's yes: a device
@@ -69,13 +72,6 @@ pub const MASS_DELETE: usize = 5;
 /// Over how long deletions from the user's other devices are counted, in
 /// seconds.
 const DELETION_WINDOW: i64 = 24 * 60 * 60;
-/// Most directives the system dialog lists.
-const SHOWN_LINES: usize = 8;
-/// Longest name the system dialog shows in full.
-const SHOWN_CHARS: usize = 120;
-/// Longest value of a directive or variable the system dialog shows in
-/// full: past it, its start and its end.
-const SHOWN_VALUE: usize = 1000;
 
 /// What a sync starts from on one side.
 pub struct SyncLocal {
@@ -110,8 +106,10 @@ pub struct SyncState {
     /// Deletions this computer made from the user's other devices without
     /// asking, whichever they came from: when (seconds since 1970) and how
     /// many. Those of the last [`DELETION_WINDOW`] count with a sync's own.
-    /// Kept in a small file of their own for this computer
-    /// ([`Side::sync_unasked`]), written before a sync changes anything.
+    /// Kept apart from each device's state, one list for this device
+    /// ([`super::SyncStore::sync_unasked`]), written before a sync changes
+    /// anything; the conversation reads it from
+    /// [`super::SyncStore::unasked`], never from a kept state.
     #[serde(skip)]
     pub unasked: Vec<(i64, u32)>,
 }
@@ -164,7 +162,7 @@ pub struct SyncWrite {
 /// What the user of the side that connected decides on.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = crate::types::BINDINGS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
 pub struct Review {
     /// Hosts both computers changed, differently.
     pub conflicts: Vec<Conflict>,
@@ -181,7 +179,7 @@ pub struct Review {
 /// What the user decides on of the vault's entries and groups.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = crate::types::BINDINGS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
 pub struct VaultReview {
     /// Items both computers changed, differently, or one deleted and the
     /// other changed.
@@ -200,7 +198,7 @@ impl Review {
     pub fn may_show(&self, item: &str, field: &str) -> bool {
         field
             .strip_prefix("s:")
-            .is_some_and(|name| !sshkm_core::vault::is_otp_field(name))
+            .is_some_and(|name| !crate::vault::is_otp_field(name))
             && self.vault.conflicts.iter().any(|conflict| {
                 conflict.id == item
                     && conflict.here == Party::Changed
@@ -222,7 +220,7 @@ impl Review {
 /// A risky change: the host and the directives it would add.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = crate::types::BINDINGS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
 pub struct RiskyChange {
     pub id: String,
     pub lines: Vec<RiskyLine>,
@@ -243,7 +241,7 @@ pub struct RiskyVariables {
 /// next sync.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = crate::types::BINDINGS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
 pub struct SyncDecisions {
     /// Conflicts where this computer's version stays.
     #[serde(default)]
@@ -275,7 +273,7 @@ pub struct SyncDecisions {
 /// How a sync went on this side.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = crate::types::BINDINGS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
 pub struct SyncSummary {
     /// Hosts added, changed and deleted here.
     pub added: u32,
@@ -304,7 +302,7 @@ pub struct SyncSummary {
 /// Why the vault's entries didn't sync.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-#[cfg_attr(test, derive(ts_rs::TS), ts(export, export_to = crate::types::BINDINGS))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = crate::TS_DIR))]
 pub enum VaultOff {
     /// A vault is in a folder this cloud service keeps in step: this
     /// computer's (`here`) or the other's.
@@ -337,7 +335,7 @@ impl VaultOff {
 
 /// The rest of the conversation on either side.
 pub fn run(
-    session: &mut Session<TcpStream>,
+    session: &mut Session<impl Connection>,
     side: &impl Side,
     peer: PeerKey,
     entries: Entries,
@@ -367,14 +365,15 @@ struct VaultSorted {
 }
 
 fn talk(
-    session: &mut Session<TcpStream>,
+    session: &mut Session<impl Connection>,
     side: &impl Side,
     peer: PeerKey,
     entries: Entries,
 ) -> Result<PairingPhase, PairingFailure> {
     let initiator = session.is_initiator();
     side.show(None, &PairingPhase::Syncing);
-    let local = side.sync_load(peer)?;
+    let mut local = side.sync_load(peer)?;
+    local.state.unasked = unasked(side);
     let (mine, theirs) = swap_manifests(session, &local)?;
     let vault = match EntrySync::agreed(entries.mine, entries.theirs) {
         Some(_) => Some(swap_vault(session, side, &local.state.vault)?),
@@ -480,7 +479,7 @@ fn talk(
 
 /// Sends this side's manifest and reads the other's, checked.
 fn swap_manifests(
-    session: &mut Session<TcpStream>,
+    session: &mut Session<impl Connection>,
     local: &SyncLocal,
 ) -> Result<(Manifest, Manifest), PairingFailure> {
     let hosts = hosts::portable(&local.config);
@@ -554,7 +553,7 @@ fn remember_vault(
 /// that didn't connect reads before it makes its own copy, so the other
 /// isn't left writing while it does; writes may take as long as a step.
 fn swap_vault(
-    session: &mut Session<TcpStream>,
+    session: &mut Session<impl Connection>,
     side: &impl Side,
     base: &VaultBase,
 ) -> Result<VaultPlan, PairingFailure> {
@@ -581,7 +580,7 @@ fn swap_vault(
 /// on whatever needs one, less the risky ones they don't allow in the
 /// system dialog, sent to the other side; there, what came.
 fn settle(
-    session: &mut Session<TcpStream>,
+    session: &mut Session<impl Connection>,
     side: &impl Side,
     config: &SshConfig,
     sorted: &Sorted,
@@ -714,176 +713,6 @@ fn allow_risky(
     }
 }
 
-/// The system dialog that asks to allow `changes` from a sync with `peer`
-/// in the config file `file`: its title, text and button.
-pub fn risky_prompt(
-    peer: &str,
-    file: &str,
-    changes: &[RiskyChange],
-) -> (Localized, Localized, Localized) {
-    let en = risky_list(changes, |n| format!("…and {n} more"));
-    let ru = risky_list(changes, |n| format!("…и ещё {n}"));
-    let uz = risky_list(changes, |n| format!("…va yana {n} ta"));
-    let peer = shown(peer, SHOWN_CHARS);
-    (
-        Localized::new(
-            "Allow ssh to run this?",
-            "Разрешить ssh запускать это?",
-            "ssh buni ishga tushirsinmi?",
-        ),
-        Localized::new(
-            format!(
-                "The sync with {peer} adds to {file} what makes ssh run programs, load code \
-                 or let the server use this computer each time you connect:\n\n{en}\n\n\
-                 Allow it only if you made these changes on {peer} yourself. Otherwise \
-                 they wait for the next sync."
-            ),
-            format!(
-                "Синхронизация с {peer} добавляет в {file} то, из-за чего ssh при каждом \
-                 подключении запускает программы, загружает код или даёт серверу доступ к \
-                 этому компьютеру:\n\n{ru}\n\n\
-                 Разрешайте, только если эти изменения на {peer} сделали вы сами. Иначе \
-                 они подождут следующей синхронизации."
-            ),
-            format!(
-                "{peer} bilan sinxronlash {file} ga ssh har safar ulanganda dasturlarni \
-                 ishga tushiradigan, kod yuklaydigan yoki serverga bu kompyuterdan \
-                 foydalanishga ruxsat beradigan narsalarni qoʻshadi:\n\n{uz}\n\n\
-                 Faqat bu oʻzgarishlarni {peer} da oʻzingiz qilgan boʻlsangiz, ruxsat \
-                 bering. Aks holda ular keyingi sinxronlashni kutadi."
-            ),
-        ),
-        Localized::new(
-            "Allow and sync",
-            "Разрешить и синхронизировать",
-            "Ruxsat berish va sinxronlash",
-        ),
-    )
-}
-
-/// One line per directive (`• Host prod: ProxyCommand …`), at most
-/// [`SHOWN_LINES`] of them; `more` says how many were left out.
-fn risky_list(changes: &[RiskyChange], more: impl Fn(usize) -> String) -> String {
-    let all: Vec<String> = changes
-        .iter()
-        .flat_map(|change| {
-            change.lines.iter().map(move |line| {
-                format!(
-                    "• Host {}: {} {}",
-                    shown(&change.id, SHOWN_CHARS),
-                    shown(&line.key, SHOWN_CHARS),
-                    shown_value(&line.value)
-                )
-            })
-        })
-        .collect();
-    let mut lines: Vec<String> = all.iter().take(SHOWN_LINES).cloned().collect();
-    if all.len() > SHOWN_LINES {
-        lines.push(more(all.len() - SHOWN_LINES));
-    }
-    lines.join("\n")
-}
-
-/// The system dialog that asks to allow `changes` to environments from a
-/// sync with `peer`: its title, text and button. One line per variable,
-/// with the value `value` gives for it (`NODE_OPTIONS=--require …`), so
-/// what is allowed is what programs will load.
-pub fn variables_prompt(
-    peer: &str,
-    changes: &[RiskyVariables],
-    value: &dyn Fn(&RiskyVariables, &str) -> Option<String>,
-) -> (Localized, Localized, Localized) {
-    let list = |more: &dyn Fn(usize) -> String| {
-        let all: Vec<String> = changes
-            .iter()
-            .flat_map(|change| {
-                change.names.iter().map(move |name| {
-                    let shown_value = value(change, name)
-                        .map(|value| format!("={}", shown_value(&value)))
-                        .unwrap_or_default();
-                    format!(
-                        "• {}: {}{shown_value}",
-                        shown(&change.environment, SHOWN_CHARS),
-                        shown(name, SHOWN_CHARS)
-                    )
-                })
-            })
-            .collect();
-        let mut lines: Vec<String> = all.iter().take(SHOWN_LINES).cloned().collect();
-        if all.len() > SHOWN_LINES {
-            lines.push(more(all.len() - SHOWN_LINES));
-        }
-        lines.join("\n")
-    };
-    let en = list(&|n| format!("…and {n} more"));
-    let ru = list(&|n| format!("…и ещё {n}"));
-    let uz = list(&|n| format!("…va yana {n} ta"));
-    let peer = shown(peer, SHOWN_CHARS);
-    (
-        Localized::new(
-            "Allow variables that run code?",
-            "Разрешить переменные, которые запускают код?",
-            "Kod ishga tushiradigan oʻzgaruvchilarga ruxsat berilsinmi?",
-        ),
-        Localized::new(
-            format!(
-                "The sync with {peer} adds or changes variables that make programs load \
-                 code or run commands when you use the environment in a terminal or a \
-                 .env file:\n\n{en}\n\nAllow it only if you made these changes on {peer} \
-                 yourself. Otherwise they wait for the next sync."
-            ),
-            format!(
-                "Синхронизация с {peer} добавляет или меняет переменные, из-за которых \
-                 программы загружают код или запускают команды, когда вы используете \
-                 окружение в терминале или в файле .env:\n\n{ru}\n\nРазрешайте, только \
-                 если эти изменения на {peer} сделали вы сами. Иначе они подождут следующей \
-                 синхронизации."
-            ),
-            format!(
-                "{peer} bilan sinxronlash muhitni terminalda yoki .env faylida \
-                 ishlatganingizda dasturlarga kod yuklatadigan yoki buyruq ishga \
-                 tushiradigan oʻzgaruvchilarni qoʻshadi yoki oʻzgartiradi:\n\n{uz}\n\n\
-                 Faqat bu oʻzgarishlarni {peer} da oʻzingiz qilgan boʻlsangiz, ruxsat \
-                 bering. Aks holda ular keyingi sinxronlashni kutadi."
-            ),
-        ),
-        Localized::new(
-            "Allow and sync",
-            "Разрешить и синхронизировать",
-            "Ruxsat berish va sinxronlash",
-        ),
-    )
-}
-
-/// A value as the dialog shows it ([`shown`]): a run of spaces as one, so
-/// padding can't push what follows out of sight, and in full up to
-/// [`SHOWN_VALUE`] characters; past that, its start and its end.
-fn shown_value(text: &str) -> String {
-    let mut collapsed = String::with_capacity(text.len());
-    for c in text.chars() {
-        if c.is_whitespace() && !c.is_control() && !invisible(c) {
-            if !collapsed.ends_with(' ') {
-                collapsed.push(' ');
-            }
-        } else {
-            collapsed.push(c);
-        }
-    }
-    let chars: Vec<char> = collapsed.chars().collect();
-    if chars.len() <= SHOWN_VALUE {
-        return shown(&collapsed, SHOWN_VALUE);
-    }
-    let half = SHOWN_VALUE / 2;
-    let head: String = chars[..half].iter().collect();
-    let tail: String = chars[chars.len() - half..].iter().collect();
-    format!(
-        "{} … (+{}) … {}",
-        shown(&head, half),
-        chars.len() - SHOWN_VALUE,
-        shown(&tail, half)
-    )
-}
-
 /// What the changes to make here follow: which side this is, the
 /// decisions, and whether the deletions the other user decided through
 /// conflicts fit within the limit ([`decided_deletions`]).
@@ -897,6 +726,31 @@ struct Choice<'a> {
 /// or moves it to the recycle bin.
 fn removes(conflict: &VaultConflict) -> bool {
     conflict.there == Party::Deleted || conflict.to_bin
+}
+
+/// Whether making `choices` of `plan` deletes an item from the vault or
+/// moves one to the recycle bin: then a backup that outlives the rotation
+/// goes first ([`super::SyncStore::vault_apply`]).
+pub fn deletes(plan: &VaultPlan, choices: &VaultChoices) -> bool {
+    plan.changes
+        .iter()
+        .any(|change| change.removal && choices.make.contains(&change.id))
+        || plan
+            .conflicts
+            .iter()
+            .any(|conflict| removes(conflict) && choices.theirs.contains(&conflict.id))
+}
+
+/// The deletions this device made without asking, from all the user's
+/// devices ([`SyncState::unasked`]); at the limit for a day when they can't
+/// be read, which is kept so (best effort: unkept, it stays at the limit
+/// the next time too).
+fn unasked(side: &impl Side) -> Vec<(i64, u32)> {
+    side.unasked().unwrap_or_else(|_| {
+        let at_the_limit = SyncState::at_the_limit(OffsetDateTime::now_utc().unix_timestamp());
+        let _ = side.sync_unasked(&at_the_limit);
+        at_the_limit
+    })
 }
 
 /// Deletions the other user decided through conflicts, on the side that
@@ -1027,7 +881,10 @@ fn choose_vault(
 
 /// Sends `message` and reads the other side's: the side that connected
 /// sends first.
-fn swap(session: &mut Session<TcpStream>, message: &Message) -> Result<Message, PairingFailure> {
+fn swap(
+    session: &mut Session<impl Connection>,
+    message: &Message,
+) -> Result<Message, PairingFailure> {
     if session.is_initiator() {
         session.send_large(message).map_err(broken)?;
         session.recv_large(MAX_MANIFEST).map_err(broken)
@@ -1044,7 +901,7 @@ fn swap(session: &mut Session<TcpStream>, message: &Message) -> Result<Message, 
 /// need a look when, with those made from any of them without asking in the
 /// last [`DELETION_WINDOW`], they pass [`MASS_DELETE`], hosts and the
 /// vault's items counted together.
-fn sort(local: &SyncLocal, plan: &sshkm_core::sync::Plan, vault: Option<&VaultPlan>) -> Sorted {
+fn sort(local: &SyncLocal, plan: &crate::sync::Plan, vault: Option<&VaultPlan>) -> Sorted {
     let mut sorted = Sorted {
         conflicts: plan.conflicts.clone(),
         ..Sorted::default()
@@ -1089,7 +946,7 @@ fn sort(local: &SyncLocal, plan: &sshkm_core::sync::Plan, vault: Option<&VaultPl
 /// Waits for the user's decisions while watching the connection; after
 /// [`ANSWER_TIMEOUT`] everything waits for the next sync.
 fn decide(
-    session: &mut Session<TcpStream>,
+    session: &mut Session<impl Connection>,
     side: &impl Side,
 ) -> Result<SyncDecisions, PairingFailure> {
     let started = Instant::now();
@@ -1097,7 +954,11 @@ fn decide(
         if let Some(decisions) = side.decisions(POLL)? {
             return Ok(decisions);
         }
-        if waiting(session.stream()).map_err(|_| PairingFailure::Broken)? {
+        if session
+            .stream()
+            .waiting()
+            .map_err(|_| PairingFailure::Broken)?
+        {
             // The other side says nothing until it has the decisions:
             // anything now is it hanging up.
             return Err(PairingFailure::PeerLeft);
@@ -1114,8 +975,8 @@ fn count(n: usize) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::super::pairing::Purpose;
-    use super::super::script::{Script, over_own_handshake, talk};
+    use super::super::Purpose;
+    use super::super::script::{Script, over_own_handshake, talk, talk_on};
     use super::*;
 
     const LEFT: &str =
@@ -1313,51 +1174,6 @@ mod tests {
     }
 
     #[test]
-    fn the_system_dialog_lists_hosts_and_directives_as_ssh_reads_them() {
-        let change = |id: &str, n: usize| RiskyChange {
-            id: id.into(),
-            lines: (0..n)
-                .map(|i| RiskyLine {
-                    key: "LocalCommand".into(),
-                    value: format!("echo {i}\u{202E}"),
-                })
-                .collect(),
-        };
-        let (title, body, approve) =
-            risky_prompt("Bob\u{200B}", "~/.ssh/config", &[change("prod", 2)]);
-        assert_eq!(title.en, "Allow ssh to run this?");
-        assert_eq!(approve.ru, "Разрешить и синхронизировать");
-        assert!(
-            body.en
-                .contains("The sync with Bob<U+200B> adds to ~/.ssh/config")
-        );
-        assert!(
-            body.en
-                .contains("• Host prod: LocalCommand echo 0<U+202E>\n")
-        );
-        assert!(body.uz.contains("• Host prod: LocalCommand echo 1<U+202E>"));
-
-        let (_, body, _) = risky_prompt("Bob", "config", &[change("a", 5), change("b", 6)]);
-        assert_eq!(body.en.matches("• Host").count(), SHOWN_LINES);
-        assert!(body.en.contains("…and 3 more"));
-        assert!(body.ru.contains("…и ещё 3"));
-        // Padding can't hide what follows, nor a line break of its own.
-        let padded = format!(
-            "--max-old-space-size=4096{}--require /tmp/x.js",
-            " ".repeat(100)
-        );
-        assert_eq!(
-            shown_value(&padded),
-            "--max-old-space-size=4096 --require /tmp/x.js"
-        );
-        assert_eq!(shown_value("a\u{2028}b\u{2029}c"), "a<U+2028>b<U+2029>c");
-        let long = format!("{}{}", "x".repeat(SHOWN_VALUE), "--require /tmp/x.js");
-        let value = shown_value(&long);
-        assert!(value.ends_with("--require /tmp/x.js"), "{value}");
-        assert!(value.contains(" … (+19) … "));
-    }
-
-    #[test]
     fn many_deletions_need_a_yes() {
         let many = (1..=6)
             .map(|n| format!("Host h{n}\n    HostName 10.0.1.{n}\n\n"))
@@ -1437,6 +1253,24 @@ mod tests {
     }
 
     #[test]
+    fn deletions_count_from_the_devices_list_at_the_limit_when_unreadable() {
+        let hosts = "Host h1\n    HostName 10.0.1.1\n\nHost h2\n    HostName 10.0.1.2\n";
+        let ((_, mut left), (_, right)) = sync(
+            Script::own("alice", "s", hosts),
+            Script::own("bob", "s", ""),
+        );
+        set(&right, "");
+        // Alice's list of the day's deletions can't be read (her kept state
+        // never has it: `sync_load` leaves it out). Two deletions are past
+        // the limit then, and wait for her.
+        left.unasked_unreadable = true;
+        let ((left_sum, left), _) = sync(left, right);
+        assert_eq!((left_sum.removed, left_sum.deferred), (0, 2));
+        // The limit is kept, to hold for a day.
+        assert_eq!(unasked(&left), u32::try_from(MASS_DELETE).unwrap());
+    }
+
+    #[test]
     fn only_the_users_devices_with_the_vault_sync() {
         let mut stranger = Script::own("bob", "s", RIGHT);
         stranger.own_peer = false;
@@ -1445,7 +1279,11 @@ mod tests {
         let not_own = PairingPhase::Failed {
             reason: PairingFailure::NotOwn,
         };
-        assert_eq!((&left_end, &right_end), (&not_own, &not_own));
+        // The side connected to hangs up without a word.
+        let left = PairingPhase::Failed {
+            reason: PairingFailure::PeerLeft,
+        };
+        assert_eq!((&left_end, &right_end), (&left, &not_own));
         assert_eq!(right.config_text(), RIGHT);
 
         let ((left_end, _), _) = talk(
@@ -1466,8 +1304,8 @@ mod tests {
     /// Two copies of one vault (with the key own devices share), each on
     /// a side whose entries sync, the first with a login `Mail`.
     fn vault_pair() -> (tempfile::TempDir, Script, Script, String) {
-        use sshkm_core::SecretString;
-        use sshkm_core::vault::{EntryInput, Vault, VaultPaths};
+        use crate::SecretString;
+        use crate::vault::{EntryInput, Vault, VaultPaths};
         let dir = tempfile::tempdir().unwrap();
         let paths = |name: &str| {
             let folder = dir.path().join(name);
@@ -1504,9 +1342,9 @@ mod tests {
 
     fn add_login(side: &Script, title: &str) -> String {
         side.real_vault()
-            .add_entry(&sshkm_core::vault::EntryInput {
+            .add_entry(&crate::vault::EntryInput {
                 title: title.into(),
-                ..sshkm_core::vault::EntryInput::default()
+                ..crate::vault::EntryInput::default()
             })
             .unwrap()
     }
@@ -1550,10 +1388,10 @@ mod tests {
             vault
                 .update_entry(
                     &mail,
-                    &sshkm_core::vault::EntryInput {
+                    &crate::vault::EntryInput {
                         title: detail.summary.title,
                         url: "https://mail.example".into(),
-                        ..sshkm_core::vault::EntryInput::default()
+                        ..crate::vault::EntryInput::default()
                     },
                 )
                 .unwrap();
@@ -1565,6 +1403,46 @@ mod tests {
             right.real_vault().entry(&mail).unwrap().summary.url,
             "https://mail.example"
         );
+    }
+
+    #[test]
+    fn whichever_side_connects_each_takes_what_the_other_has() {
+        let (_dir, alice, bob, _) = vault_pair();
+        let shop = add_login(&alice, "Shop");
+        let blog = add_login(&bob, "Blog");
+        // Bob connects this time.
+        let ((bob_sum, bob), (alice_sum, alice)) = sync(bob, alice);
+        assert_eq!((bob_sum.added, alice_sum.added), (1, 1));
+        assert_eq!(
+            (bob_sum.vault.logins.added, alice_sum.vault.logins.added),
+            (1, 1)
+        );
+        assert_eq!(title(&bob, &shop).as_deref(), Some("Shop"));
+        assert_eq!(title(&alice, &blog).as_deref(), Some("Blog"));
+        assert!(bob.config_text().contains("Host a\n"));
+        assert!(alice.config_text().contains("Host b\n"));
+    }
+
+    #[test]
+    fn a_sync_runs_over_a_socket_as_over_a_pipe() {
+        use std::net::{TcpListener, TcpStream};
+
+        use crate::p2p::Identity;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let (_dir, left, right, _) = vault_pair();
+        let shop = add_login(&left, "Shop");
+        let ((left_end, _), (right_end, right)) = talk_on(
+            (client, server),
+            (left, Identity::generate().unwrap()),
+            (right, Identity::generate().unwrap()),
+            Purpose::Sync,
+        );
+        assert_eq!(synced(&left_end).added, 1);
+        assert_eq!(synced(&right_end).vault.logins.added, 1);
+        assert_eq!(title(&right, &shop).as_deref(), Some("Shop"));
     }
 
     #[test]
@@ -1613,9 +1491,9 @@ mod tests {
             side.real_vault()
                 .update_entry(
                     &mail,
-                    &sshkm_core::vault::EntryInput {
+                    &crate::vault::EntryInput {
                         title: to.into(),
-                        ..sshkm_core::vault::EntryInput::default()
+                        ..crate::vault::EntryInput::default()
                     },
                 )
                 .unwrap();
@@ -1644,9 +1522,9 @@ mod tests {
             right_versions + 1
         );
         // Saved, though nothing else of the vault changed on that side.
-        let saved = sshkm_core::vault::Vault::unlock(
-            &sshkm_core::vault::VaultPaths::new(dir.path().join("b/vault.kdbx")),
-            &sshkm_core::SecretString::from("master"),
+        let saved = crate::vault::Vault::unlock(
+            &crate::vault::VaultPaths::new(dir.path().join("b/vault.kdbx")),
+            &crate::SecretString::from("master"),
         )
         .unwrap();
         assert_eq!(saved.entry(&mail).unwrap().history_len, right_versions + 1);
@@ -1675,8 +1553,8 @@ mod tests {
 
     #[test]
     fn a_variable_that_loads_code_needs_the_system_dialog() {
-        use sshkm_core::SecretString;
-        use sshkm_core::vault::envs::{EnvInput, EnvVarInput};
+        use crate::SecretString;
+        use crate::vault::envs::{EnvInput, EnvVarInput};
         let (_dir, mut left, right, _) = vault_pair();
         let env = {
             let mut vault = right.real_vault();
@@ -1711,30 +1589,6 @@ mod tests {
         assert_eq!(asked.len(), 1);
         assert_eq!(asked[0].names, ["NODE_OPTIONS"]);
         assert_eq!(asked[0].environment, "dev");
-    }
-
-    #[test]
-    fn the_variables_dialog_names_the_environment_and_shows_the_values() {
-        let value = |_: &RiskyVariables, name: &str| {
-            (name == "NODE_OPTIONS").then(|| "--require /tmp/x.js\u{202E}".to_owned())
-        };
-        let (_, body, _) = variables_prompt(
-            "MacBook",
-            &[RiskyVariables {
-                id: "x".into(),
-                environment: "Shop · dev".into(),
-                names: vec!["NODE_OPTIONS".into(), "PATH".into()],
-            }],
-            &value,
-        );
-        assert!(
-            body.en.contains(
-                "• Shop · dev: NODE_OPTIONS=--require /tmp/x.js<U+202E>\n• Shop · dev: PATH\n"
-            ),
-            "{}",
-            body.en
-        );
-        assert!(body.ru.contains("MacBook"));
     }
 
     fn unasked(side: &Script) -> u32 {
@@ -1829,9 +1683,9 @@ mod tests {
             side.real_vault()
                 .update_entry(
                     id,
-                    &sshkm_core::vault::EntryInput {
+                    &crate::vault::EntryInput {
                         title: to.into(),
-                        ..sshkm_core::vault::EntryInput::default()
+                        ..crate::vault::EntryInput::default()
                     },
                 )
                 .unwrap();
@@ -1856,7 +1710,7 @@ mod tests {
 
     #[test]
     fn a_device_learned_through_a_sync_is_named_in_the_summary() {
-        let key = sshkm_core::p2p::Identity::generate()
+        let key = crate::p2p::Identity::generate()
             .unwrap()
             .public()
             .to_string();
@@ -1877,7 +1731,7 @@ mod tests {
 
     #[test]
     fn only_a_text_field_of_a_conflict_both_changed_is_shown() {
-        use sshkm_core::vault::sync::ItemKind;
+        use crate::vault::sync::ItemKind;
         let conflict = |id: &str, there: Party| VaultConflict {
             id: id.into(),
             kind: ItemKind::Login,

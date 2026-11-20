@@ -12,17 +12,17 @@
 //! the one they meant; until then nothing goes to it, not even the offer.
 //! An item with a secret in it (a password, an environment) goes only after
 //! the user's yes in a system dialog that names the device as this vault
-//! knows it ([`Side::allow_send`]).
+//! knows it ([`User::allow_send`]).
 //!
-//! [`conversation`]: super::pairing::conversation
+//! [`conversation`]: super::conversation
+//! [`User::allow_send`]: super::User::allow_send
 
-use std::net::TcpStream;
 use std::time::Duration;
 
-use sshkm_core::p2p::protocol::{Item, ItemSummary};
-use sshkm_core::p2p::{Message, Session};
-
-use super::pairing::{ANSWER_TIMEOUT, PairingFailure, PairingPhase, Side, broken, wait_for_answer};
+use super::{ANSWER_TIMEOUT, PairingFailure, PairingPhase, Side, broken, wait_for_answer};
+use crate::p2p::connection::Connection;
+use crate::p2p::protocol::{Item, ItemSummary};
+use crate::p2p::{Message, Session};
 
 /// How long the side that was connected to waits for an offer after
 /// pairing, while the other user may be asked whether it is the device
@@ -38,7 +38,7 @@ pub(super) const STEP_TIMEOUT: Duration = Duration::from_secs(30);
 /// An item that needs a feature the other side didn't name (`features`) is
 /// not even offered.
 pub fn send(
-    session: &mut Session<TcpStream>,
+    session: &mut Session<impl Connection>,
     side: &impl Side,
     item: &Item,
     known: Option<&str>,
@@ -133,7 +133,7 @@ pub fn send(
 
 /// Receives the item the other side offers, if it offers one: `None` when
 /// it hung up instead (it only paired).
-pub fn receive(session: &mut Session<TcpStream>, side: &impl Side) -> Option<PairingPhase> {
+pub fn receive(session: &mut Session<impl Connection>, side: &impl Side) -> Option<PairingPhase> {
     let _ = session.stream().set_read_timeout(Some(OFFER_WAIT));
     let summary = match session.recv() {
         // A kind this version doesn't know: said so, never asked about.
@@ -208,14 +208,14 @@ pub fn receive(session: &mut Session<TcpStream>, side: &impl Side) -> Option<Pai
 
 #[cfg(test)]
 mod tests {
-    use std::net::{TcpListener, TcpStream};
     use std::thread;
 
-    use sshkm_core::p2p::protocol::{HostKey, HostsEntry, ItemSummary, Server, VERSION};
-    use sshkm_core::p2p::{Identity, accept, connect};
+    use crate::p2p::connection::pipe;
+    use crate::p2p::protocol::{HostKey, HostsEntry, ItemSummary, Server, VERSION};
+    use crate::p2p::{Identity, accept, connect};
 
-    use super::super::pairing::{Purpose, conversation};
     use super::super::script::{Script, codes, peers, run, talk_as};
+    use super::super::{Purpose, conversation};
     use super::*;
 
     fn password() -> Item {
@@ -520,7 +520,7 @@ mod tests {
     /// out there, and named; the sender's dialog names them too.
     #[test]
     fn variables_that_run_code_are_named_where_an_environment_arrives() {
-        let var = |name: &str| sshkm_core::p2p::protocol::EnvVariable {
+        let var = |name: &str| crate::p2p::protocol::EnvVariable {
             name: name.into(),
             value: "x".into(),
             secret: false,
@@ -569,17 +569,15 @@ mod tests {
 
     #[test]
     fn a_payload_other_than_the_offer_is_not_saved() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
+        let (stream, theirs) = pipe();
         let receiver = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
+            let stream = theirs;
             let mut session = accept(stream, &Identity::generate().unwrap()).unwrap();
             let mut side = Script::new("bob", Some(true));
             side.knows = true;
             (conversation(&mut session, &side, None), side)
         });
         // A sender that offers a password, then sends a host.
-        let stream = TcpStream::connect(address).unwrap();
         let mut session = connect(stream, &Identity::generate().unwrap()).unwrap();
         let hello = Message::Hello {
             version: VERSION,
@@ -611,16 +609,14 @@ mod tests {
 
     #[test]
     fn a_key_other_than_the_offered_one_is_not_saved() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
+        let (stream, theirs) = pipe();
         let receiver = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
+            let stream = theirs;
             let mut session = accept(stream, &Identity::generate().unwrap()).unwrap();
             let mut side = Script::new("bob", Some(true));
             side.knows = true;
             (conversation(&mut session, &side, None), side)
         });
-        let stream = TcpStream::connect(address).unwrap();
         let mut session = connect(stream, &Identity::generate().unwrap()).unwrap();
         session
             .send(&Message::Hello {
@@ -658,17 +654,15 @@ mod tests {
 
     #[test]
     fn an_item_of_an_unknown_kind_is_answered_cleanly() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
+        let (stream, theirs) = pipe();
         let receiver = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
+            let stream = theirs;
             let mut session = accept(stream, &Identity::generate().unwrap()).unwrap();
             let mut side = Script::new("bob", Some(true));
             side.knows = true;
             (conversation(&mut session, &side, None), side)
         });
         // A later version offers a kind this one doesn't know.
-        let stream = TcpStream::connect(address).unwrap();
         let mut session = connect(stream, &Identity::generate().unwrap()).unwrap();
         session
             .send(&Message::Hello {
@@ -736,7 +730,7 @@ mod tests {
 
     #[test]
     fn variables_that_run_code_stay_here_for_a_version_that_would_set_them() {
-        let var = |name: &str| sshkm_core::p2p::protocol::EnvVariable {
+        let var = |name: &str| crate::p2p::protocol::EnvVariable {
             name: name.into(),
             value: "x".into(),
             secret: false,
@@ -764,10 +758,9 @@ mod tests {
     /// features, which takes it; returns what was offered and what was sent,
     /// and the sending side.
     fn send_to_an_older_version(item: &Item) -> (ItemSummary, Item, Script) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
+        let (stream, theirs) = pipe();
         let older = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
+            let stream = theirs;
             let mut session = accept(stream, &Identity::generate().unwrap()).unwrap();
             assert!(matches!(session.recv().unwrap(), Message::Hello { .. }));
             session
@@ -794,7 +787,6 @@ mod tests {
             session.send(&Message::Received { saved: true }).unwrap();
             (offered, item)
         });
-        let stream = TcpStream::connect(address).unwrap();
         let mut session = connect(stream, &Identity::generate().unwrap()).unwrap();
         let mut side = Script::new("alice", Some(true));
         side.knows = true;
@@ -813,11 +805,10 @@ mod tests {
             variables: Vec::new(),
         };
         assert!(personal.requires().is_some());
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
+        let (stream, theirs) = pipe();
         // A receiver of a version before features.
         let receiver = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
+            let stream = theirs;
             let mut session = accept(stream, &Identity::generate().unwrap()).unwrap();
             session
                 .send(&Message::Hello {
@@ -832,7 +823,6 @@ mod tests {
             // The sender hangs up without offering anything.
             session.recv().is_err()
         });
-        let stream = TcpStream::connect(address).unwrap();
         let mut session = connect(stream, &Identity::generate().unwrap()).unwrap();
         let mut side = Script::new("alice", Some(true));
         side.knows = true;

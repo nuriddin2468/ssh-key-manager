@@ -39,6 +39,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use sshkm_core::config::{HostKind, SshConfig};
+use sshkm_core::p2p::conversation::PairingPhase;
 use sshkm_core::{ErrorCode, fsutil};
 use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
@@ -50,7 +51,6 @@ use crate::commands::Shared;
 use crate::confirm::Localized;
 use crate::error::{AppError, AppResult};
 use crate::nearby::SharedNearby;
-use crate::nearby::pairing::PairingPhase;
 use crate::tunnels::SharedTunnels;
 use crate::vault::LockReason;
 

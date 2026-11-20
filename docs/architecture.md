@@ -127,7 +127,7 @@ real `~/.ssh`. Its modules:
     names, issuer and dates out of each certificate.
 
 - `p2p`: two copies of the app talking over the local network, without the network
-  itself, so the tests run over loopback sockets.
+  itself, so the tests run over loopback sockets and in-memory pipes.
   - `identity` is the device's Curve25519 key pair.
   - `session` runs a Noise `XX` handshake over any byte stream, sends length-framed
     JSON messages, and agrees on the six-digit pairing code with a hash commitment
@@ -139,6 +139,18 @@ real `~/.ssh`. Its modules:
     random key the vault keeps (`sshkm.own.key`).
   - Large values (a vault file, a long manifest) go as their size and SHA-256, then
     in parts, so a message never passes 1 MiB.
+  - `conversation` is what two devices say once the session is open, the same in the
+    desktop app and on the phone: pairing and sending an item (`transfer`), adding
+    one of the user's devices and giving a new one the vault (`own`), and a sync
+    between two of them (`sync`): manifests both ways, then (when both sync the
+    vault's entries and neither vault is in a cloud folder) the vaults' copies, each
+    side's plan, the decisions of the user who started it, writing the files and the
+    vault, and agreeing on the next snapshot. It runs over any `connection::Connection`
+    (a socket, or an in-memory `pipe` in the tests) and reaches the device through
+    `Side`, three traits by who answers: `User` (the page, the confirmation before a
+    device is added, the system dialogs), `Device` (its name, contacts, own devices
+    and vault proof) and `SyncStore` (host blocks and server keys, the records, the
+    snapshot per device, the vault's entries).
 
 - `sync`: keeping the user's own computers in step.
   - `merge` is a three-way merge of items made of fields, against a snapshot of keyed
@@ -257,9 +269,9 @@ translates.
 - **Nearby.** `src-tauri/src/nearby/`.
   - Announces the device with mDNS for ten minutes when asked, and browses for
     others while the Nearby page is open (`mdns-sd`).
-  - Pairs one device at a time, from either side, on its own thread. `pairing::converse`
-    is the whole conversation; it reaches the app through a small `Side` trait, so its
-    tests run two sides over loopback without Tauri.
+  - Pairs one device at a time, from either side, on its own thread, holding the
+    core's conversation (`sshkm_core::p2p::conversation`) on the socket; `AppSide` is
+    its `Side`: the Nearby page, the system dialogs, the vault, `~/.ssh` and `store`.
   - Talks only to addresses on the local network (`on_local_network`), and gives a
     connection the conversation only after its handshake, which has a deadline.
   - What the user must allow outside the page (sending a secret, adding a device,
@@ -270,17 +282,16 @@ translates.
     and shows the review; a public key goes to `~/.ssh` through `keys::add_public`,
     and its fingerprint to `nearby.json`, which the audit reads (`AuditInput::others`).
   - Every change goes to the UI as `nearby-changed` with the whole status.
-  - `own` adds one of the user's devices after the code: the user confirms, both are
-    recorded, and a computer without a vault gets it, held in memory until its user
-    sets a master password (`Vault::join`).
+  - Adding one of the user's devices (the core's `conversation::own`): after the code
+    the user confirms, both are recorded, and a computer without a vault gets it, held
+    in memory until its user sets a master password (`Vault::join`).
   - `presence` announces this computer to the user's devices while the vault is
     unlocked, on a port that only takes a sync, and finds theirs.
-  - `sync` is a sync's conversation: manifests both ways, then (when both sync the
-    vault's entries and neither vault is in a cloud folder) the vaults' copies, each
-    side's plan, the decisions of the user who started it, writing the files and the
-    vault after a backup, and agreeing on the next snapshot, which `store` keeps per
-    device in `sync/` in the app's data folder. During a review the other device's
-    copy stays in memory, for the values of a conflict the user asks to see
+  - A sync (the core's `conversation::sync`) writes `~/.ssh/config` and `known_hosts`
+    only if they are as it found them, and the vault after a backup; `store` keeps the
+    snapshot per device in `sync/` in the app's data folder, and `sync_prompt` builds
+    the system dialogs for risky changes. During a review the other device's copy
+    stays in memory, for the values of a conflict the user asks to see
     (`nearby_sync_value`), and goes when the sync ends.
   - `examples/nearby_peer.rs` stands in for another computer, also as a new one
     (`--join`) and as one of the user's devices (`--sync`).

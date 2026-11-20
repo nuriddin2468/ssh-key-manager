@@ -1,12 +1,17 @@
 //! An interactive shell on a terminal: bytes in, bytes out, the size of
 //! the screen, and the end.
 //!
-//! Output is read as events ([`Shell::next_event`]): the app's terminal
-//! asks for the next one when it has drawn the last, so a fast server
-//! waits for a slow screen (SSH's window) instead of filling memory. What
-//! goes either way is never logged.
+//! Output is read as events ([`Shell::next_event`]). russh widens SSH's
+//! window as data arrives, not as the app reads it; what bounds memory is
+//! the channel between russh's session task and the reader, 100 messages
+//! long. When it is full, the session task waits, and with it everything
+//! on the connection, keepalive answers included. So the app must keep
+//! asking for the next event for as long as the shell is open (one task or
+//! coroutine that does nothing else), even while the terminal isn't on
+//! screen. What goes either way is never logged.
 
 use std::collections::VecDeque;
+use std::time::Duration;
 
 use russh::client::Msg;
 use russh::{Channel, ChannelMsg, ChannelReadHalf, ChannelWriteHalf, Pty};
@@ -17,6 +22,11 @@ use crate::error::Error;
 
 /// The terminal type the phone's terminal emulates.
 pub const TERM: &str = "xterm-256color";
+
+/// How long the server may take to answer the terminal and shell requests.
+const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
+/// Output kept while waiting for those answers, at most.
+const PENDING_BYTES: usize = 1 << 20;
 
 /// The size of the terminal, in characters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,8 +70,9 @@ pub struct Shell {
 struct Reader {
     half: ChannelReadHalf,
     /// Events read while waiting for the server's answers to the terminal
-    /// and shell requests.
+    /// and shell requests, and their bytes.
     pending: VecDeque<ShellEvent>,
+    pending_bytes: usize,
     exit_status: Option<u32>,
     exit_signal: Option<String>,
     closed: bool,
@@ -87,12 +98,27 @@ impl Shell {
         let mut reader = Reader {
             half,
             pending: VecDeque::new(),
+            pending_bytes: 0,
             exit_status: None,
             exit_signal: None,
             closed: false,
         };
-        let refused = || Error::ShellRefused {
-            alias: connection.destination().alias.clone(),
+        let destination = connection.destination();
+        let answered = async |reader: &mut Reader| match tokio::time::timeout(
+            REPLY_TIMEOUT,
+            reader.wait_for_reply(),
+        )
+        .await
+        {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(Error::ShellRefused {
+                alias: destination.alias.clone(),
+            }),
+            Err(_) => Err(Error::TimedOut {
+                alias: destination.alias.clone(),
+                host: destination.host.clone(),
+                port: destination.port,
+            }),
         };
         // Backspace sends DEL, as the terminal view does; the line
         // discipline counts UTF-8 characters when it erases.
@@ -100,13 +126,9 @@ impl Shell {
         writer
             .request_pty(true, TERM, size.cols, size.rows, 0, 0, &modes)
             .await?;
-        if !reader.wait_for_reply().await {
-            return Err(refused());
-        }
+        answered(&mut reader).await?;
         writer.request_shell(true).await?;
-        if !reader.wait_for_reply().await {
-            return Err(refused());
-        }
+        answered(&mut reader).await?;
         Ok(Self {
             connection,
             writer,
@@ -120,7 +142,8 @@ impl Shell {
         self.reader.lock().await.next_event().await
     }
 
-    /// Sends what the user typed (or pasted).
+    /// Sends what the user typed (or pasted). Calls made one after another,
+    /// each awaited, go out in that order; calls in flight at once may not.
     pub async fn write(&self, data: &[u8]) -> Result<(), Error> {
         self.writer.data(data).await.map_err(Error::from)
     }
@@ -154,8 +177,9 @@ impl Shell {
 }
 
 impl Reader {
-    /// Waits for the server's answer to a request, keeping what else comes:
-    /// `true` for yes.
+    /// Waits for the server's answer to a request, keeping what else comes,
+    /// up to [`PENDING_BYTES`]: `true` for yes. A server that sends more
+    /// before it answers is taken as a no.
     async fn wait_for_reply(&mut self) -> bool {
         loop {
             match self.half.wait().await {
@@ -163,7 +187,13 @@ impl Reader {
                 Some(ChannelMsg::Failure) | None => return false,
                 Some(other) => {
                     if let Some(event) = self.event(other) {
-                        let ended = matches!(event, ShellEvent::Closed(_));
+                        let ended = match &event {
+                            ShellEvent::Output(data) => {
+                                self.pending_bytes += data.len();
+                                self.pending_bytes > PENDING_BYTES
+                            }
+                            ShellEvent::Closed(_) => true,
+                        };
                         self.pending.push_back(event);
                         if ended {
                             return false;

@@ -1,29 +1,35 @@
 //! The settings `ssh` would use for one host, worked out without `ssh`: for
 //! the phone, which has no `ssh` to ask (`ssh -G`).
 //!
-//! The rules are OpenSSH's (`readconf.c`): lines are read top to bottom, the
-//! options before the first block apply to every host, a `Host` block
-//! applies when one of its patterns matches the name as typed and none of
-//! its negated (`!`) ones does, and for each keyword the first value
-//! obtained is the one used. `ProxyCommand` and `ProxyJump` share one slot:
-//! whichever comes first wins, `none` included.
+//! The rules are OpenSSH's (`readconf.c`, checked against OpenSSH 9.9 with
+//! `ssh -G`): lines are read top to bottom, the options before the first
+//! block apply to every host, a `Host` block applies when one of its
+//! patterns matches the name as typed (case counts) and none of its negated
+//! (`!`) ones does, and for each keyword the first value obtained is the one
+//! used. A user given besides the files (`ssh -l`, the user of a jump spec)
+//! comes first, as the command line does. `ProxyCommand` and `ProxyJump`
+//! share one slot: whichever comes first wins, `none` included.
 //!
 //! `Match` blocks are evaluated for `all`, `host` (the `HostName` obtained so
-//! far, `%h` expanded), `originalhost` (the name as typed) and `user` (the
-//! `User` obtained so far), each negatable with `!`. A block one of those
-//! rules out doesn't apply. `exec` would run a program, so a block that
-//! needs it to decide is reported in [`EffectiveSettings::runs_code`]; one
-//! that needs any other criterion (`localuser`, `canonical`, `final`,
-//! `localnetwork`, `tagged`, …, or `user` before any `User`) is reported in
+//! far, `%h` expanded, without case), `originalhost` (the name as typed,
+//! without case) and `user` (the user obtained so far, case counts), each
+//! negatable with `!`. A block one of those rules out doesn't apply. `exec`
+//! would run a program, so a block that needs it to decide is reported in
+//! [`EffectiveSettings::runs_code`]; one that needs any other criterion
+//! (`localuser`, `canonical`, `final`, `localnetwork`, `tagged`, …, or `user`
+//! before any user is known) is reported in
 //! [`EffectiveSettings::undecided`]. Either way its options are taken as if
 //! it applied, so what it would do is reported too.
 //!
-//! What makes `ssh` run a program or that it may read differently is
-//! reported as [`RiskyDirective`]s with [`Risk::RunsCode`], by the rules of
-//! the [`risky`](super::risky) module, for the value in effect: a later
-//! `ProxyCommand` after `ProxyCommand none` changes nothing, and neither does
-//! a block that doesn't apply. `Include` is reported too: the file it names
-//! may say anything.
+//! What makes `ssh` run a program is reported as [`RiskyDirective`]s with
+//! [`Risk::RunsCode`], by the rules of the [`risky`](super::risky) module, for
+//! the value in effect: a later `ProxyCommand` after `ProxyCommand none`
+//! changes nothing, and neither does a block that doesn't apply. `Include` is
+//! reported too: the file it names may say anything. A line `ssh` may read
+//! differently from this parser (an odd keyword, a control character) is
+//! reported wherever it is, in [`EffectiveSettings::odd_lines`]: `ssh` may
+//! read it as a new `Host` or `Match` line, so no block after it can be
+//! trusted to be what it seems.
 
 use super::SshConfig;
 use super::lexer::{Directive, LineKind, is_trailing_ws, lex, split_args};
@@ -49,11 +55,13 @@ pub struct EffectiveSettings {
     /// earlier line set aside.
     options: Vec<EffectiveOption>,
     /// Lines in effect that make `ssh` run a program or load code on this
-    /// computer, or that it may read differently from this parser: the
-    /// value in effect of `ProxyCommand`, `LocalCommand`,
+    /// computer: the value in effect of `ProxyCommand`, `LocalCommand`,
     /// `PermitLocalCommand`, `KnownHostsCommand`, …, a `Match … exec` that
-    /// isn't ruled out otherwise, an `Include`, and odd lines.
+    /// isn't ruled out otherwise, an `Include`.
     pub runs_code: Vec<RiskyDirective>,
+    /// Every line of the file `ssh` may read differently from this parser,
+    /// wherever it is, as written.
+    pub odd_lines: Vec<String>,
     /// `Match …` lines that may apply but need a criterion only `ssh` can
     /// evaluate, as written.
     pub undecided: Vec<String>,
@@ -88,8 +96,22 @@ impl SshConfig {
     /// The settings in effect when connecting to `host`, the name as typed
     /// (see the module documentation).
     pub fn effective(&self, host: &str) -> EffectiveSettings {
+        self.effective_as(host, None)
+    }
+
+    /// The same, with `user` given besides the files (`ssh -l`, or the user
+    /// of a jump spec): it comes before any `User` line, and `Match user`
+    /// sees it.
+    pub fn effective_as(&self, host: &str, user: Option<&str>) -> EffectiveSettings {
         let original = host.to_lowercase();
         let mut out = EffectiveSettings::default();
+        if let Some(user) = user {
+            out.options.push(EffectiveOption {
+                key: "user".to_owned(),
+                value: user.to_owned(),
+                block: None,
+            });
+        }
         // The options before the first block apply to every host.
         let mut applies = true;
         let mut header: Option<String> = None;
@@ -103,16 +125,15 @@ impl SshConfig {
                 .keyword()
                 .filter(|_| !rest.chars().any(|c| c.is_control() && c != '\t'));
             let Some(key) = keyword else {
-                // `ssh` may read the line as anything, a new block too.
-                if applies {
-                    out.runs_code.push(directive(header.as_ref(), &d, rest));
-                }
+                // `ssh` may read the line as anything, a new block too:
+                // wherever it is, what follows may not be what it seems.
+                out.odd_lines.push(line.text.clone());
                 continue;
             };
             match key.as_str() {
                 "host" => {
                     header = Some(format!("{} {}", d.key, d.value));
-                    applies = host_line_matches(d.value, &original);
+                    applies = host_line_matches(d.value, host);
                 }
                 "match" => {
                     header = Some(format!("{} {}", d.key, d.value));
@@ -176,12 +197,12 @@ fn directive(header: Option<&String>, d: &Directive<'_>, value: &str) -> RiskyDi
     }
 }
 
-/// Whether a `Host` line (its value) applies to `host` (in lower case): one
-/// of its patterns matches and none of its negated ones does.
+/// Whether a `Host` line (its value) applies to `host`, the name as typed:
+/// one of its patterns matches and none of its negated ones does. Case
+/// counts, as in `ssh`.
 fn host_line_matches(value: &str, host: &str) -> bool {
     let mut matched = false;
     for pattern in split_args(value).0 {
-        let pattern = pattern.to_lowercase();
         let (negated, pattern) = match pattern.strip_prefix('!') {
             Some(rest) => (true, rest),
             None => (false, pattern.as_str()),
@@ -198,12 +219,20 @@ fn host_line_matches(value: &str, host: &str) -> bool {
 
 /// Whether a comma-separated pattern list (`a,b*,!c`) matches `name`, as
 /// OpenSSH's `match_pattern_list()`: a negated match rules it out, else any
-/// match counts.
-fn pattern_list_matches(list: &str, name: &str) -> bool {
-    let name = name.to_lowercase();
+/// match counts. Without case for host names (`fold_case`), with it for
+/// users.
+fn pattern_list_matches(list: &str, name: &str, fold_case: bool) -> bool {
+    let fold = |text: &str| {
+        if fold_case {
+            text.to_lowercase()
+        } else {
+            text.to_owned()
+        }
+    };
+    let name = fold(name);
     let mut matched = false;
     for pattern in list.split(',').filter(|p| !p.is_empty()) {
-        let pattern = pattern.to_lowercase();
+        let pattern = fold(pattern);
         let (negated, pattern) = match pattern.strip_prefix('!') {
             Some(rest) => (true, rest),
             None => (false, pattern.as_str()),
@@ -264,11 +293,12 @@ fn match_line(value: &str, original: &str, so_far: &EffectiveSettings) -> MatchR
                 &so_far
                     .get("hostname")
                     .map_or_else(|| original.to_owned(), |h| expand_host(h, original)),
+                true,
             )),
-            "originalhost" => Some(pattern_list_matches(&argument, original)),
+            "originalhost" => Some(pattern_list_matches(&argument, original, true)),
             "user" => so_far
                 .get("user")
-                .map(|user| pattern_list_matches(&argument, user)),
+                .map(|user| pattern_list_matches(&argument, user, false)),
             "exec" => {
                 needs_exec = true;
                 None
@@ -379,10 +409,11 @@ Host WEB?
         assert_eq!(effective(text, "api.prod").get("user"), Some("deploy"));
         assert_eq!(effective(text, "bastion.prod").get("user"), None);
         assert_eq!(effective(text, "api.dev").get("user"), None);
-        // Names compare without case.
-        assert_eq!(effective(text, "web1").get("port"), Some("2200"));
-        assert_eq!(effective(text, "Web1").get("port"), Some("2200"));
-        assert_eq!(effective(text, "web12").get("port"), None);
+        // `Host` patterns compare with the name as typed, case and all
+        // (OpenSSH 9.9: `ssh -G WEB1` takes the block, `ssh -G web1` doesn't).
+        assert_eq!(effective(text, "WEB1").get("port"), Some("2200"));
+        assert_eq!(effective(text, "web1").get("port"), None);
+        assert_eq!(effective(text, "WEB12").get("port"), None);
     }
 
     #[test]
@@ -448,19 +479,32 @@ Host *
     }
 
     #[test]
-    fn includes_and_odd_lines_count_where_they_apply() {
-        let text = "\
-Host a
-  Include ~/.ssh/extra
-Host b
-  Proxy-Command x
-Host c
-  HostName c.example.com\x0bProxyCommand x
-";
+    fn includes_count_where_they_apply() {
+        let text = "Host a\n  Include ~/.ssh/extra\nHost b\n  User b\n";
         assert_eq!(keys(&effective(text, "a")), ["include"]);
-        assert_eq!(effective(text, "b").runs_code.len(), 1);
-        assert_eq!(effective(text, "c").runs_code.len(), 1);
-        assert_eq!(effective(text, "d").runs_code, []);
+        assert_eq!(effective(text, "b").runs_code, []);
+    }
+
+    #[test]
+    fn odd_lines_count_wherever_they_are() {
+        // `ssh` reads `=Host web` as a `Host web` line: the ProxyCommand
+        // after it is web's, though the parser sees it under `Host nothing`.
+        let hidden_block = "Host nothing\n=Host web\n  ProxyCommand nc evil 22\n";
+        let web = effective(hidden_block, "web");
+        assert_eq!(web.odd_lines, ["=Host web"]);
+        assert_eq!(web.runs_code, []);
+        // And a `HostName` that seems to be web's may be another block's.
+        let moved = "Host web\n  User alice\n=Host other\n  HostName evil.example.com\n";
+        assert_eq!(effective(moved, "web").odd_lines, ["=Host other"]);
+        // Control characters, odd keywords: reported for every host.
+        let odd = "Host web \x0b\n  ProxyCommand x\nHost b\n  Proxy-Command x\n";
+        for host in ["web", "b", "elsewhere"] {
+            assert_eq!(effective(odd, host).odd_lines.len(), 2, "{host}");
+        }
+        assert_eq!(
+            effective("Host a\n  User a\n", "a").odd_lines,
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -516,6 +560,30 @@ Match user deploy
         assert_eq!(known.undecided, Vec::<String>::new());
         let other = effective("User bob\nMatch user deploy\n  Port 2200\n", "x");
         assert_eq!(other.get("port"), None);
+    }
+
+    #[test]
+    fn users_compare_with_case_and_a_given_user_comes_first() {
+        // OpenSSH 9.9: `User deploy` then `Match !user Deploy` applies.
+        let text = "User deploy\nMatch !user Deploy\n  ProxyCommand nc %h %p\n";
+        assert_eq!(keys(&effective(text, "x")), ["proxycommand"]);
+        // A user from the command line or a jump spec wins over `User` and
+        // is what `Match user` sees.
+        let jump = "Host bastion\n  User jump\nMatch user admin\n  Port 2002\n";
+        let given = SshConfig::parse(jump).effective_as("bastion", Some("admin"));
+        assert_eq!(given.get("user"), Some("admin"));
+        assert_eq!(given.get("port"), Some("2002"));
+        assert_eq!(effective(jump, "bastion").get("port"), None);
+    }
+
+    #[test]
+    fn host_criteria_ignore_case() {
+        // OpenSSH 9.9: `Match host big.example.com` takes `HostName
+        // Big.Example.COM`, and `Match originalhost UP` takes `Up`.
+        let text = "Host up2\n  HostName Big.Example.COM\nMatch host big.example.com\n  Port 1002\n\
+                    Match originalhost UP\n  User u\n";
+        assert_eq!(effective(text, "up2").get("port"), Some("1002"));
+        assert_eq!(effective(text, "Up").get("user"), Some("u"));
     }
 
     #[test]

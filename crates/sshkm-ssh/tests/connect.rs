@@ -119,7 +119,16 @@ async fn a_known_host_opens_a_shell_signed_by_the_app() {
     shell.keepalive().await.unwrap();
     shell.close().await;
     server.wait_for(|log| log.closed).await;
-    assert!(shell.connection().is_closed() || matches!(closed(&shell).await, Closed { .. }));
+    // The shell ends, without an exit status (nothing exited), and the
+    // connection with it.
+    assert_eq!(closed(&shell).await.exit_status, None);
+    for _ in 0..100 {
+        if shell.connection().is_closed() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the connection stayed open after close");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -309,6 +318,92 @@ async fn a_cancelled_connection_takes_its_question_away() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("the question stayed after the connection was given up");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_app_isnt_asked_to_sign_for_a_key_the_server_refuses() {
+    // The server takes keys, but not the phone's: it answers the offer
+    // without PK_OK, so nothing is signed (no screen lock for nothing).
+    let server = TestServer::start(Spec {
+        seed: 18,
+        user: "bob".into(),
+        key: Some(common::host_key(55).public_key().clone()),
+        password: true,
+        ..Spec::default()
+    })
+    .await;
+    let app = Arc::new(App::new().with_signer().answering(&[&[PASSWORD]]));
+    connect(
+        &host_block("db", server.port, "bob"),
+        &server.known_line(),
+        "db",
+        with_key(),
+        &app,
+    )
+    .await
+    .unwrap();
+    assert_eq!(app.signed(), 0);
+    assert_eq!(server.log.lock().unwrap().signed_in, ["password"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_server_that_keeps_asking_gets_three_answers() {
+    let server = TestServer::start(Spec {
+        seed: 19,
+        user: "bob".into(),
+        endless: true,
+        ..Spec::default()
+    })
+    .await;
+    let app = Arc::new(App::new().answering(&[&[PASSWORD], &[PASSWORD], &[PASSWORD], &[PASSWORD]]));
+    let error = connect(
+        &host_block("db", server.port, "bob"),
+        &server.known_line(),
+        "db",
+        ConnectOptions::default(),
+        &app,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(error, Error::AuthFailed { .. }), "{error:?}");
+    let attempts: Vec<u32> = app
+        .asked
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|p| p.attempt)
+        .collect();
+    assert_eq!(attempts, [1, 2, 3]);
+    assert_eq!(server.log.lock().unwrap().rounds, 3 + 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failing_callbacks_fail_the_connection() {
+    let server = TestServer::start(key_server(20)).await;
+    let config = host_block("web", server.port, "alice");
+    let mut throwing = App::new().with_signer();
+    throwing.unknown_host_fails = true;
+    let error = connect(&config, "", "web", with_key(), &Arc::new(throwing))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, Error::App { detail } if detail.contains("IllegalState")),
+        "{error:?}"
+    );
+
+    // A yes that can't be stored doesn't connect: the next connection, and
+    // computers, wouldn't know the key.
+    let mut storing = App::new().with_signer().trusting();
+    storing.storing_fails = true;
+    let storing = Arc::new(storing);
+    let error = connect(&config, "", "web", with_key(), &storing)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, Error::App { detail } if detail == "disk full"),
+        "{error:?}"
+    );
+    assert_eq!(storing.signed(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -602,6 +697,33 @@ async fn hosts_that_need_ssh_are_never_connected() {
         .await
         .unwrap_err();
     assert!(matches!(error, Error::NotAvailable { .. }), "{error:?}");
+    // Lines `ssh` reads otherwise than the parser: `=Host web` starts a
+    // block for web, so ssh would use the ProxyCommand; and the HostName
+    // after `=Host other` isn't web's.
+    for config in [
+        format!(
+            "{}Host nothing\n=Host web\n  ProxyCommand nc evil 22\n",
+            host_block("web", server.port, "alice")
+        ),
+        format!(
+            "{}=Host other\n  HostName evil.example.com\n",
+            host_block("web", server.port, "alice")
+        ),
+    ] {
+        let error = connect(&config, &server.known_line(), "web", with_key(), &app)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                Error::NotAvailable {
+                    reason: NotAvailable::OddLine { .. },
+                    ..
+                }
+            ),
+            "{config}: {error:?}"
+        );
+    }
     // Nothing went over the network.
     assert_eq!(server.log.lock().unwrap().connections, 0);
     assert!(app.unknown.lock().unwrap().is_empty());
@@ -677,7 +799,7 @@ async fn network_failures_are_typed() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_default_user_and_keepalive_apply() {
+async fn the_default_user_applies() {
     let server = TestServer::start(key_server(14)).await;
     let app = Arc::new(App::new().with_signer());
     let connection = connect(
@@ -686,7 +808,6 @@ async fn the_default_user_and_keepalive_apply() {
         "web",
         ConnectOptions {
             default_user: Some("alice".into()),
-            default_keepalive: Some(Duration::from_secs(1)),
             ..with_key()
         },
         &app,
@@ -694,8 +815,66 @@ async fn the_default_user_and_keepalive_apply() {
     .await
     .unwrap();
     assert_eq!(connection.destination().user, None);
-    // Keepalives are answered: the connection stays up past a few.
-    tokio::time::sleep(Duration::from_millis(2500)).await;
-    assert!(!connection.is_closed());
+    assert_eq!(server.log.lock().unwrap().signed_in, ["publickey"]);
     connection.disconnect().await;
+}
+
+/// A shell through a proxy that can stop passing bytes on.
+async fn shell_through(
+    proxy: &common::Proxy,
+    server: &TestServer,
+    keepalive: Option<u64>,
+) -> Shell {
+    let app = Arc::new(App::new().with_signer());
+    let config = format!(
+        "Host web\n  HostName 127.0.0.1\n  Port {}\n  User alice\n  ServerAliveCountMax 2\n",
+        proxy.port
+    );
+    let known = format!(
+        "[127.0.0.1]:{} {}\n",
+        proxy.port,
+        server.host_key.to_openssh().unwrap()
+    );
+    let connection = connect(
+        &config,
+        &known,
+        "web",
+        ConnectOptions {
+            default_keepalive: keepalive.map(Duration::from_secs),
+            ..with_key()
+        },
+        &app,
+    )
+    .await
+    .unwrap();
+    let shell = connection
+        .open_shell(PtySize { cols: 80, rows: 24 })
+        .await
+        .unwrap();
+    read_until(&shell, "welcome").await;
+    shell
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn keepalives_end_a_connection_the_network_dropped() {
+    let server = TestServer::start(key_server(17)).await;
+
+    // With keepalive every second, two unanswered asks end it.
+    let proxy = common::Proxy::start(server.port).await;
+    let shell = shell_through(&proxy, &server, Some(1)).await;
+    proxy.freeze();
+    let started = std::time::Instant::now();
+    let end = closed(&shell).await;
+    assert!(end.connection_lost, "{end:?}");
+    assert!(started.elapsed() < Duration::from_secs(5));
+
+    // Without it, nothing notices.
+    let quiet = common::Proxy::start(server.port).await;
+    let shell = shell_through(&quiet, &server, None).await;
+    quiet.freeze();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(4), shell.next_event())
+            .await
+            .is_err()
+    );
 }

@@ -16,12 +16,14 @@ pub struct SignRequest {
     pub data: Vec<u8>,
 }
 
-/// Why the app didn't sign.
+/// Why the app didn't do what it was asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SignError {
-    /// The user said no (dismissed the screen lock or the fingerprint).
+pub enum CallbackError {
+    /// The user said no (dismissed the screen lock, closed the dialog), or
+    /// the app stopped asking.
     Cancelled,
-    /// Keystore or the key failed; English for developers.
+    /// Something in the app failed (Keystore, storage, …); English for
+    /// developers.
     Failed(String),
 }
 
@@ -81,29 +83,38 @@ pub struct AuthPrompt {
     pub name: String,
     pub instructions: String,
     pub prompts: Vec<PromptItem>,
-    /// 1 the first time this method asks; more after the server refused
-    /// the answers, so an answer filled from the vault isn't sent again
-    /// unasked.
+    /// 1 the first time these questions are asked on this machine; more
+    /// when one of them comes again (the server refused the answer, or asks
+    /// once more), so an answer filled from the vault isn't sent again
+    /// unasked. Never more than 3: the client stops answering then.
     pub attempt: u32,
 }
 
-/// What the app does for the client. Every method may take as long as
-/// the user does; the connection waits.
+/// What the app does for the client. The async methods may take as long as
+/// the user does; the connection waits. An error cancels the connection
+/// ([`CallbackError::Cancelled`]) or fails it.
 #[async_trait::async_trait]
 pub trait Callbacks: Send + Sync {
     /// Signs `request.data` with the phone's key (`SHA256withECDSA`) and
     /// returns the signature in DER, as Keystore does. Only called once the
     /// server has said it would accept the key.
-    async fn sign(&self, request: SignRequest) -> Result<Vec<u8>, SignError>;
+    async fn sign(&self, request: SignRequest) -> Result<Vec<u8>, CallbackError>;
 
     /// Asks the user whether to trust `key`. `true` connects.
-    async fn unknown_host(&self, key: UnknownHostKey) -> bool;
+    async fn unknown_host(&self, key: UnknownHostKey) -> Result<bool, CallbackError>;
 
     /// After a yes to [`unknown_host`](Self::unknown_host): the
-    /// `known_hosts` line to store, which syncs to computers.
-    fn host_key_trusted(&self, line: String);
+    /// `known_hosts` line to store, which syncs to computers. It is written
+    /// as computers write the lines sync adds (`KnownHosts::add_key`:
+    /// plain, the name in lower case, `[host]:port` off port 22). Called
+    /// from the connection's own task: it must return at once (hand the
+    /// line over to be stored), never wait for anything.
+    fn host_key_trusted(&self, line: String) -> Result<(), CallbackError>;
 
     /// Answers to `prompt`, one per item, in order; `None` cancels. The
     /// client wipes its copies once they are sent.
-    async fn answer(&self, prompt: AuthPrompt) -> Option<Vec<Zeroizing<String>>>;
+    async fn answer(
+        &self,
+        prompt: AuthPrompt,
+    ) -> Result<Option<Vec<Zeroizing<String>>>, CallbackError>;
 }

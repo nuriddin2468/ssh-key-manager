@@ -13,6 +13,10 @@
 //! and it syncs to computers. `@cert-authority` lines are not used: the
 //! phone asks for no certificates, so such a host is unknown.
 //!
+//! The key is checked at the first key exchange; russh doesn't hand later
+//! re-exchanges (every hour or gigabyte) to the check again, where OpenSSH
+//! would. The session is already bound to the key checked then.
+//!
 //! When `known_hosts` has keys of some types for a host, those types are
 //! asked for first, as OpenSSH does, so a host known by its RSA key isn't
 //! "unknown" because the phone prefers Ed25519. A host known only by other

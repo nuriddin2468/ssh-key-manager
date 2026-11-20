@@ -7,13 +7,16 @@
 //! with the Keystore key (behind the screen lock), trusting an unknown
 //! server key, answering password and one-time-code prompts from the vault
 //! or the user. The shell it returns gives output with
-//! [`SshShell::next_event`] (call it again when the last event is drawn)
-//! and takes input, a new size, keepalives and `disconnect`.
+//! [`SshShell::next_event`] (one coroutine that keeps asking while the shell
+//! is open) and takes input and a new size (in call order), keepalives and
+//! `disconnect`.
 //!
 //! The SSH client runs on a runtime of its own (two threads), so Kotlin's
 //! dispatchers never carry it; cancelling a Kotlin call stops the Rust work
-//! behind it. Answers and session data are never logged; the Rust copies
-//! of answers are wiped once sent.
+//! behind it. Answers and session data are never logged. The Rust copies of
+//! answers and of typed bytes are wiped once sent; UniFFI's buffers and
+//! Kotlin's strings aren't, and neither are keyboard-interactive answers
+//! inside russh (see `sshkm-ssh`'s README).
 
 use std::future::Future;
 use std::sync::{Arc, LazyLock};
@@ -147,24 +150,42 @@ pub struct SshAuthPrompt {
 /// Why the app didn't sign.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum SshCallbackError {
-    /// The user said no.
+    /// The user said no (dismissed the screen lock, closed the dialog).
     #[error("cancelled")]
     Cancelled,
-    /// Keystore failed; English for developers.
+    /// Keystore or storage failed; English for developers.
     #[error("{detail}")]
     Failed { detail: String },
 }
 
+/// Any other exception a callback throws. A coroutine cancelled under the
+/// callback (its dialog's scope closed) cancels the connection; anything
+/// else fails it, never panics.
 impl From<uniffi::UnexpectedUniFFICallbackError> for SshCallbackError {
     fn from(error: uniffi::UnexpectedUniFFICallbackError) -> Self {
-        Self::Failed {
-            detail: error.reason,
+        if error.reason.contains("CancellationException") {
+            Self::Cancelled
+        } else {
+            Self::Failed {
+                detail: error.reason,
+            }
         }
     }
 }
 
-/// What the app does for the SSH client. Each method may take as long as
-/// the user does.
+impl From<SshCallbackError> for ssh::CallbackError {
+    fn from(error: SshCallbackError) -> Self {
+        match error {
+            SshCallbackError::Cancelled => Self::Cancelled,
+            SshCallbackError::Failed { detail } => Self::Failed(detail),
+        }
+    }
+}
+
+/// What the app does for the SSH client. The `suspend` methods may take as
+/// long as the user does. Every method may throw: `SshCallbackException`
+/// (`Cancelled`, `Failed`), or anything else, which fails the connection
+/// (a `CancellationException` cancels it).
 #[uniffi::export(with_foreign)]
 #[async_trait::async_trait]
 pub trait SshCallbacks: Send + Sync {
@@ -174,14 +195,15 @@ pub trait SshCallbacks: Send + Sync {
     async fn sign(&self, request: SshSignRequest) -> Result<Vec<u8>, SshCallbackError>;
 
     /// Whether the user trusts this server key.
-    async fn unknown_host(&self, host: SshUnknownHost) -> bool;
+    async fn unknown_host(&self, host: SshUnknownHost) -> Result<bool, SshCallbackError>;
 
     /// After a yes: the `known_hosts` line to store (it syncs to
-    /// computers).
-    fn host_key_trusted(&self, line: String);
+    /// computers). Called on the connection's own thread: hand the line
+    /// over and return at once, never wait for anything here.
+    fn host_key_trusted(&self, line: String) -> Result<(), SshCallbackError>;
 
     /// The answers, one per prompt; `null` cancels.
-    async fn answer(&self, prompt: SshAuthPrompt) -> Option<Vec<String>>;
+    async fn answer(&self, prompt: SshAuthPrompt) -> Result<Option<Vec<String>>, SshCallbackError>;
 }
 
 /// Hands the client's questions to Kotlin.
@@ -189,22 +211,20 @@ struct Bridge(Arc<dyn SshCallbacks>);
 
 #[async_trait::async_trait]
 impl ssh::Callbacks for Bridge {
-    async fn sign(&self, request: ssh::SignRequest) -> Result<Vec<u8>, ssh::SignError> {
-        self.0
+    async fn sign(&self, request: ssh::SignRequest) -> Result<Vec<u8>, ssh::CallbackError> {
+        Ok(self
+            .0
             .sign(SshSignRequest {
                 alias: request.alias,
                 user: request.user,
                 data: request.data,
             })
-            .await
-            .map_err(|error| match error {
-                SshCallbackError::Cancelled => ssh::SignError::Cancelled,
-                SshCallbackError::Failed { detail } => ssh::SignError::Failed(detail),
-            })
+            .await?)
     }
 
-    async fn unknown_host(&self, key: ssh::UnknownHostKey) -> bool {
-        self.0
+    async fn unknown_host(&self, key: ssh::UnknownHostKey) -> Result<bool, ssh::CallbackError> {
+        Ok(self
+            .0
             .unknown_host(SshUnknownHost {
                 alias: key.alias,
                 host: key.host,
@@ -213,14 +233,17 @@ impl ssh::Callbacks for Bridge {
                 fingerprint: key.fingerprint,
                 other_types: key.other_types,
             })
-            .await
+            .await?)
     }
 
-    fn host_key_trusted(&self, line: String) {
-        self.0.host_key_trusted(line);
+    fn host_key_trusted(&self, line: String) -> Result<(), ssh::CallbackError> {
+        Ok(self.0.host_key_trusted(line)?)
     }
 
-    async fn answer(&self, prompt: ssh::AuthPrompt) -> Option<Vec<Zeroizing<String>>> {
+    async fn answer(
+        &self,
+        prompt: ssh::AuthPrompt,
+    ) -> Result<Option<Vec<Zeroizing<String>>>, ssh::CallbackError> {
         let prompt = SshAuthPrompt {
             alias: prompt.alias,
             host: prompt.host,
@@ -247,8 +270,10 @@ impl ssh::Callbacks for Bridge {
                 .collect(),
             attempt: prompt.attempt,
         };
+        // The strings move into wiped wrappers. UniFFI's buffer they were
+        // read from, and Kotlin's own strings, aren't wiped.
         let answers = self.0.answer(prompt).await?;
-        Some(answers.into_iter().map(Zeroizing::new).collect())
+        Ok(answers.map(|answers| answers.into_iter().map(Zeroizing::new).collect()))
     }
 }
 
@@ -258,8 +283,11 @@ pub enum SshNotAvailable {
     /// A line would make `ssh` run a program (`ProxyCommand`,
     /// `LocalCommand`, `KnownHostsCommand`, `Match … exec`, …).
     RunsProgram { directive: String, value: String },
-    /// A `Match` line only `ssh` can evaluate may apply.
+    /// A `Match` line only `ssh` can evaluate may apply, or
+    /// `CanonicalizeHostname` is on.
     Undecided { line: String },
+    /// A line of the host blocks `ssh` may read differently from the app.
+    OddLine { line: String },
 }
 
 /// Why a connection didn't open or a call failed. `alias` names the
@@ -338,6 +366,9 @@ pub enum SshError {
     Signer { alias: String, detail: String },
     #[error("cancelled")]
     Cancelled,
+    /// A callback failed (not cancelled); `detail` is what it threw.
+    #[error("the app failed: {detail}")]
+    App { detail: String },
     #[error("{alias} refused to open a shell")]
     ShellRefused { alias: String },
     #[error("the connection ended: {detail}")]
@@ -358,6 +389,7 @@ impl From<ssh::Error> for SshError {
                         SshNotAvailable::RunsProgram { directive, value }
                     }
                     ssh::NotAvailable::Undecided { line } => SshNotAvailable::Undecided { line },
+                    ssh::NotAvailable::OddLine { line } => SshNotAvailable::OddLine { line },
                 },
             },
             E::BadSettings { alias, detail } => Self::BadSettings { alias, detail },
@@ -419,6 +451,7 @@ impl From<ssh::Error> for SshError {
             },
             E::Signer { alias, detail } => Self::Signer { alias, detail },
             E::Cancelled => Self::Cancelled,
+            E::App { detail } => Self::App { detail },
             E::ShellRefused { alias } => Self::ShellRefused { alias },
             E::Disconnected { detail } => Self::Disconnected { detail },
         }
@@ -512,9 +545,7 @@ pub async fn ssh_open_shell(
         connection.open_shell(size).await
     })
     .await?;
-    Ok(Arc::new(SshShell {
-        shell: Arc::new(shell),
-    }))
+    Ok(Arc::new(SshShell::new(shell)))
 }
 
 /// Something from the shell.
@@ -531,10 +562,46 @@ pub enum SshShellEvent {
     },
 }
 
-/// An open shell. Reading, writing and resizing may run at once.
+/// What the user does to the shell, in the order they do it.
+enum Input {
+    /// Typed or pasted; wiped once sent (it may be a password for `sudo`).
+    Data(Zeroizing<Vec<u8>>),
+    Resize(ssh::PtySize),
+}
+
+/// An open shell. Reading runs on its own; input goes out in the order it
+/// is given, through one queue.
 #[derive(uniffi::Object)]
 pub struct SshShell {
     shell: Arc<ssh::Shell>,
+    input: tokio::sync::mpsc::UnboundedSender<Input>,
+}
+
+impl SshShell {
+    fn new(shell: ssh::Shell) -> Self {
+        let shell = Arc::new(shell);
+        let (input, mut queue) = tokio::sync::mpsc::unbounded_channel::<Input>();
+        let writer = Arc::clone(&shell);
+        // Ends when the shell can't take more, or when the object is freed.
+        RUNTIME.spawn(async move {
+            while let Some(input) = queue.recv().await {
+                let sent = match input {
+                    Input::Data(data) => writer.write(&data).await,
+                    Input::Resize(size) => writer.resize(size).await,
+                };
+                if sent.is_err() {
+                    break;
+                }
+            }
+        });
+        Self { shell, input }
+    }
+
+    fn send(&self, input: Input) -> Result<(), SshError> {
+        self.input.send(input).map_err(|_| SshError::Disconnected {
+            detail: "the shell is closed".to_owned(),
+        })
+    }
 }
 
 impl std::fmt::Debug for SshShell {
@@ -545,7 +612,9 @@ impl std::fmt::Debug for SshShell {
 
 #[uniffi::export]
 impl SshShell {
-    /// The next thing from the shell; call again when it is drawn.
+    /// The next thing from the shell. Keep one coroutine asking for as long
+    /// as the shell is open, even while the terminal is off screen: while
+    /// nobody asks, the whole connection waits, keepalives included.
     pub async fn next_event(&self) -> SshShellEvent {
         let shell = Arc::clone(&self.shell);
         match on_runtime(async move { shell.next_event().await }).await {
@@ -558,16 +627,15 @@ impl SshShell {
         }
     }
 
-    /// Sends what the user typed or pasted.
-    pub async fn write(&self, data: Vec<u8>) -> Result<(), SshError> {
-        let shell = Arc::clone(&self.shell);
-        Ok(on_runtime(async move { shell.write(&data).await }).await?)
+    /// Sends what the user typed or pasted. Returns at once; input goes out
+    /// in the order of these calls (and of `resize`).
+    pub fn write(&self, data: Vec<u8>) -> Result<(), SshError> {
+        self.send(Input::Data(Zeroizing::new(data)))
     }
 
-    /// The terminal's new size, in characters.
-    pub async fn resize(&self, cols: u32, rows: u32) -> Result<(), SshError> {
-        let shell = Arc::clone(&self.shell);
-        Ok(on_runtime(async move { shell.resize(ssh::PtySize { cols, rows }).await }).await?)
+    /// The terminal's new size, in characters, in order with `write`.
+    pub fn resize(&self, cols: u32, rows: u32) -> Result<(), SshError> {
+        self.send(Input::Resize(ssh::PtySize { cols, rows }))
     }
 
     /// Asks every machine on the way for an answer now (when the app comes
@@ -613,19 +681,138 @@ mod tests {
         async fn sign(&self, _request: SshSignRequest) -> Result<Vec<u8>, SshCallbackError> {
             Err(SshCallbackError::Cancelled)
         }
-        async fn unknown_host(&self, host: SshUnknownHost) -> bool {
+        async fn unknown_host(&self, host: SshUnknownHost) -> Result<bool, SshCallbackError> {
             self.asked.lock().unwrap().push(host);
-            false
+            Ok(false)
         }
-        fn host_key_trusted(&self, _line: String) {}
-        async fn answer(&self, _prompt: SshAuthPrompt) -> Option<Vec<String>> {
-            None
+        fn host_key_trusted(&self, _line: String) -> Result<(), SshCallbackError> {
+            Ok(())
+        }
+        async fn answer(
+            &self,
+            _prompt: SshAuthPrompt,
+        ) -> Result<Option<Vec<String>>, SshCallbackError> {
+            Ok(None)
         }
     }
 
     struct Server;
     impl russh::server::Handler for Server {
         type Error = russh::Error;
+    }
+
+    /// Lets anyone in and echoes what a shell gets.
+    #[derive(Default)]
+    struct Echo {
+        sessions: Vec<russh::ChannelId>,
+    }
+
+    // russh's trait is async; these answer at once.
+    #[allow(clippy::unused_async_trait_impl)]
+    impl russh::server::Handler for Echo {
+        type Error = russh::Error;
+
+        async fn auth_none(&mut self, _user: &str) -> Result<russh::server::Auth, Self::Error> {
+            Ok(russh::server::Auth::Accept)
+        }
+
+        async fn channel_open_session(
+            &mut self,
+            channel: russh::Channel<russh::server::Msg>,
+            reply: russh::server::ChannelOpenHandle,
+            _session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            self.sessions.push(channel.id());
+            reply.accept().await;
+            Ok(())
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        async fn pty_request(
+            &mut self,
+            channel: russh::ChannelId,
+            _term: &str,
+            _cols: u32,
+            _rows: u32,
+            _pix_width: u32,
+            _pix_height: u32,
+            _modes: &[(russh::Pty, u32)],
+            session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            session.channel_success(channel)
+        }
+
+        async fn shell_request(
+            &mut self,
+            channel: russh::ChannelId,
+            session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            session.channel_success(channel)
+        }
+
+        async fn data(
+            &mut self,
+            channel: russh::ChannelId,
+            data: &[u8],
+            session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            if self.sessions.contains(&channel) {
+                session.data(channel, data.to_vec())?;
+            }
+            Ok(())
+        }
+    }
+
+    /// Trusts every server key.
+    struct Trusting;
+
+    #[async_trait::async_trait]
+    impl SshCallbacks for Trusting {
+        async fn sign(&self, _request: SshSignRequest) -> Result<Vec<u8>, SshCallbackError> {
+            Err(SshCallbackError::Cancelled)
+        }
+        async fn unknown_host(&self, _host: SshUnknownHost) -> Result<bool, SshCallbackError> {
+            Ok(true)
+        }
+        fn host_key_trusted(&self, _line: String) -> Result<(), SshCallbackError> {
+            Ok(())
+        }
+        async fn answer(
+            &self,
+            _prompt: SshAuthPrompt,
+        ) -> Result<Option<Vec<String>>, SshCallbackError> {
+            Ok(None)
+        }
+    }
+
+    /// A server on the bridge's runtime; its port.
+    fn serve<H>(handler: impl Fn() -> H + Send + 'static) -> u16
+    where
+        H: russh::server::Handler + Send + 'static,
+    {
+        let host_key = PrivateKey::from(Ed25519Keypair::from_seed(&[6; 32]));
+        RUNTIME.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let config = Arc::new(russh::server::Config {
+                keys: vec![host_key],
+                ..russh::server::Config::default()
+            });
+            tokio::spawn(async move {
+                while let Ok((stream, _)) = listener.accept().await {
+                    let config = Arc::clone(&config);
+                    let handler = handler();
+                    tokio::spawn(async move {
+                        if let Ok(session) =
+                            russh::server::run_stream(config, stream, handler).await
+                        {
+                            let _ = session.await;
+                        }
+                    });
+                }
+            });
+            port
+        })
     }
 
     fn request(destination: &str, hosts_config: String) -> SshConnectRequest {
@@ -700,6 +887,58 @@ mod tests {
             ssh_key_fingerprint("ssh-ed25519 AAAA".into()),
             Err(SshError::BadKey)
         ));
+    }
+
+    #[test]
+    fn input_goes_out_in_the_order_given() {
+        let port = serve(Echo::default);
+        let config = format!("Host echo\n  HostName 127.0.0.1\n  Port {port}\n");
+        let shell = block_on(ssh_open_shell(request("echo", config), Arc::new(Trusting))).unwrap();
+        // Calls that return at once, as a terminal's key handler makes them.
+        let mut expected = Vec::new();
+        for i in 0..200u8 {
+            let byte = b'a' + i % 26;
+            shell.write(vec![byte]).unwrap();
+            expected.push(byte);
+            if i % 50 == 0 {
+                shell.resize(80 + u32::from(i), 24).unwrap();
+            }
+        }
+        let mut echoed = Vec::new();
+        block_on(async {
+            while echoed.len() < expected.len() {
+                match shell.next_event().await {
+                    SshShellEvent::Output { data } => echoed.extend(data),
+                    SshShellEvent::Closed { .. } => panic!("closed early"),
+                }
+            }
+        });
+        assert_eq!(echoed, expected);
+        block_on(shell.disconnect());
+        assert!(matches!(
+            block_on(shell.next_event()),
+            SshShellEvent::Closed { .. }
+        ));
+    }
+
+    #[test]
+    fn callback_exceptions_cancel_or_fail() {
+        let cancelled = uniffi::UnexpectedUniFFICallbackError::new(
+            "kotlinx.coroutines.JobCancellationException: Job was cancelled",
+        );
+        assert!(matches!(
+            SshCallbackError::from(cancelled),
+            SshCallbackError::Cancelled
+        ));
+        let other = uniffi::UnexpectedUniFFICallbackError::new("java.io.IOException: disk full");
+        assert!(matches!(
+            SshCallbackError::from(other),
+            SshCallbackError::Failed { detail } if detail.contains("disk full")
+        ));
+        assert_eq!(
+            ssh::CallbackError::from(SshCallbackError::Cancelled),
+            ssh::CallbackError::Cancelled
+        );
     }
 
     #[test]

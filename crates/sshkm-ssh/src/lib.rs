@@ -21,8 +21,9 @@
 //! Algorithms are those of current OpenSSH clients that russh has: no
 //! `ssh-rsa` with SHA-1, no DSS, no SHA-1 MACs, no compression. russh's
 //! crypto runs on `ring`, which builds for Android with the NDK's compiler
-//! alone. Agent forwarding is never asked for. Nothing here logs, and
-//! answers to prompts are wiped once sent.
+//! alone. Agent forwarding is never asked for. Nothing here logs. The
+//! client wipes its own copies of answers once sent; russh wipes the
+//! password it sends, not keyboard-interactive answers.
 //!
 //! Everything is async on tokio; the caller provides the runtime.
 //!
@@ -38,7 +39,7 @@ pub mod route;
 mod session;
 
 pub use callbacks::{
-    AuthMethod, AuthPrompt, Callbacks, PromptItem, SignError, SignRequest, UnknownHostKey,
+    AuthMethod, AuthPrompt, CallbackError, Callbacks, PromptItem, SignRequest, UnknownHostKey,
 };
 pub use client::{ConnectOptions, Connection};
 pub use error::{Error, KeyMismatch, NotAvailable};

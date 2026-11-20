@@ -15,7 +15,7 @@ use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 
 use crate::auth::authenticate;
-use crate::callbacks::{Callbacks, UnknownHostKey};
+use crate::callbacks::{CallbackError, Callbacks, UnknownHostKey};
 use crate::error::{Error, KeyMismatch};
 use crate::host_keys::{self, Verdict};
 use crate::key::PhoneKey;
@@ -279,7 +279,8 @@ impl client::Handler for HopHandler {
                         _ = abandoned => return Err(Error::Cancelled),
                     },
                     None => question.await,
-                };
+                }
+                .map_err(callback_error)?;
                 if !trusted {
                     return Err(Error::UnknownHostDeclined {
                         alias: alias.clone(),
@@ -294,11 +295,23 @@ impl client::Handler for HopHandler {
                         .add_key(host, *port, &key_type, &encoded);
                 }
                 if let Some(line) = host_keys::line_for(host, *port, key) {
-                    self.callbacks.host_key_trusted(line);
+                    // The user's yes stands only once it is stored: the next
+                    // connection, and computers, must know the key too.
+                    self.callbacks
+                        .host_key_trusted(line)
+                        .map_err(callback_error)?;
                 }
                 Ok(true)
             }
         }
+    }
+}
+
+/// The connection's error for a callback's.
+fn callback_error(error: CallbackError) -> Error {
+    match error {
+        CallbackError::Cancelled => Error::Cancelled,
+        CallbackError::Failed(detail) => Error::App { detail },
     }
 }
 

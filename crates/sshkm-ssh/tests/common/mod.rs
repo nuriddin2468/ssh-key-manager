@@ -23,7 +23,7 @@ use russh::keys::ssh_key::private::Ed25519Keypair;
 use russh::keys::{PrivateKey, PublicKey};
 use russh::server::{self, Auth, Msg, Response, Session};
 use russh::{Channel, ChannelId, MethodKind, MethodSet};
-use sshkm_ssh::{AuthPrompt, Callbacks, PhoneKey, SignError, SignRequest, UnknownHostKey};
+use sshkm_ssh::{AuthPrompt, CallbackError, Callbacks, PhoneKey, SignRequest, UnknownHostKey};
 use tokio::net::{TcpListener, TcpStream};
 use zeroize::Zeroizing;
 
@@ -47,6 +47,8 @@ pub struct Spec {
     pub key_then_code: bool,
     /// It opens `direct-tcpip` channels (a jump host).
     pub forwards: bool,
+    /// Keyboard-interactive asks `Password:` again after every answer.
+    pub endless: bool,
 }
 
 /// What a test server saw.
@@ -59,6 +61,7 @@ pub struct Log {
     pub received: Vec<u8>,
     pub closed: bool,
     pub forwards: Vec<(String, u32)>,
+    pub rounds: usize,
 }
 
 pub struct TestServer {
@@ -81,7 +84,7 @@ impl TestServer {
         if spec.key.is_some() {
             methods.push(MethodKind::PublicKey);
         }
-        if spec.interactive || spec.key_then_code {
+        if spec.interactive || spec.key_then_code || spec.endless {
             methods.push(MethodKind::KeyboardInteractive);
         }
         if spec.password {
@@ -218,6 +221,14 @@ impl server::Handler for Handler {
         response: Option<Response<'a>>,
     ) -> Result<Auth, Self::Error> {
         let code_only = self.spec.key_then_code;
+        if self.spec.endless {
+            self.log.lock().unwrap().rounds += 1;
+            return Ok(Auth::Partial {
+                name: "".into(),
+                instructions: "".into(),
+                prompts: vec![("Password: ".into(), false)].into(),
+            });
+        }
         if user != self.spec.user || !(self.spec.interactive || (code_only && self.key_done)) {
             return Ok(Auth::reject());
         }
@@ -363,6 +374,59 @@ impl server::Handler for Handler {
     }
 }
 
+/// A TCP proxy to a server that can stop passing bytes on, as a network
+/// that drops everything does.
+pub struct Proxy {
+    pub port: u16,
+    pub frozen: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Proxy {
+    pub async fn start(target: u16) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let frozen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let shared = Arc::clone(&frozen);
+        tokio::spawn(async move {
+            while let Ok((client, _)) = listener.accept().await {
+                let Ok(server) = TcpStream::connect(("127.0.0.1", target)).await else {
+                    continue;
+                };
+                let (client_read, client_write) = client.into_split();
+                let (server_read, server_write) = server.into_split();
+                tokio::spawn(pump(client_read, server_write, Arc::clone(&shared)));
+                tokio::spawn(pump(server_read, client_write, Arc::clone(&shared)));
+            }
+        });
+        Self { port, frozen }
+    }
+
+    pub fn freeze(&self) {
+        self.frozen.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Passes bytes on, holding them while `frozen`.
+async fn pump(
+    mut from: tokio::net::tcp::OwnedReadHalf,
+    mut to: tokio::net::tcp::OwnedWriteHalf,
+    frozen: Arc<std::sync::atomic::AtomicBool>,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut buffer = vec![0; 16 * 1024];
+    while let Ok(n) = from.read(&mut buffer).await {
+        if n == 0 {
+            break;
+        }
+        while frozen.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        if to.write_all(&buffer[..n]).await.is_err() {
+            break;
+        }
+    }
+}
+
 /// The phone's key for tests: a fixed P-256 key standing in for Keystore.
 pub fn phone_signing_key() -> SigningKey {
     SigningKey::from_bytes(&[0x24; 32].into()).unwrap()
@@ -387,6 +451,10 @@ pub struct App {
     pub hang: bool,
     /// The unanswered question went away.
     pub question_dropped: Arc<std::sync::atomic::AtomicBool>,
+    /// `unknown_host` fails, as a Kotlin exception does.
+    pub unknown_host_fails: bool,
+    /// Storing a trusted line fails.
+    pub storing_fails: bool,
     /// Answers to prompts, in order; `None` once they run out.
     pub answers: Mutex<VecDeque<Vec<&'static str>>>,
     pub asked: Mutex<Vec<AuthPrompt>>,
@@ -422,15 +490,18 @@ impl App {
 
 #[async_trait::async_trait]
 impl Callbacks for App {
-    async fn sign(&self, request: SignRequest) -> Result<Vec<u8>, SignError> {
-        let key = self.signer.as_ref().ok_or(SignError::Cancelled)?;
+    async fn sign(&self, request: SignRequest) -> Result<Vec<u8>, CallbackError> {
+        let key = self.signer.as_ref().ok_or(CallbackError::Cancelled)?;
         self.signed.fetch_add(1, Ordering::SeqCst);
         let signature: Signature = key.sign(&request.data);
         Ok(signature.to_der().as_bytes().to_vec())
     }
 
-    async fn unknown_host(&self, key: UnknownHostKey) -> bool {
+    async fn unknown_host(&self, key: UnknownHostKey) -> Result<bool, CallbackError> {
         self.unknown.lock().unwrap().push(key);
+        if self.unknown_host_fails {
+            return Err(CallbackError::Failed("IllegalStateException".into()));
+        }
         if self.hang {
             struct Dropped(Arc<std::sync::atomic::AtomicBool>);
             impl Drop for Dropped {
@@ -441,21 +512,30 @@ impl Callbacks for App {
             let _dropped = Dropped(Arc::clone(&self.question_dropped));
             std::future::pending::<()>().await;
         }
-        self.trust
+        Ok(self.trust)
     }
 
-    fn host_key_trusted(&self, line: String) {
+    fn host_key_trusted(&self, line: String) -> Result<(), CallbackError> {
+        if self.storing_fails {
+            return Err(CallbackError::Failed("disk full".into()));
+        }
         self.trusted.lock().unwrap().push(line);
+        Ok(())
     }
 
-    async fn answer(&self, prompt: AuthPrompt) -> Option<Vec<Zeroizing<String>>> {
+    async fn answer(
+        &self,
+        prompt: AuthPrompt,
+    ) -> Result<Option<Vec<Zeroizing<String>>>, CallbackError> {
         self.asked.lock().unwrap().push(prompt);
-        let answers = self.answers.lock().unwrap().pop_front()?;
-        Some(
+        let Some(answers) = self.answers.lock().unwrap().pop_front() else {
+            return Ok(None);
+        };
+        Ok(Some(
             answers
                 .into_iter()
                 .map(|a| Zeroizing::new(a.to_owned()))
                 .collect(),
-        )
+        ))
     }
 }

@@ -7,17 +7,26 @@ use std::fmt;
 pub enum NotAvailable {
     /// A line in effect would make `ssh` run a program on the computer
     /// (`ProxyCommand`, `LocalCommand`, `PermitLocalCommand`,
-    /// `KnownHostsCommand`, `Match … exec`), read another file (`Include`),
-    /// or is one `ssh` may read differently from the app.
+    /// `KnownHostsCommand`, `Match … exec`, …) or read another file
+    /// (`Include`).
     RunsProgram {
         /// The keyword as written (`ProxyCommand`, `Match`, …).
         directive: String,
         /// The line's value as written.
         value: String,
     },
-    /// A `Match` line may apply whose criteria only `ssh` can evaluate.
+    /// A `Match` line may apply whose criteria only `ssh` can evaluate, or
+    /// `CanonicalizeHostname` is on (`ssh` reads the files again with the
+    /// name it finds).
     Undecided {
-        /// The `Match …` line as written.
+        /// The line as written.
+        line: String,
+    },
+    /// A line of the file `ssh` may read differently from the app (an odd
+    /// keyword, a control character): it may start another block, so no
+    /// host's settings can be trusted.
+    OddLine {
+        /// The line as written.
         line: String,
     },
 }
@@ -26,7 +35,8 @@ impl fmt::Display for NotAvailable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::RunsProgram { directive, .. } => write!(f, "it uses {directive}"),
-            Self::Undecided { line } => write!(f, "only ssh can tell whether `{line}` applies"),
+            Self::Undecided { line } => write!(f, "only ssh can work out `{line}`"),
+            Self::OddLine { .. } => write!(f, "a line ssh may read differently"),
         }
     }
 }
@@ -131,9 +141,13 @@ pub enum Error {
     /// refused, or it returned something that isn't a signature by the key.
     #[error("the phone's key couldn't sign: {detail}")]
     Signer { alias: String, detail: String },
-    /// The user cancelled (a prompt, the screen lock for the key).
+    /// The user cancelled (a prompt, the screen lock for the key), or the
+    /// app stopped asking.
     #[error("cancelled")]
     Cancelled,
+    /// The app failed to answer a question or to store a line.
+    #[error("the app failed: {detail}")]
+    App { detail: String },
     /// The server refused the terminal or the shell.
     #[error("{alias} refused to open a shell")]
     ShellRefused { alias: String },

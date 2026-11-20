@@ -5,9 +5,22 @@
 //! The key is offered first without a signature; the app is asked to sign
 //! (and the user to unlock the key) only once the server has said it would
 //! take it. A server that asks for more after one method succeeded
-//! (`partial success`: a key and then a code) gets the next one. Prompts
-//! and passwords are asked of the app each time, three times at most per
-//! method (`NumberOfPasswordPrompts`); answers are wiped once sent.
+//! (`partial success`: a key and then a code) gets the next one.
+//!
+//! Every question is counted by what it asks (the password, a one-time
+//! code, or another question by its text), across rounds, keyboard-
+//! interactive exchanges and the password method alike. The prompt the app
+//! gets says how often (`attempt`), so a value filled from the vault isn't
+//! sent again unasked, and a question asked three times
+//! (`NumberOfPasswordPrompts`) isn't answered a fourth: the client moves on
+//! to another method or gives up, so a server that keeps asking can't lock
+//! the account with the vault's password. Rounds and steps are bounded too.
+//!
+//! The client wipes its own copies of answers. russh wipes the password it
+//! sends with the password method, but not keyboard-interactive answers,
+//! which it takes as plain strings.
+
+use std::collections::HashMap;
 
 use russh::client::{AuthResult, Handle, KeyboardInteractiveAuthResponse};
 use russh::keys::HashAlg;
@@ -16,14 +29,68 @@ use russh::{MethodKind, MethodSet};
 use sshkm_core::prompt::ServerPrompt;
 use zeroize::Zeroizing;
 
-use crate::callbacks::{AuthMethod, AuthPrompt, Callbacks, PromptItem, SignError, SignRequest};
+use crate::callbacks::{AuthMethod, AuthPrompt, CallbackError, Callbacks, PromptItem, SignRequest};
 use crate::client::HopHandler;
 use crate::error::Error;
 use crate::key::PhoneKey;
 use crate::route::Endpoint;
 
-/// Attempts per method, as OpenSSH's `NumberOfPasswordPrompts`.
+/// Times the same question is answered, as OpenSSH's
+/// `NumberOfPasswordPrompts`.
 const ATTEMPTS: u32 = 3;
+/// Rounds of one keyboard-interactive exchange.
+const ROUNDS: u32 = 16;
+/// Methods tried, in all, on one machine.
+const STEPS: u32 = 16;
+
+/// What a question asks, for counting: the password and one-time codes by
+/// kind, anything else by its text.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Question {
+    Password,
+    OneTimeCode,
+    Other(String),
+}
+
+impl Question {
+    fn of(item: &PromptItem) -> Self {
+        match item.kind {
+            ServerPrompt::Password => Self::Password,
+            ServerPrompt::OneTimeCode => Self::OneTimeCode,
+            ServerPrompt::Other => Self::Other(item.text.trim().to_owned()),
+        }
+    }
+}
+
+/// How often each question has been asked on this machine.
+#[derive(Debug, Default)]
+struct Asked(HashMap<Question, u32>);
+
+impl Asked {
+    /// The attempt `items` would be: one more than the most any of them was
+    /// asked. `None` once one of them has been asked [`ATTEMPTS`] times.
+    fn next_attempt(&self, items: &[PromptItem]) -> Option<u32> {
+        let most = items
+            .iter()
+            .map(|item| self.0.get(&Question::of(item)).copied().unwrap_or(0))
+            .max()
+            .unwrap_or(0);
+        (most < ATTEMPTS).then_some(most + 1)
+    }
+
+    fn count(&mut self, items: &[PromptItem]) {
+        for item in items {
+            *self.0.entry(Question::of(item)).or_default() += 1;
+        }
+    }
+}
+
+/// How a method ended.
+enum Outcome {
+    Server(AuthResult),
+    /// The client stopped: a question asked too often, or too many rounds.
+    GaveUp,
+}
 
 /// Signs in to `endpoint` as `user`.
 pub(crate) async fn authenticate(
@@ -44,11 +111,12 @@ pub(crate) async fn authenticate(
             remaining_methods, ..
         } => remaining_methods,
     };
+    let mut asked = Asked::default();
     let mut key_tried = false;
-    let mut interactive_attempts = 0;
-    let mut password_attempts = 0;
-    loop {
-        let result = if let Some(key) = key.filter(|_| !key_tried)
+    let mut interactive_done = false;
+    let mut password_done = false;
+    for _ in 0..STEPS {
+        let outcome = if let Some(key) = key.filter(|_| !key_tried)
             && methods.contains(&MethodKind::PublicKey)
         {
             key_tried = true;
@@ -58,120 +126,137 @@ pub(crate) async fn authenticate(
                 alias: &endpoint.alias,
                 user,
             };
-            handle
-                .authenticate_publickey_with(user, key.public_key().clone(), None, &mut signer)
-                .await
-                .map_err(|e| e.into_error(&endpoint.alias))?
-        } else if interactive_attempts < ATTEMPTS
-            && methods.contains(&MethodKind::KeyboardInteractive)
-        {
-            interactive_attempts += 1;
-            keyboard_interactive(handle, endpoint, user, interactive_attempts, callbacks).await?
-        } else if password_attempts < ATTEMPTS && methods.contains(&MethodKind::Password) {
-            password_attempts += 1;
-            password(handle, endpoint, user, password_attempts, callbacks).await?
+            Outcome::Server(
+                handle
+                    .authenticate_publickey_with(user, key.public_key().clone(), None, &mut signer)
+                    .await
+                    .map_err(|e| e.into_error(&endpoint.alias))?,
+            )
+        } else if !interactive_done && methods.contains(&MethodKind::KeyboardInteractive) {
+            let outcome =
+                keyboard_interactive(handle, endpoint, user, &mut asked, callbacks).await?;
+            interactive_done = matches!(outcome, Outcome::GaveUp);
+            outcome
+        } else if !password_done && methods.contains(&MethodKind::Password) {
+            let outcome = password(handle, endpoint, user, &mut asked, callbacks).await?;
+            password_done = matches!(outcome, Outcome::GaveUp);
+            outcome
         } else {
             return Err(failed(&methods));
         };
-        match result {
-            AuthResult::Success => return Ok(()),
-            AuthResult::Failure {
-                remaining_methods,
-                partial_success,
-            } => {
-                if partial_success {
-                    // A new step: its prompts are new questions.
-                    interactive_attempts = 0;
-                    password_attempts = 0;
-                }
-                methods = remaining_methods;
-            }
+        match outcome {
+            Outcome::Server(AuthResult::Success) => return Ok(()),
+            Outcome::Server(AuthResult::Failure {
+                remaining_methods, ..
+            }) => methods = remaining_methods,
+            Outcome::GaveUp => {}
         }
     }
+    Err(failed(&methods))
 }
 
-/// One keyboard-interactive exchange, as many rounds as the server asks.
+/// One keyboard-interactive exchange, as many rounds as the server asks
+/// (up to [`ROUNDS`]).
 async fn keyboard_interactive(
     handle: &mut Handle<HopHandler>,
     endpoint: &Endpoint,
     user: &str,
-    attempt: u32,
+    asked: &mut Asked,
     callbacks: &dyn Callbacks,
-) -> Result<AuthResult, Error> {
+) -> Result<Outcome, Error> {
     let mut response = handle
         .authenticate_keyboard_interactive_start(user, None)
         .await?;
-    loop {
-        match response {
-            KeyboardInteractiveAuthResponse::Success => return Ok(AuthResult::Success),
+    for _ in 0..ROUNDS {
+        let (name, instructions, prompts) = match response {
+            KeyboardInteractiveAuthResponse::Success => {
+                return Ok(Outcome::Server(AuthResult::Success));
+            }
             KeyboardInteractiveAuthResponse::Failure {
                 remaining_methods,
                 partial_success,
             } => {
-                return Ok(AuthResult::Failure {
+                return Ok(Outcome::Server(AuthResult::Failure {
                     remaining_methods,
                     partial_success,
-                });
+                }));
             }
             KeyboardInteractiveAuthResponse::InfoRequest {
                 name,
                 instructions,
                 prompts,
-            } => {
-                let answers = if prompts.is_empty() {
-                    // Nothing to ask (some servers send an empty round).
-                    Vec::new()
-                } else {
-                    let items = prompts
-                        .iter()
-                        .map(|p| PromptItem {
-                            kind: ServerPrompt::of(&p.prompt),
-                            text: p.prompt.clone(),
-                            echo: p.echo,
-                        })
-                        .collect::<Vec<_>>();
-                    let count = items.len();
-                    let answers = callbacks
-                        .answer(AuthPrompt {
-                            alias: endpoint.alias.clone(),
-                            host: endpoint.host.clone(),
-                            port: endpoint.port,
-                            user: user.to_owned(),
-                            method: AuthMethod::KeyboardInteractive,
-                            name,
-                            instructions,
-                            prompts: items,
-                            attempt,
-                        })
-                        .await
-                        .ok_or(Error::Cancelled)?;
-                    if answers.len() != count {
-                        return Err(Error::Cancelled);
-                    }
-                    answers
-                };
-                // russh takes `String`s; ours are wiped when they go.
-                let sent = answers.iter().map(|a| String::clone(a)).collect();
-                drop(answers);
-                response = handle
-                    .authenticate_keyboard_interactive_respond(sent)
-                    .await?;
+            } => (name, instructions, prompts),
+        };
+        let answers = if prompts.is_empty() {
+            // Nothing to ask (some servers send an empty round).
+            Vec::new()
+        } else {
+            let items: Vec<PromptItem> = prompts
+                .iter()
+                .map(|p| PromptItem {
+                    kind: ServerPrompt::of(&p.prompt),
+                    text: p.prompt.clone(),
+                    echo: p.echo,
+                })
+                .collect();
+            let Some(attempt) = asked.next_attempt(&items) else {
+                // The next request (another method, or none) ends this
+                // exchange without an answer.
+                return Ok(Outcome::GaveUp);
+            };
+            asked.count(&items);
+            let count = items.len();
+            let answers = ask(
+                callbacks,
+                AuthPrompt {
+                    alias: endpoint.alias.clone(),
+                    host: endpoint.host.clone(),
+                    port: endpoint.port,
+                    user: user.to_owned(),
+                    method: AuthMethod::KeyboardInteractive,
+                    name,
+                    instructions,
+                    prompts: items,
+                    attempt,
+                },
+            )
+            .await?;
+            if answers.len() != count {
+                return Err(Error::Cancelled);
             }
-        }
+            answers
+        };
+        // russh takes plain `String`s and doesn't wipe them; ours are
+        // wiped as they go.
+        let sent = answers.iter().map(|a| String::clone(a)).collect();
+        drop(answers);
+        response = handle
+            .authenticate_keyboard_interactive_respond(sent)
+            .await?;
     }
+    Ok(Outcome::GaveUp)
 }
 
-/// One `password` attempt.
+/// One `password` attempt, unless the password was asked too often.
 async fn password(
     handle: &mut Handle<HopHandler>,
     endpoint: &Endpoint,
     user: &str,
-    attempt: u32,
+    asked: &mut Asked,
     callbacks: &dyn Callbacks,
-) -> Result<AuthResult, Error> {
-    let text = format!("{user}@{}'s password: ", endpoint.host);
-    let mut answers = callbacks
-        .answer(AuthPrompt {
+) -> Result<Outcome, Error> {
+    let items = vec![PromptItem {
+        text: format!("{user}@{}'s password: ", endpoint.host),
+        echo: false,
+        kind: ServerPrompt::Password,
+    }];
+    let Some(attempt) = asked.next_attempt(&items) else {
+        return Ok(Outcome::GaveUp);
+    };
+    asked.count(&items);
+    let mut answers = ask(
+        callbacks,
+        AuthPrompt {
             alias: endpoint.alias.clone(),
             host: endpoint.host.clone(),
             port: endpoint.port,
@@ -179,23 +264,33 @@ async fn password(
             method: AuthMethod::Password,
             name: String::new(),
             instructions: String::new(),
-            prompts: vec![PromptItem {
-                text,
-                echo: false,
-                kind: ServerPrompt::Password,
-            }],
+            prompts: items,
             attempt,
-        })
-        .await
-        .ok_or(Error::Cancelled)?;
+        },
+    )
+    .await?;
     if answers.len() != 1 {
         return Err(Error::Cancelled);
     }
     let password: Zeroizing<String> = answers.remove(0);
     // russh wipes its copy when the request is gone.
-    Ok(handle
-        .authenticate_password(user, String::clone(&password))
-        .await?)
+    Ok(Outcome::Server(
+        handle
+            .authenticate_password(user, String::clone(&password))
+            .await?,
+    ))
+}
+
+/// Asks the app; `None` and a cancelled callback cancel.
+async fn ask(
+    callbacks: &dyn Callbacks,
+    prompt: AuthPrompt,
+) -> Result<Vec<Zeroizing<String>>, Error> {
+    match callbacks.answer(prompt).await {
+        Ok(Some(answers)) => Ok(answers),
+        Ok(None) | Err(CallbackError::Cancelled) => Err(Error::Cancelled),
+        Err(CallbackError::Failed(detail)) => Err(Error::App { detail }),
+    }
 }
 
 /// Signs through the app, converting Keystore's DER signature.
@@ -212,7 +307,7 @@ struct AppSigner<'a> {
 #[derive(Debug)]
 enum SignerError {
     Gone,
-    App(SignError),
+    App(CallbackError),
     Key(crate::key::KeyError),
 }
 
@@ -228,8 +323,8 @@ impl SignerError {
             Self::Gone => Error::Disconnected {
                 detail: "the connection closed while signing in".to_owned(),
             },
-            Self::App(SignError::Cancelled) => Error::Cancelled,
-            Self::App(SignError::Failed(detail)) => Error::Signer {
+            Self::App(CallbackError::Cancelled) => Error::Cancelled,
+            Self::App(CallbackError::Failed(detail)) => Error::Signer {
                 alias: alias.to_owned(),
                 detail,
             },
@@ -266,5 +361,41 @@ impl russh::Signer for AppSigner<'_> {
         // russh sends what follows the data: the signature as a string.
         crate::key::put_string(&mut to_sign, &blob);
         Ok(to_sign)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(kind: ServerPrompt, text: &str) -> PromptItem {
+        PromptItem {
+            text: text.to_owned(),
+            echo: false,
+            kind,
+        }
+    }
+
+    #[test]
+    fn questions_are_counted_by_what_they_ask() {
+        let mut asked = Asked::default();
+        let password = [item(ServerPrompt::Password, "Password: ")];
+        let both = [
+            item(ServerPrompt::Password, "Password for alice: "),
+            item(ServerPrompt::OneTimeCode, "Verification code: "),
+        ];
+        let pin = [item(ServerPrompt::Other, "PIN: ")];
+        assert_eq!(asked.next_attempt(&password), Some(1));
+        asked.count(&password);
+        // The password worded otherwise is still the password.
+        assert_eq!(asked.next_attempt(&both), Some(2));
+        asked.count(&both);
+        assert_eq!(asked.next_attempt(&pin), Some(1));
+        assert_eq!(asked.next_attempt(&password), Some(3));
+        asked.count(&password);
+        assert_eq!(asked.next_attempt(&password), None);
+        assert_eq!(asked.next_attempt(&both), None);
+        assert_eq!(asked.next_attempt(&pin), Some(1));
+        assert_eq!(asked.next_attempt(&[]), Some(1));
     }
 }

@@ -113,7 +113,13 @@ fn resolve_into(
     if path.contains(&key) {
         return Err(bad(&alias, "the jump hosts go round in a circle"));
     }
-    let settings = config.effective(&alias);
+    // Each level of first hops adds a machine: stop before the stack grows.
+    if path.len() + hops.len() >= MAX_HOPS {
+        return Err(bad(&alias, "more than 8 machines on the way"));
+    }
+    // A user in the jump spec is given as `ssh -l` gives it: before the
+    // files, and `Match user` sees it.
+    let settings = config.effective_as(&alias, spec.user.as_deref());
     check_available(&alias, &settings, honour_jump)?;
     let endpoint = endpoint(&alias, spec, &settings)?;
     if honour_jump
@@ -134,41 +140,66 @@ fn resolve_into(
     Ok(())
 }
 
-/// Refuses a host whose settings need `ssh` (see the module documentation).
-/// For a hop after the first, `ssh` sets aside `ProxyCommand` and
-/// `ProxyJump` (`honour_jump` false).
+/// Refuses a host whose settings need `ssh` (see the module documentation):
+/// every line in effect that would run a program, except those for what the
+/// phone never does; every odd line in the file; a `Match` only `ssh` can
+/// evaluate; `CanonicalizeHostname` (`ssh` reads the files again with the
+/// name it finds, the phone can't). For a hop after the first, `ssh` sets
+/// aside `ProxyCommand` and `ProxyJump` (`honour_jump` false).
+///
+/// The phone's host blocks come from own-device sync, which never carries
+/// `Include` or options before the first block (`sync::hosts`): an
+/// `Include` that makes every host unavailable means the file was made some
+/// other way, and the phone can't read what it names anyway.
 fn check_available(
     alias: &str,
     settings: &EffectiveSettings,
     honour_jump: bool,
 ) -> Result<(), Error> {
+    let refuse = |reason| {
+        Err(Error::NotAvailable {
+            alias: alias.to_owned(),
+            reason,
+        })
+    };
+    if let Some(line) = settings.odd_lines.first() {
+        return refuse(NotAvailable::OddLine { line: line.clone() });
+    }
     for directive in &settings.runs_code {
         let keyword = directive.key.replace('"', "").to_ascii_lowercase();
-        let odd = !keyword.chars().all(|c| c.is_ascii_alphanumeric());
-        let blocks = odd
-            || match keyword.as_str() {
-                "proxycommand" => honour_jump,
-                "localcommand" | "permitlocalcommand" | "knownhostscommand" | "match"
-                | "include" => true,
-                // What the phone never does anyway: a library or agent for
-                // keys, X11, a command instead of the shell. Names with odd
-                // characters fail as host names below.
-                _ => false,
-            };
-        if blocks {
-            return Err(Error::NotAvailable {
-                alias: alias.to_owned(),
-                reason: NotAvailable::RunsProgram {
-                    directive: directive.key.clone(),
-                    value: directive.value.clone(),
-                },
+        let harmless = match keyword.as_str() {
+            "proxycommand" => !honour_jump,
+            // What the phone never does: a library or an agent for keys,
+            // X11, a command instead of the shell, another name for
+            // `known_hosts`. Names with odd characters (`HostName`,
+            // `User`, `ProxyJump`) are checked as names below.
+            "remotecommand"
+            | "pkcs11provider"
+            | "smartcarddevice"
+            | "securitykeyprovider"
+            | "identityagent"
+            | "xauthlocation"
+            | "hostkeyalias"
+            | "hostname"
+            | "user"
+            | "proxyjump" => true,
+            _ => false,
+        };
+        if !harmless {
+            return refuse(NotAvailable::RunsProgram {
+                directive: directive.key.clone(),
+                value: directive.value.clone(),
             });
         }
     }
     if let Some(line) = settings.undecided.first() {
-        return Err(Error::NotAvailable {
-            alias: alias.to_owned(),
-            reason: NotAvailable::Undecided { line: line.clone() },
+        return refuse(NotAvailable::Undecided { line: line.clone() });
+    }
+    if let Some(value) = settings.get("canonicalizehostname")
+        && !first_word(value).eq_ignore_ascii_case("no")
+    {
+        return refuse(NotAvailable::Undecided {
+            line: format!("CanonicalizeHostname {value}"),
         });
     }
     Ok(())
@@ -176,10 +207,12 @@ fn check_available(
 
 /// The endpoint `spec` names, with its settings.
 fn endpoint(alias: &str, spec: &Spec, settings: &EffectiveSettings) -> Result<Endpoint, Error> {
+    // `ssh` connects to, and looks up, the name in lower case.
     let host = match settings.get("hostname") {
         Some(name) => expand_host_name(alias, name)?,
         None => alias.to_owned(),
-    };
+    }
+    .to_lowercase();
     if !is_host_name(&host) {
         return Err(bad(alias, format!("{host:?} is not a host name")));
     }
@@ -479,6 +512,43 @@ Host *
     }
 
     #[test]
+    fn the_jump_specs_user_is_what_match_user_sees() {
+        let config = "\
+Host db
+  User me
+  ProxyJump admin@bastion
+Host bastion
+  User jump
+Match user admin
+  ProxyCommand nc %h %p
+";
+        // OpenSSH runs `ssh -l admin bastion`: the Match applies there.
+        assert!(matches!(
+            route(config, "db"),
+            Err(Error::NotAvailable { alias, .. }) if alias == "bastion"
+        ));
+        assert_eq!(
+            names(&route(config, "bastion").unwrap()),
+            ["bastion=jump@bastion:22"]
+        );
+    }
+
+    #[test]
+    fn names_are_case_sensitive_but_connect_in_lower_case() {
+        let config = "Host Web\n  HostName %h.Example.COM\n  Port 2200\n";
+        assert_eq!(
+            names(&route(config, "Web").unwrap()),
+            ["Web=-@web.example.com:2200"]
+        );
+        // `ssh -G web` doesn't take `Host Web`.
+        assert_eq!(names(&route(config, "web").unwrap()), ["web=-@web:22"]);
+        assert_eq!(
+            names(&route("", "EXAMPLE.org").unwrap()),
+            ["EXAMPLE.org=-@example.org:22"]
+        );
+    }
+
+    #[test]
     fn circles_and_long_chains_are_refused() {
         let circle = "Host a\n  ProxyJump b\nHost b\n  ProxyJump a\n";
         assert!(matches!(
@@ -521,6 +591,49 @@ Host *
                 other => panic!("{config}: {other:?}"),
             }
         }
+        // Odd lines anywhere: `ssh` reads `=Host web` as `Host web`, so the
+        // ProxyCommand below it is web's, and the HostName after `=Host
+        // other` isn't web's.
+        for config in [
+            "Host nothing\n=Host a\n  ProxyCommand nc evil 22\n",
+            "Host nothing\nHost a \x0b\n  ProxyCommand nc evil 22\n",
+            "Host a\n  User alice\n=Host other\n  HostName evil.example.com\n",
+            "Host a\n  User alice\nHost b\n  Proxy-Command x\n",
+        ] {
+            assert!(
+                matches!(
+                    route(config, "a"),
+                    Err(Error::NotAvailable {
+                        reason: NotAvailable::OddLine { .. },
+                        ..
+                    })
+                ),
+                "{config:?}"
+            );
+        }
+        // Anything else that would run a program is refused by default.
+        for config in [
+            "Host a\n  ProxyCommand nc %h %p\n  Include x\n",
+            "Match exec x\n",
+        ] {
+            assert!(
+                matches!(route(config, "a"), Err(Error::NotAvailable { .. })),
+                "{config}"
+            );
+        }
+        for value in ["yes", "always", "\"yes\""] {
+            assert!(
+                matches!(
+                    route(&format!("Host a\n  CanonicalizeHostname {value}\n"), "a"),
+                    Err(Error::NotAvailable {
+                        reason: NotAvailable::Undecided { .. },
+                        ..
+                    })
+                ),
+                "{value}"
+            );
+        }
+        route("Host a\n  CanonicalizeHostname no\n", "a").unwrap();
         assert!(matches!(
             route("Match localuser bob\n  User x\n", "a"),
             Err(Error::NotAvailable {
